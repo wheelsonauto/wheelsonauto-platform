@@ -123,6 +123,64 @@ function upsertById(list, incoming) {
   });
   return next;
 }
+async function syncCloverIntoData(data, options = {}) {
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  const result = { customers: 0, payments: 0, errors: [] };
+  if (options.customers !== false) {
+    try {
+      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/customers?expand=emailAddresses,phoneNumbers&limit=100');
+      const customers = cloverElements(body).map(mapCloverCustomer);
+      data.customers = upsertById(data.customers, customers);
+      data.integrations.clover.lastCustomerSyncAt = new Date().toISOString();
+      data.integrations.clover.lastCustomerSyncCount = customers.length;
+      result.customers = customers.length;
+    } catch (err) {
+      data.integrations.clover.lastCustomerSyncError = String(err && err.message || err);
+      result.errors.push(data.integrations.clover.lastCustomerSyncError);
+    }
+  }
+  if (options.payments !== false) {
+    try {
+      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100');
+      const payments = cloverElements(body).map(mapCloverPayment);
+      data.payments = upsertById(data.payments, payments);
+      data.integrations.clover.lastPaymentSyncAt = new Date().toISOString();
+      data.integrations.clover.lastPaymentSyncCount = payments.length;
+      data.integrations.clover.lastPaymentSyncError = '';
+      result.payments = payments.length;
+    } catch (err) {
+      data.integrations.clover.lastPaymentSyncError = String(err && err.message || err);
+      result.errors.push(data.integrations.clover.lastPaymentSyncError);
+    }
+  }
+  data.integrations.clover.connected = result.errors.length === 0 || data.integrations.clover.connected === true;
+  data.integrations.clover.environment = CLOVER_ENV;
+  data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
+  data.integrations.clover.accessTokenMasked = 'stored in Render';
+  return result;
+}
+function cleanAutopayPayload(payload) {
+  const amount = Number(payload.amount || 0);
+  return {
+    id: payload.id || ('rec-' + Date.now()),
+    customer: String(payload.customer || '').trim(),
+    phone: String(payload.phone || '').trim(),
+    email: String(payload.email || '').trim(),
+    vehicle: String(payload.vehicle || '').trim(),
+    amount: Number.isFinite(amount) ? amount : 0,
+    frequency: payload.frequency || 'Weekly',
+    nextRun: payload.nextRun || payload.firstRun || 'After setup',
+    status: payload.status || 'Setup needed',
+    tone: payload.tone || (payload.status === 'Active' ? 'good' : 'warn'),
+    provider: 'Clover',
+    cloverCustomerId: String(payload.cloverCustomerId || '').trim(),
+    cloverSubscriptionId: String(payload.cloverSubscriptionId || '').trim(),
+    paymentSetup: payload.paymentSetup || 'Needs Clover setup',
+    notes: String(payload.notes || '').trim(),
+    createdAt: payload.createdAt || new Date().toISOString()
+  };
+}
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -158,40 +216,34 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/integrations/clover/sync-customers' && req.method === 'POST') {
       const data = await readData();
-      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/customers?expand=emailAddresses,phoneNumbers&limit=100');
-      const customers = cloverElements(body).map(mapCloverCustomer);
-      data.customers = upsertById(data.customers, customers);
-      data.integrations = data.integrations || {}; data.integrations.clover = data.integrations.clover || {};
-      data.integrations.clover.connected = true;
-      data.integrations.clover.environment = CLOVER_ENV;
-      data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
-      data.integrations.clover.accessTokenMasked = 'stored in Render';
-      data.integrations.clover.lastCustomerSyncAt = new Date().toISOString();
-      data.integrations.clover.lastCustomerSyncCount = customers.length;
+      const synced = await syncCloverIntoData(data, { payments: false });
       await writeData(data);
-      return json(res, 200, { ok: true, imported: customers.length, customers: data.customers.length });
+      return json(res, synced.errors.length ? 500 : 200, { ok: synced.errors.length === 0, imported: synced.customers, customers: data.customers.length, error: synced.errors[0] || '' });
     }
     if (url.pathname === '/api/integrations/clover/sync-payments' && req.method === 'POST') {
       const data = await readData();
-      data.integrations = data.integrations || {}; data.integrations.clover = data.integrations.clover || {};
-      try {
-        const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100');
-        const payments = cloverElements(body).map(mapCloverPayment);
-        data.payments = upsertById(data.payments, payments);
-        data.integrations.clover.connected = true;
-        data.integrations.clover.environment = CLOVER_ENV;
-        data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
-        data.integrations.clover.accessTokenMasked = 'stored in Render';
-        data.integrations.clover.lastPaymentSyncAt = new Date().toISOString();
-        data.integrations.clover.lastPaymentSyncCount = payments.length;
-        data.integrations.clover.lastPaymentSyncError = '';
-        await writeData(data);
-        return json(res, 200, { ok: true, imported: payments.length, recurring: data.recurringPayments.length, payments: data.payments.length });
-      } catch (err) {
-        data.integrations.clover.lastPaymentSyncError = String(err && err.message || err);
-        await writeData(data);
-        return json(res, 500, { ok: false, error: data.integrations.clover.lastPaymentSyncError });
+      const synced = await syncCloverIntoData(data, { customers: false });
+      await writeData(data);
+      return json(res, synced.errors.length ? 500 : 200, { ok: synced.errors.length === 0, imported: synced.payments, recurring: data.recurringPayments.length, payments: data.payments.length, error: synced.errors[0] || '' });
+    }
+    if (url.pathname === '/api/integrations/clover/sync-all' && req.method === 'POST') {
+      const data = await readData();
+      const synced = await syncCloverIntoData(data);
+      await writeData(data);
+      return json(res, synced.errors.length ? 207 : 200, { ok: synced.errors.length === 0, ...synced, totalCustomers: (data.customers || []).length, totalPayments: (data.payments || []).length });
+    }
+    if (url.pathname === '/api/recurring-payments' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const autopay = cleanAutopayPayload(payload);
+      data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+      data.customers = Array.isArray(data.customers) ? data.customers : [];
+      data.recurringPayments.unshift(autopay);
+      if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
+        data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, contract: 'Autopay setup', balance: 0, source: 'WheelsonAuto', cloverCustomerId: autopay.cloverCustomerId });
       }
+      await writeData(data);
+      return json(res, 201, { ok: true, autopay });
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       const event = JSON.parse(await readBody(req) || '{}');
