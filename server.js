@@ -15,7 +15,11 @@ async function readData() {
   try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); }
   catch { return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], recurringPayments: [], integrations: { clover: {}, shopify: {} } }; }
 }
-async function writeData(data) { await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8'); }
+async function writeData(data) {
+  const tmpFile = DATA_FILE + '.tmp';
+  await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
+  await fs.rename(tmpFile, DATA_FILE);
+}
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
 function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8'); }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
@@ -70,9 +74,10 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse(await readBody(req) || '{}');
       const data = await readData();
       const app = { id: payload.id || ('app-' + Date.now()), submittedAt: payload.submittedAt || new Date().toISOString(), stage: 'New', status: 'New', score: payload.score || scoreApplication(payload), ...payload };
+      data.applications = Array.isArray(data.applications) ? data.applications : [];
+      data.websiteLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
       if (!data.applications.some(existing => existing.id === app.id)) data.applications.unshift(app);
-      data.websiteLeads = data.websiteLeads || [];
-      if (!data.websiteLeads.some(existing => existing.id === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), source: 'wheelsonauto.com/apply', name: app.name, vehicle: app.vehicle, created: 'Just now', status: 'Submitted' });
+      if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, vehicle: app.vehicle, created: 'Just now', status: 'Submitted' });
       await writeData(data);
       return json(res, 201, { ok: true, application: app });
     }
