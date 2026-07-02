@@ -4,7 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = __dirname;
-const DATA_FILE = path.join(ROOT, 'data.json');
+const DATA_DIR = process.env.DATA_DIR || ROOT;
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
 const SEED_FILE = path.join(ROOT, 'seed.json');
 const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -17,9 +18,19 @@ const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.c
 
 async function readData() {
   try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); }
-  catch { return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], recurringPayments: [], integrations: { clover: {}, shopify: {} } }; }
+  catch {
+    try {
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      const seed = JSON.parse(await fs.readFile(SEED_FILE, 'utf8'));
+      await writeData(seed);
+      return seed;
+    } catch {
+      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], recurringPayments: [], integrations: { clover: {}, shopify: {} } };
+    }
+  }
 }
 async function writeData(data) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpFile = DATA_FILE + '.tmp';
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
   await fs.rename(tmpFile, DATA_FILE);
