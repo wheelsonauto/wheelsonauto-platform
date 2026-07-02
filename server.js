@@ -8,7 +8,7 @@ const DATA_FILE = path.join(ROOT, 'data.json');
 const SEED_FILE = path.join(ROOT, 'seed.json');
 const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
-const LOGIN_PIN = process.env.WOA_ADMIN_PIN || 'wheelson';
+const LOGIN_PIN = process.env.WOA_ADMIN_PIN || '';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 
 async function readData() {
@@ -27,8 +27,22 @@ function loginPage(message = '') {
 }
 async function appHtml({ publicMode = false } = {}) {
   const data = await readData();
+  const clientData = publicMode ? {
+    vehicles: (data.vehicles || []).filter(v => ['Ready', 'Coming soon', 'Pending application'].includes(v.status)),
+    business: data.business || { name: 'WheelsonAuto', website: 'wheelsonauto.com' },
+    applications: [],
+    customers: [],
+    contracts: [],
+    payments: [],
+    maintenance: [],
+    recurringPayments: [],
+    tasks: [],
+    documents: [],
+    websiteLeads: [],
+    integrations: { clover: {}, shopify: { store: 'wheelsonauto.com', embedPath: '/apply' } }
+  } : data;
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
-  const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(data).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';</script>';
+  const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
 async function staticFile(res, pathname) {
@@ -64,7 +78,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/login' && req.method === 'POST') {
       const pin = new URLSearchParams(await readBody(req)).get('pin');
-      if (pin === LOGIN_PIN) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + SESSION_VALUE + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      if (LOGIN_PIN && pin === LOGIN_PIN) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + SESSION_VALUE + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
       return send(res, 401, loginPage('That PIN did not match.'));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=; Max-Age=0; Path=/', Location: '/' });
