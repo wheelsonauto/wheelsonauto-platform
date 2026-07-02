@@ -1,0 +1,406 @@
+{
+  "vehicles": [
+    {
+      "id": "veh-001",
+      "name": "2016 Ford Focus Hatch",
+      "vin": "1FADP3K24GL123456",
+      "plate": "A19-WWM",
+      "rate": 229,
+      "down": 485,
+      "status": "Available",
+      "tone": "good",
+      "miles": "700/week",
+      "contractMonths": 19,
+      "color": "Silver",
+      "odometer": 92800,
+      "gps": "Not connected"
+    },
+    {
+      "id": "veh-002",
+      "name": "2016 Chevrolet Cruze",
+      "vin": "1G1PE5SB8G7123456",
+      "plate": "K42-RTO",
+      "rate": 229,
+      "down": 485,
+      "status": "Pending application",
+      "tone": "warn",
+      "miles": "700/week",
+      "contractMonths": 19,
+      "color": "Blue",
+      "odometer": 101400,
+      "gps": "Ready"
+    },
+    {
+      "id": "veh-003",
+      "name": "2015 Lincoln MKZ",
+      "vin": "3LN6L2G91FR123456",
+      "plate": "LNZ-229",
+      "rate": 229,
+      "down": 485,
+      "status": "Active contract",
+      "tone": "info",
+      "miles": "700/week",
+      "contractMonths": 19,
+      "color": "Black",
+      "odometer": 113200,
+      "gps": "Bouncie"
+    },
+    {
+      "id": "veh-004",
+      "name": "2014 Nissan Sentra",
+      "vin": "3N1AB7AP8EY123456",
+      "plate": "SEN-210",
+      "rate": 210,
+      "down": 485,
+      "status": "Maintenance",
+      "tone": "bad",
+      "miles": "700/week",
+      "contractMonths": 19,
+      "color": "White",
+      "odometer": 120880,
+      "gps": "Not connected"
+    }
+  ],
+  "applications": [
+    {
+      "id": "app-1001",
+      "phone": "(856) 555-0194",
+      "email": "marcus@example.com",
+      "vehicle": "2016 Chevrolet Cruze",
+      "income": "Missing",
+      "employer": "Harbor Logistics",
+      "residence": "Local residence",
+      "license": "Uploaded",
+      "stage": "Needs review",
+      "score": 82,
+      "notes": "Works nights, wants Friday pickup.",
+      "submittedAt": "Today 9:12 AM"
+    },
+    {
+      "id": "app-1002",
+      "phone": "(856) 555-0118",
+      "email": "tania@example.com",
+      "vehicle": "2016 Ford Focus Hatch",
+      "income": "Uploaded",
+      "employer": "Prime Home Care",
+      "residence": "Local residence",
+      "license": "Uploaded",
+      "stage": "Approved",
+      "score": 58,
+      "notes": "Approved. Down payment due.",
+      "submittedAt": "Yesterday 3:48 PM"
+    },
+    {
+      "id": "app-1003",
+      "phone": "(856) 555-0142",
+      "email": "devin@example.com",
+      "vehicle": "2015 Lincoln MKZ",
+      "income": "Needed",
+      "employer": "Metro Flooring",
+      "residence": "Local residence",
+      "license": "Needed",
+      "stage": "Docs requested",
+      "score": 71,
+      "notes": "Asked for clearer license photo.",
+      "submittedAt": "Jun 29 11:05 AM"
+    }
+  ],
+  "customers": [
+    {
+      "id": "cus-001",
+      "name": "Alicia Brown",
+      "phone": "(856) 555-0171",
+      "email": "alicia@example.com",
+      "stage": "Active contract",
+      "tone": "good",
+      "vehicle": "2015 Lincoln MKZ",
+      "balance": 0,
+      "license": "NJ valid through 2028",
+      "risk": "Low"
+    },
+    {
+      "id": "cus-002",
+      "name": "Ramon Price",
+      "phone": "(856) 555-0123",
+      "email": "ramon@example.com",
+      "stage": "Past due",
+      "tone": "bad",
+      "vehicle": "2014 GMC Acadia",
+      "balance": 458,
+      "license": "NJ valid through 2027",
+      "risk": "High"
+    },
+    {
+      "id": "cus-003",
+      "name": "Tania Williams",
+      "phone": "(856) 555-0118",
+      "email": "tania@example.com",
+      "stage": "Approved",
+      "tone": "warn",
+      "vehicle": "2016 Ford Focus Hatch",
+      "balance": 485,
+      "license": "NJ valid through 2029",
+      "risk": "Medium"
+    },
+    {
+      "id": "cus-004",
+      "name": "Devin Carter",
+      "phone": "(856) 555-0142",
+      "email": "devin@example.com",
+      "stage": "Applicant",
+      "tone": "info",
+      "vehicle": "2015 Lincoln MKZ",
+      "balance": 0,
+      "license": "Waiting docs",
+      "risk": "Review"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "WOA-1048",
+      "customer": "Alicia Brown",
+      "vehicle": "2015 Lincoln MKZ",
+      "weekly": 229,
+      "status": "Active",
+      "tone": "good",
+      "paidWeeks": 16,
+      "totalWeeks": 82,
+      "nextDue": "Jul 3",
+      "balance": 0,
+      "autopay": "Active",
+      "paymentProvider": "Clover"
+    },
+    {
+      "id": "WOA-1049",
+      "customer": "Ramon Price",
+      "vehicle": "2014 GMC Acadia",
+      "weekly": 230,
+      "status": "Past due",
+      "tone": "bad",
+      "paidWeeks": 8,
+      "totalWeeks": 82,
+      "nextDue": "Today",
+      "balance": 458,
+      "autopay": "Failed retry",
+      "paymentProvider": "Clover"
+    },
+    {
+      "id": "WOA-1050",
+      "customer": "Tania Williams",
+      "vehicle": "2016 Ford Focus Hatch",
+      "weekly": 229,
+      "status": "Signing",
+      "tone": "warn",
+      "paidWeeks": 0,
+      "totalWeeks": 82,
+      "nextDue": "Jul 4",
+      "balance": 485,
+      "autopay": "Setup needed",
+      "paymentProvider": "Clover"
+    }
+  ],
+  "payments": [
+    {
+      "id": "pay-001",
+      "date": "Today",
+      "customer": "Ramon Price",
+      "type": "Weekly payment",
+      "amount": 229,
+      "status": "Failed",
+      "tone": "bad"
+    },
+    {
+      "id": "pay-002",
+      "date": "Jul 3",
+      "customer": "Alicia Brown",
+      "type": "Weekly payment",
+      "amount": 229,
+      "status": "Scheduled",
+      "tone": "info"
+    },
+    {
+      "id": "pay-003",
+      "date": "Jul 4",
+      "customer": "Tania Williams",
+      "type": "Down payment",
+      "amount": 485,
+      "status": "Due",
+      "tone": "warn"
+    },
+    {
+      "id": "pay-004",
+      "date": "Jul 5",
+      "customer": "Devin Carter",
+      "type": "Application hold",
+      "amount": 50,
+      "status": "Optional",
+      "tone": "info"
+    }
+  ],
+  "maintenance": [
+    {
+      "id": "svc-001",
+      "vehicle": "2014 Nissan Sentra",
+      "issue": "Brake inspection",
+      "status": "In progress",
+      "tone": "warn",
+      "cost": 320,
+      "due": "Jul 2"
+    },
+    {
+      "id": "svc-002",
+      "vehicle": "2015 Lincoln MKZ",
+      "issue": "Oil change",
+      "status": "Scheduled",
+      "tone": "info",
+      "cost": 85,
+      "due": "Jul 8"
+    },
+    {
+      "id": "svc-003",
+      "vehicle": "2016 Ford Focus Hatch",
+      "issue": "Detail before pickup",
+      "status": "Open",
+      "tone": "good",
+      "cost": 120,
+      "due": "Jul 3"
+    }
+  ],
+  "integrations": {
+    "clover": {
+      "connected": false,
+      "environment": "sandbox",
+      "merchantId": "",
+      "accessTokenMasked": "",
+      "lastCustomerSyncAt": null,
+      "lastPaymentSyncAt": null,
+      "webhookEvents": []
+    },
+    "shopify": {
+      "connected": false,
+      "store": "wheelsonauto.com",
+      "embedPath": "/apply",
+      "lastLeadSyncAt": null
+    }
+  },
+  "recurringPayments": [
+    {
+      "id": "rec-001",
+      "customer": "Alicia Brown",
+      "vehicle": "2015 Lincoln MKZ",
+      "amount": 229,
+      "frequency": "Weekly",
+      "status": "Active",
+      "tone": "good",
+      "nextRun": "Jul 3",
+      "provider": "Clover",
+      "cloverSubscriptionId": "CLV-SUB-001"
+    },
+    {
+      "id": "rec-002",
+      "customer": "Ramon Price",
+      "vehicle": "2014 GMC Acadia",
+      "amount": 230,
+      "frequency": "Weekly",
+      "status": "Failed retry",
+      "tone": "bad",
+      "nextRun": "Today",
+      "provider": "Clover",
+      "cloverSubscriptionId": "CLV-SUB-002"
+    },
+    {
+      "id": "rec-003",
+      "customer": "Tania Williams",
+      "vehicle": "2016 Ford Focus Hatch",
+      "amount": 229,
+      "frequency": "Weekly",
+      "status": "Setup needed",
+      "tone": "warn",
+      "nextRun": "After pickup",
+      "provider": "Clover",
+      "cloverSubscriptionId": ""
+    }
+  ],
+  "business": {
+    "name": "WheelsonAuto",
+    "website": "wheelsonauto.com",
+    "phone": "(555) 410-2026",
+    "email": "sales@wheelsonauto.com",
+    "location": "United States",
+    "tagline": "Rent-to-own cars with clear weekly payments."
+  },
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Call Ramon about failed Clover retry",
+      "owner": "Office",
+      "due": "Today",
+      "tone": "bad",
+      "status": "Open"
+    },
+    {
+      "id": "task-002",
+      "title": "Upload Alicia insurance card to contract file",
+      "owner": "Admin",
+      "due": "Today",
+      "tone": "warn",
+      "status": "Open"
+    },
+    {
+      "id": "task-003",
+      "title": "Confirm Tania pickup and start autopay setup",
+      "owner": "Sales",
+      "due": "Tomorrow",
+      "tone": "blue",
+      "status": "Open"
+    }
+  ],
+  "documents": [
+    {
+      "id": "doc-001",
+      "customer": "Alicia Brown",
+      "type": "Driver license",
+      "status": "Received"
+    },
+    {
+      "id": "doc-002",
+      "customer": "Ramon Price",
+      "type": "Proof of income",
+      "status": "Received"
+    },
+    {
+      "id": "doc-003",
+      "customer": "Tania Williams",
+      "type": "Insurance",
+      "status": "Needed"
+    }
+  ],
+  "websiteLeads": [
+    {
+      "id": "lead-001",
+      "source": "wheelsonauto.com/apply",
+      "name": "Devin Carter",
+      "vehicle": "2012 Toyota Camry",
+      "created": "Today",
+      "status": "Review"
+    }
+  ],
+  "contractTemplates": [
+    {
+      "id": "tpl-001",
+      "name": "Weekly rent-to-own",
+      "paymentFrequency": "Weekly",
+      "lateFee": 35,
+      "graceDays": 2,
+      "defaultTermWeeks": 104
+    },
+    {
+      "id": "tpl-002",
+      "name": "Biweekly rent-to-own",
+      "paymentFrequency": "Biweekly",
+      "lateFee": 45,
+      "graceDays": 3,
+      "defaultTermWeeks": 104
+    }
+  ]
+}
