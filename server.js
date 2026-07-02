@@ -173,18 +173,25 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/integrations/clover/sync-payments' && req.method === 'POST') {
       const data = await readData();
-      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100&expand=tender,employee');
-      const payments = cloverElements(body).map(mapCloverPayment);
-      data.payments = upsertById(data.payments, payments);
       data.integrations = data.integrations || {}; data.integrations.clover = data.integrations.clover || {};
-      data.integrations.clover.connected = true;
-      data.integrations.clover.environment = CLOVER_ENV;
-      data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
-      data.integrations.clover.accessTokenMasked = 'stored in Render';
-      data.integrations.clover.lastPaymentSyncAt = new Date().toISOString();
-      data.integrations.clover.lastPaymentSyncCount = payments.length;
-      await writeData(data);
-      return json(res, 200, { ok: true, imported: payments.length, recurring: data.recurringPayments.length, payments: data.payments.length });
+      try {
+        const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100');
+        const payments = cloverElements(body).map(mapCloverPayment);
+        data.payments = upsertById(data.payments, payments);
+        data.integrations.clover.connected = true;
+        data.integrations.clover.environment = CLOVER_ENV;
+        data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
+        data.integrations.clover.accessTokenMasked = 'stored in Render';
+        data.integrations.clover.lastPaymentSyncAt = new Date().toISOString();
+        data.integrations.clover.lastPaymentSyncCount = payments.length;
+        data.integrations.clover.lastPaymentSyncError = '';
+        await writeData(data);
+        return json(res, 200, { ok: true, imported: payments.length, recurring: data.recurringPayments.length, payments: data.payments.length });
+      } catch (err) {
+        data.integrations.clover.lastPaymentSyncError = String(err && err.message || err);
+        await writeData(data);
+        return json(res, 500, { ok: false, error: data.integrations.clover.lastPaymentSyncError });
+      }
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       const event = JSON.parse(await readBody(req) || '{}');
