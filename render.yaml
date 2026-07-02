@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: wheelsonauto-platform
+    env: node
+    plan: starter
+    buildCommand: ""
+    startCommand: "node server.js"
+    envVars:
+      - key: WOA_ADMIN_PIN
+        sync: false
