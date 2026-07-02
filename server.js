@@ -10,6 +10,10 @@ const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
 const LOGIN_PIN = process.env.WOA_ADMIN_PIN || '';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
+const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
+const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
+const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
+const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.com' : 'https://api.clover.com';
 
 async function readData() {
   try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); }
@@ -64,6 +68,61 @@ function scoreApplication(app) {
   if (Number(app.down) >= 2000) score += 10;
   return Math.min(98, score);
 }
+function cloverReady() {
+  if (!CLOVER_TOKEN || !CLOVER_MERCHANT_ID) throw new Error('Clover is not connected yet. Add CLOVER_ACCESS_TOKEN and CLOVER_MERCHANT_ID in Render.');
+}
+async function cloverGet(pathname) {
+  cloverReady();
+  const response = await fetch(CLOVER_API_BASE + pathname, { headers: { Authorization: 'Bearer ' + CLOVER_TOKEN, Accept: 'application/json' } });
+  const text = await response.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  if (!response.ok) throw new Error('Clover API ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
+  return body;
+}
+function cloverElements(body) { return Array.isArray(body.elements) ? body.elements : []; }
+function firstElement(value) { return value && Array.isArray(value.elements) && value.elements[0] ? value.elements[0] : {}; }
+function mapCloverCustomer(customer) {
+  const first = customer.firstName || '';
+  const last = customer.lastName || '';
+  const name = (first + ' ' + last).trim() || customer.name || customer.id;
+  return {
+    id: 'clover-customer-' + customer.id,
+    cloverCustomerId: customer.id,
+    name,
+    phone: firstElement(customer.phoneNumbers).phoneNumber || '',
+    email: firstElement(customer.emailAddresses).emailAddress || '',
+    contract: 'Clover customer',
+    balance: 0,
+    source: 'Clover',
+    updatedAt: new Date().toISOString()
+  };
+}
+function mapCloverPayment(payment) {
+  const amount = Number(payment.amount || 0) / 100;
+  const created = payment.createdTime ? new Date(payment.createdTime).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US');
+  const customer = payment.employee && payment.employee.name ? payment.employee.name : 'Clover payment';
+  return {
+    id: 'clover-payment-' + payment.id,
+    cloverPaymentId: payment.id,
+    date: created,
+    customer,
+    method: payment.tender && payment.tender.label ? payment.tender.label : 'Clover',
+    amount,
+    status: payment.result === 'SUCCESS' ? 'Paid' : (payment.result || 'Recorded'),
+    source: 'Clover',
+    tone: payment.result === 'SUCCESS' ? 'good' : 'warn'
+  };
+}
+function upsertById(list, incoming) {
+  const next = Array.isArray(list) ? list.slice() : [];
+  incoming.forEach(item => {
+    const index = next.findIndex(existing => existing.id === item.id);
+    if (index >= 0) next[index] = { ...next[index], ...item };
+    else next.unshift(item);
+  });
+  return next;
+}
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -98,10 +157,34 @@ const server = http.createServer(async (req, res) => {
       await writeData(data); return json(res, 200, { ok: true, clover: data.integrations.clover });
     }
     if (url.pathname === '/api/integrations/clover/sync-customers' && req.method === 'POST') {
-      const data = await readData(); data.integrations.clover.lastCustomerSyncAt = new Date().toISOString(); await writeData(data); return json(res, 200, { ok: true, imported: data.customers.length });
+      const data = await readData();
+      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/customers?expand=emailAddresses,phoneNumbers&limit=100');
+      const customers = cloverElements(body).map(mapCloverCustomer);
+      data.customers = upsertById(data.customers, customers);
+      data.integrations = data.integrations || {}; data.integrations.clover = data.integrations.clover || {};
+      data.integrations.clover.connected = true;
+      data.integrations.clover.environment = CLOVER_ENV;
+      data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
+      data.integrations.clover.accessTokenMasked = 'stored in Render';
+      data.integrations.clover.lastCustomerSyncAt = new Date().toISOString();
+      data.integrations.clover.lastCustomerSyncCount = customers.length;
+      await writeData(data);
+      return json(res, 200, { ok: true, imported: customers.length, customers: data.customers.length });
     }
     if (url.pathname === '/api/integrations/clover/sync-payments' && req.method === 'POST') {
-      const data = await readData(); data.integrations.clover.lastPaymentSyncAt = new Date().toISOString(); await writeData(data); return json(res, 200, { ok: true, recurring: data.recurringPayments.length, payments: data.payments.length });
+      const data = await readData();
+      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100&expand=tender,employee');
+      const payments = cloverElements(body).map(mapCloverPayment);
+      data.payments = upsertById(data.payments, payments);
+      data.integrations = data.integrations || {}; data.integrations.clover = data.integrations.clover || {};
+      data.integrations.clover.connected = true;
+      data.integrations.clover.environment = CLOVER_ENV;
+      data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
+      data.integrations.clover.accessTokenMasked = 'stored in Render';
+      data.integrations.clover.lastPaymentSyncAt = new Date().toISOString();
+      data.integrations.clover.lastPaymentSyncCount = payments.length;
+      await writeData(data);
+      return json(res, 200, { ok: true, imported: payments.length, recurring: data.recurringPayments.length, payments: data.payments.length });
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       const event = JSON.parse(await readBody(req) || '{}');
