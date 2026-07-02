@@ -16,7 +16,7 @@ const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
 const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.com' : 'https://api.clover.com';
 const CLOVER_HCO_BASE = CLOVER_ENV === 'sandbox' ? 'https://apisandbox.dev.clover.com' : 'https://api.clover.com';
-const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || CLOVER_TOKEN;
+const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 
@@ -88,6 +88,17 @@ function cloverReady() {
 }
 function cloverCheckoutReady() {
   if (!CLOVER_ECOMMERCE_PRIVATE_KEY || !CLOVER_MERCHANT_ID) throw new Error('Clover Hosted Checkout is not ready. Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render. The key must be the Ecommerce private key for Hosted Checkout.');
+}
+function checkoutStatus() {
+  return {
+    ok: !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID),
+    environment: CLOVER_ENV,
+    merchantId: CLOVER_MERCHANT_ID ? 'stored in Render' : '',
+    ecommercePrivateKey: CLOVER_ECOMMERCE_PRIVATE_KEY ? 'stored in Render' : '',
+    pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID ? 'stored in Render' : '',
+    publicBaseUrl: PUBLIC_BASE_URL,
+    message: CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Hosted Checkout is ready to create Clover payment sessions.' : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.'
+  };
 }
 async function cloverGet(pathname) {
   cloverReady();
@@ -333,6 +344,9 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.integrations = data.integrations || {}; data.integrations.clover = { ...(data.integrations.clover || {}), ...payload, connected: true };
       await writeData(data); return json(res, 200, { ok: true, clover: data.integrations.clover });
+    }
+    if (url.pathname === '/api/integrations/clover/checkout-status' && req.method === 'POST') {
+      return json(res, 200, checkoutStatus());
     }
     if (url.pathname === '/api/integrations/clover/sync-customers' && req.method === 'POST') {
       const data = await readData();
