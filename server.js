@@ -15,6 +15,10 @@ const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
 const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
 const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.com' : 'https://api.clover.com';
+const CLOVER_HCO_BASE = CLOVER_ENV === 'sandbox' ? 'https://apisandbox.dev.clover.com' : 'https://api.clover.com';
+const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || CLOVER_TOKEN;
+const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 
 async function readData() {
   try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); }
@@ -82,6 +86,9 @@ function scoreApplication(app) {
 function cloverReady() {
   if (!CLOVER_TOKEN || !CLOVER_MERCHANT_ID) throw new Error('Clover is not connected yet. Add CLOVER_ACCESS_TOKEN and CLOVER_MERCHANT_ID in Render.');
 }
+function cloverCheckoutReady() {
+  if (!CLOVER_ECOMMERCE_PRIVATE_KEY || !CLOVER_MERCHANT_ID) throw new Error('Clover Hosted Checkout is not ready. Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render. The key must be the Ecommerce private key for Hosted Checkout.');
+}
 async function cloverGet(pathname) {
   cloverReady();
   const response = await fetch(CLOVER_API_BASE + pathname, { headers: { Authorization: 'Bearer ' + CLOVER_TOKEN, Accept: 'application/json' } });
@@ -89,6 +96,25 @@ async function cloverGet(pathname) {
   let body = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
   if (!response.ok) throw new Error('Clover API ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
+  return body;
+}
+async function cloverPostCheckout(payload) {
+  cloverCheckoutReady();
+  const response = await fetch(CLOVER_HCO_BASE + '/invoicingcheckoutservice/v1/checkouts', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
+    },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  if (!response.ok) throw new Error('Clover Hosted Checkout ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
+  if (!body.href) throw new Error('Clover Hosted Checkout did not return a checkout URL.');
   return body;
 }
 function cloverElements(body) { return Array.isArray(body.elements) ? body.elements : []; }
@@ -192,12 +218,95 @@ function cleanAutopayPayload(payload) {
     createdAt: payload.createdAt || new Date().toISOString()
   };
 }
+function cents(amount) { return Math.max(0, Math.round(Number(amount || 0) * 100)); }
+function splitName(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return { firstName: parts[0] || 'WheelsonAuto', lastName: parts.slice(1).join(' ') || 'Customer' };
+}
+function publicPayHtml(request, message = '') {
+  const safeName = escapeHtml(request.customer || 'Customer');
+  const amount = '$' + Number(request.amount || 0).toLocaleString();
+  const vehicle = escapeHtml(request.vehicle || 'WheelsonAuto recurring payment');
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title><link rel="stylesheet" href="/styles.css"></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on Clover secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit">Pay securely with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
+}
+function paymentResultHtml(title, message) {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title><link rel="stylesheet" href="/styles.css"></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></section></main></div></body></html>';
+}
+function createPaymentRequest(data, payload) {
+  const recurring = (data.recurringPayments || []).find(p => p.id === payload.recurringPaymentId) || {};
+  const amount = Number(payload.amount || recurring.amount || 0);
+  const request = {
+    id: 'plink-' + crypto.randomBytes(12).toString('hex'),
+    recurringPaymentId: payload.recurringPaymentId || recurring.id || '',
+    customer: payload.customer || recurring.customer || '',
+    phone: payload.phone || recurring.phone || '',
+    email: payload.email || recurring.email || '',
+    vehicle: payload.vehicle || recurring.vehicle || '',
+    amount,
+    frequency: payload.frequency || recurring.frequency || 'Weekly',
+    status: 'Open',
+    source: 'WheelsonAuto hosted checkout',
+    createdAt: new Date().toISOString(),
+    url: ''
+  };
+  request.url = PUBLIC_BASE_URL + '/pay/' + request.id;
+  return request;
+}
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
     if (await staticFile(res, url.pathname)) return;
     if (url.pathname === '/apply' && req.method === 'GET') return send(res, 200, await appHtml({ publicMode: true }));
+    if (url.pathname.startsWith('/pay/') && req.method === 'GET') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      const requestId = parts[1];
+      const data = await readData();
+      data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+      const request = data.paymentRequests.find(item => item.id === requestId);
+      if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
+      if (parts[2] === 'success') {
+        request.status = 'Paid through Clover checkout';
+        request.paidAt = new Date().toISOString();
+        data.payments = Array.isArray(data.payments) ? data.payments : [];
+        if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
+          data.payments.unshift({ id: 'pay-' + Date.now(), paymentRequestId: request.id, date: new Date().toLocaleString('en-US'), customer: request.customer, method: 'Clover Hosted Checkout', amount: request.amount, status: 'Paid', tone: 'good', source: 'Clover Hosted Checkout' });
+        }
+        const recurring = (data.recurringPayments || []).find(p => p.id === request.recurringPaymentId);
+        if (recurring) { recurring.status = 'Active'; recurring.tone = 'good'; recurring.lastPaymentAt = new Date().toISOString(); }
+        await writeData(data);
+        return send(res, 200, paymentResultHtml('Payment received', 'Thank you. Clover has returned this payment as successful, and WheelsonAuto can now update your account.'));
+      }
+      if (parts[2] === 'failure') {
+        request.status = 'Failed or incomplete';
+        request.failedAt = new Date().toISOString();
+        const recurring = (data.recurringPayments || []).find(p => p.id === request.recurringPaymentId);
+        if (recurring) { recurring.status = 'Failed retry'; recurring.tone = 'bad'; }
+        await writeData(data);
+        return send(res, 200, publicPayHtml(request, 'That payment did not complete. You can try again below, or contact WheelsonAuto for help.'));
+      }
+      return send(res, 200, publicPayHtml(request));
+    }
+    if (url.pathname.startsWith('/api/public/payment-links/') && url.pathname.endsWith('/checkout') && req.method === 'POST') {
+      const requestId = url.pathname.split('/')[4];
+      const data = await readData();
+      data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+      const request = data.paymentRequests.find(item => item.id === requestId);
+      if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
+      const name = splitName(request.customer);
+      const checkout = await cloverPostCheckout({
+        ...(CLOVER_HCO_PAGE_CONFIG_UUID ? { pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID } : {}),
+        customer: { email: request.email || undefined, firstName: name.firstName, lastName: name.lastName, phoneNumber: request.phone || undefined },
+        redirectUrls: { success: PUBLIC_BASE_URL + '/pay/' + request.id + '/success', failure: PUBLIC_BASE_URL + '/pay/' + request.id + '/failure' },
+        shoppingCart: { lineItems: [{ name: 'WheelsonAuto ' + (request.frequency || 'recurring') + ' payment', note: request.vehicle || 'Recurring payment', price: cents(request.amount), unitQty: 1 }] }
+      });
+      request.status = 'Clover checkout opened';
+      request.checkoutSessionId = checkout.checkoutSessionId || '';
+      request.checkoutHref = checkout.href;
+      request.checkoutCreatedAt = new Date().toISOString();
+      await writeData(data);
+      return send(res, 302, '', 'text/plain', { Location: checkout.href });
+    }
     if (url.pathname === '/api/public/applications' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
       const data = await readData();
@@ -255,6 +364,20 @@ const server = http.createServer(async (req, res) => {
       }
       await writeData(data);
       return json(res, 201, { ok: true, autopay });
+    }
+    if (url.pathname === '/api/payment-links' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+      const request = createPaymentRequest(data, payload);
+      data.paymentRequests.unshift(request);
+      const recurring = (data.recurringPayments || []).find(p => p.id === request.recurringPaymentId);
+      if (recurring) {
+        recurring.lastPaymentLinkAt = new Date().toISOString();
+        recurring.lastPaymentLinkUrl = request.url;
+      }
+      await writeData(data);
+      return json(res, 201, { ok: true, paymentLink: request });
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       const event = JSON.parse(await readBody(req) || '{}');
