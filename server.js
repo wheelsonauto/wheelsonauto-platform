@@ -438,12 +438,19 @@ function contactFromRecurringSubscription(subscription, key) {
   const first = firstElement(customer[plural] || subscription[plural]);
   return String(first[key === 'phone' ? 'phoneNumber' : 'emailAddress'] || '');
 }
+function cleanPaymentSource(value) {
+  const source = String(value || '').trim();
+  if (!source) return '';
+  const lowered = source.toLowerCase();
+  if (['clover', 'clover recurring api', 'manual recurring roster import', 'clover plan manager', 'wheelsonauto hosted checkout'].includes(lowered)) return '';
+  if (/\s/.test(source) || source.length < 8) return '';
+  return source;
+}
 function recurringPaymentSource(row) {
   const candidates = [
     row && row.cloverPaymentSource,
     row && row.paymentSource,
     row && row.paymentSourceId,
-    row && row.source,
     row && row.token,
     row && row.paymentToken,
     row && row.multiPayToken,
@@ -458,8 +465,11 @@ function recurringPaymentSource(row) {
     row && row.tender && row.tender.source,
     row && row.tender && row.tender.token
   ];
-  const source = candidates.find(value => typeof value === 'string' && value.trim());
-  return source ? source.trim() : '';
+  for (const value of candidates) {
+    const source = cleanPaymentSource(value);
+    if (source) return source;
+  }
+  return '';
 }
 function membersFromRecurringSubscriptions(plan, subscriptions) {
   const subtotal = amountFromRecurringValue(plan.amount ?? plan.unitAmount ?? plan.price ?? plan.recurringAmount ?? plan.planAmount ?? plan.total);
@@ -510,7 +520,7 @@ function cleanRecurringRosterImport(rows) {
       lastRun: String(row.lastRun || row.lastRunDate || row.lastPaymentDate || '').trim(),
       cloverSubscriptionId: String(row.cloverSubscriptionId || row.subscriptionId || row.id || '').trim(),
       cloverCustomerId: String(row.cloverCustomerId || row.customerId || '').trim(),
-      cloverPaymentSource: String(row.cloverPaymentSource || row.paymentSource || row.source || row.token || row.paymentToken || row.multiPayToken || '').trim(),
+      cloverPaymentSource: recurringPaymentSource(row),
       cardLabel: String(row.cardLabel || row.cardBrand || row.brand || '').trim(),
       cardLast4: String(row.cardLast4 || row.last4 || '').trim()
     };
