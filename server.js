@@ -17,7 +17,9 @@ const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
 const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.com' : 'https://api.clover.com';
 const CLOVER_HCO_BASE = CLOVER_ENV === 'sandbox' ? 'https://apisandbox.dev.clover.com' : 'https://api.clover.com';
 const CLOVER_CHARGE_BASE = process.env.CLOVER_CHARGE_BASE || (CLOVER_ENV === 'sandbox' ? 'https://scl-sandbox.dev.clover.com' : 'https://scl.clover.com');
+const CLOVER_TOKEN_BASE = process.env.CLOVER_TOKEN_BASE || (CLOVER_ENV === 'sandbox' ? 'https://token-sandbox.dev.clover.com' : 'https://token.clover.com');
 const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || '';
+const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || process.env.CLOVER_API_ACCESS_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
@@ -83,7 +85,7 @@ async function appHtml({ publicMode = false } = {}) {
 }
 async function staticFile(res, pathname) {
   const clean = pathname.replace(/^\//, '');
-  if (!['styles.css', 'app.js'].includes(clean)) return false;
+  if (!['styles.css', 'app.js', 'card-setup.js'].includes(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8';
   send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type);
   return true;
@@ -111,6 +113,7 @@ function checkoutStatus() {
     environment: CLOVER_ENV,
     merchantId: CLOVER_MERCHANT_ID ? 'stored in Render' : '',
     ecommercePrivateKey: CLOVER_ECOMMERCE_PRIVATE_KEY ? 'stored in Render' : '',
+    ecommercePublicKey: CLOVER_ECOMMERCE_PUBLIC_KEY ? 'stored in Render' : '',
     pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID ? 'stored in Render' : '',
     publicBaseUrl: PUBLIC_BASE_URL,
     message: CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Hosted Checkout is ready to create Clover payment sessions.' : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.'
@@ -163,6 +166,43 @@ async function cloverPostCharge(payload, req) {
   let body = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
   if (!response.ok) throw new Error('Clover saved-card charge ' + response.status + ': ' + cloverErrorMessage(body, text));
+  return body;
+}
+async function cloverPostCardCustomer(payload) {
+  cloverChargeReady();
+  const response = await fetch(CLOVER_CHARGE_BASE + '/v1/customers', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'WheelsonAuto/1.0'
+    },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  if (!response.ok) throw new Error('Clover card-on-file customer ' + response.status + ': ' + cloverErrorMessage(body, text));
+  return body;
+}
+async function cloverPostRecurring(pathname, payload) {
+  cloverReady();
+  const response = await fetch(CLOVER_HCO_BASE + pathname, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + CLOVER_TOKEN,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'WheelsonAuto/1.0',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
+    },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  if (!response.ok) throw new Error('Clover recurring API ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
   return body;
 }
 function cloverErrorMessage(body, text) {
@@ -525,6 +565,11 @@ function recurringCardChargeSource(row) {
   const source = recurringPaymentSource(row);
   return isCloverEcommerceToken(source) ? source : '';
 }
+function hasWheelsonAutoSavedCard(row) {
+  const setup = String(row && row.paymentSetup || '').toLowerCase();
+  const source = String(row && row.source || '').toLowerCase();
+  return !!(row && row.cardSavedAt) || setup.includes('card saved') || source.includes('wheelsonauto card setup');
+}
 function recurringCardLabel(row) {
   const card = firstCardFromRecurring(row);
   return String(row && row.cardLabel || row && row.cardBrand || row && row.brand || card.cardType || card.brand || card.label || '').trim();
@@ -768,6 +813,105 @@ function createPaymentRequest(data, payload) {
   request.url = PUBLIC_BASE_URL + '/pay/' + request.id;
   return request;
 }
+function createCardSetupRequest(data, payload) {
+  const autopay = cleanAutopayPayload({
+    ...payload,
+    status: 'Waiting on card setup',
+    tone: 'warn',
+    paymentSetup: 'Waiting on customer authorization',
+    nextRun: payload.nextRun || payload.firstRun || 'After card setup'
+  });
+  const request = {
+    id: 'setup-' + crypto.randomBytes(12).toString('hex'),
+    recurringPaymentId: autopay.id,
+    customer: autopay.customer,
+    phone: autopay.phone,
+    email: autopay.email,
+    vehicle: autopay.vehicle,
+    amount: autopay.amount,
+    frequency: autopay.frequency,
+    firstRun: autopay.nextRun,
+    cloverPlanId: String(payload.cloverPlanId || payload.planId || '').trim(),
+    status: 'Open',
+    source: 'WheelsonAuto card setup',
+    createdAt: new Date().toISOString(),
+    url: ''
+  };
+  request.url = PUBLIC_BASE_URL + '/setup-card/' + request.id;
+  autopay.cardSetupRequestId = request.id;
+  autopay.cardSetupUrl = request.url;
+  autopay.cloverPlanId = request.cloverPlanId;
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
+  data.recurringPayments.unshift(autopay);
+  data.cardSetupRequests.unshift(request);
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
+    data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, contract: 'Autopay card setup', balance: 0, source: 'WheelsonAuto' });
+  }
+  return { autopay, request };
+}
+function setupCardHtml(request, message = '') {
+  const setupReady = !!(CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY);
+  const tokenBase = CLOVER_TOKEN_BASE;
+  const config = {
+    requestId: request.id,
+    publicKey: CLOVER_ECOMMERCE_PUBLIC_KEY,
+    tokenUrl: tokenBase + '/v1/tokens',
+    submitUrl: '/api/public/card-setup/' + encodeURIComponent(request.id) + '/complete'
+  };
+  const disabled = setupReady ? '' : ' disabled';
+  const amount = '$' + Number(request.amount || 0).toLocaleString();
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title><link rel="stylesheet" href="/styles.css"></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save your card securely with Clover so WheelsonAuto can run authorized recurring and manual catch-up payments.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Card setup is not ready yet. WheelsonAuto needs the Clover Ecommerce public key and private key in Render.</div>' : '') + '<form id="cardSetupForm" class="form" style="margin-top:14px"><div class="field span2"><label>Name on card</label><input id="cardName" autocomplete="cc-name" value="' + escapeHtml(request.customer || '') + '"' + disabled + '></div><div class="field span2"><label>Card number</label><input id="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="Card number"' + disabled + '></div><div class="field"><label>Month</label><input id="expMonth" inputmode="numeric" autocomplete="cc-exp-month" placeholder="MM"' + disabled + '></div><div class="field"><label>Year</label><input id="expYear" inputmode="numeric" autocomplete="cc-exp-year" placeholder="YYYY"' + disabled + '></div><div class="field"><label>CVV</label><input id="cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="CVV"' + disabled + '></div><div class="field"><label>ZIP</label><input id="zip" inputmode="numeric" autocomplete="postal-code" placeholder="ZIP"' + disabled + '></div><label class="check span2"><input id="consent" type="checkbox"' + disabled + '> I authorize WheelsonAuto to save this card with Clover and charge authorized recurring payments, retries, and manual catch-up payments for my account.</label><div class="notice span2">Your card is sent directly to Clover for tokenization. WheelsonAuto stores only the Clover saved-card/customer reference, not the card number or CVV.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Save card with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Cancel</a></div></form><div id="setupMessage" class="notice" style="display:none;margin-top:12px"></div></section></main></div><script>window.__CARD_SETUP__=' + JSON.stringify(config).replace(/</g, '\\u003c') + ';</script><script src="/card-setup.js"></script></body></html>';
+}
+async function completeCardSetup(data, request, payload) {
+  const token = cleanPaymentSource(payload.token || payload.source || '');
+  if (!isCloverEcommerceToken(token)) throw new Error('Clover did not return a valid card token.');
+  const name = splitName(request.customer);
+  const customer = await cloverPostCardCustomer({
+    email: request.email || undefined,
+    firstName: name.firstName,
+    lastName: name.lastName,
+    source: token
+  });
+  const savedCard = firstElement(customer.sources) || {};
+  const cardSource = token;
+  let subscription = null;
+  if (request.cloverPlanId) {
+    subscription = await cloverPostRecurring('/recurring/v1/plans/' + encodeURIComponent(request.cloverPlanId) + '/subscriptions', {
+      collectionMethod: 'CHARGE_AUTOMATICALLY',
+      customerId: customer.id,
+      amount: Number(request.amount || 0),
+      startDate: request.firstRun || undefined
+    });
+  }
+  request.status = subscription ? 'Card saved and Clover subscription created' : 'Card saved for manual charges';
+  request.completedAt = new Date().toISOString();
+  request.cloverCustomerId = customer.id || '';
+  request.cloverPaymentSource = cardSource;
+  request.cloverCardId = String(savedCard.id || savedCard || '');
+  request.cloverSubscriptionId = subscription && subscription.id || '';
+  const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
+  if (recurring) {
+    recurring.status = 'Active';
+    recurring.tone = 'good';
+    recurring.paymentSetup = subscription ? 'Active in Clover' : 'Card saved for WheelsonAuto charges';
+    recurring.cloverCustomerId = customer.id || '';
+    recurring.cloverPaymentSource = cardSource;
+    recurring.cloverCardId = request.cloverCardId;
+    recurring.cloverSubscriptionId = request.cloverSubscriptionId;
+    recurring.cardLabel = payload.brand || '';
+    recurring.cardLast4 = payload.last4 || '';
+    recurring.cardSavedAt = new Date().toISOString();
+    recurring.notes = [recurring.notes, 'Customer authorized card-on-file through WheelsonAuto setup link.'].filter(Boolean).join('\n');
+  }
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  const existing = data.customers.find(c => String(c.name || '').toLowerCase() === String(request.customer || '').toLowerCase());
+  const customerPatch = { cloverCustomerId: customer.id || '', cardLast4: payload.last4 || '', cardLabel: payload.brand || '', source: 'WheelsonAuto card setup' };
+  if (existing) Object.assign(existing, customerPatch);
+  await writeData(data);
+  return { customer, subscription, recurring };
+}
 function allRecurringRows(data) {
   return [
     ...(((data.integrations || {}).clover || {}).recurringPlanMembers || []),
@@ -815,7 +959,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
       data.integrations.clover.lastManualChargeLookupError = String(err && err.message || err);
     }
   }
-  const source = cardSource;
+  const source = cardSource || (hasWheelsonAutoSavedCard(recurring) ? customerSource : '');
   if (!source) throw new Error('Clover shows a card on file for this recurring customer, but it did not return a chargeable Ecommerce saved-card token. Use Pay link for this charge, or save the customer card through WheelsonAuto checkout before using Charge saved card.');
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
@@ -886,6 +1030,17 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
     if (await staticFile(res, url.pathname)) return;
     if (url.pathname === '/apply' && req.method === 'GET') return send(res, 200, await appHtml({ publicMode: true }));
+    if (url.pathname.startsWith('/setup-card/') && req.method === 'GET') {
+      const requestId = url.pathname.split('/').filter(Boolean)[1];
+      const data = await readData();
+      data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
+      const request = data.cardSetupRequests.find(item => item.id === requestId);
+      if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'));
+      if (String(request.status || '').toLowerCase().includes('card saved')) {
+        return send(res, 200, paymentResultHtml('Card already saved', 'This WheelsonAuto card setup link has already been completed.'));
+      }
+      return send(res, 200, setupCardHtml(request));
+    }
     if (url.pathname.startsWith('/pay/') && req.method === 'GET') {
       const parts = url.pathname.split('/').filter(Boolean);
       const requestId = parts[1];
@@ -934,6 +1089,24 @@ const server = http.createServer(async (req, res) => {
       if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, vehicle: app.vehicle, created: 'Just now', status: 'Submitted' });
       await writeData(data);
       return json(res, 201, { ok: true, application: app });
+    }
+    if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
+      const requestId = url.pathname.split('/')[3];
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
+      const request = data.cardSetupRequests.find(item => item.id === requestId);
+      if (!request) return json(res, 404, { ok: false, error: 'Card setup link was not found.' });
+      try {
+        const result = await completeCardSetup(data, request, payload);
+        return json(res, 201, { ok: true, recurring: result.recurring, cloverCustomerId: request.cloverCustomerId, cloverSubscriptionId: request.cloverSubscriptionId });
+      } catch (err) {
+        request.status = 'Card setup failed';
+        request.lastError = String(err && err.message || err);
+        request.lastFailedAt = new Date().toISOString();
+        await writeData(data);
+        return json(res, 400, { ok: false, error: request.lastError });
+      }
     }
     if (url.pathname === '/login' && req.method === 'POST') {
       const pin = new URLSearchParams(await readBody(req)).get('pin');
@@ -1030,6 +1203,13 @@ const server = http.createServer(async (req, res) => {
       }
       await writeData(data);
       return json(res, 201, { ok: true, autopay });
+    }
+    if (url.pathname === '/api/card-setup-requests' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const created = createCardSetupRequest(data, payload);
+      await writeData(data);
+      return json(res, 201, { ok: true, autopay: created.autopay, setupLink: created.request });
     }
     if (url.pathname === '/api/integrations/clover/manual-charge' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
