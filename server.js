@@ -129,10 +129,10 @@ async function cloverPostCheckout(payload) {
   return body;
 }
 async function cloverGetRecurring(pathname) {
-  cloverCheckoutReady();
+  cloverReady();
   const response = await fetch(CLOVER_HCO_BASE + pathname, {
     headers: {
-      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
+      Authorization: 'Bearer ' + CLOVER_TOKEN,
       Accept: 'application/json',
       'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
     }
