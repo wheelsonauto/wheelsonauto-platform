@@ -475,13 +475,18 @@ async function syncCloverRecurringPlans(data) {
   if (savedActive > apiActive) {
     throw new Error('Clover recurring API returned ' + apiActive + ' active subscriptions, less than saved Plan Manager total ' + savedActive + '. Keeping saved plan totals.');
   }
+  const savedMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const savedNamedMembers = savedMembers.filter(member => String(member.customer || '').trim() && member.customer !== 'Clover recurring customer');
+  const importedNamedMembers = importedMembers.filter(member => String(member.customer || '').trim() && member.customer !== 'Clover recurring customer');
+  const keepSavedMembers = savedNamedMembers.length > importedNamedMembers.length;
   data.integrations.clover.recurringPlans = plans;
-  data.integrations.clover.recurringPlanMembers = importedMembers;
+  data.integrations.clover.recurringPlanMembers = keepSavedMembers ? savedMembers : importedMembers;
   data.integrations.clover.recurringPlanSummary = summary;
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
   data.integrations.clover.lastRecurringPlanSyncError = '';
   data.integrations.clover.lastRecurringPlanSyncSource = 'Clover recurring API';
   data.integrations.clover.lastRecurringPlanSyncPaths = attempted;
+  data.integrations.clover.lastRecurringMemberSyncWarning = keepSavedMembers ? ('Clover returned ' + importedNamedMembers.length + ' named recurring customers, less than saved roster ' + savedNamedMembers.length + '. Keeping saved recurring roster.') : '';
   return { recurringPlans: plans.length, summary: data.integrations.clover.recurringPlanSummary };
 }
 function cents(amount) { return Math.max(0, Math.round(Number(amount || 0) * 100)); }
