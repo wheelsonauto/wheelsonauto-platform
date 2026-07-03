@@ -446,7 +446,28 @@ function cleanPaymentSource(value) {
   if (/\s/.test(source) || source.length < 8) return '';
   return source;
 }
+function firstCardFromRecurring(row) {
+  const customer = row && (row.customer || row.customerInfo) || {};
+  const collections = [
+    row && row.cards,
+    row && row.card,
+    row && row.paymentCards,
+    row && row.paymentMethods,
+    customer && customer.cards,
+    customer && customer.paymentCards,
+    customer && customer.paymentMethods
+  ];
+  for (const collection of collections) {
+    if (!collection) continue;
+    const cards = Array.isArray(collection) ? collection : collectionElements(collection);
+    const card = cards.find(item => item && (item.id || item.token || item.source || item.paymentSource));
+    if (card) return card;
+    if (collection.id || collection.token || collection.source || collection.paymentSource) return collection;
+  }
+  return {};
+}
 function recurringPaymentSource(row) {
+  const card = firstCardFromRecurring(row);
   const candidates = [
     row && row.cloverPaymentSource,
     row && row.paymentSource,
@@ -463,13 +484,25 @@ function recurringPaymentSource(row) {
     row && row.paymentMethod && row.paymentMethod.token,
     row && row.paymentMethod && row.paymentMethod.paymentSource,
     row && row.tender && row.tender.source,
-    row && row.tender && row.tender.token
+    row && row.tender && row.tender.token,
+    card && card.paymentSource,
+    card && card.source,
+    card && card.token,
+    card && card.id
   ];
   for (const value of candidates) {
     const source = cleanPaymentSource(value);
     if (source) return source;
   }
   return '';
+}
+function recurringCardLabel(row) {
+  const card = firstCardFromRecurring(row);
+  return String(row && row.cardLabel || row && row.cardBrand || row && row.brand || card.cardType || card.brand || card.label || '').trim();
+}
+function recurringCardLast4(row) {
+  const card = firstCardFromRecurring(row);
+  return String(row && row.cardLast4 || row && row.last4 || card.last4 || '').trim();
 }
 function membersFromRecurringSubscriptions(plan, subscriptions) {
   const subtotal = amountFromRecurringValue(plan.amount ?? plan.unitAmount ?? plan.price ?? plan.recurringAmount ?? plan.planAmount ?? plan.total);
@@ -493,8 +526,8 @@ function membersFromRecurringSubscriptions(plan, subscriptions) {
       cloverSubscriptionId: String(item.id || item.uuid || item.subscriptionId || ''),
       cloverCustomerId: String(customer.id || item.customerId || item.cloverCustomerId || ''),
       cloverPaymentSource: recurringPaymentSource(item),
-      cardLabel: String(item.cardLabel || item.cardBrand || item.brand || item.card && item.card.brand || item.card && item.card.label || '').trim(),
-      cardLast4: String(item.cardLast4 || item.last4 || item.card && item.card.last4 || '').trim()
+      cardLabel: recurringCardLabel(item),
+      cardLast4: recurringCardLast4(item)
     };
   });
 }
@@ -521,8 +554,8 @@ function cleanRecurringRosterImport(rows) {
       cloverSubscriptionId: String(row.cloverSubscriptionId || row.subscriptionId || row.id || '').trim(),
       cloverCustomerId: String(row.cloverCustomerId || row.customerId || '').trim(),
       cloverPaymentSource: recurringPaymentSource(row),
-      cardLabel: String(row.cardLabel || row.cardBrand || row.brand || '').trim(),
-      cardLast4: String(row.cardLast4 || row.last4 || '').trim()
+      cardLabel: recurringCardLabel(row),
+      cardLast4: recurringCardLast4(row)
     };
   }).filter(row => row.customer || row.phone || row.email || row.amount);
 }
@@ -536,6 +569,22 @@ function mergeRecurringRoster(existing, imported) {
     byKey.set(key, { ...old, ...row, id: old.id || row.id });
   });
   return Array.from(byKey.values());
+}
+function enrichRecurringRoster(existing, imported) {
+  const keyFor = row => String(row.cloverSubscriptionId || row.id || ((row.customer || '').toLowerCase() + '|' + (row.phone || '') + '|' + (row.plan || row.amount || ''))).trim();
+  const importedByKey = new Map();
+  (Array.isArray(imported) ? imported : []).forEach(row => importedByKey.set(keyFor(row), row));
+  return (Array.isArray(existing) ? existing : []).map(row => {
+    const incoming = importedByKey.get(keyFor(row)) || {};
+    return {
+      ...row,
+      cloverPaymentSource: row.cloverPaymentSource || incoming.cloverPaymentSource || '',
+      cardLabel: row.cardLabel || incoming.cardLabel || '',
+      cardLast4: row.cardLast4 || incoming.cardLast4 || '',
+      cloverCustomerId: row.cloverCustomerId || incoming.cloverCustomerId || '',
+      cloverSubscriptionId: row.cloverSubscriptionId || incoming.cloverSubscriptionId || ''
+    };
+  });
 }
 function countFromRecurringPlan(plan) {
   const keys = [
@@ -647,7 +696,7 @@ async function syncCloverRecurringPlans(data) {
   const importedNamedMembers = importedMembers.filter(member => String(member.customer || '').trim() && member.customer !== 'Clover recurring customer');
   const keepSavedMembers = savedNamedMembers.length > importedNamedMembers.length;
   data.integrations.clover.recurringPlans = plans;
-  data.integrations.clover.recurringPlanMembers = keepSavedMembers ? savedMembers : importedMembers;
+  data.integrations.clover.recurringPlanMembers = keepSavedMembers ? enrichRecurringRoster(savedMembers, importedMembers) : importedMembers;
   data.integrations.clover.recurringPlanSummary = summary;
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
   data.integrations.clover.lastRecurringPlanSyncError = '';
@@ -712,7 +761,27 @@ function chargeReference() {
 async function chargeSavedRecurringCard(data, payload, req) {
   const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
   if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
-  const source = recurringPaymentSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
+  let source = recurringPaymentSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
+  if (!source && recurring.cloverSubscriptionId) {
+    try {
+      const fresh = await cloverGetRecurring('/recurring/v1/subscriptions/' + encodeURIComponent(recurring.cloverSubscriptionId));
+      source = recurringPaymentSource(fresh);
+      if (source) {
+        recurring.cloverPaymentSource = source;
+        recurring.cardLabel = recurring.cardLabel || recurringCardLabel(fresh);
+        recurring.cardLast4 = recurring.cardLast4 || recurringCardLast4(fresh);
+        updateRecurringChargeState(data, recurring.id, {
+          cloverPaymentSource: recurring.cloverPaymentSource,
+          cardLabel: recurring.cardLabel,
+          cardLast4: recurring.cardLast4
+        });
+      }
+    } catch (err) {
+      data.integrations = data.integrations || {};
+      data.integrations.clover = data.integrations.clover || {};
+      data.integrations.clover.lastManualChargeLookupError = String(err && err.message || err);
+    }
+  }
   if (!source) throw new Error('No saved Clover payment source is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
