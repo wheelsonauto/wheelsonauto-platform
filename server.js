@@ -168,7 +168,7 @@ async function cloverPostCharge(payload, req) {
 function cloverErrorMessage(body, text) {
   const parts = [body && body.message, body && body.error, body && body.code, body && body.decline_code, body && body.param, body && body.type]
     .filter(Boolean)
-    .map(value => String(value));
+    .map(value => typeof value === 'object' ? JSON.stringify(value) : String(value));
   const detail = parts.join(' | ');
   const raw = String(text || '').trim();
   if (raw && raw !== detail && raw.length <= 600) return detail ? detail + ' | ' + raw : raw;
@@ -455,9 +455,6 @@ function cleanPaymentSource(value) {
   if (/\s/.test(source) || source.length < 8) return '';
   return source;
 }
-function isMultiPayToken(value) {
-  return /^clv_/i.test(String(value || '').trim());
-}
 function recurringCustomerSource(row) {
   const customer = row && (row.customer || row.customerInfo) || {};
   const candidates = [
@@ -512,7 +509,8 @@ function recurringPaymentSource(row) {
     row && row.tender && row.tender.token,
     card && card.paymentSource,
     card && card.source,
-    card && card.token
+    card && card.token,
+    card && card.id
   ];
   for (const value of candidates) {
     const source = cleanPaymentSource(value);
@@ -520,9 +518,8 @@ function recurringPaymentSource(row) {
   }
   return '';
 }
-function recurringMultiPaySource(row) {
-  const source = recurringPaymentSource(row);
-  return isMultiPayToken(source) ? source : '';
+function recurringCardChargeSource(row) {
+  return recurringPaymentSource(row);
 }
 function recurringCardLabel(row) {
   const card = firstCardFromRecurring(row);
@@ -790,12 +787,12 @@ async function chargeSavedRecurringCard(data, payload, req) {
   const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
   if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
   let customerSource = recurringCustomerSource(recurring);
-  let cardSource = recurringMultiPaySource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
+  let cardSource = recurringCardChargeSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
   if ((!customerSource || !cardSource) && recurring.cloverSubscriptionId) {
     try {
       const fresh = await cloverGetRecurring('/recurring/v1/subscriptions/' + encodeURIComponent(recurring.cloverSubscriptionId));
       customerSource = customerSource || recurringCustomerSource(fresh);
-      cardSource = cardSource || recurringMultiPaySource(fresh);
+      cardSource = cardSource || recurringCardChargeSource(fresh);
       if (customerSource || cardSource) {
         recurring.cloverCustomerId = recurring.cloverCustomerId || customerSource;
         recurring.cloverPaymentSource = recurring.cloverPaymentSource || cardSource;
@@ -814,8 +811,8 @@ async function chargeSavedRecurringCard(data, payload, req) {
       data.integrations.clover.lastManualChargeLookupError = String(err && err.message || err);
     }
   }
-  const source = customerSource || cardSource;
-  if (!source) throw new Error('No chargeable Clover customer ID or multi-pay saved-card token is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
+  const source = cardSource || customerSource;
+  if (!source) throw new Error('No chargeable Clover customer ID or saved-card token is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
   const ref = chargeReference();
