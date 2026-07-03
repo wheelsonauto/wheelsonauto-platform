@@ -370,6 +370,42 @@ function membersFromRecurringSubscriptions(plan, subscriptions) {
     };
   });
 }
+function cleanRecurringRosterImport(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => {
+    const amount = Number(row.amount ?? row.subtotal ?? row.weekly ?? row.payment ?? row.plan ?? 0);
+    const plan = String(row.plan || row.name || row.amount || amount || '').trim();
+    const customer = String(row.customer || row.name || row.customerName || row.fullName || '').trim();
+    const phone = String(row.phone || row.phoneNumber || row.mobile || '').trim();
+    const email = String(row.email || row.emailAddress || '').trim();
+    return {
+      id: String(row.id || row.cloverSubscriptionId || ('manual-recurring-member-' + Date.now() + '-' + index)),
+      source: 'Manual recurring roster import',
+      customer: customer || 'Clover recurring customer',
+      phone,
+      email,
+      vehicle: String(row.vehicle || row.description || '').trim(),
+      plan,
+      amount: Number.isFinite(amount) ? amount : 0,
+      frequency: String(row.frequency || 'Weekly').trim(),
+      status: String(row.status || 'Active').trim(),
+      nextRun: String(row.nextRun || row.nextRunDate || row.nextPaymentDate || '').trim(),
+      lastRun: String(row.lastRun || row.lastRunDate || row.lastPaymentDate || '').trim(),
+      cloverSubscriptionId: String(row.cloverSubscriptionId || row.subscriptionId || row.id || '').trim(),
+      cloverCustomerId: String(row.cloverCustomerId || row.customerId || '').trim()
+    };
+  }).filter(row => row.customer || row.phone || row.email || row.amount);
+}
+function mergeRecurringRoster(existing, imported) {
+  const byKey = new Map();
+  const keyFor = row => String(row.cloverSubscriptionId || row.id || ((row.customer || '').toLowerCase() + '|' + (row.phone || '') + '|' + (row.plan || row.amount || ''))).trim();
+  (Array.isArray(existing) ? existing : []).forEach(row => byKey.set(keyFor(row), row));
+  (Array.isArray(imported) ? imported : []).forEach(row => {
+    const key = keyFor(row);
+    const old = byKey.get(key) || {};
+    byKey.set(key, { ...old, ...row, id: old.id || row.id });
+  });
+  return Array.from(byKey.values());
+}
 function countFromRecurringPlan(plan) {
   const keys = [
     'activeCustomers', 'activeCustomerCount', 'customerCount', 'customersCount',
@@ -621,6 +657,18 @@ const server = http.createServer(async (req, res) => {
       data.integrations.clover.lastRecurringPlanSyncSource = 'Manual Plan Manager import';
       await writeData(data);
       return json(res, 200, { ok: true, imported: plans.length, summary: data.integrations.clover.recurringPlanSummary });
+    }
+    if (url.pathname === '/api/integrations/clover/import-recurring-roster' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.clover = data.integrations.clover || {};
+      const imported = cleanRecurringRosterImport(payload.members || payload.rows || []);
+      data.integrations.clover.recurringPlanMembers = mergeRecurringRoster(data.integrations.clover.recurringPlanMembers || [], imported);
+      data.integrations.clover.lastRecurringRosterImportAt = new Date().toISOString();
+      data.integrations.clover.lastRecurringMemberSyncWarning = '';
+      await writeData(data);
+      return json(res, 200, { ok: true, imported: imported.length, members: data.integrations.clover.recurringPlanMembers.length });
     }
     if (url.pathname === '/api/integrations/clover/sync-customers' && req.method === 'POST') {
       const data = await readData();
