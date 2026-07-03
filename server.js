@@ -329,13 +329,40 @@ function frequencyFromRecurringPlan(plan) {
 function activeSubscriptionCount(subscriptions) {
   return (subscriptions || []).filter(item => {
     const status = String(item.status || item.state || '').toLowerCase();
-    return !status || ['active', 'trialing', 'current', 'success'].includes(status);
+    return !status || !['canceled', 'cancelled', 'deleted', 'inactive', 'expired', 'failed', 'paused', 'suspended', 'void', 'disabled'].includes(status);
   }).length;
+}
+function countFromRecurringPlan(plan) {
+  const keys = [
+    'activeCustomers', 'activeCustomerCount', 'customerCount', 'customersCount',
+    'activeSubscriptions', 'activeSubscriptionCount', 'subscriptionCount',
+    'subscriptionsCount', 'subscriberCount', 'subscribersCount',
+    'totalSubscriptions', 'totalSubscribers', 'quantity'
+  ];
+  for (const key of keys) {
+    const value = plan && plan[key];
+    if (Array.isArray(value)) return value.length;
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  for (const key of ['customers', 'subscriptions', 'subscribers']) {
+    const value = plan && plan[key];
+    if (Array.isArray(value)) return value.length;
+    if (value && typeof value === 'object') {
+      const collection = collectionElements(value);
+      if (collection.length) return collection.length;
+      const number = Number(value.count ?? value.total ?? value.totalCount ?? value.activeCount);
+      if (Number.isFinite(number) && number >= 0) return number;
+    }
+  }
+  return 0;
 }
 function cleanRecurringPlanFromApi(plan, subscriptions, index) {
   const subtotal = amountFromRecurringValue(plan.amount ?? plan.unitAmount ?? plan.price ?? plan.recurringAmount ?? plan.planAmount ?? plan.total);
   const frequency = frequencyFromRecurringPlan(plan);
-  const customers = activeSubscriptionCount(subscriptions);
+  const subscriptionCustomers = activeSubscriptionCount(subscriptions);
+  const planCustomers = countFromRecurringPlan(plan);
+  const customers = Math.max(subscriptionCustomers, planCustomers);
   const status = String(plan.status || plan.state || 'Active');
   return {
     id: String(plan.id || plan.uuid || ('clover-api-plan-' + index)),
@@ -346,7 +373,9 @@ function cleanRecurringPlanFromApi(plan, subscriptions, index) {
     lastRun: String(plan.lastRun || plan.lastRunDate || plan.lastPaymentDate || ''),
     status: status.toLowerCase() === 'deleted' ? 'Inactive' : status,
     possibleWeekly: Math.round(weeklyEquivalent(subtotal, frequency) * customers * 100) / 100,
-    source: 'Clover recurring API'
+    source: 'Clover recurring API',
+    cloverSubscriptionRows: subscriptions.length,
+    cloverPlanCustomerCount: planCustomers
   };
 }
 async function syncCloverRecurringPlans(data) {
