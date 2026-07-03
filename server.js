@@ -421,7 +421,7 @@ async function syncCloverRecurringPlans(data) {
   }
   const plans = cleanCloverPlanSummary(importedPlans);
   const summary = summarizeCloverPlans(plans);
-  data.integrations.clover.lastRecurringPlanSyncDetails = plans.map(plan => ({
+  data.integrations.clover.lastRecurringPlanSyncDetails = importedPlans.map(plan => ({
     plan: plan.plan,
     customers: Number(plan.customers || 0),
     subscriptionRows: Number(plan.cloverSubscriptionRows || 0),
