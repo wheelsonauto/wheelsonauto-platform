@@ -16,6 +16,7 @@ const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
 const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.com' : 'https://api.clover.com';
 const CLOVER_HCO_BASE = CLOVER_ENV === 'sandbox' ? 'https://apisandbox.dev.clover.com' : 'https://api.clover.com';
+const CLOVER_CHARGE_BASE = process.env.CLOVER_CHARGE_BASE || (CLOVER_ENV === 'sandbox' ? 'https://scl-sandbox.dev.clover.com' : 'https://scl.clover.com');
 const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
@@ -101,6 +102,9 @@ function cloverReady() {
 function cloverCheckoutReady() {
   if (!CLOVER_ECOMMERCE_PRIVATE_KEY || !CLOVER_MERCHANT_ID) throw new Error('Clover Hosted Checkout is not ready. Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render. The key must be the Ecommerce private key for Hosted Checkout.');
 }
+function cloverChargeReady() {
+  if (!CLOVER_ECOMMERCE_PRIVATE_KEY) throw new Error('Clover saved-card charging is not ready. Add CLOVER_ECOMMERCE_PRIVATE_KEY in Render.');
+}
 function checkoutStatus() {
   return {
     ok: !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID),
@@ -138,6 +142,27 @@ async function cloverPostCheckout(payload) {
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
   if (!response.ok) throw new Error('Clover Hosted Checkout ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
   if (!body.href) throw new Error('Clover Hosted Checkout did not return a checkout URL.');
+  return body;
+}
+async function cloverPostCharge(payload, req) {
+  cloverChargeReady();
+  const forwardedFor = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+  const response = await fetch(CLOVER_CHARGE_BASE + '/v1/charges', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'WheelsonAuto/1.0',
+      'x-forwarded-for': forwardedFor,
+      'idempotency-key': payload.idempotencyKey
+    },
+    body: JSON.stringify(payload.charge)
+  });
+  const text = await response.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  if (!response.ok) throw new Error('Clover saved-card charge ' + response.status + ': ' + (body.message || body.error || body.code || body.decline_code || text || 'Request failed'));
   return body;
 }
 async function cloverGetRecurring(pathname) {
@@ -322,6 +347,9 @@ function cleanAutopayPayload(payload) {
     provider: 'Clover',
     cloverCustomerId: String(payload.cloverCustomerId || '').trim(),
     cloverSubscriptionId: String(payload.cloverSubscriptionId || '').trim(),
+    cloverPaymentSource: String(payload.cloverPaymentSource || payload.paymentSource || payload.source || '').trim(),
+    cardLabel: String(payload.cardLabel || '').trim(),
+    cardLast4: String(payload.cardLast4 || '').trim(),
     paymentSetup: payload.paymentSetup || 'Needs Clover setup',
     notes: String(payload.notes || '').trim(),
     createdAt: payload.createdAt || new Date().toISOString()
@@ -410,6 +438,29 @@ function contactFromRecurringSubscription(subscription, key) {
   const first = firstElement(customer[plural] || subscription[plural]);
   return String(first[key === 'phone' ? 'phoneNumber' : 'emailAddress'] || '');
 }
+function recurringPaymentSource(row) {
+  const candidates = [
+    row && row.cloverPaymentSource,
+    row && row.paymentSource,
+    row && row.paymentSourceId,
+    row && row.source,
+    row && row.token,
+    row && row.paymentToken,
+    row && row.multiPayToken,
+    row && row.mtoken,
+    row && row.cardToken,
+    row && row.card && row.card.token,
+    row && row.card && row.card.source,
+    row && row.card && row.card.paymentSource,
+    row && row.paymentMethod && row.paymentMethod.source,
+    row && row.paymentMethod && row.paymentMethod.token,
+    row && row.paymentMethod && row.paymentMethod.paymentSource,
+    row && row.tender && row.tender.source,
+    row && row.tender && row.tender.token
+  ];
+  const source = candidates.find(value => typeof value === 'string' && value.trim());
+  return source ? source.trim() : '';
+}
 function membersFromRecurringSubscriptions(plan, subscriptions) {
   const subtotal = amountFromRecurringValue(plan.amount ?? plan.unitAmount ?? plan.price ?? plan.recurringAmount ?? plan.planAmount ?? plan.total);
   const frequency = frequencyFromRecurringPlan(plan);
@@ -430,7 +481,10 @@ function membersFromRecurringSubscriptions(plan, subscriptions) {
       nextRun: String(item.nextRun || item.nextRunDate || item.nextBillingDate || item.nextPaymentDate || ''),
       lastRun: String(item.lastRun || item.lastRunDate || item.lastPaymentDate || plan.lastRun || plan.lastRunDate || ''),
       cloverSubscriptionId: String(item.id || item.uuid || item.subscriptionId || ''),
-      cloverCustomerId: String(customer.id || item.customerId || item.cloverCustomerId || '')
+      cloverCustomerId: String(customer.id || item.customerId || item.cloverCustomerId || ''),
+      cloverPaymentSource: recurringPaymentSource(item),
+      cardLabel: String(item.cardLabel || item.cardBrand || item.brand || item.card && item.card.brand || item.card && item.card.label || '').trim(),
+      cardLast4: String(item.cardLast4 || item.last4 || item.card && item.card.last4 || '').trim()
     };
   });
 }
@@ -455,7 +509,10 @@ function cleanRecurringRosterImport(rows) {
       nextRun: String(row.nextRun || row.nextRunDate || row.nextPaymentDate || '').trim(),
       lastRun: String(row.lastRun || row.lastRunDate || row.lastPaymentDate || '').trim(),
       cloverSubscriptionId: String(row.cloverSubscriptionId || row.subscriptionId || row.id || '').trim(),
-      cloverCustomerId: String(row.cloverCustomerId || row.customerId || '').trim()
+      cloverCustomerId: String(row.cloverCustomerId || row.customerId || '').trim(),
+      cloverPaymentSource: String(row.cloverPaymentSource || row.paymentSource || row.source || row.token || row.paymentToken || row.multiPayToken || '').trim(),
+      cardLabel: String(row.cardLabel || row.cardBrand || row.brand || '').trim(),
+      cardLast4: String(row.cardLast4 || row.last4 || '').trim()
     };
   }).filter(row => row.customer || row.phone || row.email || row.amount);
 }
@@ -623,6 +680,74 @@ function createPaymentRequest(data, payload) {
   request.url = PUBLIC_BASE_URL + '/pay/' + request.id;
   return request;
 }
+function allRecurringRows(data) {
+  return [
+    ...(((data.integrations || {}).clover || {}).recurringPlanMembers || []),
+    ...(data.recurringPayments || [])
+  ];
+}
+function findRecurringRow(data, id) {
+  const rows = allRecurringRows(data);
+  return rows.find(row => row && row.id === id) || rows.find(row => row && row.cloverSubscriptionId && row.cloverSubscriptionId === id) || null;
+}
+function updateRecurringChargeState(data, id, patch) {
+  const local = (data.recurringPayments || []).find(row => row.id === id || row.cloverSubscriptionId === id);
+  if (local) Object.assign(local, patch);
+  const member = ((((data.integrations || {}).clover || {}).recurringPlanMembers || [])).find(row => row.id === id || row.cloverSubscriptionId === id);
+  if (member) Object.assign(member, patch);
+}
+function chargeReference() {
+  return ('WOA' + Date.now().toString(36)).slice(-12).toUpperCase();
+}
+async function chargeSavedRecurringCard(data, payload, req) {
+  const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+  if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
+  const source = recurringPaymentSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
+  if (!source) throw new Error('No saved Clover payment source is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
+  const amount = Number(payload.amount || recurring.amount || 0);
+  if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
+  const ref = chargeReference();
+  const charge = await cloverPostCharge({
+    idempotencyKey: 'woa-' + (payload.recurringPaymentId || recurring.id) + '-' + cents(amount) + '-' + Date.now(),
+    charge: {
+      amount: cents(amount),
+      currency: 'usd',
+      capture: true,
+      source,
+      description: 'WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment',
+      external_reference_id: ref,
+      external_customer_reference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
+      receipt_email: recurring.email || undefined,
+      stored_credentials: { sequence: 'SUBSEQUENT', is_scheduled: false }
+    }
+  }, req);
+  const status = String(charge.status || charge.result || '').toLowerCase();
+  const paid = status === 'paid' || status === 'succeeded' || status === 'success' || charge.paid === true || charge.captured === true;
+  const payment = {
+    id: 'clover-manual-charge-' + (charge.id || Date.now()),
+    cloverChargeId: charge.id || charge.charge || '',
+    date: new Date().toLocaleString('en-US'),
+    customer: recurring.customer,
+    method: 'Clover saved card',
+    amount,
+    status: paid ? 'Paid' : (charge.status || charge.result || 'Submitted'),
+    tone: paid ? 'good' : 'warn',
+    source: 'Clover saved-card charge',
+    notes: String(payload.note || '').trim()
+  };
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  data.payments.unshift(payment);
+  updateRecurringChargeState(data, recurring.id, {
+    status: paid ? 'Active' : 'Payment submitted',
+    tone: paid ? 'good' : 'warn',
+    nextRun: String(payload.nextRun || recurring.nextRun || '').trim(),
+    lastPaymentAt: new Date().toISOString(),
+    lastCloverChargeId: payment.cloverChargeId,
+    lastManualChargeAt: new Date().toISOString()
+  });
+  await writeData(data);
+  return { charge, payment, recurring };
+}
 async function attachCloverCheckout(data, request) {
   const name = splitName(request.customer);
   const checkout = await cloverPostCheckout({
@@ -788,6 +913,16 @@ const server = http.createServer(async (req, res) => {
       }
       await writeData(data);
       return json(res, 201, { ok: true, autopay });
+    }
+    if (url.pathname === '/api/integrations/clover/manual-charge' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      try {
+        const result = await chargeSavedRecurringCard(data, payload, req);
+        return json(res, 201, { ok: true, charge: result.charge, payment: result.payment });
+      } catch (err) {
+        return json(res, 400, { ok: false, error: String(err && err.message || err) });
+      }
     }
     if (url.pathname === '/api/payment-links' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
