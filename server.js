@@ -19,6 +19,18 @@ const CLOVER_HCO_BASE = CLOVER_ENV === 'sandbox' ? 'https://apisandbox.dev.clove
 const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
+const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
+const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
+const autoSyncStatus = {
+  enabled: true,
+  intervalMs: AUTO_SYNC_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
+  lastSource: '',
+  lastError: '',
+  lastResult: null
+};
 
 async function readData() {
   try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); }
@@ -241,6 +253,58 @@ async function syncCloverIntoData(data, options = {}) {
   data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
   data.integrations.clover.accessTokenMasked = 'stored in Render';
   return result;
+}
+async function runAutoSync(options = {}) {
+  const now = Date.now();
+  const lastStarted = autoSyncStatus.lastStartedAt ? Date.parse(autoSyncStatus.lastStartedAt) : 0;
+  if (autoSyncStatus.inFlight) return { ok: false, skipped: true, reason: 'already running', status: autoSyncStatus };
+  if (!options.force && lastStarted && now - lastStarted < AUTO_SYNC_MS) {
+    return { ok: true, skipped: true, reason: 'waiting for next auto sync', status: autoSyncStatus };
+  }
+  autoSyncStatus.inFlight = true;
+  autoSyncStatus.lastStartedAt = new Date().toISOString();
+  autoSyncStatus.lastSource = options.source || 'automatic';
+  autoSyncStatus.lastError = '';
+  try {
+    const data = await readData();
+    data.integrations = data.integrations || {};
+    data.integrations.autoSync = {
+      enabled: true,
+      intervalMs: AUTO_SYNC_MS,
+      lastStartedAt: autoSyncStatus.lastStartedAt,
+      lastSource: autoSyncStatus.lastSource
+    };
+    const result = await syncCloverIntoData(data);
+    autoSyncStatus.lastFinishedAt = new Date().toISOString();
+    autoSyncStatus.lastResult = result;
+    autoSyncStatus.lastError = result.errors[0] || '';
+    data.integrations.autoSync.lastFinishedAt = autoSyncStatus.lastFinishedAt;
+    data.integrations.autoSync.lastError = autoSyncStatus.lastError;
+    data.integrations.autoSync.lastResult = result;
+    await writeData(data);
+    return { ok: result.errors.length === 0, skipped: false, ...result, status: autoSyncStatus };
+  } catch (err) {
+    autoSyncStatus.lastFinishedAt = new Date().toISOString();
+    autoSyncStatus.lastError = String(err && err.message || err);
+    autoSyncStatus.lastResult = { errors: [autoSyncStatus.lastError] };
+    try {
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.autoSync = {
+        enabled: true,
+        intervalMs: AUTO_SYNC_MS,
+        lastStartedAt: autoSyncStatus.lastStartedAt,
+        lastFinishedAt: autoSyncStatus.lastFinishedAt,
+        lastSource: autoSyncStatus.lastSource,
+        lastError: autoSyncStatus.lastError,
+        lastResult: autoSyncStatus.lastResult
+      };
+      await writeData(data);
+    } catch {}
+    return { ok: false, skipped: false, error: autoSyncStatus.lastError, status: autoSyncStatus };
+  } finally {
+    autoSyncStatus.inFlight = false;
+  }
 }
 function cleanAutopayPayload(payload) {
   const amount = Number(payload.amount || 0);
@@ -634,6 +698,11 @@ const server = http.createServer(async (req, res) => {
     if (!authed(req)) return send(res, 200, loginPage());
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, await readData());
     if (url.pathname === '/api/state' && req.method === 'PUT') { await writeData(JSON.parse(await readBody(req) || '{}')); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/sync/status' && req.method === 'GET') return json(res, 200, { ok: true, autoSync: autoSyncStatus });
+    if (url.pathname === '/api/sync/auto' && req.method === 'POST') {
+      const result = await runAutoSync({ source: 'dashboard', force: url.searchParams.get('force') === '1' });
+      return json(res, result.ok ? 200 : 207, result);
+    }
     if (url.pathname === '/api/reset' && req.method === 'POST') { await fs.copyFile(SEED_FILE, DATA_FILE); return json(res, 200, { ok: true, data: await readData() }); }
     if (url.pathname === '/api/integrations/clover/connect' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
@@ -732,11 +801,22 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       const event = JSON.parse(await readBody(req) || '{}');
-      const data = await readData(); data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || []; data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), event }); await writeData(data); return json(res, 200, { ok: true });
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.clover = data.integrations.clover || {};
+      data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
+      data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), event });
+      await writeData(data);
+      setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), 0);
+      return json(res, 200, { ok: true });
     }
     return send(res, 200, await appHtml({ publicMode: false }));
   } catch (err) {
     send(res, 500, 'Server error: ' + String(err && err.message || err), 'text/plain; charset=utf-8');
   }
 });
-server.listen(PORT, HOST, () => console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT));
+server.listen(PORT, HOST, () => {
+  console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
+  setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
+  setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
+});
