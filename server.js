@@ -229,6 +229,51 @@ function cleanAutopayPayload(payload) {
     createdAt: payload.createdAt || new Date().toISOString()
   };
 }
+function weeklyEquivalent(amount, frequency) {
+  const value = Number(amount || 0);
+  const f = String(frequency || '').toLowerCase();
+  if (f.includes('bi-weekly')) return value / 2;
+  if (f.includes('semi-month')) return value * 24 / 52;
+  if (f === 'monthly') return value * 12 / 52;
+  if (f.includes('bi-month')) return value * 6 / 52;
+  if (f.includes('quarter')) return value * 4 / 52;
+  if (f.includes('4 months')) return value * 3 / 52;
+  if (f.includes('semi-annual')) return value * 2 / 52;
+  if (f.includes('annual')) return value / 52;
+  if (f.includes('daily')) return value * 7;
+  return value;
+}
+function cleanCloverPlanSummary(plans) {
+  return (Array.isArray(plans) ? plans : []).map((plan, index) => {
+    const subtotal = Number(plan.subtotal || plan.amount || 0);
+    const customers = Number(plan.customers || 0);
+    const frequency = String(plan.frequency || 'Weekly').trim();
+    const possibleWeekly = Number(plan.possibleWeekly != null ? plan.possibleWeekly : weeklyEquivalent(subtotal, frequency) * customers);
+    return {
+      id: String(plan.id || ('clover-plan-' + index + '-' + String(plan.plan || plan.name || subtotal).replace(/[^a-z0-9]+/gi, '-').toLowerCase())),
+      plan: String(plan.plan || plan.name || subtotal || 'Clover plan').trim(),
+      subtotal,
+      customers,
+      frequency,
+      lastRun: String(plan.lastRun || '').trim(),
+      status: String(plan.status || 'Active').trim(),
+      possibleWeekly: Math.round(possibleWeekly * 100) / 100,
+      source: 'Clover Plan Manager'
+    };
+  }).filter(plan => plan.plan && plan.status);
+}
+function summarizeCloverPlans(plans) {
+  const summary = (plans || []).reduce((next, plan) => {
+    if (String(plan.status || '').toLowerCase() === 'active') {
+      next.activePlans += 1;
+      next.activeCustomers += Number(plan.customers || 0);
+      next.possibleWeekly += Number(plan.possibleWeekly != null ? plan.possibleWeekly : weeklyEquivalent(plan.subtotal, plan.frequency) * Number(plan.customers || 0));
+    }
+    return next;
+  }, { activePlans: 0, activeCustomers: 0, possibleWeekly: 0 });
+  summary.possibleWeekly = Math.round(summary.possibleWeekly * 100) / 100;
+  return summary;
+}
 function cents(amount) { return Math.max(0, Math.round(Number(amount || 0) * 100)); }
 function splitName(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -347,6 +392,18 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/integrations/clover/checkout-status' && req.method === 'POST') {
       return json(res, 200, checkoutStatus());
+    }
+    if (url.pathname === '/api/integrations/clover/import-plan-summary' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.clover = data.integrations.clover || {};
+      const plans = cleanCloverPlanSummary(payload.plans || []);
+      data.integrations.clover.recurringPlans = plans;
+      data.integrations.clover.recurringPlanSummary = summarizeCloverPlans(plans);
+      data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
+      await writeData(data);
+      return json(res, 200, { ok: true, imported: plans.length, summary: data.integrations.clover.recurringPlanSummary });
     }
     if (url.pathname === '/api/integrations/clover/sync-customers' && req.method === 'POST') {
       const data = await readData();
