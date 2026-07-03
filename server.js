@@ -130,7 +130,7 @@ async function cloverPostCheckout(payload) {
 }
 async function cloverGetRecurring(pathname) {
   cloverReady();
-  const response = await fetch(CLOVER_HCO_BASE + pathname, {
+  const response = await fetch(CLOVER_API_BASE + pathname, {
     headers: {
       Authorization: 'Bearer ' + CLOVER_TOKEN,
       Accept: 'application/json',
@@ -391,8 +391,15 @@ async function syncCloverRecurringPlans(data) {
     importedPlans.push(cleanRecurringPlanFromApi(plan, subscriptions, index));
   }
   const plans = cleanCloverPlanSummary(importedPlans);
+  const summary = summarizeCloverPlans(plans);
+  const savedSummary = data.integrations.clover.recurringPlanSummary || {};
+  const savedActive = Number(savedSummary.activeCustomers || 0);
+  const apiActive = Number(summary.activeCustomers || 0);
+  if (savedActive > apiActive) {
+    throw new Error('Clover recurring API returned ' + apiActive + ' active subscriptions, less than saved Plan Manager total ' + savedActive + '. Keeping saved plan totals.');
+  }
   data.integrations.clover.recurringPlans = plans;
-  data.integrations.clover.recurringPlanSummary = summarizeCloverPlans(plans);
+  data.integrations.clover.recurringPlanSummary = summary;
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
   data.integrations.clover.lastRecurringPlanSyncError = '';
   data.integrations.clover.lastRecurringPlanSyncSource = 'Clover recurring API';
@@ -527,6 +534,8 @@ const server = http.createServer(async (req, res) => {
       data.integrations.clover.recurringPlans = plans;
       data.integrations.clover.recurringPlanSummary = summarizeCloverPlans(plans);
       data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
+      data.integrations.clover.lastRecurringPlanSyncError = '';
+      data.integrations.clover.lastRecurringPlanSyncSource = 'Manual Plan Manager import';
       await writeData(data);
       return json(res, 200, { ok: true, imported: plans.length, summary: data.integrations.clover.recurringPlanSummary });
     }
