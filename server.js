@@ -332,6 +332,44 @@ function activeSubscriptionCount(subscriptions) {
     return !status || !['canceled', 'cancelled', 'deleted', 'inactive', 'expired', 'failed', 'paused', 'suspended', 'void', 'disabled'].includes(status);
   }).length;
 }
+function nameFromRecurringSubscription(subscription) {
+  const customer = subscription.customer || subscription.customerInfo || subscription.cardholder || subscription.cardHolder || {};
+  const first = customer.firstName || subscription.firstName || '';
+  const last = customer.lastName || subscription.lastName || '';
+  return String(customer.name || subscription.customerName || subscription.name || ((first + ' ' + last).trim()) || '').trim();
+}
+function contactFromRecurringSubscription(subscription, key) {
+  const customer = subscription.customer || subscription.customerInfo || {};
+  const value = customer[key] || subscription[key] || '';
+  if (value) return String(value);
+  const plural = key === 'phone' ? 'phoneNumbers' : 'emailAddresses';
+  const first = firstElement(customer[plural] || subscription[plural]);
+  return String(first[key === 'phone' ? 'phoneNumber' : 'emailAddress'] || '');
+}
+function membersFromRecurringSubscriptions(plan, subscriptions) {
+  const subtotal = amountFromRecurringValue(plan.amount ?? plan.unitAmount ?? plan.price ?? plan.recurringAmount ?? plan.planAmount ?? plan.total);
+  const frequency = frequencyFromRecurringPlan(plan);
+  const planName = String(plan.name || plan.planName || plan.description || plan.id || '').trim();
+  return (subscriptions || []).filter(item => activeSubscriptionCount([item]) > 0).map((item, index) => {
+    const customer = item.customer || item.customerInfo || {};
+    return {
+      id: 'clover-recurring-member-' + (item.id || item.uuid || item.subscriptionId || (plan.id + '-' + index)),
+      source: 'Clover recurring API',
+      customer: nameFromRecurringSubscription(item) || 'Clover recurring customer',
+      phone: contactFromRecurringSubscription(item, 'phone'),
+      email: contactFromRecurringSubscription(item, 'email'),
+      vehicle: String(item.vehicle || item.description || ''),
+      plan: planName,
+      amount: subtotal,
+      frequency,
+      status: String(item.status || item.state || 'Active'),
+      nextRun: String(item.nextRun || item.nextRunDate || item.nextBillingDate || item.nextPaymentDate || ''),
+      lastRun: String(item.lastRun || item.lastRunDate || item.lastPaymentDate || plan.lastRun || plan.lastRunDate || ''),
+      cloverSubscriptionId: String(item.id || item.uuid || item.subscriptionId || ''),
+      cloverCustomerId: String(customer.id || item.customerId || item.cloverCustomerId || '')
+    };
+  });
+}
 function countFromRecurringPlan(plan) {
   const keys = [
     'activeCustomers', 'activeCustomerCount', 'customerCount', 'customersCount',
@@ -399,6 +437,7 @@ async function syncCloverRecurringPlans(data) {
   const rawPlans = collectionElements(plansBody);
   if (!rawPlans.length) throw new Error(data.integrations.clover.lastRecurringPlanSyncError || 'Clover recurring API returned no plan rows.');
   const importedPlans = [];
+  const importedMembers = [];
   for (let index = 0; index < rawPlans.length; index += 1) {
     const plan = rawPlans[index];
     const planId = plan.id || plan.uuid;
@@ -417,6 +456,7 @@ async function syncCloverRecurringPlans(data) {
         }
       }
     }
+    importedMembers.push(...membersFromRecurringSubscriptions(plan, subscriptions));
     importedPlans.push(cleanRecurringPlanFromApi(plan, subscriptions, index));
   }
   const plans = cleanCloverPlanSummary(importedPlans);
@@ -436,6 +476,7 @@ async function syncCloverRecurringPlans(data) {
     throw new Error('Clover recurring API returned ' + apiActive + ' active subscriptions, less than saved Plan Manager total ' + savedActive + '. Keeping saved plan totals.');
   }
   data.integrations.clover.recurringPlans = plans;
+  data.integrations.clover.recurringPlanMembers = importedMembers;
   data.integrations.clover.recurringPlanSummary = summary;
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
   data.integrations.clover.lastRecurringPlanSyncError = '';
