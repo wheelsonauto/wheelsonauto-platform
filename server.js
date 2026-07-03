@@ -162,8 +162,17 @@ async function cloverPostCharge(payload, req) {
   const text = await response.text();
   let body = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
-  if (!response.ok) throw new Error('Clover saved-card charge ' + response.status + ': ' + (body.message || body.error || body.code || body.decline_code || text || 'Request failed'));
+  if (!response.ok) throw new Error('Clover saved-card charge ' + response.status + ': ' + cloverErrorMessage(body, text));
   return body;
+}
+function cloverErrorMessage(body, text) {
+  const parts = [body && body.message, body && body.error, body && body.code, body && body.decline_code, body && body.param, body && body.type]
+    .filter(Boolean)
+    .map(value => String(value));
+  const detail = parts.join(' | ');
+  const raw = String(text || '').trim();
+  if (raw && raw !== detail && raw.length <= 600) return detail ? detail + ' | ' + raw : raw;
+  return detail || raw.slice(0, 600) || 'Request failed';
 }
 async function cloverGetRecurring(pathname) {
   cloverReady();
@@ -446,6 +455,22 @@ function cleanPaymentSource(value) {
   if (/\s/.test(source) || source.length < 8) return '';
   return source;
 }
+function isMultiPayToken(value) {
+  return /^clv_/i.test(String(value || '').trim());
+}
+function recurringCustomerSource(row) {
+  const customer = row && (row.customer || row.customerInfo) || {};
+  const candidates = [
+    row && row.cloverCustomerId,
+    row && row.customerId,
+    customer && customer.id
+  ];
+  for (const value of candidates) {
+    const source = cleanPaymentSource(value);
+    if (source) return source;
+  }
+  return '';
+}
 function firstCardFromRecurring(row) {
   const customer = row && (row.customer || row.customerInfo) || {};
   const collections = [
@@ -487,14 +512,17 @@ function recurringPaymentSource(row) {
     row && row.tender && row.tender.token,
     card && card.paymentSource,
     card && card.source,
-    card && card.token,
-    card && card.id
+    card && card.token
   ];
   for (const value of candidates) {
     const source = cleanPaymentSource(value);
     if (source) return source;
   }
   return '';
+}
+function recurringMultiPaySource(row) {
+  const source = recurringPaymentSource(row);
+  return isMultiPayToken(source) ? source : '';
 }
 function recurringCardLabel(row) {
   const card = firstCardFromRecurring(row);
@@ -761,16 +789,20 @@ function chargeReference() {
 async function chargeSavedRecurringCard(data, payload, req) {
   const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
   if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
-  let source = recurringPaymentSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
-  if (!source && recurring.cloverSubscriptionId) {
+  let customerSource = recurringCustomerSource(recurring);
+  let cardSource = recurringMultiPaySource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
+  if ((!customerSource || !cardSource) && recurring.cloverSubscriptionId) {
     try {
       const fresh = await cloverGetRecurring('/recurring/v1/subscriptions/' + encodeURIComponent(recurring.cloverSubscriptionId));
-      source = recurringPaymentSource(fresh);
-      if (source) {
-        recurring.cloverPaymentSource = source;
+      customerSource = customerSource || recurringCustomerSource(fresh);
+      cardSource = cardSource || recurringMultiPaySource(fresh);
+      if (customerSource || cardSource) {
+        recurring.cloverCustomerId = recurring.cloverCustomerId || customerSource;
+        recurring.cloverPaymentSource = recurring.cloverPaymentSource || cardSource;
         recurring.cardLabel = recurring.cardLabel || recurringCardLabel(fresh);
         recurring.cardLast4 = recurring.cardLast4 || recurringCardLast4(fresh);
         updateRecurringChargeState(data, recurring.id, {
+          cloverCustomerId: recurring.cloverCustomerId,
           cloverPaymentSource: recurring.cloverPaymentSource,
           cardLabel: recurring.cardLabel,
           cardLast4: recurring.cardLast4
@@ -782,23 +814,28 @@ async function chargeSavedRecurringCard(data, payload, req) {
       data.integrations.clover.lastManualChargeLookupError = String(err && err.message || err);
     }
   }
-  if (!source) throw new Error('No saved Clover payment source is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
+  const source = customerSource || cardSource;
+  if (!source) throw new Error('No chargeable Clover customer ID or multi-pay saved-card token is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
   const ref = chargeReference();
+  const chargeBody = {
+    amount: cents(amount),
+    currency: 'USD',
+    capture: true,
+    ecomind: 'ecom',
+    source,
+    description: 'WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment',
+    external_reference_id: ref,
+    external_customer_reference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
+    receipt_email: recurring.email || undefined
+  };
+  if (cardSource && source === cardSource) {
+    chargeBody.stored_credentials = { sequence: 'SUBSEQUENT', is_scheduled: false, initiator: 'MERCHANT' };
+  }
   const charge = await cloverPostCharge({
     idempotencyKey: 'woa-' + (payload.recurringPaymentId || recurring.id) + '-' + cents(amount) + '-' + Date.now(),
-    charge: {
-      amount: cents(amount),
-      currency: 'usd',
-      capture: true,
-      source,
-      description: 'WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment',
-      external_reference_id: ref,
-      external_customer_reference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
-      receipt_email: recurring.email || undefined,
-      stored_credentials: { sequence: 'SUBSEQUENT', is_scheduled: false }
-    }
+    charge: chargeBody
   }, req);
   const status = String(charge.status || charge.result || '').toLowerCase();
   const paid = status === 'paid' || status === 'succeeded' || status === 'success' || charge.paid === true || charge.captured === true;
