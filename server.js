@@ -421,6 +421,14 @@ async function syncCloverRecurringPlans(data) {
   }
   const plans = cleanCloverPlanSummary(importedPlans);
   const summary = summarizeCloverPlans(plans);
+  data.integrations.clover.lastRecurringPlanSyncDetails = plans.map(plan => ({
+    plan: plan.plan,
+    customers: Number(plan.customers || 0),
+    subscriptionRows: Number(plan.cloverSubscriptionRows || 0),
+    planCustomerCount: Number(plan.cloverPlanCustomerCount || 0),
+    amount: Number(plan.subtotal || plan.amount || 0),
+    frequency: plan.frequency || ''
+  }));
   const savedSummary = data.integrations.clover.recurringPlanSummary || {};
   const savedActive = Number(savedSummary.activeCustomers || 0);
   const apiActive = Number(summary.activeCustomers || 0);
