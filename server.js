@@ -455,6 +455,9 @@ function cleanPaymentSource(value) {
   if (/\s/.test(source) || source.length < 8) return '';
   return source;
 }
+function isCloverEcommerceToken(value) {
+  return /^clv_/i.test(String(value || '').trim());
+}
 function recurringCustomerSource(row) {
   const customer = row && (row.customer || row.customerInfo) || {};
   const candidates = [
@@ -519,7 +522,8 @@ function recurringPaymentSource(row) {
   return '';
 }
 function recurringCardChargeSource(row) {
-  return recurringPaymentSource(row);
+  const source = recurringPaymentSource(row);
+  return isCloverEcommerceToken(source) ? source : '';
 }
 function recurringCardLabel(row) {
   const card = firstCardFromRecurring(row);
@@ -811,8 +815,8 @@ async function chargeSavedRecurringCard(data, payload, req) {
       data.integrations.clover.lastManualChargeLookupError = String(err && err.message || err);
     }
   }
-  const source = cardSource || customerSource;
-  if (!source) throw new Error('No chargeable Clover customer ID or saved-card token is linked to this recurring customer yet. Sync recurring details from Clover, or open this customer in Clover to confirm the card-on-file token is available.');
+  const source = cardSource;
+  if (!source) throw new Error('Clover shows a card on file for this recurring customer, but it did not return a chargeable Ecommerce saved-card token. Use Pay link for this charge, or save the customer card through WheelsonAuto checkout before using Charge saved card.');
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
   const ref = chargeReference();
