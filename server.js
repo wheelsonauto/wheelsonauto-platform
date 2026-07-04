@@ -140,7 +140,22 @@ async function mergeVehicleImport(data) {
       sourceRow: row.rowNumber
     };
     const vehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));
-    if (vehicleKey) Object.assign(data.vehicles[vehicleIndex.get(vehicleKey)], vehiclePatch);
+    if (vehicleKey) {
+      const existingVehicle = data.vehicles[vehicleIndex.get(vehicleKey)];
+      if (existingVehicle.manuallyEditedAt) {
+        Object.assign(existingVehicle, {
+          source: existingVehicle.source || vehiclePatch.source,
+          sourceRow: existingVehicle.sourceRow || vehiclePatch.sourceRow,
+          sheetStatus: vehiclePatch.status,
+          sheetCustomer: row.customer || '',
+          sheetWeeklyAmount: weekly || 0,
+          sheetTempTag: row.tempTag || '',
+          sheetTracker: row.tracker || ''
+        });
+      } else {
+        Object.assign(existingVehicle, vehiclePatch);
+      }
+    }
     else {
       data.vehicles.push({ id: 'veh-sheet-' + String(row.rowNumber).padStart(3, '0'), ...vehiclePatch });
       [row.vin, row.licensePlate, row.tempTag].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), data.vehicles.length - 1));
