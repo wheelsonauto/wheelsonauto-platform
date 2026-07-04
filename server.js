@@ -56,7 +56,7 @@ async function readData() {
       await writeData(seed);
       return seed;
     } catch {
-      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], organizations: [], recurringPayments: [], integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -381,7 +381,7 @@ function isOwnerUser(user) {
 function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
-  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay'];
+  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
@@ -711,7 +711,7 @@ function mergeById(preferred, fallback) {
 }
 async function protectConcurrentLocalWrites(data) {
   const latest = await readData();
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'tasks', 'apiProviders'].forEach(key => {
     data[key] = mergeById(latest[key], data[key]);
   });
   data.customers = upsertById(latest.customers, data.customers);
@@ -841,6 +841,41 @@ function cleanAutopayPayload(payload) {
     paymentSetup: payload.paymentSetup || 'Needs Clover setup',
     notes: String(payload.notes || '').trim(),
     createdAt: payload.createdAt || new Date().toISOString()
+  };
+}
+function cleanApiProviderPayload(payload) {
+  const now = new Date().toISOString();
+  return {
+    id: String(payload.id || ('api-' + Date.now())).trim(),
+    name: String(payload.name || payload.system || 'API system').trim(),
+    group: String(payload.group || 'API').trim(),
+    status: String(payload.status || 'API needed').trim(),
+    owner: String(payload.owner || 'Owner').trim(),
+    envKeys: String(payload.envKeys || payload.credentials || '').trim(),
+    endpoint: String(payload.endpoint || payload.route || '').trim(),
+    liveTest: String(payload.liveTest || payload.testPlan || '').trim(),
+    notes: String(payload.notes || '').trim(),
+    lastTestAt: String(payload.lastTestAt || '').trim(),
+    lastTestResult: String(payload.lastTestResult || '').trim(),
+    updatedAt: now,
+    createdAt: payload.createdAt || now
+  };
+}
+function cleanTaskPayload(payload) {
+  const now = new Date().toISOString();
+  return {
+    id: String(payload.id || ('task-' + Date.now())).trim(),
+    title: String(payload.title || payload.type || 'Task').trim(),
+    type: String(payload.type || 'Other').trim(),
+    customer: String(payload.customer || '').trim(),
+    vehicle: String(payload.vehicle || '').trim(),
+    due: String(payload.due || '').trim(),
+    status: String(payload.status || 'Open').trim(),
+    owner: String(payload.owner || '').trim(),
+    notes: String(payload.notes || '').trim(),
+    doneAt: String(payload.doneAt || '').trim(),
+    updatedAt: now,
+    createdAt: payload.createdAt || now
   };
 }
 function weeklyEquivalent(amount, frequency) {
@@ -1803,6 +1838,36 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, synced.errors.length ? 207 : 200, { ok: synced.errors.length === 0, ...synced, vehicleSheet, totalCustomers: (data.customers || []).length, totalPayments: (data.payments || []).length });
+    }
+    if (url.pathname === '/api/api-providers' && req.method === 'GET') {
+      const data = await readData();
+      return json(res, 200, { ok: true, providers: Array.isArray(data.apiProviders) ? data.apiProviders : [] });
+    }
+    if (url.pathname === '/api/api-providers' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.apiProviders = Array.isArray(data.apiProviders) ? data.apiProviders : [];
+      const provider = cleanApiProviderPayload(payload);
+      const existing = data.apiProviders.find(item => item.id === provider.id);
+      if (existing) Object.assign(existing, provider, { createdAt: existing.createdAt || provider.createdAt });
+      else data.apiProviders.unshift(provider);
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.messages.unshift({ id: 'msg-api-' + Date.now(), date: new Date().toLocaleString('en-US'), customer: provider.name, channel: 'Internal log', template: 'API setup', status: provider.status, subject: provider.group, body: provider.liveTest || provider.notes || '' });
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+      return json(res, 200, { ok: true, provider });
+    }
+    if (url.pathname === '/api/tasks' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+      const task = cleanTaskPayload(payload);
+      const existing = data.tasks.find(item => item.id === task.id);
+      if (existing) Object.assign(existing, task, { createdAt: existing.createdAt || task.createdAt });
+      else data.tasks.unshift(task);
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+      return json(res, 200, { ok: true, task });
     }
     if (url.pathname === '/api/recurring-payments' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
