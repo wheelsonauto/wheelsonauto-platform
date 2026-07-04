@@ -492,6 +492,52 @@ function checkoutStatus() {
     message: CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Hosted Checkout is ready to create Clover payment sessions.' : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.'
   };
 }
+function systemReadiness(data) {
+  const env = key => process.env[key] ? 'Set' : 'Missing';
+  const route = (method, path, purpose, status = 'Ready') => ({ method, path, purpose, status });
+  const envChecks = [
+    ['CLOVER_ACCESS_TOKEN', env('CLOVER_ACCESS_TOKEN'), 'Clover customer/payment/recurring sync'],
+    ['CLOVER_MERCHANT_ID', env('CLOVER_MERCHANT_ID'), 'Clover merchant account'],
+    ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
+    ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
+    ['PUBLIC_BASE_URL', PUBLIC_BASE_URL ? 'Set' : 'Missing', 'Customer payment/card setup links'],
+    ['WOA_AUTOPAY_MS', process.env.WOA_AUTOPAY_MS ? 'Set' : 'Default', 'WheelsonAuto autopay monitor interval']
+  ];
+  const routes = [
+    route('GET', '/api/state', 'Dashboard state'),
+    route('PUT', '/api/state', 'Role-aware dashboard saves'),
+    route('POST', '/api/api-providers', 'API readiness setup records'),
+    route('POST', '/api/tasks', 'Dispatch task creation'),
+    route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
+    route('POST', '/api/payment-links', 'Customer payment links'),
+    route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
+    route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
+    route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
+    route('POST', '/api/webhooks/clover', 'Clover webhook intake')
+  ];
+  const missing = envChecks.filter(item => item[1] === 'Missing').map(item => item[0]);
+  const records = {
+    vehicles: (data.vehicles || []).length,
+    customers: (data.customers || []).length,
+    contracts: (data.contracts || []).length,
+    recurringPayments: (data.recurringPayments || []).length,
+    apiProviders: (data.apiProviders || []).length,
+    tasks: (data.tasks || []).length,
+    documents: (data.documents || []).length
+  };
+  return {
+    ok: missing.length === 0,
+    checkedAt: new Date().toISOString(),
+    environment: CLOVER_ENV,
+    publicBaseUrl: PUBLIC_BASE_URL,
+    missing,
+    envChecks: envChecks.map(item => ({ key: item[0], status: item[1], purpose: item[2] })),
+    routes,
+    records,
+    autoSync: autoSyncStatus,
+    autopay: woaAutopayStatus
+  };
+}
 async function cloverEcommerceDiagnostics() {
   const status = checkoutStatus();
   const result = {
@@ -1754,6 +1800,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/woa-autopay/run' && req.method === 'POST') {
       const result = await runWheelsonAutoAutopay({ source: 'dashboard' });
       return json(res, result.ok ? 200 : 207, result);
+    }
+    if (url.pathname === '/api/system/readiness' && req.method === 'POST') {
+      const data = await readData();
+      return json(res, 200, systemReadiness(data));
     }
     if (url.pathname === '/api/reset' && req.method === 'POST') { await fs.copyFile(SEED_FILE, DATA_FILE); return json(res, 200, { ok: true, data: await readData() }); }
     if (url.pathname === '/api/integrations/clover/connect' && req.method === 'POST') {
