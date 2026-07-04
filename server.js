@@ -119,6 +119,49 @@ function checkoutStatus() {
     message: CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Hosted Checkout is ready to create Clover payment sessions.' : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.'
   };
 }
+async function cloverEcommerceDiagnostics() {
+  const status = checkoutStatus();
+  const result = {
+    ...status,
+    savedCardApi: {
+      checked: false,
+      authorized: false,
+      status: 0,
+      message: ''
+    }
+  };
+  if (!CLOVER_ECOMMERCE_PRIVATE_KEY || !CLOVER_MERCHANT_ID) {
+    result.savedCardApi.message = 'Missing Ecommerce private key or Clover merchant ID in Render.';
+    return result;
+  }
+  const response = await fetch(CLOVER_CHARGE_BASE + '/v1/customers', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'WheelsonAuto/1.0',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
+    },
+    body: JSON.stringify({
+      email: 'diagnostic-no-card@wheelsonauto.com',
+      firstName: 'WheelsonAuto',
+      lastName: 'Diagnostic',
+      source: 'invalid-diagnostic-source'
+    })
+  });
+  const text = await response.text();
+  let body = {};
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+  result.savedCardApi.checked = true;
+  result.savedCardApi.status = response.status;
+  result.savedCardApi.message = cloverErrorMessage(body, text);
+  result.savedCardApi.authorized = response.status !== 401 && response.status !== 403;
+  if (result.savedCardApi.authorized) {
+    result.savedCardApi.message = 'Ecommerce private key reached Clover saved-card API. A non-auth error here is expected because this check intentionally sends no real card.';
+  }
+  return result;
+}
 async function cloverGet(pathname) {
   cloverReady();
   const response = await fetch(CLOVER_API_BASE + pathname, { headers: { Authorization: 'Bearer ' + CLOVER_TOKEN, Accept: 'application/json' } });
@@ -185,7 +228,13 @@ async function cloverPostCardCustomer(payload) {
   const text = await response.text();
   let body = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
-  if (!response.ok) throw new Error('Clover card-on-file customer ' + response.status + ': ' + cloverErrorMessage(body, text));
+  if (!response.ok) {
+    const detail = cloverErrorMessage(body, text);
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('Clover Ecommerce private key is unauthorized for saved-card setup. Replace CLOVER_ECOMMERCE_PRIVATE_KEY in Render with the private key from the Clover Ecommerce Hosted iFrame + API/SDK token, then redeploy. Clover said ' + response.status + ': ' + detail);
+    }
+    throw new Error('Clover card-on-file customer ' + response.status + ': ' + detail);
+  }
   return body;
 }
 async function cloverPostRecurring(pathname, payload) {
@@ -1162,6 +1211,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/integrations/clover/checkout-status' && req.method === 'POST') {
       return json(res, 200, checkoutStatus());
+    }
+    if (url.pathname === '/api/integrations/clover/ecommerce-diagnostics' && req.method === 'POST') {
+      try {
+        const diagnostic = await cloverEcommerceDiagnostics();
+        return json(res, diagnostic.savedCardApi.authorized ? 200 : 401, { ok: diagnostic.savedCardApi.authorized, diagnostic });
+      } catch (err) {
+        return json(res, 500, { ok: false, error: String(err && err.message || err) });
+      }
     }
     if (url.pathname === '/api/integrations/clover/import-plan-summary' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
