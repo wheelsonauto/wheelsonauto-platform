@@ -82,6 +82,46 @@ function importVehicleStatus(row) {
   if (status.includes('lot')) return 'Ready';
   return row.customer ? 'Rented' : 'Ready';
 }
+function dateKey(date = new Date()) {
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+}
+function importedOilDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const normalized = raw.replace(/-/g, '/');
+  const parts = normalized.split('/');
+  if (parts.length >= 2) {
+    const month = Number(parts[0]);
+    const day = Number(parts[1]);
+    const year = Number(parts[2] || new Date().getFullYear());
+    if (month && day) return dateKey(new Date(year, month - 1, day));
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : dateKey(parsed);
+}
+function addMonths(dateText, months) {
+  const base = dateText ? new Date(dateText + 'T12:00:00') : new Date();
+  if (Number.isNaN(base.getTime())) return dateKey();
+  base.setMonth(base.getMonth() + months);
+  return dateKey(base);
+}
+function previousDayKey() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return dateKey(d);
+}
+function upsertMaintenanceJob(data, job) {
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  const existing = data.maintenance.find(item => item.id === job.id);
+  if (existing) {
+    const status = String(existing.status || '').toLowerCase();
+    if (status.includes('complete') || status.includes('fixed')) return false;
+    Object.assign(existing, job);
+    return false;
+  }
+  data.maintenance.unshift(job);
+  return true;
+}
 async function loadVehicleImport() {
   try {
     const body = JSON.parse(await fs.readFile(VEHICLE_IMPORT_FILE, 'utf8'));
@@ -96,6 +136,7 @@ async function mergeVehicleImport(data) {
   data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
   data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
@@ -108,7 +149,7 @@ async function mergeVehicleImport(data) {
   const contractIndex = new Map();
   data.contracts.forEach((contract, index) => contractIndex.set(normKey(contract.customer) + '|' + normKey(contract.vehicle), index));
   const recurringRows = [...data.recurringPayments, ...data.integrations.clover.recurringPlanMembers];
-  let customers = 0, contracts = 0, recurringLinked = 0;
+  let customers = 0, contracts = 0, recurringLinked = 0, maintenanceImported = 0;
 
   rows.forEach(row => {
     const vehicleName = vehicleNameFromImport(row);
@@ -159,6 +200,63 @@ async function mergeVehicleImport(data) {
     else {
       data.vehicles.push({ id: 'veh-sheet-' + String(row.rowNumber).padStart(3, '0'), ...vehiclePatch });
       [row.vin, row.licensePlate, row.tempTag].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), data.vehicles.length - 1));
+    }
+    const currentVehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));
+    const currentVehicle = currentVehicleKey ? data.vehicles[vehicleIndex.get(currentVehicleKey)] : null;
+    const oilDone = importedOilDate(row.oilChangeDate);
+    const outOfLot = status === 'Rented' || !!row.customer;
+    if (oilDone) {
+      if (upsertMaintenanceJob(data, {
+        id: 'mnt-sheet-oil-done-' + row.rowNumber,
+        vehicleId: currentVehicle && currentVehicle.id || '',
+        vehicle: vehicleName,
+        customer: row.customer || '',
+        type: 'Monthly inspection / oil change',
+        issue: 'Oil change completed',
+        cost: 0,
+        due: oilDone,
+        nextDue: oilDone,
+        reminder: 'Imported from vehicle sheet',
+        notes: 'Oil change date from vehicle sheet: ' + row.oilChangeDate,
+        status: 'Completed',
+        completedAt: oilDone,
+        fixedAt: oilDone,
+        source: 'Vehicle sheet import',
+        sourceRow: row.rowNumber
+      })) maintenanceImported += 1;
+      if (upsertMaintenanceJob(data, {
+        id: 'mnt-sheet-oil-next-' + row.rowNumber,
+        vehicleId: currentVehicle && currentVehicle.id || '',
+        vehicle: vehicleName,
+        customer: row.customer || '',
+        type: 'Monthly inspection / oil change',
+        issue: 'Next monthly oil change / inspection',
+        cost: 0,
+        due: addMonths(oilDone, 1),
+        nextDue: addMonths(oilDone, 1),
+        reminder: row.customer ? 'Remind customer when due' : 'Internal only',
+        notes: 'Auto-created from the last oil change on the vehicle sheet.',
+        status: 'Scheduled',
+        source: 'Vehicle sheet import',
+        sourceRow: row.rowNumber
+      })) maintenanceImported += 1;
+    } else if (outOfLot) {
+      if (upsertMaintenanceJob(data, {
+        id: 'mnt-sheet-oil-overdue-' + row.rowNumber,
+        vehicleId: currentVehicle && currentVehicle.id || '',
+        vehicle: vehicleName,
+        customer: row.customer || '',
+        type: 'Monthly inspection / oil change',
+        issue: 'Oil change date missing - verify service',
+        cost: 0,
+        due: previousDayKey(),
+        nextDue: previousDayKey(),
+        reminder: row.customer ? 'Remind customer when due' : 'Internal only',
+        notes: 'No oil change date was listed on the vehicle sheet. Mark fixed after service or update the due date.',
+        status: 'Scheduled',
+        source: 'Vehicle sheet import',
+        sourceRow: row.rowNumber
+      })) maintenanceImported += 1;
     }
 
     if (!row.customer) return;
@@ -213,7 +311,7 @@ async function mergeVehicleImport(data) {
     });
   });
 
-  data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked };
+  data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked, maintenanceImported };
   return data.integrations.vehicleSheet;
 }
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
