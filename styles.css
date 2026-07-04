@@ -17,6 +17,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .notice.bad{border-color:#f0beb6;background:#fff0ee;color:#8d2818}.check{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;line-height:1.45;color:#33414d}.check input{margin-top:3px}.clover-field{min-height:42px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:10px;display:flex;align-items:center}.clover-field iframe{width:100%!important;min-height:20px}
 .payment-success{display:grid;gap:4px;background:linear-gradient(135deg,#e8f8ef,#f6fff9);border-color:#94d8b1;box-shadow:inset 4px 0 0 #177245}.payment-success strong{font-size:24px;color:#126136}.payment-success span{font-weight:750}
 .account-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:-6px 0 18px}.account-card{background:rgba(255,255,255,.82);border:1px solid #e3d6bb;border-radius:8px;padding:12px 13px;box-shadow:0 12px 26px rgba(17,24,32,.06);display:grid;gap:3px;min-width:0}.account-card span{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#8a6a22;font-weight:950}.account-card strong{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.account-card small{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.quickbar{display:none}
+.ops-board{margin-bottom:16px;background:linear-gradient(135deg,#fff,#fffaf0)}.ops-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.ops-item{border:1px solid #e3d6bb;background:#fff;border-radius:8px;padding:12px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;box-shadow:0 10px 24px rgba(17,24,32,.06)}.ops-item strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ops-item .btn{min-width:86px;justify-content:center}
 
 @media(max-width:760px){
   body{background:#fff}
@@ -39,6 +40,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .stat{padding:13px}.stat b{font-size:22px}.stat span,.stat .trend{font-size:12px}
   .section{padding:13px;margin-bottom:12px}.section-head{display:grid;gap:10px}
   .layout{gap:12px}.item{padding:11px}.item-row{align-items:flex-start;display:grid;gap:5px}
+  .ops-board{margin-bottom:12px}.ops-list{grid-template-columns:1fr}.ops-item{grid-template-columns:1fr}.ops-item .btn{width:100%}
   .tabs{overflow-x:auto;gap:4px}.tabs button{white-space:nowrap;padding:10px}
   .table-wrap{overflow:visible}
   .table{min-width:0;border-collapse:separate;border-spacing:0 10px}
