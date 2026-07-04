@@ -1024,6 +1024,28 @@ function updateRecurringChargeState(data, id, patch) {
   const member = ((((data.integrations || {}).clover || {}).recurringPlanMembers || [])).find(row => row.id === id || row.cloverSubscriptionId === id);
   if (member) Object.assign(member, patch);
 }
+function patchRecurringAdminState(data, id, patch) {
+  const stamp = new Date().toISOString();
+  const adminPatch = { ...patch, updatedAt: stamp };
+  let found = false;
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  data.recurringPayments.forEach(row => {
+    if (row && (row.id === id || row.cloverSubscriptionId === id)) {
+      Object.assign(row, adminPatch);
+      found = true;
+    }
+  });
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  const members = data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  members.forEach(row => {
+    if (row && (row.id === id || row.cloverSubscriptionId === id)) {
+      Object.assign(row, adminPatch);
+      found = true;
+    }
+  });
+  return found;
+}
 function chargeReference() {
   return ('WOA' + Date.now().toString(36)).slice(-12).toUpperCase();
 }
@@ -1314,6 +1336,40 @@ const server = http.createServer(async (req, res) => {
       }
       await writeData(data);
       return json(res, 201, { ok: true, autopay });
+    }
+    if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const id = String(payload.recurringPaymentId || payload.id || '').trim();
+      const nextRun = String(payload.nextRun || '').trim();
+      if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a new auto-charge date.' });
+      const found = patchRecurringAdminState(data, id, {
+        nextRun,
+        adminNextRun: nextRun,
+        adminScheduleChangedAt: new Date().toISOString(),
+        notes: String(payload.note || '').trim()
+      });
+      if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      await writeData(data);
+      return json(res, 200, { ok: true, nextRun });
+    }
+    if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const id = String(payload.recurringPaymentId || payload.id || '').trim();
+      if (!id) return json(res, 400, { ok: false, error: 'Choose a recurring customer to remove.' });
+      const removedAt = new Date().toISOString();
+      const found = patchRecurringAdminState(data, id, {
+        status: 'Removed',
+        tone: 'bad',
+        nextRun: 'Removed',
+        removedAt,
+        paymentSetup: 'Removed from WheelsonAuto autopay',
+        notes: String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()
+      });
+      if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      await writeData(data);
+      return json(res, 200, { ok: true, removedAt });
     }
     if (url.pathname === '/api/card-setup-requests' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
