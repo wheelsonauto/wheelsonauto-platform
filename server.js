@@ -334,13 +334,59 @@ async function mergeVehicleImport(data) {
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
 function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8'); }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
-function authed(req) { return cookies(req).woa_session === SESSION_VALUE; }
+function sessionCookie(user) {
+  const payload = Buffer.from(JSON.stringify(user), 'utf8').toString('base64url');
+  return SESSION_VALUE + '.' + payload;
+}
+function sessionUser(req) {
+  const raw = cookies(req).woa_session || '';
+  if (raw === SESSION_VALUE) return { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' };
+  if (!raw.startsWith(SESSION_VALUE + '.')) return null;
+  try {
+    const body = JSON.parse(Buffer.from(raw.slice(SESSION_VALUE.length + 1), 'base64url').toString('utf8'));
+    return body && body.role ? body : null;
+  } catch {
+    return null;
+  }
+}
+function authed(req) { return !!sessionUser(req); }
+function roleHome(role) {
+  const r = String(role || '').toLowerCase();
+  if (r === 'mechanic') return 'Mechanic Portal';
+  if (r === 'manager') return 'Manager Portal';
+  return 'Dashboard';
+}
+function roleAccess(role) {
+  const r = String(role || '').toLowerCase();
+  if (r === 'mechanic') return 'Maintenance only';
+  if (r === 'manager') return 'Fleet and customer operations';
+  return 'Full platform access';
+}
+function staffLoginUser(staff) {
+  return { id: staff.id || ('staff-' + Date.now()), name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: roleHome(staff.role), access: roleAccess(staff.role) };
+}
+function findStaffByPin(data, pin) {
+  const clean = String(pin || '').trim();
+  if (!clean) return null;
+  return (data.staffAccounts || []).find(staff => String(staff.status || 'Active').toLowerCase() !== 'disabled' && String(staff.pinHint || '').trim() === clean) || null;
+}
+function isOwnerUser(user) {
+  return String(user && user.role || '').toLowerCase() === 'owner';
+}
+function apiAllowedForUser(user, pathname) {
+  if (isOwnerUser(user)) return true;
+  const role = String(user && user.role || '').toLowerCase();
+  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay'];
+  if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
+  if (role === 'mechanic' && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
+  return true;
+}
 async function readBody(req) { let body = ''; for await (const chunk of req) body += chunk; return body; }
 function escapeHtml(value) { return String(value || '').replace(/[&<>\"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;' }[c])); }
 function loginPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title><link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180"><link rel="stylesheet" href="/styles.css"></head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Authorized staff only. Please sign in to continue.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Access PIN<input name="pin" type="password" autofocus></label><button>Sign in</button></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title><link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180"><link rel="stylesheet" href="/styles.css"></head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Access PIN<input name="pin" type="password" autofocus autocomplete="current-password"></label><button>Sign in</button><div class="login-pin">Use the owner PIN for full access, or a staff temporary PIN saved under Settings.</div></form></main></body></html>';
 }
-async function appHtml({ publicMode = false } = {}) {
+async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
   const clientData = publicMode ? {
     vehicles: (data.vehicles || []).filter(v => ['Ready', 'Coming soon', 'Pending application'].includes(v.status)),
@@ -357,7 +403,8 @@ async function appHtml({ publicMode = false } = {}) {
     integrations: { clover: {}, shopify: { store: 'wheelsonauto.com', embedPath: '/apply' } }
   } : data;
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
-  const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';</script>';
+  const currentUser = publicMode ? null : (user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
 async function staticFile(res, pathname) {
@@ -1605,11 +1652,19 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/login' && req.method === 'POST') {
       const pin = new URLSearchParams(await readBody(req)).get('pin');
-      if (LOGIN_PIN && pin === LOGIN_PIN) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + SESSION_VALUE + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      if (LOGIN_PIN && pin === LOGIN_PIN) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie({ id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      const data = await readData();
+      const staff = findStaffByPin(data, pin);
+      if (staff) {
+        const user = staffLoginUser(staff);
+        return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie(user) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      }
       return send(res, 401, loginPage('That PIN did not match.'));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=; Max-Age=0; Path=/', Location: '/' });
-    if (!authed(req)) return send(res, 200, loginPage());
+    const user = sessionUser(req);
+    if (!user) return send(res, 200, loginPage());
+    if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, await readData());
     if (url.pathname === '/api/state' && req.method === 'PUT') { await writeData(JSON.parse(await readBody(req) || '{}')); return json(res, 200, { ok: true }); }
     if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {
@@ -1810,7 +1865,7 @@ const server = http.createServer(async (req, res) => {
       setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), 0);
       return json(res, 200, { ok: true });
     }
-    return send(res, 200, await appHtml({ publicMode: false }));
+    return send(res, 200, await appHtml({ publicMode: false, user }));
   } catch (err) {
     send(res, 500, 'Server error: ' + String(err && err.message || err), 'text/plain; charset=utf-8');
   }
