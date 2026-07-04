@@ -7,6 +7,7 @@ const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
 const SEED_FILE = path.join(ROOT, 'seed.json');
+const VEHICLE_IMPORT_FILE = path.join(ROOT, 'vehicle-import.json');
 const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
 const LOGIN_PIN = process.env.WOA_ADMIN_PIN || '';
@@ -63,6 +64,139 @@ async function writeData(data) {
   const tmpFile = DATA_FILE + '.tmp';
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
   await fs.rename(tmpFile, DATA_FILE);
+}
+function normKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function moneyNumber(value) {
+  const cleaned = String(value || '').replace(/[$,\s]/g, '');
+  const number = Number(cleaned);
+  return Number.isFinite(number) ? number : 0;
+}
+function vehicleNameFromImport(row) {
+  return [row.year, row.makeModel].filter(Boolean).join(' ').trim() || 'Imported vehicle';
+}
+function importVehicleStatus(row) {
+  const status = String(row.status || '').toLowerCase();
+  if (status.includes('rented')) return 'Rented';
+  if (status.includes('lot')) return 'Ready';
+  return row.customer ? 'Rented' : 'Ready';
+}
+async function loadVehicleImport() {
+  try {
+    const body = JSON.parse(await fs.readFile(VEHICLE_IMPORT_FILE, 'utf8'));
+    return Array.isArray(body.rows) ? body.rows : [];
+  } catch {
+    return [];
+  }
+}
+async function mergeVehicleImport(data) {
+  const rows = await loadVehicleImport();
+  if (!rows.length) return { rows: 0, vehicles: 0, customers: 0, contracts: 0, recurringLinked: 0 };
+  data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+
+  const vehicleIndex = new Map();
+  data.vehicles.forEach((vehicle, index) => [vehicle.vin, vehicle.plate, vehicle.stock].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), index)));
+  const customerIndex = new Map();
+  data.customers.forEach((customer, index) => customerIndex.set(normKey(customer.name), index));
+  const contractIndex = new Map();
+  data.contracts.forEach((contract, index) => contractIndex.set(normKey(contract.customer) + '|' + normKey(contract.vehicle), index));
+  const recurringRows = [...data.recurringPayments, ...data.integrations.clover.recurringPlanMembers];
+  let customers = 0, contracts = 0, recurringLinked = 0;
+
+  rows.forEach(row => {
+    const vehicleName = vehicleNameFromImport(row);
+    const status = importVehicleStatus(row);
+    const weekly = moneyNumber(row.weeklyAmount || row.weeklyAmountRaw);
+    const plate = row.licensePlate || row.tempTag || '';
+    const vehiclePatch = {
+      name: vehicleName,
+      year: row.year || '',
+      make: String(row.makeModel || '').split(/\s+/)[0] || '',
+      model: String(row.makeModel || '').split(/\s+/).slice(1).join(' '),
+      vin: row.vin || '',
+      plate,
+      tempTag: row.tempTag || '',
+      stock: plate || row.vin || ('CSV-' + row.rowNumber),
+      mileage: Number(row.mileageStart || 0),
+      odometer: Number(row.mileageStart || 0),
+      status,
+      tone: status === 'Rented' ? 'good' : 'good',
+      currentCustomer: row.customer || '',
+      rate: weekly || 0,
+      tracker: row.tracker || '',
+      oilChangeDate: row.oilChangeDate || '',
+      lastChargedToll: row.lastChargedToll || '',
+      violationBill: row.violationBill || '',
+      notes: row.notes || '',
+      photoUrl: '',
+      source: 'Vehicle sheet import',
+      sourceRow: row.rowNumber
+    };
+    const vehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));
+    if (vehicleKey) Object.assign(data.vehicles[vehicleIndex.get(vehicleKey)], vehiclePatch);
+    else {
+      data.vehicles.push({ id: 'veh-sheet-' + String(row.rowNumber).padStart(3, '0'), ...vehiclePatch });
+      [row.vin, row.licensePlate, row.tempTag].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), data.vehicles.length - 1));
+    }
+
+    if (!row.customer) return;
+    const customerKey = normKey(row.customer);
+    const customerPatch = {
+      name: row.customer,
+      stage: status === 'Rented' ? 'Active contract' : 'Vehicle history',
+      tone: status === 'Rented' ? 'good' : 'warn',
+      vehicle: vehicleName,
+      balance: 0,
+      contract: 'Vehicle sheet import',
+      source: 'Vehicle sheet import',
+      weeklyAmount: weekly || 0,
+      dateStarted: row.dateStarted || '',
+      tracker: row.tracker || '',
+      licensePlate: row.licensePlate || '',
+      vin: row.vin || '',
+      importedVehicleRow: row.rowNumber
+    };
+    if (customerIndex.has(customerKey)) Object.assign(data.customers[customerIndex.get(customerKey)], customerPatch);
+    else {
+      data.customers.push({ id: 'cus-sheet-' + String(row.rowNumber).padStart(3, '0'), phone: '', email: '', ...customerPatch });
+      customerIndex.set(customerKey, data.customers.length - 1);
+    }
+    customers += 1;
+
+    if (weekly) {
+      const contractKey = customerKey + '|' + normKey(vehicleName);
+      const contractPatch = { customer: row.customer, vehicle: vehicleName, weekly, status: 'Active', tone: 'good', dateStarted: row.dateStarted || '', nextDue: '', balance: 0, autopay: 'Clover recurring', paymentProvider: 'Clover', tracker: row.tracker || '', source: 'Vehicle sheet import' };
+      if (contractIndex.has(contractKey)) Object.assign(data.contracts[contractIndex.get(contractKey)], contractPatch);
+      else {
+        data.contracts.push({ id: 'WOA-SHEET-' + String(row.rowNumber).padStart(3, '0'), paidWeeks: 0, totalWeeks: 82, ...contractPatch });
+        contractIndex.set(contractKey, data.contracts.length - 1);
+      }
+      contracts += 1;
+    }
+
+    recurringRows.forEach(recurring => {
+      if (normKey(recurring.customer) !== customerKey) return;
+      recurring.vehicle = recurring.vehicle || vehicleName;
+      recurring.amount = Number(recurring.amount || weekly || 0);
+      recurring.weeklyAmount = weekly || recurring.amount || 0;
+      recurring.vin = recurring.vin || row.vin || '';
+      recurring.licensePlate = recurring.licensePlate || row.licensePlate || '';
+      recurring.tracker = recurring.tracker || row.tracker || '';
+      recurring.dateStarted = recurring.dateStarted || row.dateStarted || '';
+      recurring.sourceVehicleRow = row.rowNumber;
+      recurringLinked += 1;
+    });
+  });
+
+  data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked };
+  return data.integrations.vehicleSheet;
 }
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
 function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8'); }
@@ -450,6 +584,7 @@ async function runAutoSync(options = {}) {
       lastSource: autoSyncStatus.lastSource
     };
     const result = await syncCloverIntoData(data);
+    result.vehicleSheet = await mergeVehicleImport(data);
     autoSyncStatus.lastFinishedAt = new Date().toISOString();
     autoSyncStatus.lastResult = result;
     autoSyncStatus.lastError = result.errors[0] || '';
@@ -1344,6 +1479,13 @@ const server = http.createServer(async (req, res) => {
     if (!authed(req)) return send(res, 200, loginPage());
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, await readData());
     if (url.pathname === '/api/state' && req.method === 'PUT') { await writeData(JSON.parse(await readBody(req) || '{}')); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {
+      const data = await readData();
+      const imported = await mergeVehicleImport(data);
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+      return json(res, 200, { ok: true, imported, vehicles: (data.vehicles || []).length, customers: (data.customers || []).length, contracts: (data.contracts || []).length });
+    }
     if (url.pathname === '/api/sync/status' && req.method === 'GET') return json(res, 200, { ok: true, autoSync: autoSyncStatus });
     if (url.pathname === '/api/sync/auto' && req.method === 'POST') {
       const result = await runAutoSync({ source: 'dashboard', force: url.searchParams.get('force') === '1' });
@@ -1433,9 +1575,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/integrations/clover/sync-all' && req.method === 'POST') {
       const data = await readData();
       const synced = await syncCloverIntoData(data);
+      const vehicleSheet = await mergeVehicleImport(data);
       await protectConcurrentLocalWrites(data);
       await writeData(data);
-      return json(res, synced.errors.length ? 207 : 200, { ok: synced.errors.length === 0, ...synced, totalCustomers: (data.customers || []).length, totalPayments: (data.payments || []).length });
+      return json(res, synced.errors.length ? 207 : 200, { ok: synced.errors.length === 0, ...synced, vehicleSheet, totalCustomers: (data.customers || []).length, totalPayments: (data.payments || []).length });
     }
     if (url.pathname === '/api/recurring-payments' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
