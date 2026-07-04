@@ -157,6 +157,7 @@ async function cloverPostCharge(payload, req) {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'User-Agent': 'WheelsonAuto/1.0',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID,
       'x-forwarded-for': forwardedFor,
       'idempotency-key': payload.idempotencyKey
     },
@@ -176,7 +177,8 @@ async function cloverPostCardCustomer(payload) {
       Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      'User-Agent': 'WheelsonAuto/1.0'
+      'User-Agent': 'WheelsonAuto/1.0',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
     },
     body: JSON.stringify(payload)
   });
