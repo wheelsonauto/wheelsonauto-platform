@@ -56,6 +56,54 @@ Future multi-company rules:
 - API Roadmap
 - Settings
 
+## Live Platform Map
+
+Dashboard is the owner command center. It should open with money, today's payment work, priority queue, transactions, application count, and fleet status visible without hunting through menus.
+
+Today is the daily payment board. It tracks possible money for the day, collected money, unpaid/open customers, failed attempts, and follow-up. It should answer one question fast: who paid, who did not, and who needs a message.
+
+Payments is the recurring and transaction center. It should show active recurring customers, today's due customers, failed/retry customers, setup-needed customers, transaction history, manual paid/failed tracking, payment links, and saved-card charge actions.
+
+Customers is the master customer file area. It replaces the old Contracts label. A customer file should connect contact info, vehicle, current plate/temp tag, old temp tag, tracker name, recurring payment, payment history, maintenance history, claims, notes, removal status, and future documents/e-sign.
+
+Fleet is the car command area. Ready/in-lot cars stay first, rented/assigned cars stay visible underneath, and the Fleet command board shows missing tracker, missing tag, maintenance, old temp tags, and assigned-car issues.
+
+Maintenance is the service system. It should only focus on cars that are out with customers or assigned, not in-lot inventory. It supports repair jobs, monthly inspection/oil change reminders, mechanic updates, service history, and reset-next-month behavior after completion.
+
+Applications handles the customer intake pipeline. It should support active review, approval, denial/removal, approval message, contract handoff, selected car from the public website, and future e-sign/autopay setup.
+
+Claims & Issues is recovery money. It tracks tolls, violations, tickets, damage, reimbursements, unpaid balances, payment links, mark-paid, follow-up dates, and future E-ZPass/Clover dispute feeds.
+
+Messages is the communication queue. It should give copy-ready messages for failed payments, approved applicants, maintenance reminders, and claims. Future SMS API should send from the WheelsonAuto number.
+
+Reports is the owner accounting and operating view. It should combine daily closeout, accounting control, failed payment risk, fleet snapshot, application pipeline, open recovery, repair exposure, and collected totals.
+
+Mechanic Portal is a limited workspace. Mechanics should see maintenance jobs, assigned vehicle/customer info, due dates, notes, and done/update actions only.
+
+Manager Portal is a limited operations workspace. Managers should see fleet, customers, applications, maintenance, claims, messages, and reports without owner-only Clover keys, staff control, company setup, or dangerous settings.
+
+Companies prepares future separate stores or subscription clients. It is not full tenant isolation yet. It records accounts and staff assignment now; real isolation comes in the database/auth phase.
+
+Settings controls Clover setup, website apply path, staff accounts, role access, and account readiness.
+
+## Data Connection Rules
+
+- Customer name matching must connect customers, contracts/customer files, recurring payments, payments, vehicles, claims, and maintenance.
+- Vehicle sheet data is important source data and should not be thrown away. It should feed fleet, customer files, tracker names, temp tags, plates, oil changes, and maintenance status.
+- In-lot cars belong in Fleet as inventory. Rented/assigned cars belong in customer files and should still appear in Fleet as a separate assigned section.
+- Removed customers should leave the active payment/customer work but stay in history.
+- Removing a customer from Clover recurring should not delete the WheelsonAuto customer file.
+- WheelsonAuto recurring should become the long-term source of truth for autopay date control when cards are saved through WheelsonAuto/Clover ecommerce tokenization.
+- No button should pretend an API exists. If the provider is not connected and live-tested, mark it API phase and keep the manual workflow functional.
+
+## Portal And Permission Rules
+
+- Owner can control payments, Clover/API settings, staff, companies, reports, and all records.
+- Manager can run daily operations, update fleet/customer/application/maintenance/claim work, and use reports without API credentials or staff/company controls.
+- Mechanic can only update maintenance work, see necessary vehicle/customer info, and log service notes.
+- Future store/subscription accounts need hard data isolation before outside use: separate customers, cars, payments, Clover credentials, staff, reports, files, audit logs, and billing.
+- Staff accounts should be created from Settings and disabled from Settings. No random user should be able to become a mechanic or manager.
+
 ## Future API Phases
 
 - Clover disputes
@@ -67,6 +115,16 @@ Future multi-company rules:
 - tracker/location provider
 - marketing/follow-up systems
 - SMS from WheelsonAuto number
+
+## API Build Order
+
+1. Clover hardening: payment sync, saved-card charging, disputes, refunds, payment status reconciliation, and error logging.
+2. SMS: send approval, autopay setup, failed-payment, maintenance, and claim links from the business number.
+3. E-ZPass/tolls: import tolls and violations, match plate to vehicle/customer, create claim/reimbursement balance, and track paid/unpaid.
+4. Insurance/background checks: attach verification results and expiration reminders to applications and customer files.
+5. Tracker/location: connect tracker provider, show current vehicle status, and flag location/late-payment risk.
+6. Accounting exports: closeout report, monthly P&L by car, repairs, claims recovered, unpaid balances, taxes/fees, and CSV/PDF export.
+7. Multi-company isolation and billing: separate data per store/client before selling subscriptions.
 
 ## Recovery Checklist
 
