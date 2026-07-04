@@ -110,6 +110,10 @@ function previousDayKey() {
   d.setDate(d.getDate() - 1);
   return dateKey(d);
 }
+function isInLotImport(row) {
+  const status = String(row.status || '').toLowerCase().replace(/\s+/g, '');
+  return status.includes('inlot') || status.includes('lot') || status.includes('ready') || (!row.customer && !status.includes('rented'));
+}
 function upsertMaintenanceJob(data, job) {
   data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
   const existing = data.maintenance.find(item => item.id === job.id);
@@ -121,6 +125,17 @@ function upsertMaintenanceJob(data, job) {
   }
   data.maintenance.unshift(job);
   return true;
+}
+function removeSheetMaintenanceForRow(data, rowNumber) {
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  const ids = new Set([
+    'mnt-sheet-oil-done-' + rowNumber,
+    'mnt-sheet-oil-next-' + rowNumber,
+    'mnt-sheet-oil-overdue-' + rowNumber
+  ]);
+  const before = data.maintenance.length;
+  data.maintenance = data.maintenance.filter(item => !ids.has(item.id));
+  return before - data.maintenance.length;
 }
 async function loadVehicleImport() {
   try {
@@ -204,8 +219,10 @@ async function mergeVehicleImport(data) {
     const currentVehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));
     const currentVehicle = currentVehicleKey ? data.vehicles[vehicleIndex.get(currentVehicleKey)] : null;
     const oilDone = importedOilDate(row.oilChangeDate);
-    const outOfLot = status === 'Rented' || !!row.customer;
-    if (oilDone) {
+    const outOfLot = status === 'Rented' && !isInLotImport(row);
+    if (!outOfLot) {
+      maintenanceImported += removeSheetMaintenanceForRow(data, row.rowNumber);
+    } else if (oilDone) {
       if (upsertMaintenanceJob(data, {
         id: 'mnt-sheet-oil-done-' + row.rowNumber,
         vehicleId: currentVehicle && currentVehicle.id || '',
