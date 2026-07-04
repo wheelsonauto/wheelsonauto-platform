@@ -383,8 +383,24 @@ function apiAllowedForUser(user, pathname) {
   const role = String(user && user.role || '').toLowerCase();
   const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
-  if (role === 'mechanic' && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
+  if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
+}
+function stateForUserWrite(current, incoming, user) {
+  if (isOwnerUser(user)) return incoming;
+  const role = String(user && user.role || '').toLowerCase();
+  const allowed = role === 'mechanic'
+    ? ['maintenance', 'messages', 'vehicles']
+    : role === 'manager'
+      ? ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'websiteLeads']
+      : ['messages'];
+  const next = { ...current };
+  allowed.forEach(key => {
+    if (Object.prototype.hasOwnProperty.call(incoming, key)) next[key] = incoming[key];
+  });
+  next.lastStaffSaveAt = new Date().toISOString();
+  next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
+  return next;
 }
 async function readBody(req) { let body = ''; for await (const chunk of req) body += chunk; return body; }
 function escapeHtml(value) { return String(value || '').replace(/[&<>\"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;' }[c])); }
@@ -1672,7 +1688,12 @@ const server = http.createServer(async (req, res) => {
     if (!user) return send(res, 200, loginPage());
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, await readData());
-    if (url.pathname === '/api/state' && req.method === 'PUT') { await writeData(JSON.parse(await readBody(req) || '{}')); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/state' && req.method === 'PUT') {
+      const incoming = JSON.parse(await readBody(req) || '{}');
+      const current = await readData();
+      await writeData(stateForUserWrite(current, incoming, user));
+      return json(res, 200, { ok: true });
+    }
     if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {
       const data = await readData();
       const imported = await mergeVehicleImport(data);
