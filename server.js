@@ -282,6 +282,26 @@ function upsertById(list, incoming) {
   });
   return next;
 }
+function mergeById(preferred, fallback) {
+  const merged = [];
+  const seen = new Set();
+  [...(Array.isArray(preferred) ? preferred : []), ...(Array.isArray(fallback) ? fallback : [])].forEach(item => {
+    const id = item && item.id;
+    if (id && seen.has(id)) return;
+    if (id) seen.add(id);
+    if (item) merged.push(item);
+  });
+  return merged;
+}
+async function protectConcurrentLocalWrites(data) {
+  const latest = await readData();
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments'].forEach(key => {
+    data[key] = mergeById(latest[key], data[key]);
+  });
+  data.customers = upsertById(latest.customers, data.customers);
+  data.payments = upsertById(latest.payments, data.payments);
+  return data;
+}
 async function syncCloverIntoData(data, options = {}) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
@@ -355,6 +375,7 @@ async function runAutoSync(options = {}) {
     data.integrations.autoSync.lastFinishedAt = autoSyncStatus.lastFinishedAt;
     data.integrations.autoSync.lastError = autoSyncStatus.lastError;
     data.integrations.autoSync.lastResult = result;
+    await protectConcurrentLocalWrites(data);
     await writeData(data);
     return { ok: result.errors.length === 0, skipped: false, ...result, status: autoSyncStatus };
   } catch (err) {
@@ -373,6 +394,7 @@ async function runAutoSync(options = {}) {
         lastError: autoSyncStatus.lastError,
         lastResult: autoSyncStatus.lastResult
       };
+      await protectConcurrentLocalWrites(data);
       await writeData(data);
     } catch {}
     return { ok: false, skipped: false, error: autoSyncStatus.lastError, status: autoSyncStatus };
@@ -1087,6 +1109,7 @@ const server = http.createServer(async (req, res) => {
       data.websiteLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
       if (!data.applications.some(existing => existing.id === app.id)) data.applications.unshift(app);
       if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, vehicle: app.vehicle, created: 'Just now', status: 'Submitted' });
+      await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, 201, { ok: true, application: app });
     }
@@ -1143,6 +1166,7 @@ const server = http.createServer(async (req, res) => {
       data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
       data.integrations.clover.lastRecurringPlanSyncError = '';
       data.integrations.clover.lastRecurringPlanSyncSource = 'Manual Plan Manager import';
+      await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, 200, { ok: true, imported: plans.length, summary: data.integrations.clover.recurringPlanSummary });
     }
@@ -1161,12 +1185,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/integrations/clover/sync-customers' && req.method === 'POST') {
       const data = await readData();
       const synced = await syncCloverIntoData(data, { payments: false, recurring: false });
+      await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, synced.errors.length ? 500 : 200, { ok: synced.errors.length === 0, imported: synced.customers, customers: data.customers.length, error: synced.errors[0] || '' });
     }
     if (url.pathname === '/api/integrations/clover/sync-payments' && req.method === 'POST') {
       const data = await readData();
       const synced = await syncCloverIntoData(data, { customers: false, recurring: false });
+      await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, synced.errors.length ? 500 : 200, { ok: synced.errors.length === 0, imported: synced.payments, recurring: data.recurringPayments.length, payments: data.payments.length, error: synced.errors[0] || '' });
     }
@@ -1177,10 +1203,12 @@ const server = http.createServer(async (req, res) => {
       try {
         const synced = await syncCloverRecurringPlans(data);
         data.integrations.clover.connected = true;
+        await protectConcurrentLocalWrites(data);
         await writeData(data);
         return json(res, 200, { ok: true, ...synced });
       } catch (err) {
         data.integrations.clover.lastRecurringPlanSyncError = String(err && err.message || err);
+        await protectConcurrentLocalWrites(data);
         await writeData(data);
         return json(res, 500, { ok: false, error: data.integrations.clover.lastRecurringPlanSyncError, currentSummary: data.integrations.clover.recurringPlanSummary || null });
       }
@@ -1188,6 +1216,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/integrations/clover/sync-all' && req.method === 'POST') {
       const data = await readData();
       const synced = await syncCloverIntoData(data);
+      await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, synced.errors.length ? 207 : 200, { ok: synced.errors.length === 0, ...synced, totalCustomers: (data.customers || []).length, totalPayments: (data.payments || []).length });
     }
