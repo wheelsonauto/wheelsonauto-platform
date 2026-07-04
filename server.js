@@ -1051,7 +1051,8 @@ function isWheelsonAutoManagedAutopay(row) {
 }
 function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
   const status = String(row && row.status || '').toLowerCase();
-  if (status !== 'active') return false;
+  if (Number(row && (row.retryCount || row.failedAttempts) || 0) >= 2) return false;
+  if (status !== 'active' && !status.includes('1x failed')) return false;
   if (!isWheelsonAutoManagedAutopay(row)) return false;
   if (recurringDateKey(row) !== dateKey) return false;
   return String(row.lastAutoChargeDate || '') !== dateKey;
@@ -1151,6 +1152,8 @@ async function chargeSavedRecurringCard(data, payload, req) {
   updateRecurringChargeState(data, recurring.id, {
     status: paid ? 'Active' : 'Payment submitted',
     tone: paid ? 'good' : 'warn',
+    retryCount: paid ? 0 : (recurring.retryCount || recurring.failedAttempts || 0),
+    failedAttempts: paid ? 0 : (recurring.failedAttempts || recurring.retryCount || 0),
     nextRun: String(payload.nextRun || recurring.nextRun || '').trim(),
     lastPaymentAt: new Date().toISOString(),
     lastCloverChargeId: payment.cloverChargeId,
@@ -1192,10 +1195,17 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.nextRun = nextRun;
         row.status = 'Active';
         row.tone = 'good';
+        row.retryCount = 0;
+        row.failedAttempts = 0;
+        row.lastAutoChargeResult = 'Paid';
         result.charged += 1;
       } catch (err) {
-        row.status = 'Failed retry';
-        row.tone = 'bad';
+        const attempts = Math.min(2, Number(row.retryCount || row.failedAttempts || 0) + 1);
+        row.retryCount = attempts;
+        row.failedAttempts = attempts;
+        row.status = attempts >= 2 ? '2x failed - contact customer' : '1x failed - retrying';
+        row.tone = attempts >= 2 ? 'bad' : 'warn';
+        row.lastAutoChargeResult = row.status;
         row.lastAutoChargeError = String(err && err.message || err);
         row.lastAutoChargeAttemptDate = dateKey;
         row.lastAutoChargeAttemptAt = new Date().toISOString();
