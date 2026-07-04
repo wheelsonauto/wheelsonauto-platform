@@ -178,9 +178,12 @@ async function mergeVehicleImport(data) {
       vin: row.vin || '',
       importedVehicleRow: row.rowNumber
     };
+    const recurringMatch = recurringRows.find(recurring => normKey(recurring.customer) === customerKey) || {};
+    if (recurringMatch.phone && !customerPatch.phone) customerPatch.phone = recurringMatch.phone;
+    if (recurringMatch.email && !customerPatch.email) customerPatch.email = recurringMatch.email;
     if (customerIndex.has(customerKey)) Object.assign(data.customers[customerIndex.get(customerKey)], customerPatch);
     else {
-      data.customers.push({ id: 'cus-sheet-' + String(row.rowNumber).padStart(3, '0'), phone: '', email: '', ...customerPatch });
+      data.customers.push({ id: 'cus-sheet-' + String(row.rowNumber).padStart(3, '0'), phone: recurringMatch.phone || '', email: recurringMatch.email || '', ...customerPatch });
       customerIndex.set(customerKey, data.customers.length - 1);
     }
     customers += 1;
