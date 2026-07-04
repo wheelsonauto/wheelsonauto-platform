@@ -107,6 +107,34 @@ function cloverCheckoutReady() {
 function cloverChargeReady() {
   if (!CLOVER_ECOMMERCE_PRIVATE_KEY) throw new Error('Clover saved-card charging is not ready. Add CLOVER_ECOMMERCE_PRIVATE_KEY in Render.');
 }
+function cloverEcommerceAuthHeaders(mode) {
+  const token = CLOVER_ECOMMERCE_PRIVATE_KEY;
+  if (mode === 'basic-colon') return { Authorization: 'Basic ' + Buffer.from(token + ':').toString('base64') };
+  if (mode === 'basic') return { Authorization: 'Basic ' + Buffer.from(token).toString('base64') };
+  if (mode === 'api-key') return { apikey: token, apiKey: token };
+  return { Authorization: 'Bearer ' + token };
+}
+async function cloverEcommerceFetch(pathname, options = {}) {
+  cloverChargeReady();
+  const modes = ['bearer', 'basic-colon', 'basic', 'api-key'];
+  let last = null;
+  for (const mode of modes) {
+    const response = await fetch(CLOVER_CHARGE_BASE + pathname, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        ...cloverEcommerceAuthHeaders(mode)
+      }
+    });
+    const text = await response.text();
+    let body = {};
+    try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
+    const result = { response, text, body, authMode: mode };
+    last = result;
+    if (response.status !== 401 && response.status !== 403) return result;
+  }
+  return last;
+}
 function checkoutStatus() {
   return {
     ok: !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID),
@@ -134,10 +162,9 @@ async function cloverEcommerceDiagnostics() {
     result.savedCardApi.message = 'Missing Ecommerce private key or Clover merchant ID in Render.';
     return result;
   }
-  const response = await fetch(CLOVER_CHARGE_BASE + '/v1/customers', {
+  const { response, text, body, authMode } = await cloverEcommerceFetch('/v1/customers', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'User-Agent': 'WheelsonAuto/1.0',
@@ -150,15 +177,13 @@ async function cloverEcommerceDiagnostics() {
       source: 'invalid-diagnostic-source'
     })
   });
-  const text = await response.text();
-  let body = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
   result.savedCardApi.checked = true;
   result.savedCardApi.status = response.status;
   result.savedCardApi.message = cloverErrorMessage(body, text);
+  result.savedCardApi.authMode = authMode;
   result.savedCardApi.authorized = response.status !== 401 && response.status !== 403;
   if (result.savedCardApi.authorized) {
-    result.savedCardApi.message = 'Ecommerce private key reached Clover saved-card API. A non-auth error here is expected because this check intentionally sends no real card.';
+    result.savedCardApi.message = 'Ecommerce private key reached Clover saved-card API using ' + authMode + ' auth. A non-auth error here is expected because this check intentionally sends no real card.';
   }
   return result;
 }
@@ -193,10 +218,9 @@ async function cloverPostCheckout(payload) {
 async function cloverPostCharge(payload, req) {
   cloverChargeReady();
   const forwardedFor = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
-  const response = await fetch(CLOVER_CHARGE_BASE + '/v1/charges', {
+  const { response, text, body } = await cloverEcommerceFetch('/v1/charges', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'User-Agent': 'WheelsonAuto/1.0',
@@ -206,18 +230,14 @@ async function cloverPostCharge(payload, req) {
     },
     body: JSON.stringify(payload.charge)
   });
-  const text = await response.text();
-  let body = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
   if (!response.ok) throw new Error('Clover saved-card charge ' + response.status + ': ' + cloverErrorMessage(body, text));
   return body;
 }
 async function cloverPostCardCustomer(payload) {
   cloverChargeReady();
-  const response = await fetch(CLOVER_CHARGE_BASE + '/v1/customers', {
+  const { response, text, body } = await cloverEcommerceFetch('/v1/customers', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + CLOVER_ECOMMERCE_PRIVATE_KEY,
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'User-Agent': 'WheelsonAuto/1.0',
@@ -225,9 +245,6 @@ async function cloverPostCardCustomer(payload) {
     },
     body: JSON.stringify(payload)
   });
-  const text = await response.text();
-  let body = {};
-  try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
   if (!response.ok) {
     const detail = cloverErrorMessage(body, text);
     if (response.status === 401 || response.status === 403) {
