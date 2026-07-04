@@ -242,7 +242,10 @@ function collectionElements(body) {
   if (Array.isArray(body.subscriptions)) return body.subscriptions;
   return [];
 }
-function firstElement(value) { return value && Array.isArray(value.elements) && value.elements[0] ? value.elements[0] : {}; }
+function firstElement(value) {
+  const items = collectionElements(value);
+  return items[0] || {};
+}
 function mapCloverCustomer(customer) {
   const first = customer.firstName || '';
   const last = customer.lastName || '';
@@ -878,15 +881,18 @@ function createCardSetupRequest(data, payload) {
 function setupCardHtml(request, message = '') {
   const setupReady = !!(CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY);
   const tokenBase = CLOVER_TOKEN_BASE;
+  const sdkUrl = CLOVER_ENV === 'sandbox' ? 'https://checkout.sandbox.dev.clover.com/sdk.js' : 'https://checkout.clover.com/sdk.js';
   const config = {
     requestId: request.id,
     publicKey: CLOVER_ECOMMERCE_PUBLIC_KEY,
+    merchantId: CLOVER_MERCHANT_ID,
+    sdkUrl,
     tokenUrl: tokenBase + '/v1/tokens',
     submitUrl: '/api/public/card-setup/' + encodeURIComponent(request.id) + '/complete'
   };
   const disabled = setupReady ? '' : ' disabled';
   const amount = '$' + Number(request.amount || 0).toLocaleString();
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title><link rel="stylesheet" href="/styles.css"></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save your card securely with Clover so WheelsonAuto can run authorized recurring and manual catch-up payments.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Card setup is not ready yet. WheelsonAuto needs the Clover Ecommerce public key and private key in Render.</div>' : '') + '<form id="cardSetupForm" class="form" style="margin-top:14px"><div class="field span2"><label>Name on card</label><input id="cardName" autocomplete="cc-name" value="' + escapeHtml(request.customer || '') + '"' + disabled + '></div><div class="field span2"><label>Card number</label><input id="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="Card number"' + disabled + '></div><div class="field"><label>Month</label><input id="expMonth" inputmode="numeric" autocomplete="cc-exp-month" placeholder="MM"' + disabled + '></div><div class="field"><label>Year</label><input id="expYear" inputmode="numeric" autocomplete="cc-exp-year" placeholder="YYYY"' + disabled + '></div><div class="field"><label>CVV</label><input id="cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="CVV"' + disabled + '></div><div class="field"><label>ZIP</label><input id="zip" inputmode="numeric" autocomplete="postal-code" placeholder="ZIP"' + disabled + '></div><label class="check span2"><input id="consent" type="checkbox"' + disabled + '> I authorize WheelsonAuto to save this card with Clover and charge authorized recurring payments, retries, and manual catch-up payments for my account.</label><div class="notice span2">Your card is sent directly to Clover for tokenization. WheelsonAuto stores only the Clover saved-card/customer reference, not the card number or CVV.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Save card with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Cancel</a></div></form><div id="setupMessage" class="notice" style="display:none;margin-top:12px"></div></section></main></div><script>window.__CARD_SETUP__=' + JSON.stringify(config).replace(/</g, '\\u003c') + ';</script><script src="/card-setup.js"></script></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title><link rel="stylesheet" href="/styles.css"><script src="' + sdkUrl + '"></script></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save your card securely with Clover so WheelsonAuto can run authorized recurring and manual catch-up payments.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Card setup is not ready yet. WheelsonAuto needs the Clover Ecommerce public key and private key in Render.</div>' : '') + '<form id="cardSetupForm" class="form" style="margin-top:14px"><div class="field span2"><label>Name on card</label><input id="cardName" autocomplete="cc-name" value="' + escapeHtml(request.customer || '') + '"' + disabled + '></div><div class="field span2"><label>Card number</label><div id="cardNumber" class="clover-field"></div><div id="cardNumberErrors" class="small err"></div></div><div class="field"><label>Expiration</label><div id="cardDate" class="clover-field"></div><div id="cardDateErrors" class="small err"></div></div><div class="field"><label>CVV</label><div id="cardCvv" class="clover-field"></div><div id="cardCvvErrors" class="small err"></div></div><div class="field"><label>ZIP</label><div id="cardZip" class="clover-field"></div><div id="cardZipErrors" class="small err"></div></div><label class="check span2"><input id="consent" type="checkbox"' + disabled + '> I authorize WheelsonAuto to save this card with Clover and charge authorized recurring payments, retries, and manual catch-up payments for my account.</label><div class="notice span2">Your card is entered in Clover secure fields for tokenization. WheelsonAuto stores only the Clover saved-card/customer reference, not the card number or CVV.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Save card with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Cancel</a></div></form><div id="setupMessage" class="notice" style="display:none;margin-top:12px"></div></section></main></div><script>window.__CARD_SETUP__=' + JSON.stringify(config).replace(/</g, '\\u003c') + ';</script><script src="/card-setup.js?v=clover-iframe-1"></script></body></html>';
 }
 async function completeCardSetup(data, request, payload) {
   const token = cleanPaymentSource(payload.token || payload.source || '');
@@ -899,7 +905,7 @@ async function completeCardSetup(data, request, payload) {
     source: token
   });
   const savedCard = firstElement(customer.sources) || {};
-  const cardSource = token;
+  const cardSource = String(savedCard.id || savedCard.source || savedCard.token || '');
   let subscription = null;
   if (request.cloverPlanId) {
     subscription = await cloverPostRecurring('/recurring/v1/plans/' + encodeURIComponent(request.cloverPlanId) + '/subscriptions', {
@@ -912,7 +918,7 @@ async function completeCardSetup(data, request, payload) {
   request.status = subscription ? 'Card saved and Clover subscription created' : 'Card saved for manual charges';
   request.completedAt = new Date().toISOString();
   request.cloverCustomerId = customer.id || '';
-  request.cloverPaymentSource = cardSource;
+  request.cloverPaymentSource = cardSource || token;
   request.cloverCardId = String(savedCard.id || savedCard || '');
   request.cloverSubscriptionId = subscription && subscription.id || '';
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
@@ -921,17 +927,17 @@ async function completeCardSetup(data, request, payload) {
     recurring.tone = 'good';
     recurring.paymentSetup = subscription ? 'Active in Clover' : 'Card saved for WheelsonAuto charges';
     recurring.cloverCustomerId = customer.id || '';
-    recurring.cloverPaymentSource = cardSource;
+    recurring.cloverPaymentSource = cardSource || token;
     recurring.cloverCardId = request.cloverCardId;
     recurring.cloverSubscriptionId = request.cloverSubscriptionId;
-    recurring.cardLabel = payload.brand || '';
-    recurring.cardLast4 = payload.last4 || '';
+    recurring.cardLabel = payload.brand || savedCard.brand || savedCard.cardBrand || '';
+    recurring.cardLast4 = payload.last4 || savedCard.last4 || '';
     recurring.cardSavedAt = new Date().toISOString();
     recurring.notes = [recurring.notes, 'Customer authorized card-on-file through WheelsonAuto setup link.'].filter(Boolean).join('\n');
   }
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   const existing = data.customers.find(c => String(c.name || '').toLowerCase() === String(request.customer || '').toLowerCase());
-  const customerPatch = { cloverCustomerId: customer.id || '', cardLast4: payload.last4 || '', cardLabel: payload.brand || '', source: 'WheelsonAuto card setup' };
+  const customerPatch = { cloverCustomerId: customer.id || '', cardLast4: payload.last4 || savedCard.last4 || '', cardLabel: payload.brand || savedCard.brand || savedCard.cardBrand || '', source: 'WheelsonAuto card setup' };
   if (existing) Object.assign(existing, customerPatch);
   await writeData(data);
   return { customer, subscription, recurring };
