@@ -362,8 +362,12 @@ function roleAccess(role) {
   if (r === 'manager') return 'Fleet and customer operations';
   return 'Full platform access';
 }
+function companyNameById(data, organizationId) {
+  const org = (data.organizations || []).find(item => item.id === organizationId);
+  return org && org.name || 'WheelsonAuto';
+}
 function staffLoginUser(staff) {
-  return { id: staff.id || ('staff-' + Date.now()), name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: roleHome(staff.role), access: roleAccess(staff.role) };
+  return { id: staff.id || ('staff-' + Date.now()), name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || 'org-wheelsonauto', companyName: staff.companyName || 'WheelsonAuto' };
 }
 function findStaffByPin(data, pin) {
   const clean = String(pin || '').trim();
@@ -1657,6 +1661,7 @@ const server = http.createServer(async (req, res) => {
       const staff = findStaffByPin(data, pin);
       if (staff) {
         const user = staffLoginUser(staff);
+        user.companyName = companyNameById(data, user.organizationId);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie(user) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
       }
       return send(res, 401, loginPage('That PIN did not match.'));
