@@ -24,6 +24,7 @@ const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
+const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
 const autoSyncStatus = {
   enabled: true,
   intervalMs: AUTO_SYNC_MS,
@@ -31,6 +32,15 @@ const autoSyncStatus = {
   lastStartedAt: '',
   lastFinishedAt: '',
   lastSource: '',
+  lastError: '',
+  lastResult: null
+};
+const woaAutopayStatus = {
+  enabled: true,
+  intervalMs: WOA_AUTOPAY_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
   lastError: '',
   lastResult: null
 };
@@ -217,7 +227,7 @@ async function cloverPostCheckout(payload) {
 }
 async function cloverPostCharge(payload, req) {
   cloverChargeReady();
-  const forwardedFor = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+  const forwardedFor = String(req && req.headers && req.headers['x-forwarded-for'] || req && req.socket && req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
   const { response, text, body } = await cloverEcommerceFetch('/v1/charges', {
     method: 'POST',
     headers: {
@@ -999,6 +1009,8 @@ async function completeCardSetup(data, request, payload) {
     recurring.cardLabel = payload.brand || savedCard.brand || savedCard.cardBrand || '';
     recurring.cardLast4 = payload.last4 || savedCard.last4 || '';
     recurring.cardSavedAt = new Date().toISOString();
+    recurring.autoChargeEnabled = true;
+    recurring.autopayManagedBy = 'WheelsonAuto';
     recurring.notes = [recurring.notes, 'Customer authorized card-on-file through WheelsonAuto setup link.'].filter(Boolean).join('\n');
   }
   data.customers = Array.isArray(data.customers) ? data.customers : [];
@@ -1023,6 +1035,26 @@ function updateRecurringChargeState(data, id, patch) {
   if (local) Object.assign(local, patch);
   const member = ((((data.integrations || {}).clover || {}).recurringPlanMembers || [])).find(row => row.id === id || row.cloverSubscriptionId === id);
   if (member) Object.assign(member, patch);
+}
+function localDateKey(date = new Date()) {
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+}
+function recurringDateKey(row) {
+  const raw = String(row && row.nextRun || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw === 'today' || raw.includes('today')) return localDateKey();
+  const match = raw.match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : '';
+}
+function isWheelsonAutoManagedAutopay(row) {
+  return !!(row && row.autoChargeEnabled && hasWheelsonAutoSavedCard(row));
+}
+function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
+  const status = String(row && row.status || '').toLowerCase();
+  if (status !== 'active') return false;
+  if (!isWheelsonAutoManagedAutopay(row)) return false;
+  if (recurringDateKey(row) !== dateKey) return false;
+  return String(row.lastAutoChargeDate || '') !== dateKey;
 }
 function patchRecurringAdminState(data, id, patch) {
   const stamp = new Date().toISOString();
@@ -1126,6 +1158,72 @@ async function chargeSavedRecurringCard(data, payload, req) {
   });
   await writeData(data);
   return { charge, payment, recurring };
+}
+function nextDateAfterCharge(dateKey, frequency) {
+  const d = new Date(dateKey + 'T12:00:00');
+  const f = String(frequency || '').toLowerCase();
+  if (f.includes('bi')) d.setDate(d.getDate() + 14);
+  else if (f.includes('month')) d.setMonth(d.getMonth() + 1);
+  else d.setDate(d.getDate() + 7);
+  return localDateKey(d);
+}
+async function runWheelsonAutoAutopay(options = {}) {
+  if (woaAutopayStatus.inFlight) return { ok: true, skipped: true, reason: 'already running', status: woaAutopayStatus };
+  woaAutopayStatus.inFlight = true;
+  woaAutopayStatus.lastStartedAt = new Date().toISOString();
+  woaAutopayStatus.lastError = '';
+  const dateKey = options.dateKey || localDateKey();
+  const result = { dateKey, charged: 0, skipped: 0, errors: [] };
+  try {
+    const data = await readData();
+    data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+    const due = data.recurringPayments.filter(row => isDueForWheelsonAutoAutopay(row, dateKey));
+    for (const row of due) {
+      try {
+        const nextRun = nextDateAfterCharge(dateKey, row.frequency);
+        await chargeSavedRecurringCard(data, {
+          recurringPaymentId: row.id,
+          amount: row.amount,
+          nextRun,
+          note: 'WheelsonAuto autopay charged for due date ' + dateKey
+        }, null);
+        row.lastAutoChargeDate = dateKey;
+        row.lastAutoChargeAt = new Date().toISOString();
+        row.nextRun = nextRun;
+        row.status = 'Active';
+        row.tone = 'good';
+        result.charged += 1;
+      } catch (err) {
+        row.status = 'Failed retry';
+        row.tone = 'bad';
+        row.lastAutoChargeError = String(err && err.message || err);
+        row.lastAutoChargeAttemptDate = dateKey;
+        row.lastAutoChargeAttemptAt = new Date().toISOString();
+        result.errors.push((row.customer || row.id) + ': ' + row.lastAutoChargeError);
+      }
+    }
+    result.skipped = data.recurringPayments.length - due.length;
+    data.integrations = data.integrations || {};
+    data.integrations.wheelsonAutoAutopay = {
+      enabled: true,
+      intervalMs: WOA_AUTOPAY_MS,
+      lastStartedAt: woaAutopayStatus.lastStartedAt,
+      lastFinishedAt: new Date().toISOString(),
+      lastResult: result
+    };
+    await writeData(data);
+    woaAutopayStatus.lastFinishedAt = data.integrations.wheelsonAutoAutopay.lastFinishedAt;
+    woaAutopayStatus.lastResult = result;
+    woaAutopayStatus.lastError = result.errors[0] || '';
+    return { ok: result.errors.length === 0, skipped: false, ...result, status: woaAutopayStatus };
+  } catch (err) {
+    woaAutopayStatus.lastFinishedAt = new Date().toISOString();
+    woaAutopayStatus.lastError = String(err && err.message || err);
+    woaAutopayStatus.lastResult = { dateKey, errors: [woaAutopayStatus.lastError] };
+    return { ok: false, skipped: false, error: woaAutopayStatus.lastError, status: woaAutopayStatus };
+  } finally {
+    woaAutopayStatus.inFlight = false;
+  }
 }
 async function attachCloverCheckout(data, request) {
   const name = splitName(request.customer);
@@ -1241,6 +1339,11 @@ const server = http.createServer(async (req, res) => {
       const result = await runAutoSync({ source: 'dashboard', force: url.searchParams.get('force') === '1' });
       return json(res, result.ok ? 200 : 207, result);
     }
+    if (url.pathname === '/api/woa-autopay/status' && req.method === 'GET') return json(res, 200, { ok: true, autopay: woaAutopayStatus });
+    if (url.pathname === '/api/woa-autopay/run' && req.method === 'POST') {
+      const result = await runWheelsonAutoAutopay({ source: 'dashboard' });
+      return json(res, result.ok ? 200 : 207, result);
+    }
     if (url.pathname === '/api/reset' && req.method === 'POST') { await fs.copyFile(SEED_FILE, DATA_FILE); return json(res, 200, { ok: true, data: await readData() }); }
     if (url.pathname === '/api/integrations/clover/connect' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
@@ -1343,15 +1446,19 @@ const server = http.createServer(async (req, res) => {
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       const nextRun = String(payload.nextRun || '').trim();
       if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a new WheelsonAuto due date.' });
+      const recurring = findRecurringRow(data, id);
+      const enableWheelsonAutoCharge = hasWheelsonAutoSavedCard(recurring);
       const found = patchRecurringAdminState(data, id, {
         nextRun,
         adminNextRun: nextRun,
         adminScheduleChangedAt: new Date().toISOString(),
+        autoChargeEnabled: enableWheelsonAutoCharge,
+        autopayManagedBy: enableWheelsonAutoCharge ? 'WheelsonAuto' : (recurring && recurring.autopayManagedBy || ''),
         notes: String(payload.note || '').trim()
       });
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       await writeData(data);
-      return json(res, 200, { ok: true, nextRun });
+      return json(res, 200, { ok: true, nextRun, autoChargeEnabled: enableWheelsonAutoCharge });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
@@ -1426,4 +1533,6 @@ server.listen(PORT, HOST, () => {
   console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
   setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
   setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
+  setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
+  setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => console.error('Background WOA autopay failed:', err && err.message || err)), WOA_AUTOPAY_MS);
 });
