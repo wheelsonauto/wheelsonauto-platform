@@ -16,19 +16,23 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 @media(max-width:760px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.nav{grid-template-columns:repeat(2,minmax(0,1fr))}.side-note{display:none}.topbar{display:grid}.stats,.three,.two,.kanban,.form{grid-template-columns:1fr}.public-head{align-items:flex-start}.public-hero h1{font-size:30px}.public-main{padding:0 14px}.table{min-width:720px}}
 .notice.bad{border-color:#f0beb6;background:#fff0ee;color:#8d2818}.check{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;line-height:1.45;color:#33414d}.check input{margin-top:3px}.clover-field{min-height:42px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:10px;display:flex;align-items:center}.clover-field iframe{width:100%!important;min-height:20px}
 .payment-success{display:grid;gap:4px;background:linear-gradient(135deg,#e8f8ef,#f6fff9);border-color:#94d8b1;box-shadow:inset 4px 0 0 #177245}.payment-success strong{font-size:24px;color:#126136}.payment-success span{font-weight:750}
+.account-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:-6px 0 18px}.account-card{background:rgba(255,255,255,.82);border:1px solid #e3d6bb;border-radius:8px;padding:12px 13px;box-shadow:0 12px 26px rgba(17,24,32,.06);display:grid;gap:3px;min-width:0}.account-card span{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#8a6a22;font-weight:950}.account-card strong{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.account-card small{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.quickbar{display:none}
 
 @media(max-width:760px){
   body{background:#fff}
-  .admin-shell .main{padding:14px;background:#f8f5ee}
-  .admin-shell .sidebar{padding:14px 12px;border-right:0;border-bottom:4px solid var(--gold)}
+  .app{max-width:100vw;overflow-x:hidden}
+  .admin-shell .main{padding:14px 14px 86px;background:#f8f5ee;width:100%;max-width:100vw;min-width:0;overflow-x:hidden}
+  .admin-shell .sidebar{padding:14px 12px;border-right:0;border-bottom:4px solid var(--gold);width:100%;max-width:100vw;min-width:0;overflow:hidden}
   .admin-shell .brand{margin-bottom:12px}
   .admin-logo{width:44px;height:44px}
   .brand b{font-size:17px}.brand span{font-size:11px}
-  .nav{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 8px;scroll-snap-type:x proximity}
+  .nav{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;width:100%;max-width:100%;min-width:0;padding:4px 2px 8px;scroll-snap-type:x proximity}
   .nav button{flex:0 0 auto;min-width:112px;justify-content:center;text-align:center;padding:10px 11px;scroll-snap-align:start}
   .nav button span{white-space:nowrap}
   .topbar{position:sticky;top:0;z-index:5;background:#f8f5ee;border-bottom:2px solid #ead8a6!important;padding:10px 0 12px;margin-bottom:14px}
   h1{font-size:24px}.topbar p{font-size:13px}
+  .account-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:-2px 0 12px}
+  .account-card{padding:10px}.account-card span{font-size:10px}.account-card strong{font-size:13px}.account-card small{font-size:11px}
   .actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
   .btn{justify-content:center;min-height:42px;padding:10px 9px}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
@@ -50,6 +54,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .modal-head,.modal-body{padding:13px}
   .public-hero{padding:18px 14px 36px}
   .public-hero h1{font-size:28px;margin-top:28px}
+  .quickbar{position:fixed;left:10px;right:10px;bottom:10px;z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;background:rgba(17,24,32,.94);border:1px solid rgba(240,184,58,.42);border-radius:8px;padding:7px;box-shadow:0 18px 48px rgba(0,0,0,.28);backdrop-filter:blur(14px)}
+  .quickbar button{border:0;border-radius:7px;background:transparent;color:#dce5eb;font-size:11px;font-weight:900;padding:9px 4px}
+  .quickbar button.active{background:#f0b83a;color:#15191f}
 }
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
