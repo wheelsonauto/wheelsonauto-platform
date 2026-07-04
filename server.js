@@ -416,7 +416,7 @@ async function staticFile(res, pathname) {
   const clean = pathname.replace(/^\//, '');
   if (!['styles.css', 'app.js', 'card-setup.js'].includes(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8';
-  send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type);
+  send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': 'no-store' });
   return true;
 }
 function scoreApplication(app) {
