@@ -1647,8 +1647,17 @@ const server = http.createServer(async (req, res) => {
       const app = { id: payload.id || ('app-' + Date.now()), submittedAt: payload.submittedAt || new Date().toISOString(), stage: 'New', status: 'New', score: payload.score || scoreApplication(payload), ...payload };
       data.applications = Array.isArray(data.applications) ? data.applications : [];
       data.websiteLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
+      data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
       if (!data.applications.some(existing => existing.id === app.id)) data.applications.unshift(app);
-      if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, vehicle: app.vehicle, created: 'Just now', status: 'Submitted' });
+      const selectedVehicle = data.vehicles.find(vehicle => vehicle.id === app.vehicleId);
+      if (selectedVehicle && ['Ready', 'Coming soon', 'Pending application'].includes(selectedVehicle.status)) {
+        selectedVehicle.status = 'Pending application';
+        selectedVehicle.pendingApplicant = app.name || '';
+        selectedVehicle.pendingApplicationId = app.id;
+        selectedVehicle.lastLeadAt = app.submittedAt;
+        selectedVehicle.notes = [selectedVehicle.notes, 'Website application submitted by ' + (app.name || 'applicant') + ' on ' + app.submittedAt].filter(Boolean).join('\n');
+      }
+      if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, created: 'Just now', status: 'Submitted' });
       await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, 201, { ok: true, application: app });
