@@ -1342,7 +1342,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       const nextRun = String(payload.nextRun || '').trim();
-      if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a new auto-charge date.' });
+      if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a new WheelsonAuto due date.' });
       const found = patchRecurringAdminState(data, id, {
         nextRun,
         adminNextRun: nextRun,
