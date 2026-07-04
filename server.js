@@ -1114,7 +1114,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, { ok: true, application: app });
     }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
-      const requestId = url.pathname.split('/')[3];
+      const requestId = url.pathname.split('/').filter(Boolean)[3];
       const payload = JSON.parse(await readBody(req) || '{}');
       const data = await readData();
       data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
