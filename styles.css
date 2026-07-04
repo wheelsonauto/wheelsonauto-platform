@@ -104,3 +104,42 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   html{scroll-behavior:auto}
   *,*:before,*:after{animation:none!important;transition:none!important}
 }
+
+/* Premium command shell refresh */
+.admin-shell{background:#f3f0e8}
+.admin-shell .sidebar{box-shadow:18px 0 46px rgba(5,7,9,.18)}
+.admin-shell .brand{padding:8px;border:1px solid rgba(240,184,58,.22);border-radius:8px;background:rgba(255,255,255,.05)}
+.admin-shell .nav{gap:4px}
+.admin-shell .nav button{min-height:42px;font-weight:850;letter-spacing:0;border:1px solid transparent}
+.admin-shell .nav button:hover{border-color:rgba(240,184,58,.26)}
+.admin-shell .nav button.active{box-shadow:0 12px 24px rgba(240,184,58,.18)}
+.admin-shell .main{background:
+  linear-gradient(180deg,rgba(255,255,255,.92),rgba(248,245,238,.96)),
+  radial-gradient(circle at top right,rgba(240,184,58,.16),transparent 30%),
+  #f8f5ee}
+.admin-shell .topbar{position:relative;background:linear-gradient(135deg,#fff,#fffaf0);border:1px solid #ead9b4!important;border-bottom:4px solid #f0b83a!important;border-radius:8px;padding:18px;box-shadow:0 18px 46px rgba(17,24,32,.08)}
+.admin-shell .topbar h1{font-size:34px}
+.admin-shell .card{background:rgba(255,255,255,.94)}
+.admin-shell .stat{position:relative;overflow:hidden}
+.admin-shell .stat:after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:linear-gradient(90deg,#111820,#f0b83a)}
+.admin-shell .section-head h2{font-size:19px}
+.admin-shell .table th{color:#7b6228}
+.admin-shell .table td{background:rgba(255,255,255,.64)}
+.admin-shell .table tr:hover td{background:#fffaf0}
+.api-control{margin-bottom:16px;background:linear-gradient(135deg,#101820,#173131);color:white;border-color:#101820;box-shadow:0 24px 62px rgba(17,24,32,.2)}
+.api-control h2{color:white}.api-control p{color:#dce5eb}
+.api-lanes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px}
+.api-lane{position:relative;overflow:hidden;text-align:left;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:white;border-radius:8px;padding:13px 12px 16px;min-height:118px;display:grid;gap:6px;align-content:start;transition:transform .16s ease,background .16s ease,border-color .16s ease}
+.api-lane:hover{transform:translateY(-2px);background:rgba(255,255,255,.12);border-color:rgba(240,184,58,.58)}
+.api-lane span{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#f0d394;font-weight:950}
+.api-lane strong{font-size:26px;line-height:1.05;overflow-wrap:anywhere}
+.api-lane small{color:#dce5eb;font-weight:750;line-height:1.35}
+.api-lane i{position:absolute;left:0;right:0;bottom:0;height:4px;background:#58a6ff}
+.api-lane i.good{background:#177245}.api-lane i.warn{background:#f0b83a}.api-lane i.bad{background:#c53a2d}.api-lane i.blue{background:#58a6ff}
+@media(max-width:1050px){.api-lanes{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){
+  .admin-shell .topbar{position:sticky;top:0;border-radius:0;padding:12px 10px}
+  .admin-shell .topbar h1{font-size:25px}
+  .api-lanes{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .api-lane{min-height:104px}
+}
