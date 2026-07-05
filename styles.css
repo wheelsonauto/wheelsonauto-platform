@@ -881,6 +881,44 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   box-shadow:0 12px 28px rgba(0,0,0,.24), inset 0 0 0 1px rgba(255,255,255,.04);
 }
 
+/* Phone header: logo + name only */
+@media(max-width:760px){
+  .admin-shell .sidebar{
+    padding:8px 10px 6px;
+    border-bottom-width:2px;
+  }
+  .admin-shell .brand{
+    margin:0;
+    padding:5px 0 4px;
+    border:0;
+    background:transparent;
+    box-shadow:none;
+    display:grid;
+    place-items:center;
+    gap:3px;
+    text-align:center;
+  }
+  .admin-shell .brand div{
+    display:grid;
+    place-items:center;
+    gap:0;
+  }
+  .admin-shell .brand b{
+    font-size:13px;
+    line-height:1.05;
+    color:#f0d394;
+  }
+  .admin-shell .brand span{
+    display:none!important;
+  }
+  .admin-shell .admin-logo{
+    width:36px;
+    height:36px;
+    padding:3px;
+    border-radius:8px;
+  }
+}
+
 /* Compact modals across desktop and phone */
 .modal-backdrop{padding:14px}
 .modal{width:min(680px,calc(100vw - 28px));max-height:86vh;border-radius:8px}
