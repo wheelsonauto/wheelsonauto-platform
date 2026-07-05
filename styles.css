@@ -880,3 +880,120 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   padding:4px;
   box-shadow:0 12px 28px rgba(0,0,0,.24), inset 0 0 0 1px rgba(255,255,255,.04);
 }
+
+/* Compact modals across desktop and phone */
+.modal-backdrop{padding:14px}
+.modal{width:min(680px,calc(100vw - 28px));max-height:86vh;border-radius:8px}
+.modal-head{padding:12px 14px;position:sticky;top:0;z-index:2}
+.modal-head strong{font-size:15px;line-height:1.2}
+.modal-body{padding:13px}
+.modal .grid,.modal .form{gap:9px}
+.modal .item,.modal .card,.modal .check{padding:10px;border-radius:8px}
+.modal .field{gap:5px}
+.modal .field label{font-size:10px;letter-spacing:.06em}
+.modal .field input,.modal .field select,.modal .field textarea,.modal .clover-field{padding:9px;border-radius:7px;font-size:13px}
+.modal .field textarea{min-height:70px}
+.modal .actions{display:flex;gap:6px;flex-wrap:wrap}
+.modal .btn{min-height:30px;padding:7px 9px;font-size:11px}
+.modal .notice,.modal .success{padding:10px;font-size:13px}
+.modal .table th,.modal .table td{padding:8px 6px;font-size:12px}
+
+/* Platform-wide compact polish */
+@media(min-width:761px){
+  .admin-shell .main{padding:18px 22px 32px}
+  .admin-shell .section{padding:14px}
+  .admin-shell .section-head{margin-bottom:10px;align-items:flex-start}
+  .admin-shell .section-head h2{font-size:17px}
+  .admin-shell .section-head p{font-size:12px;line-height:1.35;max-width:680px}
+  .admin-shell .stats{gap:10px;margin-bottom:12px}
+  .admin-shell .stat{padding:12px;min-height:86px}
+  .admin-shell .stat b{font-size:22px}
+  .admin-shell .stat span,.admin-shell .stat .trend{font-size:11px}
+  .payment-command,.workflow-board,.application-command,.fleet-command,.service-command,.claims-command,.match-board,.accounting-board,.message-playbook,.blueprint-board,.system-health,.website-command{margin-bottom:12px}
+  .payment-lanes,.application-lanes,.fleet-lanes,.service-lanes,.claim-lanes,.match-lanes,.accounting-lanes,.message-lanes,.blueprint-grid,.health-grid,.workflow-map{gap:8px}
+  .payment-lane,.application-lane,.fleet-lane,.service-lane,.claim-lane,.match-lane,.accounting-lane,.message-lane,.blueprint-card,.health-card,.workflow-step{min-height:86px;padding:10px 10px 13px}
+  .payment-lane strong,.application-lane strong,.fleet-lane strong,.service-lane strong,.claim-lane strong,.match-lane strong,.accounting-lane strong,.workflow-step strong,.health-card strong{font-size:21px}
+  .blueprint-card strong{font-size:17px}
+  .payment-lane small,.application-lane small,.fleet-lane small,.service-lane small,.claim-lane small,.match-lane small,.accounting-lane small,.message-lane small,.blueprint-card small,.health-card small,.workflow-step small{font-size:11px;line-height:1.25}
+  .payment-next-item,.service-next-item,.claim-next-item,.fleet-next-item,.match-next-item,.accounting-next-item,.access-next-item{padding:9px;gap:8px}
+  .admin-shell .table th,.admin-shell .table td{padding:9px 7px;font-size:13px}
+  .admin-shell .table th{font-size:10px}
+  .admin-shell .tabs{margin-bottom:10px}
+}
+
+@media(max-width:760px){
+  .modal-backdrop{align-items:end;padding:8px}
+  .modal{width:100%;max-height:92vh;border-radius:8px 8px 0 0}
+  .modal-head{padding:10px 11px}
+  .modal-body{padding:10px}
+  .modal .grid,.modal .grid.two,.modal .form{grid-template-columns:1fr!important;gap:8px}
+  .modal .span2{grid-column:auto}
+  .modal .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .modal .actions .btn,.modal .btn{width:100%;justify-content:center}
+  .modal .item-row{display:grid;gap:5px}
+  .modal .table-wrap{overflow:visible}
+  .modal .table{min-width:0;border-collapse:separate;border-spacing:0 7px}
+  .modal .table thead{display:none}
+  .modal .table,.modal .table tbody,.modal .table tr,.modal .table td{display:block;width:100%}
+  .modal .table tr{border:1px solid rgba(240,184,58,.2);border-radius:8px;padding:6px;background:rgba(255,255,255,.05)}
+  .modal .table td{border:0!important;padding:5px!important;display:grid!important;grid-template-columns:78px minmax(0,1fr);gap:7px}
+  .modal .table td:before{content:attr(data-label);font-size:9px;text-transform:uppercase;color:#f0d394;font-weight:950}
+  .admin-shell .main{padding:10px 10px 96px!important}
+  .admin-shell .topbar.compact-title{margin-bottom:7px;padding:6px 0}
+  .admin-shell .topbar.compact-title h1{font-size:19px}
+  .admin-shell .section{padding:10px;margin-bottom:9px;border-radius:8px}
+  .admin-shell .section-head{display:grid;gap:7px;margin-bottom:8px}
+  .admin-shell .section-head h2{font-size:16px}
+  .admin-shell .section-head p{display:none}
+  .admin-shell .section-head .actions,.admin-shell .actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .admin-shell .btn{min-height:31px;padding:7px 8px;font-size:11px;border-radius:6px}
+  .admin-shell .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-bottom:9px}
+  .admin-shell .stat{padding:9px;min-height:64px;border-radius:8px}
+  .admin-shell .stat b{font-size:18px;margin-top:4px}
+  .admin-shell .stat span,.admin-shell .stat .trend{font-size:10px;line-height:1.2}
+  .payment-command,.workflow-board,.application-command,.fleet-command,.service-command,.claims-command,.match-board,.accounting-board,.message-playbook,.blueprint-board,.system-health,.website-command{margin-bottom:9px}
+  .payment-lanes,.application-lanes,.fleet-lanes,.service-lanes,.claim-lanes,.match-lanes,.accounting-lanes,.message-lanes,.blueprint-grid,.health-grid,.workflow-map,.access-lanes{
+    display:flex;
+    gap:7px;
+    overflow-x:auto;
+    grid-template-columns:none;
+    padding-bottom:2px;
+    scroll-snap-type:x proximity;
+    scrollbar-width:none;
+  }
+  .payment-lanes::-webkit-scrollbar,.application-lanes::-webkit-scrollbar,.fleet-lanes::-webkit-scrollbar,.service-lanes::-webkit-scrollbar,.claim-lanes::-webkit-scrollbar,.match-lanes::-webkit-scrollbar,.accounting-lanes::-webkit-scrollbar,.message-lanes::-webkit-scrollbar,.blueprint-grid::-webkit-scrollbar,.health-grid::-webkit-scrollbar,.workflow-map::-webkit-scrollbar,.access-lanes::-webkit-scrollbar{display:none}
+  .payment-lane,.application-lane,.fleet-lane,.service-lane,.claim-lane,.match-lane,.accounting-lane,.message-lane,.blueprint-card,.health-card,.workflow-step,.access-lane{
+    min-width:134px;
+    min-height:74px;
+    padding:8px 8px 11px;
+    gap:3px;
+    scroll-snap-align:start;
+  }
+  .payment-lane span,.application-lane span,.fleet-lane span,.service-lane span,.claim-lane span,.match-lane span,.accounting-lane span,.message-lane span,.blueprint-card span,.health-card span,.workflow-step span,.access-lane span{font-size:9px;letter-spacing:.05em}
+  .payment-lane strong,.application-lane strong,.fleet-lane strong,.service-lane strong,.claim-lane strong,.match-lane strong,.accounting-lane strong,.workflow-step strong,.health-card strong,.access-lane strong{font-size:18px;line-height:1}
+  .blueprint-card strong,.message-lane strong{font-size:15px;line-height:1.05}
+  .payment-lane small,.application-lane small,.fleet-lane small,.service-lane small,.claim-lane small,.match-lane small,.accounting-lane small,.message-lane small,.blueprint-card small,.health-card small,.workflow-step small,.access-lane small{font-size:10px;line-height:1.15;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .payment-next-item,.service-next-item,.claim-next-item,.fleet-next-item,.match-next-item,.accounting-next-item,.access-next-item,.mini-row,.due-row{
+    grid-template-columns:1fr!important;
+    padding:9px;
+    gap:6px;
+  }
+  .payment-next-item .actions,.claim-next-item .actions,.fleet-next-item .actions,.match-next-item .actions,.accounting-next-item .actions,.due-row .actions{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+  .payment-next-item .btn,.claim-next-item .btn,.fleet-next-item .btn,.match-next-item .btn,.accounting-next-item .btn,.due-row .btn,.mini-row .btn{width:100%}
+  .admin-shell .tabs{overflow-x:auto;border-bottom:0;gap:5px;margin-bottom:8px;padding-bottom:2px;scrollbar-width:none}
+  .admin-shell .tabs::-webkit-scrollbar{display:none}
+  .admin-shell .tabs button{flex:0 0 auto;border:1px solid rgba(240,184,58,.22);border-radius:999px;background:rgba(240,184,58,.08);padding:7px 10px;font-size:11px}
+  .admin-shell .tabs button.active{background:#f0b83a;color:#111820;border-color:#f0b83a}
+  .admin-shell .local-search{grid-template-columns:1fr auto;gap:6px;margin-bottom:7px}
+  .admin-shell .local-search input{padding:8px 9px;font-size:12px}
+  .admin-shell .table-wrap{overflow:visible!important}
+  .admin-shell .table{min-width:0!important;border-collapse:separate;border-spacing:0 8px}
+  .admin-shell .table thead{display:none}
+  .admin-shell .table,.admin-shell .table tbody,.admin-shell .table tr,.admin-shell .table td{display:block;width:100%}
+  .admin-shell .table tr{background:rgba(255,255,255,.96);border:1px solid rgba(240,184,58,.18);border-radius:8px;box-shadow:0 8px 18px rgba(17,24,32,.08);padding:7px;margin-bottom:8px;overflow:hidden}
+  .admin-shell .table td{border:0!important;padding:6px 5px!important;font-size:12px!important;display:grid!important;grid-template-columns:82px minmax(0,1fr);gap:8px;align-items:start;min-width:0}
+  .admin-shell .table td:before{content:attr(data-label);font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#f0b83a;font-weight:950;line-height:1.3}
+  .admin-shell .table td .btn{width:100%;margin:2px 0}
+  .admin-shell .table td .muted{font-size:11px}
+  .admin-shell .layout,.admin-shell .two,.admin-shell .three,.admin-shell .form,.mechanic-cards,.company-grid,.api-grid,.executive-grid{grid-template-columns:1fr!important;gap:9px}
+}
