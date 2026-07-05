@@ -921,7 +921,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 
 /* App-wide compact workspaces */
 @media(min-width:921px){
-  .view-recurring-center,
+  .view-payments,
   .view-fleet,
   .view-applications,
   .view-maintenance,
@@ -937,7 +937,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     gap:12px;
     align-items:start;
   }
-  .view-recurring-center>.topbar,
+  .view-payments>.topbar,
   .view-fleet>.topbar,
   .view-applications>.topbar,
   .view-maintenance>.topbar,
@@ -948,16 +948,16 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-settings>.topbar,
   .view-companies>.topbar,
   .view-api-roadmap>.topbar,
-  .view-recurring-center>.tabs,
+  .view-payments>.tabs,
   .view-applications>.tabs,
   .view-maintenance>.tabs,
   .view-messages>.tabs,
-  .view-recurring-center>.stats,
+  .view-payments>.stats,
   .view-reports>.stats:first-of-type,
   .view-claims-issues>.stats{
     grid-column:1/-1;
   }
-  .view-recurring-center>.payment-command,
+  .view-payments>.payment-command,
   .view-fleet>.fleet-command,
   .view-applications>.application-command,
   .view-maintenance>.service-strip,
@@ -972,7 +972,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     grid-column:1/2;
     margin-bottom:0;
   }
-  .view-recurring-center>section:not(.payment-command),
+  .view-payments>section:not(.payment-command),
   .view-fleet>section:not(.fleet-command),
   .view-applications>section:not(.application-command),
   .view-maintenance>section:not(.service-strip),
@@ -997,21 +997,119 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-fleet>.fleet-prep{
     grid-column:1/2;
   }
-  .view-recurring-center>.stats,
+  .view-payments>.stats,
   .view-reports>.stats,
   .view-claims-issues>.stats{
     gap:8px;
     margin-bottom:0;
   }
-  .view-recurring-center .stat,
+  .view-payments .stat,
   .view-reports .stat,
   .view-claims-issues .stat{
     padding:10px;
   }
-  .view-recurring-center .stat b,
+  .view-payments .stat b,
   .view-reports .stat b,
   .view-claims-issues .stat b{
     font-size:19px;
+  }
+}
+
+/* Payments is one command page: summary first, tab content below */
+@media(min-width:921px){
+  .view-payments{
+    display:block;
+  }
+  .view-payments>.payment-command{
+    margin-bottom:10px;
+  }
+  .view-payments>.tabs{
+    margin:0 0 10px;
+  }
+  .view-payments>.section{
+    margin-bottom:0;
+  }
+  .view-payments .payment-lanes{
+    grid-template-columns:repeat(6,minmax(0,1fr));
+  }
+  .view-payments .payment-next{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .view-payments .payment-next-item{
+    grid-template-columns:minmax(0,1fr) auto auto;
+  }
+  .view-payments .payment-next-item .actions{
+    grid-column:1/-1;
+    justify-content:flex-start;
+  }
+  .payment-gap-note{
+    margin-bottom:10px;
+  }
+}
+
+/* Operations combines fleet, service, and claims without three crowded side tabs */
+@media(min-width:921px){
+  .view-operations{
+    display:block;
+  }
+  .view-operations>.operations-command{
+    margin-bottom:10px;
+  }
+  .view-operations>.tabs{
+    margin:0 0 10px;
+  }
+  .view-operations>.section{
+    margin-bottom:10px;
+  }
+  .view-operations .fleet-lanes{
+    grid-template-columns:repeat(5,minmax(0,1fr));
+  }
+  .view-operations>.section:not(.operations-command) .table-wrap{
+    max-height:48vh;
+    overflow:auto;
+  }
+}
+
+@media(max-width:760px){
+  .view-payments>.payment-command{
+    margin-bottom:7px;
+  }
+  .view-payments .payment-lanes{
+    display:flex;
+    gap:7px;
+    overflow-x:auto;
+    grid-template-columns:none;
+    padding-bottom:2px;
+    scrollbar-width:none;
+  }
+  .view-payments .payment-lanes::-webkit-scrollbar{display:none}
+  .view-payments .payment-lane{
+    min-width:128px;
+  }
+  .view-payments .payment-next{
+    max-height:34vh;
+  }
+  .payment-gap-note{
+    margin-bottom:7px;
+  }
+  .view-operations>.operations-command{
+    margin-bottom:7px;
+  }
+  .view-operations .fleet-lanes{
+    display:flex;
+    gap:7px;
+    overflow-x:auto;
+    grid-template-columns:none;
+    padding-bottom:2px;
+    scrollbar-width:none;
+  }
+  .view-operations .fleet-lanes::-webkit-scrollbar{display:none}
+  .view-operations .fleet-lane{
+    min-width:128px;
+  }
+  .view-operations>.section:not(.operations-command) .table-wrap{
+    max-height:50vh;
+    overflow:auto;
   }
 }
 
@@ -1025,7 +1123,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     padding-top:2px!important;
     padding-bottom:4px!important;
   }
-  .view-recurring-center>.stats,
+  .view-payments>.stats,
   .view-reports>.stats,
   .view-claims-issues>.stats{
     display:flex;
@@ -1034,21 +1132,21 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     margin-bottom:8px;
     scrollbar-width:none;
   }
-  .view-recurring-center>.stats::-webkit-scrollbar,
+  .view-payments>.stats::-webkit-scrollbar,
   .view-reports>.stats::-webkit-scrollbar,
   .view-claims-issues>.stats::-webkit-scrollbar{display:none}
-  .view-recurring-center>.stats .stat,
+  .view-payments>.stats .stat,
   .view-reports>.stats .stat,
   .view-claims-issues>.stats .stat{
     min-width:128px;
     padding:8px;
   }
-  .view-recurring-center>.stats .stat b,
+  .view-payments>.stats .stat b,
   .view-reports>.stats .stat b,
   .view-claims-issues>.stats .stat b{
     font-size:16px;
   }
-  .view-recurring-center>.payment-command,
+  .view-payments>.payment-command,
   .view-applications>.application-command,
   .view-fleet>.fleet-command,
   .view-maintenance>.service-strip,
@@ -1073,7 +1171,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-api-roadmap>section:not(.blueprint-board){
     margin-bottom:8px;
   }
-  .view-recurring-center>.payment-command .payment-next,
+  .view-payments>.payment-command .payment-next,
   .view-fleet>.fleet-command .fleet-next,
   .view-claims-issues>.claims-command .claim-next,
   .view-reports>.executive-board .executive-next,
