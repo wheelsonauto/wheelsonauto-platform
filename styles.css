@@ -99,9 +99,12 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .public-hero{padding:18px 14px 36px}
   .public-hero h1{font-size:28px;margin-top:28px}
   .public-vehicle-grid{grid-template-columns:1fr}
-  .quickbar{position:fixed;left:10px;right:10px;bottom:10px;z-index:30;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;background:rgba(17,24,32,.94);border:1px solid rgba(240,184,58,.42);border-radius:8px;padding:7px;box-shadow:0 18px 48px rgba(0,0,0,.28);backdrop-filter:blur(14px)}
-  .quickbar button{border:0;border-radius:7px;background:transparent;color:#dce5eb;font-size:11px;font-weight:900;padding:9px 4px}
-  .quickbar button.active{background:#f0b83a;color:#15191f}
+  .quickbar{position:fixed;left:10px;right:10px;bottom:10px;z-index:30;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(64px,1fr);gap:6px;background:rgba(11,16,21,.96);border:1px solid rgba(240,184,58,.46);border-radius:8px;padding:7px;box-shadow:0 18px 48px rgba(0,0,0,.30);backdrop-filter:blur(16px);overflow-x:auto;scrollbar-width:none}
+  .quickbar::-webkit-scrollbar{display:none}
+  .quickbar button{border:1px solid transparent;border-radius:7px;background:rgba(255,255,255,.04);color:#dce5eb;font-size:10px;font-weight:900;padding:7px 4px;display:grid;place-items:center;gap:4px;min-height:54px}
+  .quickbar button .quick-icon{width:19px;height:19px;display:block}
+  .quickbar button .quick-icon path{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .quickbar button.active{background:linear-gradient(180deg,#ffd166,#f0b83a);border-color:#ffe09a;color:#15191f;box-shadow:0 10px 22px rgba(240,184,58,.22)}
 }
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
@@ -416,6 +419,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     grid-template-columns:none;
     padding:9px 10px calc(9px + env(safe-area-inset-bottom));
     scrollbar-width:none;
+    background:rgba(10,15,20,.97);
   }
   .quickbar::-webkit-scrollbar{display:none}
   .quickbar button{
@@ -427,20 +431,11 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     border:1px solid rgba(255,255,255,.08);
     background:rgba(255,255,255,.06);
   }
-  .quickbar button b{
-    width:25px;
-    height:25px;
-    display:grid;
-    place-items:center;
-    border-radius:999px;
-    background:rgba(255,255,255,.1);
-    color:#f0d394;
-    font-size:12px;
-    line-height:1;
-  }
+  .quickbar button .quick-icon{width:22px;height:22px;color:#f0d394}
+  .quickbar button .quick-icon path{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
   .quickbar button span{font-size:10px;line-height:1.1;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .quickbar button.active{background:#f0b83a;color:#111820;border-color:#f0b83a}
-  .quickbar button.active b{background:#111820;color:#f0b83a}
+  .quickbar button.active{background:linear-gradient(180deg,#ffd166,#f0b83a);color:#111820;border-color:#ffe09a;box-shadow:0 10px 24px rgba(240,184,58,.22)}
+  .quickbar button.active .quick-icon{color:#111820}
 }
 
 /* Focused dashboard and softer dark desktop */
