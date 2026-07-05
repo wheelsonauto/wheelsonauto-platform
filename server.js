@@ -1936,21 +1936,40 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse(await readBody(req) || '{}');
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
-      const nextRun = String(payload.nextRun || '').trim();
-      if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a new WheelsonAuto due date.' });
       const recurring = findRecurringRow(data, id);
+      const nextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
+      const frequency = String(payload.frequency || (recurring && recurring.frequency) || 'Weekly').trim();
+      const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
+      const status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
+      const paymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
+      const monthlyDay = payload.monthlyDay === undefined || payload.monthlyDay === '' ? undefined : Number(payload.monthlyDay);
+      const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
+      const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
+      if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a WheelsonAuto due date.' });
+      if (!frequency) return json(res, 400, { ok: false, error: 'Choose how often this customer should be charged.' });
+      if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) return json(res, 400, { ok: false, error: 'Enter a valid autopay amount.' });
+      if (monthlyDay !== undefined && (!Number.isFinite(monthlyDay) || monthlyDay < 1 || monthlyDay > 31)) return json(res, 400, { ok: false, error: 'Choose a valid monthly day.' });
       const enableWheelsonAutoCharge = hasWheelsonAutoSavedCard(recurring);
-      const found = patchRecurringAdminState(data, id, {
+      const patch = {
         nextRun,
         adminNextRun: nextRun,
+        frequency,
+        adminFrequency: frequency,
+        status,
+        paymentDay,
+        chargeDay: paymentDay,
+        retryRule,
         adminScheduleChangedAt: new Date().toISOString(),
         autoChargeEnabled: enableWheelsonAutoCharge,
-        autopayManagedBy: enableWheelsonAutoCharge ? 'WheelsonAuto' : (recurring && recurring.autopayManagedBy || ''),
-        notes: String(payload.note || '').trim()
-      });
+        autopayManagedBy: managedBy || (enableWheelsonAutoCharge ? 'WheelsonAuto' : (recurring && recurring.autopayManagedBy || '')),
+        notes: String(payload.note || recurring && recurring.notes || '').trim()
+      };
+      if (amount !== undefined) patch.amount = amount;
+      if (monthlyDay !== undefined) patch.monthlyDay = monthlyDay;
+      const found = patchRecurringAdminState(data, id, patch);
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       await writeData(data);
-      return json(res, 200, { ok: true, nextRun, autoChargeEnabled: enableWheelsonAutoCharge });
+      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
