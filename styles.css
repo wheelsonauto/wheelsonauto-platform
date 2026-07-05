@@ -46,9 +46,11 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .admin-shell .brand{margin-bottom:12px}
   .admin-logo{width:44px;height:44px}
   .brand b{font-size:17px}.brand span{font-size:11px}
-  .nav{display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;width:100%;max-width:100%;min-width:0;padding:4px 2px 8px;scroll-snap-type:x proximity}
-  .nav button{flex:0 0 auto;min-width:112px;justify-content:center;text-align:center;padding:10px 11px;scroll-snap-align:start}
-  .nav button span{white-space:nowrap}
+  .nav{display:grid;gap:7px;overflow:visible;width:100%;max-width:100%;min-width:0;padding:4px 2px 8px}
+  .nav-group{margin:0}.nav-group summary{padding:10px 11px}
+  .nav-group>div{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:0 7px 7px}
+  .nav button{min-width:0;justify-content:center;text-align:center;padding:10px 8px}
+  .nav button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .topbar{position:sticky;top:0;z-index:5;background:#f8f5ee;border-bottom:2px solid #ead8a6!important;padding:10px 0 12px;margin-bottom:14px}
   h1{font-size:24px}.topbar p{font-size:13px}
   .account-strip{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:-2px 0 12px}
@@ -114,6 +116,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .admin-shell .nav button{min-height:42px;font-weight:850;letter-spacing:0;border:1px solid transparent}
 .admin-shell .nav button:hover{border-color:rgba(240,184,58,.26)}
 .admin-shell .nav button.active{box-shadow:0 12px 24px rgba(240,184,58,.18)}
+.nav-group{border:1px solid rgba(240,184,58,.18);border-radius:8px;background:rgba(255,255,255,.035);overflow:hidden}.nav-group+.nav-group{margin-top:7px}.nav-group summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 11px;color:#f1d58c;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:950;cursor:pointer}.nav-group summary::-webkit-details-marker{display:none}.nav-group summary:after{content:'+';font-size:15px;color:#e7d8b5}.nav-group[open] summary:after{content:'-'}.nav-group summary small{background:rgba(255,255,255,.12);color:#f8e5b2;border-radius:999px;padding:2px 7px;letter-spacing:0}.nav-group>div{display:grid;gap:4px;padding:0 6px 7px}.nav-group .active{position:relative}
 .admin-shell .main{background:
   linear-gradient(180deg,rgba(255,255,255,.92),rgba(248,245,238,.96)),
   radial-gradient(circle at top right,rgba(240,184,58,.16),transparent 30%),
