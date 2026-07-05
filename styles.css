@@ -1036,7 +1036,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
   .payments-command-grid{
     display:grid;
-    grid-template-columns:minmax(0,1.35fr) minmax(320px,.65fr);
+    grid-template-columns:minmax(0,.92fr) minmax(520px,1.08fr);
     gap:12px;
     align-items:start;
   }
@@ -1068,9 +1068,13 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 }
 .customer-pay-list{display:grid;gap:8px}
 .customer-pay-card{border:1px solid rgba(240,184,58,.16);background:rgba(255,255,255,.055);border-radius:8px;padding:10px;display:grid;gap:8px}
+.customer-pay-top{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:start}
 .customer-pay-card strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .customer-pay-card small{display:block;color:#b5c1ca;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.customer-pay-meta{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.customer-pay-meta{display:grid;justify-items:end;gap:5px}
+.customer-car-line{border-top:1px solid rgba(240,184,58,.13);padding-top:8px;display:grid;gap:4px}
+.customer-car-line b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.customer-car-line span{font-size:12px;color:#b5c1ca;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .customer-pay-card .actions{justify-content:flex-start;gap:6px}
 .customer-pay-card .btn{padding:7px 9px;font-size:12px}
 
@@ -1109,6 +1113,15 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .payment-customers-panel{
     max-height:none;
     overflow:visible;
+  }
+  .customer-pay-top{
+    grid-template-columns:1fr;
+  }
+  .customer-pay-meta{
+    justify-items:start;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
   }
   .view-payments .payment-lanes{
     display:flex;
