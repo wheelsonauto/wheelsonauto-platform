@@ -673,6 +673,89 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   border-color:#d44839;
 }
 
+/* Compact modern controls and no clipped panels */
+.admin-shell .main,
+.admin-shell .card,
+.admin-shell .section,
+.admin-shell .dashboard-grid,
+.admin-shell .layout,
+.admin-shell .table-wrap,
+.admin-shell .today-focus{
+  min-width:0;
+  max-width:100%;
+}
+.admin-shell .main{
+  overflow-x:clip;
+}
+.admin-shell .table-wrap{
+  overflow-x:auto;
+  border-radius:8px;
+}
+.admin-shell .section-head{
+  gap:8px;
+}
+.admin-shell .section-head .actions{
+  gap:6px;
+}
+.admin-shell .btn{
+  min-height:32px;
+  padding:7px 10px;
+  border-radius:6px;
+  font-size:12px;
+  line-height:1.1;
+  font-weight:850;
+  box-shadow:none;
+}
+.admin-shell .btn:hover{
+  box-shadow:0 8px 18px rgba(17,24,32,.12);
+}
+.admin-shell .table .btn,
+.admin-shell .ops-item .btn,
+.admin-shell .mini-row .btn,
+.admin-shell .due-row .btn,
+.admin-shell .payment-next-item .btn,
+.admin-shell .access-next-item .btn,
+.admin-shell .service-next-item .btn,
+.admin-shell .claim-next-item .btn,
+.admin-shell .fleet-next-item .btn,
+.admin-shell .match-next-item .btn,
+.admin-shell .accounting-next-item .btn{
+  min-height:28px;
+  padding:6px 8px;
+  font-size:11px;
+}
+.admin-shell .local-search .btn{
+  min-height:34px;
+  white-space:nowrap;
+}
+.admin-shell .today-focus{
+  gap:8px;
+  padding:10px;
+}
+.admin-shell .today-focus-main,
+.admin-shell .today-metric{
+  padding:10px;
+  min-height:74px;
+}
+.admin-shell .today-focus-main strong{
+  font-size:28px;
+}
+.admin-shell .today-metric strong{
+  font-size:20px;
+}
+@media(max-width:760px){
+  .admin-shell .btn{
+    min-height:34px;
+    padding:8px 10px;
+  }
+  .admin-shell .section-head .actions{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .admin-shell .table-wrap{
+    overflow-x:auto;
+  }
+}
+
 /* Sidebar logo badge */
 .admin-shell .admin-logo{
   background:linear-gradient(135deg,rgba(240,184,58,.22),rgba(17,24,32,.86));
