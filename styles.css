@@ -423,7 +423,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
   .quickbar::-webkit-scrollbar{display:none}
   .quickbar button{
-    min-width:78px;
+    min-width:88px;
     min-height:62px;
     display:grid;
     place-items:center;
@@ -433,7 +433,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
   .quickbar button .quick-icon{width:22px;height:22px;color:#f0d394}
   .quickbar button .quick-icon path{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-  .quickbar button span{font-size:10px;line-height:1.1;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .quickbar button span{font-size:10px;line-height:1.1;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .quickbar button.active{background:linear-gradient(180deg,#ffd166,#f0b83a);color:#111820;border-color:#ffe09a;box-shadow:0 10px 24px rgba(240,184,58,.22)}
   .quickbar button.active .quick-icon{color:#111820}
 }
@@ -919,6 +919,182 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
 }
 
+/* App-wide compact workspaces */
+@media(min-width:921px){
+  .view-recurring-center,
+  .view-fleet,
+  .view-applications,
+  .view-maintenance,
+  .view-claims-issues,
+  .view-reports,
+  .view-website,
+  .view-messages,
+  .view-settings,
+  .view-companies,
+  .view-api-roadmap{
+    display:grid;
+    grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr);
+    gap:12px;
+    align-items:start;
+  }
+  .view-recurring-center>.topbar,
+  .view-fleet>.topbar,
+  .view-applications>.topbar,
+  .view-maintenance>.topbar,
+  .view-claims-issues>.topbar,
+  .view-reports>.topbar,
+  .view-website>.topbar,
+  .view-messages>.topbar,
+  .view-settings>.topbar,
+  .view-companies>.topbar,
+  .view-api-roadmap>.topbar,
+  .view-recurring-center>.tabs,
+  .view-applications>.tabs,
+  .view-maintenance>.tabs,
+  .view-messages>.tabs,
+  .view-recurring-center>.stats,
+  .view-reports>.stats:first-of-type,
+  .view-claims-issues>.stats{
+    grid-column:1/-1;
+  }
+  .view-recurring-center>.payment-command,
+  .view-fleet>.fleet-command,
+  .view-applications>.application-command,
+  .view-maintenance>.service-strip,
+  .view-claims-issues>.claims-command,
+  .view-reports>.executive-board,
+  .view-reports>.closeout-board,
+  .view-website>.website-command,
+  .view-messages>.message-playbook,
+  .view-settings>.access-command,
+  .view-companies>.company-grid,
+  .view-api-roadmap>.blueprint-board{
+    grid-column:1/2;
+    margin-bottom:0;
+  }
+  .view-recurring-center>section:not(.payment-command),
+  .view-fleet>section:not(.fleet-command),
+  .view-applications>section:not(.application-command),
+  .view-maintenance>section:not(.service-strip),
+  .view-claims-issues>section:not(.claims-command),
+  .view-reports>section:not(.executive-board):not(.closeout-board),
+  .view-website>.layout,
+  .view-messages>section:not(.message-playbook),
+  .view-settings>.layout,
+  .view-settings>section:not(.access-command),
+  .view-companies>section,
+  .view-api-roadmap>section:not(.blueprint-board){
+    grid-column:2/3;
+    margin-bottom:0;
+  }
+  .view-reports>.layout,
+  .view-settings>.layout,
+  .view-website>.layout{
+    grid-column:2/3;
+    grid-template-columns:1fr;
+    gap:12px;
+  }
+  .view-fleet>.fleet-prep{
+    grid-column:1/2;
+  }
+  .view-recurring-center>.stats,
+  .view-reports>.stats,
+  .view-claims-issues>.stats{
+    gap:8px;
+    margin-bottom:0;
+  }
+  .view-recurring-center .stat,
+  .view-reports .stat,
+  .view-claims-issues .stat{
+    padding:10px;
+  }
+  .view-recurring-center .stat b,
+  .view-reports .stat b,
+  .view-claims-issues .stat b{
+    font-size:19px;
+  }
+}
+
+@media(max-width:760px){
+  .admin-shell .view-dashboard{
+    padding-top:1px!important;
+  }
+  .admin-shell .view-dashboard .topbar.compact-title{
+    margin-top:-2px!important;
+    margin-bottom:4px!important;
+    padding-top:2px!important;
+    padding-bottom:4px!important;
+  }
+  .view-recurring-center>.stats,
+  .view-reports>.stats,
+  .view-claims-issues>.stats{
+    display:flex;
+    overflow-x:auto;
+    gap:7px;
+    margin-bottom:8px;
+    scrollbar-width:none;
+  }
+  .view-recurring-center>.stats::-webkit-scrollbar,
+  .view-reports>.stats::-webkit-scrollbar,
+  .view-claims-issues>.stats::-webkit-scrollbar{display:none}
+  .view-recurring-center>.stats .stat,
+  .view-reports>.stats .stat,
+  .view-claims-issues>.stats .stat{
+    min-width:128px;
+    padding:8px;
+  }
+  .view-recurring-center>.stats .stat b,
+  .view-reports>.stats .stat b,
+  .view-claims-issues>.stats .stat b{
+    font-size:16px;
+  }
+  .view-recurring-center>.payment-command,
+  .view-applications>.application-command,
+  .view-fleet>.fleet-command,
+  .view-maintenance>.service-strip,
+  .view-claims-issues>.claims-command,
+  .view-reports>.executive-board,
+  .view-reports>.closeout-board,
+  .view-website>.website-command,
+  .view-messages>.message-playbook,
+  .view-settings>.access-command,
+  .view-companies>.notice,
+  .view-api-roadmap>.blueprint-board{
+    margin-bottom:8px;
+  }
+  .view-applications>section:not(.application-command),
+  .view-fleet>section:not(.fleet-command):not(.fleet-prep),
+  .view-claims-issues>section:not(.claims-command),
+  .view-reports>section:not(.executive-board):not(.closeout-board),
+  .view-website>.layout,
+  .view-messages>section:not(.message-playbook),
+  .view-settings>section:not(.access-command),
+  .view-companies>section,
+  .view-api-roadmap>section:not(.blueprint-board){
+    margin-bottom:8px;
+  }
+  .view-recurring-center>.payment-command .payment-next,
+  .view-fleet>.fleet-command .fleet-next,
+  .view-claims-issues>.claims-command .claim-next,
+  .view-reports>.executive-board .executive-next,
+  .view-reports>.closeout-board .table-wrap,
+  .view-messages>.message-playbook+.tabs,
+  .view-api-roadmap>.blueprint-board .blueprint-grid{
+    max-height:42vh;
+    overflow:auto;
+  }
+  .view-maintenance .service-strip{
+    grid-template-columns:82px minmax(0,1fr);
+    gap:8px;
+  }
+  .view-maintenance .service-strip>.btn{
+    grid-column:1/-1;
+  }
+  .view-maintenance .service-score strong{
+    font-size:22px;
+  }
+}
+
 /* Compact modals across desktop and phone */
 .modal-backdrop{padding:14px}
 .modal{width:min(680px,calc(100vw - 28px));max-height:86vh;border-radius:8px}
@@ -1072,5 +1248,29 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .admin-shell .topbar.compact-title h1{
     font-size:18px!important;
     line-height:1.05;
+  }
+}
+
+/* Final phone home gap fix */
+@media(max-width:760px){
+  .app.admin-shell{
+    align-content:start!important;
+    grid-template-rows:auto minmax(0,1fr)!important;
+    row-gap:0!important;
+  }
+  .admin-shell .sidebar{
+    height:auto!important;
+    min-height:0!important;
+    max-height:56px!important;
+    overflow:hidden!important;
+  }
+  .admin-shell .view-dashboard{
+    padding-top:0!important;
+  }
+  .admin-shell .view-dashboard .topbar.compact-title{
+    margin-top:-3px!important;
+    margin-bottom:3px!important;
+    padding-top:1px!important;
+    padding-bottom:3px!important;
   }
 }
