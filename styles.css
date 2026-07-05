@@ -530,6 +530,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .today-focus-main strong{font-size:34px;line-height:1}.today-metric strong{font-size:24px;line-height:1}
 .today-focus-main small,.today-metric small{color:#b5c1ca;font-weight:750}
 .today-metric.good{border-color:rgba(54,171,105,.38)}.today-metric.warn{border-color:rgba(240,184,58,.34)}.today-metric.bad{border-color:rgba(197,58,45,.42)}
+.dashboard-mobile-tabs{display:none}
 
 /* Ultra-compact page title: content starts immediately */
 .admin-shell .topbar.compact-title{
@@ -599,8 +600,17 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 @media(max-width:920px){.dashboard-grid{grid-template-columns:1fr 1fr}.dash-dues{grid-column:1/-1}.dash-transactions{grid-column:auto}}
 @media(max-width:680px){.dashboard-grid{grid-template-columns:1fr}}
 @media(max-width:760px){
-  .today-focus{grid-template-columns:1fr;margin-bottom:12px}
+  .today-focus{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:8px;padding:7px}
+  .today-focus-main,.today-metric{padding:8px;min-height:62px;gap:2px}
+  .today-focus-main strong{font-size:21px}.today-metric strong{font-size:18px}
+  .today-focus-main span,.today-metric span{font-size:9px}
+  .today-focus-main small,.today-metric small{font-size:10px;line-height:1.2}
+  .dashboard-mobile-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 8px}
+  .dashboard-mobile-tabs button{border:1px solid rgba(240,184,58,.26);background:rgba(240,184,58,.1);color:#f0d394;border-radius:999px;padding:8px 6px;font-size:11px;font-weight:900;line-height:1}
+  .dashboard-mobile-tabs button.active{background:#f0b83a;border-color:#f0b83a;color:#111820}
   .dashboard-grid{grid-template-columns:1fr;gap:12px}
+  .compact-dashboard .section{display:none}
+  .compact-dashboard .section.active{display:block}
   .due-row,.mini-row{grid-template-columns:1fr;align-items:start}
   .due-row .actions{justify-content:stretch}.due-row .actions .btn{flex:1}
   .service-strip{grid-template-columns:1fr}
