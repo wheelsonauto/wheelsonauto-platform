@@ -569,8 +569,13 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
   .admin-shell .topbar.compact-title h1{font-size:21px}
 }
-.dashboard-grid{display:grid;grid-template-columns:minmax(320px,1.25fr) repeat(3,minmax(190px,.75fr));gap:12px;align-items:start;min-width:0}
+.dashboard-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-areas:"dues dues dues" "service applications transactions";gap:12px;align-items:start;min-width:0}
+.dash-dues{grid-area:dues}
+.dash-service{grid-area:service}
+.dash-applications{grid-area:applications}
+.dash-transactions{grid-area:transactions}
 .dash-dues,.dash-service,.dash-applications,.dash-transactions{min-height:0;min-width:0}
+.dash-applications .mini-list,.dash-service .mini-list{max-height:230px;overflow:auto;padding-right:2px}
 .compact-dashboard .section{padding:13px}
 .compact-dashboard .section-head{margin-bottom:9px}
 .compact-dashboard .local-search{margin-bottom:8px}
@@ -596,9 +601,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .service-score{display:grid;gap:3px}.service-score span{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#f0c45b;font-weight:950}.service-score strong{font-size:30px;line-height:1}.service-score small{color:#b5c1ca}
 .service-mini{display:grid;gap:7px}
 .compact-stats{gap:10px;margin-bottom:12px}.compact-stats .stat{padding:12px}.compact-stats .stat b{font-size:22px}
-@media(max-width:1080px){.dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.today-focus{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:920px){.dashboard-grid{grid-template-columns:1fr 1fr}.dash-dues{grid-column:1/-1}.dash-transactions,.dash-applications{grid-column:auto}}
-@media(max-width:680px){.dashboard-grid{grid-template-columns:1fr}}
+@media(max-width:1080px){.dashboard-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.today-focus{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:920px){.dashboard-grid{grid-template-columns:1fr 1fr;grid-template-areas:"dues dues" "service applications" "transactions transactions"}}
+@media(max-width:680px){.dashboard-grid{grid-template-columns:1fr;grid-template-areas:"dues" "service" "applications" "transactions"}}
 @media(max-width:760px){
   .today-focus{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:8px;padding:7px}
   .today-focus-main,.today-metric{padding:8px;min-height:62px;gap:2px}
@@ -1029,6 +1034,21 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-payments>.section{
     margin-bottom:0;
   }
+  .payments-command-grid{
+    display:grid;
+    grid-template-columns:minmax(0,1.35fr) minmax(320px,.65fr);
+    gap:12px;
+    align-items:start;
+  }
+  .payments-main-flow{
+    min-width:0;
+  }
+  .payment-customers-panel{
+    position:sticky;
+    top:12px;
+    max-height:calc(100vh - 44px);
+    overflow:auto;
+  }
   .view-payments .payment-lanes{
     grid-template-columns:repeat(6,minmax(0,1fr));
   }
@@ -1046,6 +1066,13 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     margin-bottom:10px;
   }
 }
+.customer-pay-list{display:grid;gap:8px}
+.customer-pay-card{border:1px solid rgba(240,184,58,.16);background:rgba(255,255,255,.055);border-radius:8px;padding:10px;display:grid;gap:8px}
+.customer-pay-card strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.customer-pay-card small{display:block;color:#b5c1ca;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.customer-pay-meta{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.customer-pay-card .actions{justify-content:flex-start;gap:6px}
+.customer-pay-card .btn{padding:7px 9px;font-size:12px}
 
 /* Operations combines fleet, service, and claims without three crowded side tabs */
 @media(min-width:921px){
@@ -1073,6 +1100,15 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 @media(max-width:760px){
   .view-payments>.payment-command{
     margin-bottom:7px;
+  }
+  .payments-command-grid{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+  .payment-customers-panel{
+    max-height:none;
+    overflow:visible;
   }
   .view-payments .payment-lanes{
     display:flex;
