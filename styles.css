@@ -558,3 +558,22 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .due-row .actions{justify-content:stretch}.due-row .actions .btn{flex:1}
   .service-strip{grid-template-columns:1fr}
 }
+
+/* Gold sidebar tab labels */
+.admin-shell .nav button{
+  color:#f0d394;
+}
+.admin-shell .nav button:hover{
+  color:#fff3c9;
+}
+.admin-shell .nav button.active{
+  color:#111820;
+}
+.admin-shell .nav small{
+  background:rgba(240,184,58,.18);
+  color:#f8e5b2;
+}
+.admin-shell .nav button.active small{
+  background:#111820;
+  color:#f0b83a;
+}
