@@ -580,6 +580,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .compact-dashboard .due-row{grid-template-columns:minmax(150px,1fr) auto auto;gap:7px}
 .compact-dashboard .mini-row{grid-template-columns:minmax(0,1fr) auto;gap:7px}
 .compact-dashboard .transaction-panel .mini-row{grid-template-columns:minmax(0,1fr) auto;align-items:start}
+.compact-dashboard .transaction-panel .mini-row .tag{grid-column:1/-1;justify-self:start;max-width:100%;white-space:normal}
+.compact-dashboard .dash-transactions .section-head{align-items:flex-start}
+.compact-dashboard .dash-transactions .section-head .btn{padding-inline:8px}
 .due-row strong,.mini-row strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .due-row small,.mini-row small{display:block;color:#b5c1ca;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .due-row .actions{gap:5px;justify-content:flex-end}.due-row .btn,.mini-row .btn{padding:7px 9px;font-size:12px}
