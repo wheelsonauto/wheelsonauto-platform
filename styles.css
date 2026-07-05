@@ -117,6 +117,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .admin-shell .nav button:hover{border-color:rgba(240,184,58,.26)}
 .admin-shell .nav button.active{box-shadow:0 12px 24px rgba(240,184,58,.18)}
 .nav-group{border:1px solid rgba(240,184,58,.18);border-radius:8px;background:rgba(255,255,255,.035);overflow:hidden}.nav-group+.nav-group{margin-top:7px}.nav-group summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 11px;color:#f1d58c;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:950;cursor:pointer}.nav-group summary::-webkit-details-marker{display:none}.nav-group summary:after{content:'+';font-size:15px;color:#e7d8b5}.nav-group[open] summary:after{content:'-'}.nav-group summary small{background:rgba(255,255,255,.12);color:#f8e5b2;border-radius:999px;padding:2px 7px;letter-spacing:0}.nav-group>div{display:grid;gap:4px;padding:0 6px 7px}.nav-group .active{position:relative}
+.global-search input{font-size:18px;font-weight:850;padding:14px 15px;border-color:#d6bd79;background:#fffaf0}.global-search input::placeholder{font-weight:650;color:#8a7b58}
 .admin-shell .main{background:
   linear-gradient(180deg,rgba(255,255,255,.92),rgba(248,245,238,.96)),
   radial-gradient(circle at top right,rgba(240,184,58,.16),transparent 30%),
