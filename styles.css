@@ -757,94 +757,94 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 }
 
 /* Dark modal refresh for charge/open popups */
-.admin-shell .modal{
+.modal{
   background:linear-gradient(180deg,#111820,#0b1015);
   color:#edf3f7;
   border:1px solid rgba(240,184,58,.42);
   box-shadow:0 28px 90px rgba(0,0,0,.48);
 }
-.admin-shell .modal-head{
+.modal-head{
   background:linear-gradient(135deg,rgba(240,184,58,.14),rgba(255,255,255,.03));
   border-bottom:1px solid rgba(240,184,58,.24);
 }
-.admin-shell .modal-head strong{
+.modal-head strong{
   color:#f0d394;
 }
-.admin-shell .modal-body{
+.modal-body{
   background:transparent;
 }
-.admin-shell .modal .item,
-.admin-shell .modal .card,
-.admin-shell .modal .check{
+.modal .item,
+.modal .card,
+.modal .check{
   background:rgba(255,255,255,.055);
   border-color:rgba(240,184,58,.22);
   color:#edf3f7;
   box-shadow:none;
 }
-.admin-shell .modal .item strong,
-.admin-shell .modal .card strong{
+.modal .item strong,
+.modal .card strong{
   color:#fff6df;
 }
-.admin-shell .modal .muted,
-.admin-shell .modal small{
+.modal .muted,
+.modal small{
   color:#b8c4ce;
 }
-.admin-shell .modal .field label{
+.modal .field label{
   color:#f0d394;
 }
-.admin-shell .modal .field input,
-.admin-shell .modal .field select,
-.admin-shell .modal .field textarea,
-.admin-shell .modal .clover-field{
+.modal .field input,
+.modal .field select,
+.modal .field textarea,
+.modal .clover-field{
   background:#0c1218;
   color:#f7fbff;
   border-color:rgba(240,184,58,.34);
 }
-.admin-shell .modal .field input[readonly],
-.admin-shell .modal .field textarea[readonly]{
+.modal .field input[readonly],
+.modal .field textarea[readonly]{
   background:#111a22;
   color:#dfe8ee;
 }
-.admin-shell .modal .field input::placeholder,
-.admin-shell .modal .field textarea::placeholder{
+.modal .field input::placeholder,
+.modal .field textarea::placeholder{
   color:#8fa0ac;
 }
-.admin-shell .modal .notice{
+.modal .notice{
   background:rgba(240,184,58,.12);
   border-color:rgba(240,184,58,.32);
   color:#f6dfaa;
 }
-.admin-shell .modal .notice.bad{
+.modal .notice.bad{
   background:rgba(197,58,45,.16);
   border-color:rgba(197,58,45,.46);
   color:#ffc8c0;
 }
-.admin-shell .modal .success,
-.admin-shell .modal .payment-success{
+.modal .success,
+.modal .payment-success{
   background:linear-gradient(135deg,rgba(23,114,69,.22),rgba(240,184,58,.08));
   border-color:rgba(54,171,105,.42);
   color:#a8e8c2;
   box-shadow:inset 4px 0 0 #36ab69;
 }
-.admin-shell .modal .payment-success strong{
+.modal .payment-success strong{
   color:#bbf4cf;
 }
-.admin-shell .modal .actions{
+.modal .actions{
   gap:7px;
 }
-.admin-shell .modal .btn{
+.modal .btn{
   min-height:32px;
 }
-.admin-shell .modal a.btn{
+.modal a.btn{
   text-decoration:none;
 }
 @media(max-width:760px){
-  .admin-shell .modal{
+  .modal{
     width:100%;
     border-radius:8px;
   }
-  .admin-shell .modal .grid.two,
-  .admin-shell .modal .form{
+  .modal .grid.two,
+  .modal .form{
     grid-template-columns:1fr;
   }
 }
