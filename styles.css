@@ -1035,3 +1035,42 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .admin-shell .table td .muted{font-size:11px}
   .admin-shell .layout,.admin-shell .two,.admin-shell .three,.admin-shell .form,.mechanic-cards,.company-grid,.api-grid,.executive-grid{grid-template-columns:1fr!important;gap:9px}
 }
+
+/* Phone header polish: flatter brand, less empty space */
+@media(max-width:760px){
+  .admin-shell .sidebar{
+    padding:4px 10px 3px!important;
+    border-bottom:1px solid rgba(240,184,58,.35)!important;
+    background:linear-gradient(180deg,#080a0c 0%,#10161b 100%);
+  }
+  .admin-shell .brand{
+    min-height:0;
+    margin:0!important;
+    padding:2px 0 1px!important;
+    gap:1px!important;
+  }
+  .admin-shell .brand b{
+    font-size:12px!important;
+    line-height:1!important;
+    letter-spacing:.01em;
+  }
+  .admin-shell .admin-logo{
+    width:30px!important;
+    height:30px!important;
+    padding:2px!important;
+    border-radius:7px!important;
+    box-shadow:0 5px 13px rgba(0,0,0,.22), inset 0 0 0 1px rgba(240,184,58,.35);
+  }
+  .admin-shell .main{
+    padding-top:6px!important;
+  }
+  .admin-shell .topbar.compact-title{
+    margin-bottom:5px!important;
+    padding:4px 0 5px!important;
+    border-bottom:1px solid rgba(234,216,166,.62)!important;
+  }
+  .admin-shell .topbar.compact-title h1{
+    font-size:18px!important;
+    line-height:1.05;
+  }
+}
