@@ -530,6 +530,44 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .today-focus-main strong{font-size:34px;line-height:1}.today-metric strong{font-size:24px;line-height:1}
 .today-focus-main small,.today-metric small{color:#b5c1ca;font-weight:750}
 .today-metric.good{border-color:rgba(54,171,105,.38)}.today-metric.warn{border-color:rgba(240,184,58,.34)}.today-metric.bad{border-color:rgba(197,58,45,.42)}
+
+/* Ultra-compact page title: content starts immediately */
+.admin-shell .topbar.compact-title{
+  position:relative;
+  display:flex;
+  align-items:center;
+  min-height:0;
+  margin:0 0 10px;
+  padding:0 0 8px;
+  background:transparent!important;
+  border:0!important;
+  border-bottom:1px solid rgba(240,184,58,.28)!important;
+  border-radius:0;
+  box-shadow:none;
+}
+.admin-shell .topbar.compact-title h1{
+  margin:0;
+  font-size:22px;
+  line-height:1.15;
+  color:#f0b83a;
+}
+.admin-shell .topbar.compact-title p,
+.admin-shell .topbar.compact-title .eyebrow{display:none}
+@media(min-width:761px){
+  .admin-shell .topbar.compact-title h1{font-size:24px}
+}
+@media(max-width:760px){
+  .admin-shell .topbar.compact-title{
+    position:sticky;
+    top:0;
+    z-index:5;
+    margin:0 0 10px;
+    padding:8px 0;
+    background:rgba(11,16,21,.96)!important;
+    border-radius:0;
+  }
+  .admin-shell .topbar.compact-title h1{font-size:21px}
+}
 .dashboard-grid{display:grid;grid-template-columns:minmax(260px,.85fr) minmax(380px,1.35fr) minmax(280px,.8fr);gap:14px;align-items:start}
 .dash-priority,.dash-dues,.dash-side{min-height:0}
 .ops-list.compact{grid-template-columns:1fr;gap:8px}
