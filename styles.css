@@ -1044,10 +1044,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     min-width:0;
   }
   .payment-customers-panel{
-    position:sticky;
-    top:12px;
-    max-height:calc(100vh - 44px);
-    overflow:auto;
+    position:static;
+    max-height:none;
+    overflow:visible;
   }
   .view-payments .payment-lanes{
     grid-template-columns:repeat(6,minmax(0,1fr));
