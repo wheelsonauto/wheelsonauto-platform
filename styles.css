@@ -954,6 +954,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-companies>.topbar,
   .view-api-roadmap>.topbar,
   .view-payments>.tabs,
+  .view-fleet>.tabs,
   .view-applications>.tabs,
   .view-maintenance>.tabs,
   .view-messages>.tabs,
@@ -1000,7 +1001,15 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     gap:12px;
   }
   .view-fleet>.fleet-prep{
-    grid-column:1/2;
+    grid-column:1/-1;
+  }
+  .view-maintenance>.service-strip{
+    grid-column:1/-1!important;
+    grid-template-columns:170px minmax(0,1fr) auto;
+    align-items:stretch;
+  }
+  .view-maintenance>.section:not(.service-strip){
+    grid-column:1/-1!important;
   }
   .view-payments>.stats,
   .view-reports>.stats,
