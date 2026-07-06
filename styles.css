@@ -1481,3 +1481,62 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     margin-top:10px!important;
   }
 }
+
+/* Final admin navigation cleanup */
+.admin-shell .nav{
+  gap:6px;
+}
+.admin-shell .nav-group,
+.admin-shell .nav-single{
+  border-radius:8px;
+}
+.admin-shell .nav-group{
+  border-color:rgba(240,184,58,.16);
+  background:rgba(255,255,255,.025);
+}
+.admin-shell .nav-group summary{
+  min-height:30px;
+  padding:7px 10px;
+  color:#f0d394;
+}
+.admin-shell .nav-group summary small{
+  min-width:22px;
+  text-align:center;
+}
+.admin-shell .nav-group>div{
+  gap:3px;
+  padding:0 5px 6px;
+}
+.admin-shell .nav button{
+  min-height:34px;
+  padding:8px 10px;
+  border-radius:7px;
+}
+.admin-shell .nav button span{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.admin-shell .nav button small{
+  flex:0 0 auto;
+  font-size:10px;
+}
+@media(min-width:761px){
+  .admin-shell .sidebar{
+    padding:18px 13px;
+  }
+  .admin-shell .brand{
+    margin-bottom:14px;
+  }
+  .admin-shell .side-note{
+    margin-top:12px;
+    padding:10px;
+    font-size:11px;
+  }
+}
+@media(max-width:760px){
+  .admin-shell .sidebar .nav{
+    display:none!important;
+  }
+}
