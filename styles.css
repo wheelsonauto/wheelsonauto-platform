@@ -1094,8 +1094,22 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-operations .fleet-lanes{
     grid-template-columns:repeat(5,minmax(0,1fr));
   }
+  .operations-fleet-grid{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:10px;
+    align-items:start;
+  }
+  .operations-fleet-grid>.section{
+    min-width:0;
+    margin-bottom:0;
+  }
   .view-operations>.section:not(.operations-command) .table-wrap{
     max-height:48vh;
+    overflow:auto;
+  }
+  .view-operations .operations-fleet-grid .table-wrap{
+    max-height:52vh;
     overflow:auto;
   }
 }
@@ -1155,8 +1169,20 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-operations .fleet-lane{
     min-width:128px;
   }
+  .operations-fleet-grid{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:9px;
+  }
+  .operations-fleet-grid>.section{
+    margin-bottom:0;
+  }
   .view-operations>.section:not(.operations-command) .table-wrap{
     max-height:50vh;
+    overflow:auto;
+  }
+  .view-operations .operations-fleet-grid .table-wrap{
+    max-height:42vh;
     overflow:auto;
   }
 }
