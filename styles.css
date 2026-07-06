@@ -1671,18 +1671,17 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 @media(max-width:760px){
   .view-manager-portal>.stats,
   .view-mechanic-portal>.stats{
-    display:flex;
-    overflow-x:auto;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    overflow:visible;
     gap:7px;
     margin-bottom:8px;
-    scrollbar-width:none;
   }
-  .view-manager-portal>.stats::-webkit-scrollbar,
-  .view-mechanic-portal>.stats::-webkit-scrollbar{display:none}
   .view-manager-portal>.stats .stat,
   .view-mechanic-portal>.stats .stat{
-    min-width:126px;
+    min-width:0;
     padding:8px;
+    min-height:58px;
   }
   .view-manager-portal>.stats .stat b,
   .view-mechanic-portal>.stats .stat b{
@@ -1693,24 +1692,22 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-mechanic-portal>.mechanic-work-queue{
     margin-bottom:8px!important;
   }
-  .view-manager-portal .fleet-lanes,
-  .view-mechanic-portal .mechanic-cards{
-    display:flex;
+  .view-manager-portal .fleet-lanes{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
     gap:7px;
-    overflow-x:auto;
-    scrollbar-width:none;
-    padding-bottom:2px;
+    overflow:visible;
+    padding-bottom:0;
   }
-  .view-manager-portal .fleet-lanes::-webkit-scrollbar,
-  .view-mechanic-portal .mechanic-cards::-webkit-scrollbar{display:none}
-  .view-manager-portal .fleet-lane,
-  .view-mechanic-portal .mechanic-card{
-    min-width:150px;
-    min-height:78px;
+  .view-manager-portal .fleet-lane{
+    min-width:0;
+    min-height:72px;
     padding:8px 8px 12px;
   }
+  .view-manager-portal .fleet-lane strong{font-size:18px}
+  .view-manager-portal .fleet-lane small{font-size:10px;line-height:1.15}
   .view-manager-portal .fleet-next{
-    max-height:230px;
+    max-height:190px;
     overflow:auto;
   }
   .mechanic-workspace{
@@ -1718,9 +1715,45 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     grid-template-columns:1fr;
     gap:8px;
   }
-  .mechanic-table-panel{
-    max-height:52vh;
-    overflow:auto;
+  .view-mechanic-portal .mechanic-table-panel{display:none!important}
+  .view-mechanic-portal .mechanic-cards{
+    display:grid!important;
+    grid-template-columns:1fr!important;
+    gap:8px!important;
+    overflow:visible!important;
+    padding:0!important;
+    max-height:none!important;
+  }
+  .view-mechanic-portal .mechanic-card{
+    min-width:0!important;
+    min-height:0!important;
+    padding:9px!important;
+    gap:5px;
+  }
+  .view-mechanic-portal .mechanic-card .item-row{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:7px;
+    align-items:start;
+  }
+  .view-mechanic-portal .mechanic-card strong,
+  .view-mechanic-portal .mechanic-card .muted,
+  .view-mechanic-portal .mechanic-card div{
+    min-width:0;
+    overflow-wrap:anywhere;
+  }
+  .view-mechanic-portal .mechanic-card .actions{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:6px;
+  }
+  .view-mechanic-portal .mechanic-card .actions .btn{
+    width:100%;
+    justify-content:center;
+  }
+  .view-manager-portal .manager-fleet-board .table-wrap{
+    max-height:none;
+    overflow:visible!important;
   }
   .view-manager-portal .manager-safe-note{
     margin-top:0!important;
