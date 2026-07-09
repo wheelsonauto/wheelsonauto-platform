@@ -2960,3 +2960,73 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     min-height:42px;
   }
 }
+
+/* Payments tabs: match Customer files readability and remove washed/blurred table hover. */
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel){
+  background:rgba(255,255,255,.055)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.16)!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel):hover{
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) h2,
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) strong{
+  color:#fff6df!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .muted,
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) small{
+  color:#d9e3eb!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table-wrap{
+  background:rgba(7,10,14,.24)!important;
+  border-color:rgba(240,184,58,.18)!important;
+  box-shadow:none!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table th{
+  background:#111820!important;
+  color:#f0c45b!important;
+  border-bottom-color:rgba(240,184,58,.18)!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table td,
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tr,
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tbody tr:nth-child(even) td{
+  background:rgba(255,255,255,.035)!important;
+  color:#edf3f7!important;
+  border-bottom-color:rgba(240,184,58,.13)!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tr:hover,
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tr:hover td,
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tbody tr:hover td{
+  background:rgba(240,184,58,.10)!important;
+  color:#f7fbff!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+  box-shadow:none!important;
+}
+.view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .item{
+  background:rgba(255,255,255,.055)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+  filter:none!important;
+}
+@media(max-width:760px){
+  .view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tr{
+    background:rgba(255,255,255,.055)!important;
+    border-color:rgba(240,184,58,.20)!important;
+    box-shadow:none!important;
+    filter:none!important;
+    backdrop-filter:none!important;
+  }
+  .view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tr:hover{
+    background:rgba(240,184,58,.10)!important;
+  }
+}
