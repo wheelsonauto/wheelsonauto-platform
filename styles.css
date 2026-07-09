@@ -2080,3 +2080,202 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     box-shadow:0 -18px 48px rgba(0,0,0,.36);
   }
 }
+
+/* Final 10/10 polish: action bar, search, counters, micro motion */
+@keyframes pageFadeSlide{
+  from{opacity:.86;transform:translateY(8px)}
+  to{opacity:1;transform:translateY(0)}
+}
+@keyframes counterPop{
+  0%{opacity:0;transform:translateY(7px) scale(.98)}
+  70%{opacity:1;transform:translateY(-1px) scale(1.015)}
+  100%{opacity:1;transform:translateY(0) scale(1)}
+}
+
+.admin-shell .main{
+  animation:pageFadeSlide .24s ease both;
+}
+.payment-action-bar{
+  position:sticky;
+  top:12px;
+  z-index:8;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin:0 0 18px;
+  padding:12px 14px;
+  border:1px solid rgba(240,184,58,.28);
+  border-radius:14px;
+  background:linear-gradient(135deg,rgba(17,24,32,.96),rgba(32,42,52,.94));
+  box-shadow:0 18px 42px rgba(0,0,0,.22);
+  backdrop-filter:blur(14px);
+}
+.payment-action-bar strong{
+  display:block;
+  color:#f7fbff;
+  font-size:14px;
+  line-height:1.15;
+}
+.payment-action-bar small{
+  display:block;
+  margin-top:3px;
+  color:#b8c4ce;
+  font-size:11px;
+  font-weight:750;
+}
+.payment-action-bar .actions{
+  flex:0 0 auto;
+}
+
+.local-search{
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:0;
+  align-items:stretch;
+  filter:drop-shadow(0 10px 18px rgba(0,0,0,.08));
+}
+.search-field{
+  position:relative;
+  min-width:0;
+}
+.search-icon{
+  position:absolute;
+  left:14px;
+  top:50%;
+  width:18px;
+  height:18px;
+  transform:translateY(-50%);
+  color:#f0d394;
+  pointer-events:none;
+}
+.search-icon path{
+  fill:none;
+  stroke:currentColor;
+  stroke-width:2;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.local-search input{
+  min-height:48px;
+  padding-left:42px;
+  border-radius:12px 0 0 12px;
+  border-right:0;
+  transition:border-color .18s ease,box-shadow .18s ease,background .18s ease;
+}
+.local-search input:focus{
+  box-shadow:inset 0 0 0 1px rgba(240,184,58,.32);
+}
+.local-search .search-all{
+  min-height:48px;
+  border-radius:0 12px 12px 0;
+  border-left:0;
+  padding-inline:18px;
+}
+
+.today-focus-main,
+.today-metric,
+.stat,
+.payment-lane,
+.fleet-lane,
+.workflow-step,
+.readiness-card,
+.accounting-lane,
+.api-lane{
+  padding:18px;
+}
+.today-focus-main strong,
+.today-metric strong,
+.stat b,
+.payment-lane strong,
+.fleet-lane strong,
+.workflow-step strong,
+.readiness-card strong,
+.accounting-lane strong,
+.api-lane strong{
+  animation:counterPop .42s ease both;
+  letter-spacing:0;
+}
+.today-focus-main strong{font-size:38px}
+.today-metric strong{font-size:28px}
+.stat b{font-size:32px}
+.payment-lane strong,
+.fleet-lane strong,
+.accounting-lane strong,
+.api-lane strong{font-size:29px}
+
+.admin-shell .card,
+.admin-shell .section,
+.admin-shell .item,
+.admin-shell .lead-card,
+.admin-shell .mechanic-card,
+.today-metric,
+.payment-lane,
+.fleet-lane,
+.workflow-step,
+.readiness-card,
+.accounting-lane,
+.api-lane{
+  transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease;
+}
+.admin-shell .card:hover,
+.admin-shell .section:hover,
+.admin-shell .item:hover,
+.admin-shell .lead-card:hover,
+.admin-shell .mechanic-card:hover{
+  transform:translateY(-2px);
+}
+.today-metric:hover,
+.payment-lane:hover,
+.fleet-lane:hover,
+.workflow-step:hover,
+.readiness-card:hover,
+.accounting-lane:hover,
+.api-lane:hover{
+  transform:translateY(-3px);
+}
+
+@media(max-width:760px){
+  .payment-action-bar{
+    position:relative;
+    top:auto;
+    display:grid;
+    gap:9px;
+    padding:11px;
+    margin-bottom:12px;
+  }
+  .payment-action-bar .actions{
+    display:grid;
+    grid-template-columns:1fr;
+  }
+  .local-search{
+    grid-template-columns:1fr;
+    gap:7px;
+    filter:none;
+  }
+  .local-search input{
+    border-radius:12px;
+    border-right:1px solid rgba(240,184,58,.28);
+  }
+  .local-search .search-all{
+    border-radius:12px;
+    border-left:1px solid rgba(240,184,58,.34);
+  }
+  .today-focus-main,
+  .today-metric,
+  .stat,
+  .payment-lane,
+  .fleet-lane,
+  .workflow-step,
+  .readiness-card,
+  .accounting-lane,
+  .api-lane{
+    padding:11px;
+  }
+  .today-focus-main strong{font-size:24px}
+  .today-metric strong{font-size:20px}
+  .stat b{font-size:23px}
+  .payment-lane strong,
+  .fleet-lane strong,
+  .accounting-lane strong,
+  .api-lane strong{font-size:21px}
+}
