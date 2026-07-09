@@ -167,13 +167,23 @@ function weakValue(field, value) {
   const raw = String(value || '').trim();
   if (!raw) return true;
   if (field === 'customer') return ['Clover recurring customer', 'Unmatched Clover payment', 'Clover payment', 'Unknown customer'].includes(raw);
-  if (field === 'vehicle') return ['No vehicle linked', 'Vehicle', 'WheelsonAuto recurring payment'].includes(raw);
+  if (field === 'vehicle') {
+    const compactAmount = raw.replace(/[$,\s]/g, '');
+    return ['No vehicle linked', 'Vehicle', 'WheelsonAuto recurring payment'].includes(raw)
+      || /^\d+(\.\d{1,2})?$/.test(compactAmount);
+  }
   return false;
+}
+function weakVehicleForCustomer(row) {
+  if (!row) return true;
+  if (weakValue('vehicle', row.vehicle)) return true;
+  return !!(row.customer && row.vehicle && softNameMatch(row.customer, row.vehicle));
 }
 function fillBlank(target, patch, fields) {
   let changed = 0;
   fields.forEach(field => {
-    if (weakValue(field, target[field]) && patch[field] !== undefined && patch[field] !== null && String(patch[field]).trim() !== '') {
+    const weak = field === 'vehicle' ? weakVehicleForCustomer(target) : weakValue(field, target[field]);
+    if (weak && patch[field] !== undefined && patch[field] !== null && String(patch[field]).trim() !== '') {
       target[field] = patch[field];
       changed += 1;
     }
@@ -447,7 +457,7 @@ async function mergeVehicleImport(data) {
 
     recurringRows.forEach(recurring => {
       if (normKey(recurring.customer) !== customerKey) return;
-      recurring.vehicle = recurring.vehicle || vehicleName;
+      if (weakVehicleForCustomer(recurring)) recurring.vehicle = vehicleName;
       recurring.amount = Number(recurring.amount || weekly || 0);
       recurring.weeklyAmount = weekly || recurring.amount || 0;
       recurring.vin = recurring.vin || row.vin || '';
