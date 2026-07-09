@@ -719,17 +719,77 @@ function mapCloverCustomer(customer) {
     updatedAt: new Date().toISOString()
   };
 }
+function cloverPersonName(source) {
+  source = source || {};
+  const first = source.firstName || source.givenName || '';
+  const last = source.lastName || source.familyName || '';
+  return (first + ' ' + last).trim() || source.name || source.fullName || source.customerName || source.companyName || '';
+}
+function cloverPaymentCustomerSource(payment) {
+  payment = payment || {};
+  const order = payment.order || {};
+  return payment.customer || firstElement(payment.customers) || payment.customerInfo || order.customer || firstElement(order.customers) || {};
+}
+function cloverPaymentOrderId(payment) {
+  const order = payment && payment.order || {};
+  return String(order.id || payment && payment.orderId || payment && payment.cloverOrderId || '').trim();
+}
+function usefulPaymentName(value) {
+  value = String(value || '').trim();
+  if (!value || value.length < 2 || value.length > 80) return '';
+  if (/^(clover|credit card|debit card|visa|mastercard|amex|discover|success|paid|fail|failed|manual|cash|other)$/i.test(value)) return '';
+  if (/^\d+$/.test(value)) return '';
+  return value;
+}
+function deepCloverPaymentName(value, path = '', depth = 0) {
+  if (!value || depth > 4) return '';
+  if (typeof value === 'string') {
+    if (/(customer|cardholder|cardHolder|payer|buyer|billing).*name|name$/i.test(path) && !/(employee|merchant|device|tender|app|label|brand|type|state|result)/i.test(path)) return usefulPaymentName(value);
+    return '';
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = deepCloverPaymentName(item, path, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      const nextPath = path ? path + '.' + key : key;
+      if (/(employee|merchant|device|tender|app|label|brand|type|state|result)/i.test(nextPath)) continue;
+      const found = deepCloverPaymentName(item, nextPath, depth + 1);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+function cloverPaymentFallbackName(payment) {
+  const tx = payment && payment.cardTransaction || {};
+  const source = payment && payment.source || {};
+  const direct = [
+    payment && payment.cardholderName,
+    payment && payment.cardHolderName,
+    payment && payment.customerName,
+    tx.cardholderName,
+    tx.cardHolderName,
+    tx.customerName,
+    tx.cardholder,
+    source.cardholderName,
+    source.customerName
+  ].map(usefulPaymentName).find(Boolean);
+  return direct || deepCloverPaymentName(payment);
+}
 function mapCloverPayment(payment) {
   const amount = Number(payment.amount || 0) / 100;
   const created = payment.createdTime ? new Date(payment.createdTime).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US');
-  const customerSource = payment.customer || firstElement(payment.customers) || {};
-  const first = customerSource.firstName || '';
-  const last = customerSource.lastName || '';
-  const customer = (first + ' ' + last).trim() || customerSource.name || payment.customerName || payment.externalCustomerReference || '';
+  const customerSource = cloverPaymentCustomerSource(payment);
+  const customer = cloverPersonName(customerSource) || usefulPaymentName(payment.customerName) || usefulPaymentName(payment.externalCustomerReference) || cloverPaymentFallbackName(payment) || '';
   return {
     id: 'clover-payment-' + payment.id,
     cloverPaymentId: payment.id,
     cloverCustomerId: String(customerSource.id || payment.customerId || payment.cloverCustomerId || payment.externalCustomerReference || '').trim(),
+    cloverOrderId: cloverPaymentOrderId(payment),
     employee: payment.employee && payment.employee.name ? payment.employee.name : '',
     date: created,
     customer: customer || 'Unmatched Clover payment',
@@ -740,11 +800,35 @@ function mapCloverPayment(payment) {
     tone: payment.result === 'SUCCESS' ? 'good' : 'warn'
   };
 }
+async function enrichCloverPayment(payment) {
+  let enriched = payment || {};
+  const hasName = !!cloverPersonName(cloverPaymentCustomerSource(enriched));
+  if (!hasName && enriched.id) {
+    try {
+      const detail = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments/' + encodeURIComponent(enriched.id) + '?expand=customer,customers,order,tender');
+      enriched = { ...enriched, ...detail };
+    } catch {}
+  }
+  if (!cloverPersonName(cloverPaymentCustomerSource(enriched))) {
+    const orderId = cloverPaymentOrderId(enriched);
+    if (orderId) {
+      try {
+        const order = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/orders/' + encodeURIComponent(orderId) + '?expand=customers');
+        enriched.order = { ...(enriched.order || {}), ...order };
+      } catch {}
+    }
+  }
+  return mapCloverPayment(enriched);
+}
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
   incoming.forEach(item => {
     const index = next.findIndex(existing => existing.id === item.id);
-    if (index >= 0) next[index] = { ...next[index], ...item };
+    if (index >= 0) {
+      const existing = next[index];
+      const weakIncomingName = !item.customer || item.customer === 'Unmatched Clover payment' || item.customer === 'Clover payment';
+      next[index] = { ...existing, ...item, customer: weakIncomingName && existing.customer ? existing.customer : item.customer };
+    }
     else next.unshift(item);
   });
   return next;
@@ -788,8 +872,14 @@ async function syncCloverIntoData(data, options = {}) {
   }
   if (options.payments !== false) {
     try {
-      const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100');
-      const payments = cloverElements(body).map(mapCloverPayment);
+      let body;
+      try {
+        body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?expand=customer,customers,order,tender&limit=100');
+      } catch {
+        body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/payments?limit=100');
+      }
+      const payments = [];
+      for (const payment of cloverElements(body)) payments.push(await enrichCloverPayment(payment));
       data.payments = upsertById(data.payments, payments);
       data.integrations.clover.lastPaymentSyncAt = new Date().toISOString();
       data.integrations.clover.lastPaymentSyncCount = payments.length;
