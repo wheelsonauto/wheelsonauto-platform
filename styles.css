@@ -1768,3 +1768,315 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     margin-top:0!important;
   }
 }
+
+/* Premium polish pass: keep WheelsOnAuto black/gold, improve finish */
+:root{
+  --premium-radius:12px;
+  --premium-radius-sm:10px;
+  --premium-shadow:0 18px 46px rgba(0,0,0,.22);
+  --premium-shadow-soft:0 14px 32px rgba(0,0,0,.16);
+  --premium-border:rgba(240,184,58,.22);
+}
+
+@media(min-width:761px){
+  .app{grid-template-columns:238px minmax(0,1fr)}
+  .admin-shell .sidebar{padding:18px 12px}
+  .admin-shell .brand{
+    padding:10px;
+    margin-bottom:16px;
+    border-radius:var(--premium-radius);
+    gap:10px;
+  }
+  .admin-shell .brand b{font-size:17px;letter-spacing:0}
+  .admin-shell .brand span{font-size:11px;line-height:1.25}
+  .admin-shell .admin-logo{width:46px;height:46px;border-radius:var(--premium-radius-sm)}
+  .admin-shell .side-note{
+    margin-top:16px;
+    border-radius:var(--premium-radius);
+    padding:11px;
+    font-size:11px;
+  }
+  .admin-shell .main{padding:34px 42px 54px}
+  .admin-shell .topbar.compact-title{
+    margin-bottom:22px;
+    padding-bottom:13px;
+  }
+  .admin-shell .topbar.compact-title h1{
+    font-size:30px;
+    letter-spacing:0;
+  }
+  .grid,
+  .dashboard-grid,
+  .layout,
+  .three,
+  .two{gap:22px}
+  .stats{gap:18px;margin-bottom:24px}
+  .today-focus,
+  .payment-command,
+  .fleet-command,
+  .workflow-board,
+  .readiness-board,
+  .accounting-board,
+  .api-control{margin-bottom:24px}
+}
+
+.admin-shell .nav{gap:6px}
+.admin-shell .nav button{
+  border-radius:10px;
+  min-height:40px;
+  padding:10px 11px;
+  transition:background .18s ease,border-color .18s ease,color .18s ease,transform .18s ease,box-shadow .18s ease;
+}
+.admin-shell .nav button:hover{transform:translateX(2px)}
+.nav-group,
+.nav-single{
+  border-radius:var(--premium-radius);
+}
+.nav-group{border-color:rgba(240,184,58,.2)}
+.nav-group summary{padding:10px 11px}
+
+.admin-shell .card,
+.admin-shell .section,
+.admin-shell .item,
+.admin-shell .lead-card,
+.admin-shell .column,
+.admin-shell .mechanic-card,
+.admin-shell .account-card,
+.admin-shell .ops-item,
+.admin-shell .timeline-item,
+.modal{
+  border-radius:var(--premium-radius);
+}
+.admin-shell .card,
+.admin-shell .section{
+  border-color:var(--premium-border);
+  box-shadow:var(--premium-shadow-soft);
+}
+.admin-shell .section{
+  padding:22px;
+  margin-bottom:22px;
+}
+.admin-shell .section-head{
+  margin-bottom:16px;
+  align-items:flex-start;
+}
+.admin-shell .section-head h2{
+  font-size:20px;
+  line-height:1.2;
+  letter-spacing:0;
+}
+.admin-shell .section-head p,
+.admin-shell .section>p,
+.admin-shell .item .muted,
+.admin-shell .mini-row small,
+.admin-shell .due-row small{
+  font-size:12px;
+}
+.admin-shell .stat{
+  border-radius:var(--premium-radius);
+  padding:20px;
+}
+.admin-shell .stat span,
+.admin-shell .today-focus-main span,
+.admin-shell .today-metric span,
+.admin-shell .payment-lane span,
+.admin-shell .fleet-lane span,
+.admin-shell .workflow-step span{
+  letter-spacing:.08em;
+}
+
+.admin-shell .btn,
+.modal .btn,
+.login-card button{
+  min-height:44px;
+  border-radius:10px;
+  padding:11px 16px;
+  transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease,color .18s ease;
+}
+.admin-shell .btn:hover,
+.modal .btn:hover,
+.login-card button:hover{
+  transform:translateY(-1px);
+}
+.admin-shell .btn:active,
+.modal .btn:active,
+.login-card button:active{
+  transform:translateY(1px) scale(.99);
+}
+.admin-shell .table .btn,
+.admin-shell .ops-item .btn,
+.admin-shell .mini-row .btn,
+.admin-shell .due-row .btn,
+.admin-shell .payment-next-item .btn,
+.admin-shell .access-next-item .btn,
+.admin-shell .service-next-item .btn,
+.admin-shell .claim-next-item .btn,
+.admin-shell .fleet-next-item .btn,
+.admin-shell .match-next-item .btn,
+.admin-shell .accounting-next-item .btn{
+  min-height:34px;
+  border-radius:9px;
+  padding:7px 10px;
+}
+
+.admin-shell .table-wrap{
+  border:1px solid rgba(240,184,58,.16);
+  border-radius:var(--premium-radius);
+  background:rgba(255,255,255,.035);
+}
+.admin-shell .table{
+  border-collapse:separate;
+  border-spacing:0;
+}
+.admin-shell .table th{
+  position:sticky;
+  top:0;
+  z-index:1;
+  padding:14px 12px;
+  background:rgba(17,24,32,.96);
+  backdrop-filter:blur(10px);
+  font-size:11px;
+}
+.admin-shell .table td{
+  padding:15px 12px;
+  line-height:1.45;
+}
+.admin-shell .table tbody tr:nth-child(even) td{
+  background:rgba(255,255,255,.045);
+}
+.admin-shell .table tbody tr:hover td{
+  background:rgba(240,184,58,.10);
+}
+.admin-shell .tag{
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:11px;
+  letter-spacing:0;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);
+}
+
+.admin-shell .field input,
+.admin-shell .field select,
+.admin-shell .field textarea,
+.local-search input,
+.global-search input{
+  border-radius:10px;
+  min-height:44px;
+}
+.admin-shell .field textarea{min-height:96px}
+.admin-shell .field label{
+  font-size:11px;
+  letter-spacing:.06em;
+}
+
+.admin-shell .today-focus,
+.admin-shell .payment-command,
+.admin-shell .fleet-command,
+.admin-shell .workflow-board,
+.admin-shell .readiness-board,
+.admin-shell .accounting-board,
+.admin-shell .api-control,
+.admin-shell .claims-command,
+.admin-shell .application-command,
+.admin-shell .message-playbook,
+.admin-shell .access-command,
+.admin-shell .match-board{
+  border-radius:var(--premium-radius);
+  box-shadow:var(--premium-shadow);
+}
+.today-focus-main,
+.today-metric,
+.payment-lane,
+.fleet-lane,
+.workflow-step,
+.readiness-card,
+.accounting-lane,
+.api-lane,
+.claim-lane,
+.application-lane,
+.message-lane,
+.access-lane,
+.match-lane{
+  border-radius:var(--premium-radius-sm);
+}
+
+.admin-shell .card,
+.admin-shell .section,
+.admin-shell .stat,
+.admin-shell .table-wrap,
+.admin-shell .item,
+.admin-shell .lead-card,
+.admin-shell .mechanic-card,
+.admin-shell .ops-item{
+  animation:riseIn .32s ease both;
+}
+.admin-shell .card:nth-of-type(2),
+.admin-shell .section:nth-of-type(2){animation-delay:.025s}
+.admin-shell .card:nth-of-type(3),
+.admin-shell .section:nth-of-type(3){animation-delay:.05s}
+
+.modal-backdrop{
+  backdrop-filter:blur(10px);
+}
+.modal{
+  width:min(820px,100%);
+  border-radius:14px;
+}
+.modal-head{
+  padding:20px 22px;
+}
+.modal-body{
+  padding:22px;
+}
+.toast{
+  border-radius:12px;
+  border:1px solid rgba(240,184,58,.28);
+}
+
+@media(max-width:760px){
+  .admin-shell .sidebar{padding:8px 10px 6px}
+  .admin-shell .main{padding:12px 12px 118px}
+  .admin-shell .topbar.compact-title{
+    margin-bottom:10px;
+    padding:8px 0 9px;
+  }
+  .admin-shell .topbar.compact-title h1{font-size:22px}
+  .admin-shell .section{
+    padding:14px;
+    margin-bottom:13px;
+    border-radius:12px;
+  }
+  .admin-shell .section-head{
+    gap:9px;
+    margin-bottom:11px;
+  }
+  .admin-shell .section-head h2{font-size:18px}
+  .admin-shell .btn,
+  .modal .btn{
+    min-height:40px;
+    padding:9px 11px;
+    border-radius:10px;
+  }
+  .admin-shell .table-wrap{
+    border:0;
+    background:transparent;
+  }
+  .admin-shell .table tr{
+    border-radius:12px;
+  }
+  .admin-shell .table td{
+    padding:9px 7px;
+  }
+  .modal-backdrop{
+    padding:8px;
+  }
+  .modal{
+    max-height:calc(100vh - 20px);
+    border-radius:12px;
+  }
+  .modal-head,
+  .modal-body{padding:14px}
+  .quickbar{
+    box-shadow:0 -18px 48px rgba(0,0,0,.36);
+  }
+}
