@@ -2253,6 +2253,8 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 }
 .search-field{
   position:relative;
+  display:flex;
+  align-items:center;
   min-width:0;
 }
 .search-icon{
@@ -2278,6 +2280,16 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   border-radius:12px 0 0 12px;
   border-right:0;
   transition:border-color .18s ease,box-shadow .18s ease,background .18s ease;
+}
+
+.admin-shell .local-search .search-field .local-search-input,
+.local-search .search-field .local-search-input{
+  padding-left:42px!important;
+}
+
+.admin-shell .local-search .search-field .search-icon,
+.local-search .search-field .search-icon{
+  z-index:2;
 }
 .local-search input:focus{
   box-shadow:inset 0 0 0 1px rgba(240,184,58,.32);
