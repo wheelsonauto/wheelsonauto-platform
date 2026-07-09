@@ -27,6 +27,7 @@ const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
+const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
 const autoSyncStatus = {
   enabled: true,
   intervalMs: AUTO_SYNC_MS,
@@ -977,6 +978,7 @@ function cleanAutopayPayload(payload) {
     amount: Number.isFinite(amount) ? amount : 0,
     frequency: payload.frequency || 'Weekly',
     nextRun: payload.nextRun || payload.firstRun || 'After setup',
+    chargeTime: String(payload.chargeTime || payload.paymentTime || '18:00').trim(),
     status: payload.status || 'Setup needed',
     tone: payload.tone || (payload.status === 'Active' ? 'good' : 'warn'),
     provider: 'Clover',
@@ -1457,6 +1459,7 @@ function createCardSetupRequest(data, payload) {
     amount: autopay.amount,
     frequency: autopay.frequency,
     firstRun: autopay.nextRun,
+    chargeTime: autopay.chargeTime,
     cloverPlanId: String(payload.cloverPlanId || payload.planId || '').trim(),
     status: 'Open',
     source: 'WheelsonAuto card setup',
@@ -1560,7 +1563,11 @@ function updateRecurringChargeState(data, id, patch) {
   if (member) Object.assign(member, patch);
 }
 function localDateKey(date = new Date()) {
-  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: WOA_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const year = (parts.find(part => part.type === 'year') || {}).value || date.getFullYear();
+  const month = (parts.find(part => part.type === 'month') || {}).value || String(date.getMonth() + 1).padStart(2, '0');
+  const day = (parts.find(part => part.type === 'day') || {}).value || String(date.getDate()).padStart(2, '0');
+  return year + '-' + month + '-' + day;
 }
 function recurringDateKey(row) {
   const raw = String(row && row.nextRun || '').trim().toLowerCase();
@@ -1568,6 +1575,27 @@ function recurringDateKey(row) {
   if (raw === 'today' || raw.includes('today')) return localDateKey();
   const match = raw.match(/\d{4}-\d{2}-\d{2}/);
   return match ? match[0] : '';
+}
+function chargeTimeMinutes(row) {
+  const raw = String(row && (row.chargeTime || row.paymentTime || row.autopayTime) || '18:00').trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return 18 * 60;
+  const hour = Math.max(0, Math.min(23, Number(match[1])));
+  const minute = Math.max(0, Math.min(59, Number(match[2])));
+  return hour * 60 + minute;
+}
+function businessMinutesNow(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: WOA_TIME_ZONE, hour12: false, hour: '2-digit', minute: '2-digit' }).formatToParts(date);
+  const hour = Number((parts.find(part => part.type === 'hour') || {}).value || 0);
+  const minute = Number((parts.find(part => part.type === 'minute') || {}).value || 0);
+  return hour * 60 + minute;
+}
+function retryDelayPassed(row, date = new Date()) {
+  const attempts = Number(row && (row.retryCount || row.failedAttempts) || 0);
+  if (attempts < 1) return true;
+  const last = new Date(String(row.lastAutoChargeAttemptAt || row.lastFailedAt || ''));
+  if (Number.isNaN(last.getTime())) return true;
+  return date.getTime() - last.getTime() >= 60 * 60 * 1000;
 }
 function isWheelsonAutoManagedAutopay(row) {
   return !!(row && row.autoChargeEnabled && hasWheelsonAutoSavedCard(row));
@@ -1578,6 +1606,8 @@ function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
   if (status !== 'active' && !status.includes('1x failed')) return false;
   if (!isWheelsonAutoManagedAutopay(row)) return false;
   if (recurringDateKey(row) !== dateKey) return false;
+  if (businessMinutesNow() < chargeTimeMinutes(row)) return false;
+  if (!retryDelayPassed(row)) return false;
   return String(row.lastAutoChargeDate || '') !== dateKey;
 }
 function patchRecurringAdminState(data, id, patch) {
@@ -2048,6 +2078,7 @@ const server = http.createServer(async (req, res) => {
       const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
       const status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
       const paymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
+      const chargeTime = String(payload.chargeTime || payload.paymentTime || (recurring && (recurring.chargeTime || recurring.paymentTime)) || '18:00').trim();
       const monthlyDay = payload.monthlyDay === undefined || payload.monthlyDay === '' ? undefined : Number(payload.monthlyDay);
       const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
       const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
@@ -2064,6 +2095,7 @@ const server = http.createServer(async (req, res) => {
         status,
         paymentDay,
         chargeDay: paymentDay,
+        chargeTime,
         retryRule,
         adminScheduleChangedAt: new Date().toISOString(),
         autoChargeEnabled: enableWheelsonAutoCharge,
@@ -2075,7 +2107,7 @@ const server = http.createServer(async (req, res) => {
       const found = patchRecurringAdminState(data, id, patch);
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       await writeData(data);
-      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
+      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
