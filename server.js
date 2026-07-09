@@ -1786,6 +1786,54 @@ function patchRecurringAdminState(data, id, patch) {
 function chargeReference() {
   return ('WOA' + Date.now().toString(36)).slice(-12).toUpperCase();
 }
+function isPaymentNotFoundError(err) {
+  const message = String(err && err.message || err || '').toLowerCase();
+  return /payment not found|resource_missing|not found|valid source or token|source or token|saved-card token|saved card token/.test(message);
+}
+function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
+  const stamp = new Date().toISOString();
+  const message = String(err && err.message || err || 'Payment was not found in Clover.');
+  const amount = Number(payload.amount || row.amount || 0);
+  const status = 'Payment not found - check Clover';
+  const payment = {
+    id: 'payment-not-found-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
+    date: new Date().toLocaleString('en-US'),
+    customer: row.customer || payload.customer || 'Unknown customer',
+    method: options.method || 'Clover saved card',
+    amount,
+    status,
+    tone: 'warn',
+    source: options.source || 'WheelsonAuto payment check',
+    notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
+    recurringPaymentId: row.id || '',
+    cloverCustomerId: row.cloverCustomerId || ''
+  };
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  data.payments.unshift(payment);
+  const attempts = Array.isArray(row.paymentAttempts) ? row.paymentAttempts.slice() : [];
+  attempts.unshift({
+    id: 'attempt-not-found-' + Date.now(),
+    date: payment.date,
+    customer: payment.customer,
+    amount,
+    result: status,
+    method: payment.method,
+    notes: payment.notes
+  });
+  updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
+    status,
+    tone: 'warn',
+    lastAutoChargeResult: status,
+    lastAutoChargeError: message,
+    lastAutoChargeAttemptDate: options.dateKey || localDateKey(),
+    lastAutoChargeAttemptAt: stamp,
+    lastPaymentNotFoundAt: stamp,
+    lastPaymentResult: status,
+    lastPaymentNote: payment.notes,
+    paymentAttempts: attempts
+  });
+  return payment;
+}
 async function chargeSavedRecurringCard(data, payload, req) {
   const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
   if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
@@ -1904,6 +1952,21 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeResult = 'Paid';
         result.charged += 1;
       } catch (err) {
+        if (isPaymentNotFoundError(err)) {
+          const payment = savePaymentNotFoundResult(data, row, {
+            amount: row.amount,
+            note: 'WheelsonAuto autopay could not confirm payment for due date ' + dateKey
+          }, err, { dateKey, source: 'WheelsonAuto autopay payment not found' });
+          row.status = payment.status;
+          row.tone = 'warn';
+          row.lastAutoChargeResult = payment.status;
+          row.lastAutoChargeError = String(err && err.message || err);
+          row.lastAutoChargeAttemptDate = dateKey;
+          row.lastAutoChargeAttemptAt = new Date().toISOString();
+          result.notFound = (result.notFound || 0) + 1;
+          result.errors.push((row.customer || row.id) + ': ' + payment.status);
+          continue;
+        }
         const attempts = Math.min(2, Number(row.retryCount || row.failedAttempts || 0) + 1);
         row.retryCount = attempts;
         row.failedAttempts = attempts;
@@ -2320,6 +2383,13 @@ const server = http.createServer(async (req, res) => {
         const result = await chargeSavedRecurringCard(data, payload, req);
         return json(res, 201, { ok: true, charge: result.charge, payment: result.payment });
       } catch (err) {
+        const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+        if (recurring && isPaymentNotFoundError(err)) {
+          const payment = savePaymentNotFoundResult(data, recurring, payload, err, { source: 'Manual saved-card charge payment not found' });
+          await protectConcurrentLocalWrites(data);
+          await writeData(data);
+          return json(res, 409, { ok: false, error: payment.status + ': ' + String(err && err.message || err), payment });
+        }
         return json(res, 400, { ok: false, error: String(err && err.message || err) });
       }
     }
