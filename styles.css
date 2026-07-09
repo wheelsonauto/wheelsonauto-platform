@@ -2805,3 +2805,134 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     padding:11px;
   }
 }
+
+/* Final modal polish: keep every popup readable across admin, manager, mechanic, and public flows. */
+.modal{
+  background:linear-gradient(180deg,#111820,#0b1015)!important;
+  color:#edf3f7!important;
+  border-color:rgba(240,184,58,.42)!important;
+}
+.modal-head{
+  background:linear-gradient(135deg,rgba(240,184,58,.16),rgba(255,255,255,.035))!important;
+  border-bottom-color:rgba(240,184,58,.26)!important;
+}
+.modal-body,
+.modal .section{
+  background:transparent!important;
+  color:#edf3f7!important;
+}
+.modal .card,
+.modal .item,
+.modal .check,
+.modal .lead-card,
+.modal .column,
+.modal .stat,
+.modal .file-summary>div,
+.modal .timeline-item,
+.modal .local-result-card,
+.modal .customer-pay-card,
+.modal .mechanic-card,
+.modal .ops-item,
+.modal .mini-row,
+.modal .due-row{
+  background:rgba(255,255,255,.055)!important;
+  border-color:rgba(240,184,58,.22)!important;
+  color:#edf3f7!important;
+  box-shadow:none!important;
+  filter:none!important;
+}
+.modal .card:hover,
+.modal .item:hover,
+.modal .lead-card:hover,
+.modal .file-summary>div:hover,
+.modal .timeline-item:hover,
+.modal .customer-pay-card:hover,
+.modal .mechanic-card:hover,
+.modal .ops-item:hover,
+.modal .mini-row:hover,
+.modal .due-row:hover{
+  background:rgba(240,184,58,.10)!important;
+  border-color:rgba(240,184,58,.36)!important;
+  filter:none!important;
+  transform:none!important;
+}
+.modal strong,
+.modal h2,
+.modal h3{
+  color:#fff6df!important;
+}
+.modal p,
+.modal small,
+.modal .muted,
+.modal .trend,
+.modal .customer-car-line span{
+  color:#d9e3eb!important;
+}
+.modal .field label,
+.modal .table th,
+.modal .file-summary span,
+.modal .timeline-item span{
+  color:#f0c45b!important;
+}
+.modal .field input,
+.modal .field select,
+.modal .field textarea,
+.modal .clover-field,
+.modal .global-search input{
+  background:#0c1218!important;
+  color:#f7fbff!important;
+  border-color:rgba(240,184,58,.36)!important;
+}
+.modal .field input[readonly],
+.modal .field textarea[readonly]{
+  background:#111a22!important;
+  color:#dfe8ee!important;
+}
+.modal .table-wrap{
+  background:rgba(255,255,255,.035)!important;
+  border-color:rgba(240,184,58,.18)!important;
+}
+.modal .table th{
+  background:#111820!important;
+}
+.modal .table td,
+.modal .table tr,
+.modal .table tbody tr:nth-child(even) td{
+  background:rgba(255,255,255,.035)!important;
+  color:#edf3f7!important;
+  border-bottom-color:rgba(240,184,58,.14)!important;
+}
+.modal .table tr:hover td,
+.modal .table tbody tr:hover td{
+  background:rgba(240,184,58,.10)!important;
+}
+.modal .notice{
+  background:rgba(240,184,58,.12)!important;
+  border-color:rgba(240,184,58,.34)!important;
+  color:#f6dfaa!important;
+}
+.modal .notice.bad{
+  background:rgba(197,58,45,.16)!important;
+  border-color:rgba(197,58,45,.46)!important;
+  color:#ffc8c0!important;
+}
+.modal .success,
+.modal .payment-success{
+  background:linear-gradient(135deg,rgba(23,114,69,.22),rgba(240,184,58,.08))!important;
+  border-color:rgba(54,171,105,.42)!important;
+  color:#a8e8c2!important;
+}
+.modal-body .btn:not(.primary):not(.gold):not(.danger){
+  background:rgba(240,184,58,.12)!important;
+  color:#fff3c9!important;
+  border-color:rgba(240,184,58,.28)!important;
+}
+.modal-body .btn:not(.primary):not(.gold):not(.danger):hover{
+  background:rgba(240,184,58,.22)!important;
+  border-color:rgba(240,184,58,.48)!important;
+}
+.modal-head .btn{
+  background:#fff!important;
+  color:#17202a!important;
+  border-color:#cfd6dc!important;
+}
