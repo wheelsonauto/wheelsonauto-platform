@@ -1910,6 +1910,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     padding:11px;
     font-size:11px;
   }
+  .account-actions .btn{
+    min-height:38px;
+  }
   .admin-shell .main{padding:34px 42px 54px}
   .admin-shell .topbar.compact-title{
     margin-bottom:22px;
@@ -3028,5 +3031,137 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
   .view-payments-customers .payments-main-flow>.section:not(.payment-customers-panel) .table tr:hover{
     background:rgba(240,184,58,.10)!important;
+  }
+}
+
+/* Workflow hardening polish: login, closeout, and staff portals */
+.login-divider{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:14px 0 6px;
+  color:#7b8791;
+  font-size:11px;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.login-divider:before,
+.login-divider:after{
+  content:"";
+  height:1px;
+  flex:1;
+  background:rgba(17,24,32,.14);
+}
+.account-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.account-actions .btn{
+  min-height:38px;
+  padding:9px 12px;
+}
+.view-reports .closeout-board,
+.view-dashboard .closeout-board,
+.view-payments-customers .closeout-board{
+  background:rgba(255,255,255,.06)!important;
+  border-color:rgba(240,184,58,.24)!important;
+  color:#f7fbff!important;
+}
+.closeout-board .table-wrap{
+  margin-top:10px;
+}
+.closeout-board .table td .actions,
+.closeout-board .table td:last-child{
+  white-space:normal;
+}
+.closeout-board .btn{
+  min-height:36px;
+}
+.view-mechanic-portal .mechanic-work-queue,
+.view-mechanic-portal .staff-card-board,
+.view-manager-portal .manager-mini-board,
+.view-manager-portal .manager-fleet-board,
+.view-manager-portal .staff-card-board{
+  background:rgba(255,255,255,.055)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-mechanic-portal .mechanic-card,
+.view-mechanic-portal .staff-info-card,
+.view-manager-portal .mechanic-card,
+.view-manager-portal .staff-info-card,
+.view-manager-portal .mini-row{
+  background:rgba(255,255,255,.06)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.16)!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-mechanic-portal .mechanic-card:hover,
+.view-mechanic-portal .staff-info-card:hover,
+.view-manager-portal .mechanic-card:hover,
+.view-manager-portal .staff-info-card:hover,
+.view-manager-portal .mini-row:hover{
+  background:rgba(240,184,58,.10)!important;
+  border-color:rgba(240,184,58,.34)!important;
+  transform:translateY(-1px);
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-mechanic-portal .mechanic-card strong,
+.view-mechanic-portal .staff-info-card strong,
+.view-manager-portal .mechanic-card strong,
+.view-manager-portal .staff-info-card strong,
+.view-manager-portal .mini-row strong{
+  color:#fff6df!important;
+}
+.view-mechanic-portal .muted,
+.view-mechanic-portal small,
+.view-manager-portal .muted,
+.view-manager-portal small{
+  color:#d9e3eb!important;
+}
+.view-mechanic-portal .table-wrap,
+.view-manager-portal .table-wrap{
+  background:rgba(7,10,14,.24)!important;
+  border-color:rgba(240,184,58,.18)!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-mechanic-portal .table td,
+.view-manager-portal .table td{
+  background:rgba(255,255,255,.035)!important;
+  color:#edf3f7!important;
+}
+@media(max-width:760px){
+  .login-card{
+    padding:22px!important;
+  }
+  .view-mechanic-portal .staff-stats,
+  .view-manager-portal .staff-stats{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:8px!important;
+  }
+  .view-mechanic-portal .staff-stats .stat,
+  .view-manager-portal .staff-stats .stat{
+    min-height:74px!important;
+    padding:10px!important;
+  }
+  .view-mechanic-portal .mechanic-workspace,
+  .view-manager-portal .manager-overview-grid{
+    grid-template-columns:1fr!important;
+    gap:10px!important;
+  }
+  .closeout-board .table td:last-child .btn{
+    width:100%;
+    margin-top:4px;
   }
 }

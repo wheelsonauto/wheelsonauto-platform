@@ -11,6 +11,10 @@ const VEHICLE_IMPORT_FILE = path.join(ROOT, 'vehicle-import.json');
 const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
 const LOGIN_PIN = process.env.WOA_ADMIN_PIN || '';
+const LOGIN_USERNAME = process.env.WOA_ADMIN_USERNAME || process.env.WOA_OWNER_USERNAME || '';
+const LOGIN_PASSWORD = process.env.WOA_ADMIN_PASSWORD || process.env.WOA_OWNER_PASSWORD || '';
+const LOGIN_PASSWORD_HASH = process.env.WOA_ADMIN_PASSWORD_HASH || process.env.WOA_OWNER_PASSWORD_HASH || '';
+const LOGIN_PASSWORD_SALT = process.env.WOA_ADMIN_PASSWORD_SALT || process.env.WOA_OWNER_PASSWORD_SALT || '';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
 const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
@@ -510,12 +514,49 @@ function companyNameById(data, organizationId) {
   return org && org.name || 'WheelsonAuto';
 }
 function staffLoginUser(staff) {
-  return { id: staff.id || ('staff-' + Date.now()), name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || 'org-wheelsonauto', companyName: staff.companyName || 'WheelsonAuto' };
+  return { id: staff.id || ('staff-' + Date.now()), username: staff.username || staff.email || '', name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || 'org-wheelsonauto', companyName: staff.companyName || 'WheelsonAuto' };
 }
 function findStaffByPin(data, pin) {
   const clean = String(pin || '').trim();
   if (!clean) return null;
   return (data.staffAccounts || []).find(staff => String(staff.status || 'Active').toLowerCase() !== 'disabled' && String(staff.pinHint || '').trim() === clean) || null;
+}
+function findStaffByLogin(data, username, password) {
+  const cleanUser = normalizeLogin(username);
+  if (!cleanUser || !password) return null;
+  return (data.staffAccounts || []).find(staff => {
+    if (String(staff.status || 'Active').toLowerCase() === 'disabled') return false;
+    const names = [staff.username, staff.email, staff.name].map(normalizeLogin).filter(Boolean);
+    return names.includes(cleanUser) && verifyPasswordRecord(password, staff);
+  }) || null;
+}
+function cleanStaffAccountPayload(payload, existing = null) {
+  const staff = {
+    id: String(payload.id || existing && existing.id || ('staff-' + Date.now())).trim(),
+    name: String(payload.name || '').trim(),
+    username: normalizeLogin(payload.username || payload.email || existing && existing.username || ''),
+    role: String(payload.role || existing && existing.role || 'Mechanic').trim(),
+    organizationId: String(payload.organizationId || existing && existing.organizationId || 'org-wheelsonauto').trim(),
+    companyName: String(payload.companyName || existing && existing.companyName || 'WheelsonAuto').trim(),
+    phone: String(payload.phone || '').trim(),
+    email: String(payload.email || '').trim(),
+    status: String(payload.status || existing && existing.status || 'Active').trim(),
+    pinHint: String(payload.pinHint || existing && existing.pinHint || '').trim(),
+    notes: String(payload.notes || '').trim(),
+    createdAt: existing && existing.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!staff.name) staff.name = staff.username || staff.role || 'Staff';
+  if (!staff.username) staff.username = normalizeLogin(staff.email || staff.name.replace(/\s+/g, '.'));
+  if (existing) {
+    staff.passwordHash = existing.passwordHash || '';
+    staff.passwordSalt = existing.passwordSalt || '';
+    staff.passwordUpdatedAt = existing.passwordUpdatedAt || '';
+  }
+  const password = String(payload.password || '').trim();
+  if (password) Object.assign(staff, createPasswordRecord(password));
+  delete staff.password;
+  return staff;
 }
 function isOwnerUser(user) {
   return String(user && user.role || '').toLowerCase() === 'owner';
@@ -523,13 +564,13 @@ function isOwnerUser(user) {
 function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
-  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers'];
+  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
 }
 function stateForUserWrite(current, incoming, user) {
-  if (isOwnerUser(user)) return incoming;
+  if (isOwnerUser(user)) return preserveStaffLoginSecrets(current, incoming);
   const role = String(user && user.role || '').toLowerCase();
   const allowed = role === 'mechanic'
     ? ['maintenance', 'messages', 'vehicles']
@@ -544,10 +585,103 @@ function stateForUserWrite(current, incoming, user) {
   next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
   return next;
 }
+function preserveStaffLoginSecrets(current, incoming) {
+  const next = { ...(incoming || {}) };
+  if (current.security && current.security.ownerLogin) {
+    next.security = next.security || {};
+    next.security.ownerLogin = {
+      ...(next.security.ownerLogin || {}),
+      passwordHash: (next.security.ownerLogin && next.security.ownerLogin.passwordHash) || current.security.ownerLogin.passwordHash || '',
+      passwordSalt: (next.security.ownerLogin && next.security.ownerLogin.passwordSalt) || current.security.ownerLogin.passwordSalt || '',
+      passwordUpdatedAt: (next.security.ownerLogin && next.security.ownerLogin.passwordUpdatedAt) || current.security.ownerLogin.passwordUpdatedAt || '',
+      username: (next.security.ownerLogin && next.security.ownerLogin.username) || current.security.ownerLogin.username || LOGIN_USERNAME || 'admin'
+    };
+  }
+  if (!Array.isArray(next.staffAccounts)) return next;
+  const existingById = new Map((current.staffAccounts || []).map(staff => [staff.id, staff]));
+  next.staffAccounts = next.staffAccounts.map(staff => {
+    const old = existingById.get(staff.id) || {};
+    return {
+      ...staff,
+      passwordHash: staff.passwordHash || old.passwordHash || '',
+      passwordSalt: staff.passwordSalt || old.passwordSalt || '',
+      passwordUpdatedAt: staff.passwordUpdatedAt || old.passwordUpdatedAt || ''
+    };
+  });
+  return next;
+}
+function redactStaffSecrets(data) {
+  const safe = JSON.parse(JSON.stringify(data || {}));
+  safe.staffAccounts = (safe.staffAccounts || []).map(staff => {
+    delete staff.passwordHash;
+    delete staff.passwordSalt;
+    return staff;
+  });
+  if (safe.security && safe.security.ownerLogin) {
+    delete safe.security.ownerLogin.passwordHash;
+    delete safe.security.ownerLogin.passwordSalt;
+  }
+  return safe;
+}
 async function readBody(req) { let body = ''; for await (const chunk of req) body += chunk; return body; }
 function escapeHtml(value) { return String(value || '').replace(/[&<>\"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;' }[c])); }
+function normalizeLogin(value) {
+  return String(value || '').trim().toLowerCase();
+}
+function passwordHash(password, salt) {
+  return crypto.createHash('sha256').update(String(salt || '') + ':' + String(password || '')).digest('hex');
+}
+function passwordHashStrong(password, salt, iterations = 310000) {
+  return 'pbkdf2$' + iterations + '$' + crypto.pbkdf2Sync(String(password || ''), String(salt || ''), iterations, 32, 'sha256').toString('hex');
+}
+function createPasswordRecord(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return { passwordSalt: salt, passwordHash: passwordHashStrong(password, salt), passwordUpdatedAt: new Date().toISOString() };
+}
+function secureCompare(a, b) {
+  const left = Buffer.from(String(a || ''), 'utf8');
+  const right = Buffer.from(String(b || ''), 'utf8');
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+function verifyPasswordRecord(password, record = {}) {
+  if (!password) return false;
+  if (record.passwordHash && record.passwordSalt && String(record.passwordHash).startsWith('pbkdf2$')) {
+    const parts = String(record.passwordHash).split('$');
+    const iterations = Math.max(100000, Number(parts[1] || 310000));
+    return secureCompare(passwordHashStrong(password, record.passwordSalt, iterations), record.passwordHash);
+  }
+  if (record.passwordHash && record.passwordSalt) return secureCompare(passwordHash(password, record.passwordSalt), record.passwordHash);
+  if (record.passwordHash && LOGIN_PASSWORD_SALT) return secureCompare(passwordHash(password, LOGIN_PASSWORD_SALT), record.passwordHash);
+  if (record.passwordHash && !record.passwordSalt) return secureCompare(String(password), record.passwordHash);
+  return false;
+}
+function ownerLoginMatches(username, password, pin) {
+  if (LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return true;
+  if (!password) return false;
+  const wantedUser = normalizeLogin(LOGIN_USERNAME || 'admin');
+  const enteredUser = normalizeLogin(username || '');
+  if (wantedUser && enteredUser && enteredUser !== wantedUser) return false;
+  if (LOGIN_PASSWORD && secureCompare(password, LOGIN_PASSWORD)) return true;
+  if (LOGIN_PASSWORD_HASH && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return true;
+  return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
+}
+function storedOwnerLoginMatches(data, username, password) {
+  const security = data && data.security || {};
+  const owner = security.ownerLogin || {};
+  if (!owner.passwordHash || !password) return false;
+  const wantedUser = normalizeLogin(owner.username || LOGIN_USERNAME || 'admin');
+  const enteredUser = normalizeLogin(username || '');
+  if (wantedUser && enteredUser && enteredUser !== wantedUser) return false;
+  return verifyPasswordRecord(password, owner);
+}
+function passwordMatchesCurrentUser(data, user, password) {
+  if (!user || !password) return false;
+  if (isOwnerUser(user)) return ownerLoginMatches(user.username || LOGIN_USERNAME || 'admin', password, password) || storedOwnerLoginMatches(data, user.username || LOGIN_USERNAME || 'admin', password);
+  const staff = (data.staffAccounts || []).find(item => item.id === user.id);
+  return !!(staff && verifyPasswordRecord(password, staff));
+}
 function loginPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Access PIN<input name="pin" type="password" autofocus autocomplete="current-password"></label><button>Sign in</button><div class="login-pin">Use the owner PIN for full access, or a staff temporary PIN saved under Settings.</div></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label><button>Sign in</button><div class="login-pin">Use username/password for staff accounts. Owner PIN still works as a backup so you do not get locked out.</div></form></main></body></html>';
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -564,7 +698,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
     documents: [],
     websiteLeads: [],
     integrations: { clover: {}, shopify: { store: 'wheelsonauto.com', embedPath: '/apply' } }
-  } : data;
+  } : redactStaffSecrets(data);
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
   const currentUser = publicMode ? null : (user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
@@ -1590,6 +1724,7 @@ function createCardSetupRequest(data, payload) {
   const customerKey = normKey(autopay.customer);
   const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
   const existingAutopay = payload.reactivateExisting ? data.recurringPayments.find(row => (reactivateId && (row.id === reactivateId || row.cardSetupRequestId === reactivateId)) || (customerKey && normKey(row.customer) === customerKey)) : null;
+  const cardOnlyUpdate = !!(payload.cardOnlyUpdate && existingAutopay);
   if (existingAutopay) autopay.id = existingAutopay.id;
   const request = {
     id: 'setup-' + crypto.randomBytes(12).toString('hex'),
@@ -1618,7 +1753,16 @@ function createCardSetupRequest(data, payload) {
   autopay.cardSetupUrl = request.url;
   autopay.cloverPlanId = request.cloverPlanId;
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
-  if (existingAutopay) {
+  if (cardOnlyUpdate) {
+    Object.assign(existingAutopay, {
+      cardSetupRequestId: request.id,
+      cardSetupUrl: request.url,
+      cardChangePendingAt: new Date().toISOString(),
+      paymentSetup: 'Card change link sent',
+      lastCardSetupReason: String(payload.reason || 'Change card on file').trim(),
+      updatedAt: new Date().toISOString()
+    });
+  } else if (existingAutopay) {
     Object.assign(existingAutopay, autopay, {
       id: existingAutopay.id,
       createdAt: existingAutopay.createdAt || autopay.createdAt,
@@ -2113,16 +2257,20 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/login' && req.method === 'POST') {
-      const pin = new URLSearchParams(await readBody(req)).get('pin');
-      if (LOGIN_PIN && pin === LOGIN_PIN) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie({ id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      const form = new URLSearchParams(await readBody(req));
+      const username = form.get('username') || '';
+      const password = form.get('password') || '';
+      const pin = form.get('pin') || '';
+      if (ownerLoginMatches(username, password, pin)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie({ id: 'owner', username: LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
       const data = await readData();
-      const staff = findStaffByPin(data, pin);
+      if (storedOwnerLoginMatches(data, username, password)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie({ id: 'owner', username: (data.security && data.security.ownerLogin && data.security.ownerLogin.username) || LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
       if (staff) {
         const user = staffLoginUser(staff);
         user.companyName = companyNameById(data, user.organizationId);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie(user) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
       }
-      return send(res, 401, loginPage('That PIN did not match.'));
+      return send(res, 401, loginPage('That login did not match an active account.'));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=; Max-Age=0; Path=/', Location: '/' });
     const user = sessionUser(req);
@@ -2269,6 +2417,50 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, 200, { ok: true, task });
+    }
+    if (url.pathname === '/api/account/password' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const currentPassword = String(payload.currentPassword || '').trim();
+      const newPassword = String(payload.newPassword || '').trim();
+      if (newPassword.length < 8) return json(res, 400, { ok: false, error: 'Use at least 8 characters for the new password.' });
+      const data = await readData();
+      if (!passwordMatchesCurrentUser(data, user, currentPassword)) return json(res, 403, { ok: false, error: 'Current password or PIN did not match.' });
+      const record = createPasswordRecord(newPassword);
+      if (isOwnerUser(user)) {
+        data.security = data.security || {};
+        data.security.ownerLogin = {
+          username: normalizeLogin(payload.username || user.username || LOGIN_USERNAME || 'admin'),
+          ...record
+        };
+      } else {
+        data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
+        const staff = data.staffAccounts.find(item => item.id === user.id);
+        if (!staff) return json(res, 404, { ok: false, error: 'Staff account was not found.' });
+        Object.assign(staff, record, { updatedAt: new Date().toISOString() });
+      }
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt });
+    }
+    if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
+      const existing = data.staffAccounts.find(item => item.id === payload.id);
+      const staff = cleanStaffAccountPayload(payload, existing);
+      if (!staff.username) return json(res, 400, { ok: false, error: 'Enter a username for this staff account.' });
+      if (!existing && !staff.passwordHash && !staff.pinHint) return json(res, 400, { ok: false, error: 'Enter a password or temporary PIN for the new staff account.' });
+      const duplicate = data.staffAccounts.find(item => item.id !== staff.id && normalizeLogin(item.username || item.email) === staff.username);
+      if (duplicate) return json(res, 409, { ok: false, error: 'That username is already used by another staff account.' });
+      if (existing) Object.assign(existing, staff);
+      else data.staffAccounts.unshift(staff);
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+      const safeStaff = { ...staff };
+      delete safeStaff.passwordHash;
+      delete safeStaff.passwordSalt;
+      return json(res, 200, { ok: true, staff: safeStaff });
     }
     if (url.pathname === '/api/recurring-payments' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
