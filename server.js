@@ -1585,6 +1585,11 @@ function createCardSetupRequest(data, payload) {
     paymentSetup: 'Waiting on customer authorization',
     nextRun: payload.nextRun || payload.firstRun || 'After card setup'
   });
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  const customerKey = normKey(autopay.customer);
+  const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
+  const existingAutopay = payload.reactivateExisting ? data.recurringPayments.find(row => (reactivateId && (row.id === reactivateId || row.cardSetupRequestId === reactivateId)) || (customerKey && normKey(row.customer) === customerKey)) : null;
+  if (existingAutopay) autopay.id = existingAutopay.id;
   const request = {
     id: 'setup-' + crypto.randomBytes(12).toString('hex'),
     recurringPaymentId: autopay.id,
@@ -1611,9 +1616,14 @@ function createCardSetupRequest(data, payload) {
   autopay.cardSetupRequestId = request.id;
   autopay.cardSetupUrl = request.url;
   autopay.cloverPlanId = request.cloverPlanId;
-  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
-  data.recurringPayments.unshift(autopay);
+  if (existingAutopay) {
+    Object.assign(existingAutopay, autopay, {
+      id: existingAutopay.id,
+      createdAt: existingAutopay.createdAt || autopay.createdAt,
+      reactivatedAt: new Date().toISOString()
+    });
+  } else data.recurringPayments.unshift(autopay);
   data.cardSetupRequests.unshift(request);
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
@@ -2202,12 +2212,21 @@ const server = http.createServer(async (req, res) => {
       const autopay = cleanAutopayPayload(payload);
       data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
       data.customers = Array.isArray(data.customers) ? data.customers : [];
-      data.recurringPayments.unshift(autopay);
+      const customerKey = normKey(autopay.customer);
+      const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
+      const existingAutopay = payload.reactivateExisting ? data.recurringPayments.find(row => (reactivateId && (row.id === reactivateId || row.cardSetupRequestId === reactivateId)) || (customerKey && normKey(row.customer) === customerKey)) : null;
+      if (existingAutopay) {
+        Object.assign(existingAutopay, autopay, {
+          id: existingAutopay.id,
+          createdAt: existingAutopay.createdAt || autopay.createdAt,
+          reactivatedAt: new Date().toISOString()
+        });
+      } else data.recurringPayments.unshift(autopay);
       if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
         data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, licensePlate: autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, contract: 'Autopay setup', balance: 0, source: 'WheelsonAuto', cloverCustomerId: autopay.cloverCustomerId });
       }
       await writeData(data);
-      return json(res, 201, { ok: true, autopay });
+      return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
     }
     if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
