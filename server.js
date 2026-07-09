@@ -722,12 +722,17 @@ function mapCloverCustomer(customer) {
 function mapCloverPayment(payment) {
   const amount = Number(payment.amount || 0) / 100;
   const created = payment.createdTime ? new Date(payment.createdTime).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US');
-  const customer = payment.employee && payment.employee.name ? payment.employee.name : 'Clover payment';
+  const customerSource = payment.customer || firstElement(payment.customers) || {};
+  const first = customerSource.firstName || '';
+  const last = customerSource.lastName || '';
+  const customer = (first + ' ' + last).trim() || customerSource.name || payment.customerName || payment.externalCustomerReference || '';
   return {
     id: 'clover-payment-' + payment.id,
     cloverPaymentId: payment.id,
+    cloverCustomerId: String(customerSource.id || payment.customerId || payment.cloverCustomerId || payment.externalCustomerReference || '').trim(),
+    employee: payment.employee && payment.employee.name ? payment.employee.name : '',
     date: created,
-    customer,
+    customer: customer || 'Unmatched Clover payment',
     method: payment.tender && payment.tender.label ? payment.tender.label : 'Clover',
     amount,
     status: payment.result === 'SUCCESS' ? 'Paid' : (payment.result || 'Recorded'),
@@ -872,7 +877,13 @@ function cleanAutopayPayload(payload) {
     customer: String(payload.customer || '').trim(),
     phone: String(payload.phone || '').trim(),
     email: String(payload.email || '').trim(),
+    vehicleId: String(payload.vehicleId || '').trim(),
     vehicle: String(payload.vehicle || '').trim(),
+    vin: String(payload.vin || '').trim(),
+    licensePlate: String(payload.licensePlate || payload.plate || '').trim(),
+    plate: String(payload.plate || payload.licensePlate || '').trim(),
+    tempTag: String(payload.tempTag || '').trim(),
+    tracker: String(payload.tracker || '').trim(),
     amount: Number.isFinite(amount) ? amount : 0,
     frequency: payload.frequency || 'Weekly',
     nextRun: payload.nextRun || payload.firstRun || 'After setup',
@@ -1348,6 +1359,11 @@ function createCardSetupRequest(data, payload) {
     phone: autopay.phone,
     email: autopay.email,
     vehicle: autopay.vehicle,
+    vehicleId: autopay.vehicleId,
+    vin: autopay.vin,
+    licensePlate: autopay.licensePlate,
+    tempTag: autopay.tempTag,
+    tracker: autopay.tracker,
     amount: autopay.amount,
     frequency: autopay.frequency,
     firstRun: autopay.nextRun,
@@ -1367,7 +1383,7 @@ function createCardSetupRequest(data, payload) {
   data.cardSetupRequests.unshift(request);
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
-    data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, contract: 'Autopay card setup', balance: 0, source: 'WheelsonAuto' });
+    data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, licensePlate: autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, contract: 'Autopay card setup', balance: 0, source: 'WheelsonAuto' });
   }
   return { autopay, request };
 }
@@ -1927,7 +1943,7 @@ const server = http.createServer(async (req, res) => {
       data.customers = Array.isArray(data.customers) ? data.customers : [];
       data.recurringPayments.unshift(autopay);
       if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
-        data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, contract: 'Autopay setup', balance: 0, source: 'WheelsonAuto', cloverCustomerId: autopay.cloverCustomerId });
+        data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, licensePlate: autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, contract: 'Autopay setup', balance: 0, source: 'WheelsonAuto', cloverCustomerId: autopay.cloverCustomerId });
       }
       await writeData(data);
       return json(res, 201, { ok: true, autopay });
@@ -1988,6 +2004,25 @@ const server = http.createServer(async (req, res) => {
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       await writeData(data);
       return json(res, 200, { ok: true, removedAt });
+    }
+    if (url.pathname === '/api/card-setup-requests/delete' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const id = String(payload.recurringPaymentId || payload.setupRequestId || payload.id || '').trim();
+      if (!id) return json(res, 400, { ok: false, error: 'Choose a card setup row to delete.' });
+      data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+      data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
+      const recurring = data.recurringPayments.find(row => row.id === id || row.cardSetupRequestId === id);
+      const setupId = String(payload.setupRequestId || id || (recurring && recurring.cardSetupRequestId) || '').trim();
+      const beforeRecurring = data.recurringPayments.length;
+      const beforeRequests = data.cardSetupRequests.length;
+      data.recurringPayments = data.recurringPayments.filter(row => row.id !== id && row.cardSetupRequestId !== id && (!setupId || row.cardSetupRequestId !== setupId));
+      data.cardSetupRequests = data.cardSetupRequests.filter(request => request.id !== id && request.recurringPaymentId !== id && (!setupId || request.id !== setupId));
+      const deletedRecurring = beforeRecurring - data.recurringPayments.length;
+      const deletedRequests = beforeRequests - data.cardSetupRequests.length;
+      if (!deletedRecurring && !deletedRequests) return json(res, 404, { ok: false, error: 'Card setup row was not found.' });
+      await writeData(data);
+      return json(res, 200, { ok: true, deletedRecurring, deletedRequests });
     }
     if (url.pathname === '/api/card-setup-requests' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
