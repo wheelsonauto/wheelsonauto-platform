@@ -2523,6 +2523,49 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .local-search{
   filter:none!important;
 }
+.local-search-results{
+  grid-column:1/-1;
+  display:grid;
+  gap:8px;
+}
+.local-search-label{
+  color:#f0c45b;
+  font-size:11px;
+  font-weight:950;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  margin-top:2px;
+}
+.local-search-empty,
+.local-result-card{
+  border:1px solid rgba(240,184,58,.20);
+  background:rgba(255,255,255,.055);
+  color:#f7fbff;
+  border-radius:8px;
+  padding:10px;
+}
+.local-result-card{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto auto;
+  align-items:center;
+  gap:8px;
+}
+.local-result-card strong,
+.local-result-card small{
+  display:block;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.local-result-card small{
+  color:#d9e3eb;
+  font-size:12px;
+  margin-top:2px;
+}
+.local-result-card:hover{
+  background:rgba(240,184,58,.10);
+  border-color:rgba(240,184,58,.34);
+}
 
 /* Final no-blur pass: every staff information surface stays sharp on hover. */
 .admin-shell .card,
