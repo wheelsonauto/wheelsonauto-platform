@@ -2620,3 +2620,46 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   transform:none!important;
   will-change:auto!important;
 }
+
+/* Fleet/service rows: keep hover readable. These rows were washing white on hover. */
+.admin-shell .compact-fleet-board,
+.admin-shell .compact-service-board{
+  background:linear-gradient(180deg,rgba(17,24,32,.98),rgba(14,20,26,.96))!important;
+  border-color:rgba(240,184,58,.28)!important;
+}
+.admin-shell .compact-fleet-board .table-wrap,
+.admin-shell .compact-service-board .table-wrap{
+  background:rgba(7,10,14,.44)!important;
+  border-color:rgba(240,184,58,.24)!important;
+}
+.admin-shell .compact-fleet-board .table tbody tr,
+.admin-shell .compact-service-board .table tbody tr{
+  background:rgba(255,255,255,.035)!important;
+}
+.admin-shell .compact-fleet-board .table tbody tr:nth-child(even) td,
+.admin-shell .compact-service-board .table tbody tr:nth-child(even) td,
+.admin-shell .compact-fleet-board .table tbody tr td,
+.admin-shell .compact-service-board .table tbody tr td{
+  background:transparent!important;
+  border-bottom-color:rgba(240,184,58,.16)!important;
+  color:#f6fbff!important;
+}
+.admin-shell .compact-fleet-board .table tbody tr:hover,
+.admin-shell .compact-service-board .table tbody tr:hover{
+  background:rgba(240,184,58,.13)!important;
+  outline:1px solid rgba(240,184,58,.34)!important;
+  outline-offset:-1px;
+}
+.admin-shell .compact-fleet-board .table tbody tr:hover td,
+.admin-shell .compact-service-board .table tbody tr:hover td{
+  background:transparent!important;
+  color:#fff!important;
+}
+.admin-shell .compact-fleet-board .muted,
+.admin-shell .compact-service-board .muted{
+  color:#cfd9e1!important;
+}
+.admin-shell .compact-fleet-board .tag,
+.admin-shell .compact-service-board .tag{
+  border:1px solid rgba(240,184,58,.24)!important;
+}
