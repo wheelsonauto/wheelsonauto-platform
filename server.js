@@ -139,6 +139,135 @@ function removeSheetMaintenanceForRow(data, rowNumber) {
   data.maintenance = data.maintenance.filter(item => !ids.has(item.id));
   return before - data.maintenance.length;
 }
+function compactKey(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+function phoneKey(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length >= 7 ? digits.slice(-10) : '';
+}
+function emailKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+function nameTokens(value) {
+  return String(value || '').toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2 && !['and', 'the', 'jr', 'sr'].includes(token));
+}
+function softNameMatch(a, b) {
+  const ak = normKey(a), bk = normKey(b);
+  if (!ak || !bk) return false;
+  if (ak === bk) return true;
+  const ac = compactKey(ak), bc = compactKey(bk);
+  if (ac.length >= 6 && bc.length >= 6 && (ac.includes(bc) || bc.includes(ac))) return true;
+  const at = nameTokens(ak), bt = nameTokens(bk);
+  if (!at.length || !bt.length) return false;
+  const overlap = at.filter(token => bt.includes(token));
+  return overlap.length >= Math.min(2, at.length, bt.length);
+}
+function weakValue(field, value) {
+  const raw = String(value || '').trim();
+  if (!raw) return true;
+  if (field === 'customer') return ['Clover recurring customer', 'Unmatched Clover payment', 'Clover payment', 'Unknown customer'].includes(raw);
+  if (field === 'vehicle') return ['No vehicle linked', 'Vehicle', 'WheelsonAuto recurring payment'].includes(raw);
+  return false;
+}
+function fillBlank(target, patch, fields) {
+  let changed = 0;
+  fields.forEach(field => {
+    if (weakValue(field, target[field]) && patch[field] !== undefined && patch[field] !== null && String(patch[field]).trim() !== '') {
+      target[field] = patch[field];
+      changed += 1;
+    }
+  });
+  return changed;
+}
+function rowProfile(row = {}) {
+  const vehicle = String(row.vehicle || row.name || '').trim();
+  const plate = String(row.licensePlate || row.plate || row.stock || '').trim();
+  return {
+    customer: row.customer || row.name || '',
+    phone: row.phone || row.phoneNumber || '',
+    email: row.email || row.emailAddress || '',
+    vehicle,
+    vehicleId: row.vehicleId || (row.id && String(row.id).startsWith('veh-') ? row.id : ''),
+    vin: row.vin || '',
+    licensePlate: plate,
+    plate,
+    tempTag: row.tempTag || '',
+    tracker: row.tracker || '',
+    amount: row.amount || row.weeklyAmount || row.weekly || row.rate || row.price || '',
+    weeklyAmount: row.weeklyAmount || row.weekly || row.amount || row.rate || row.price || '',
+    frequency: row.frequency || '',
+    cloverCustomerId: row.cloverCustomerId || '',
+    cloverPaymentSource: row.cloverPaymentSource || '',
+    cardLabel: row.cardLabel || '',
+    cardLast4: row.cardLast4 || '',
+    cardSavedAt: row.cardSavedAt || '',
+    paymentSetup: row.paymentSetup || ''
+  };
+}
+function enrichLinkedProfiles(data) {
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const profiles = [];
+  data.customers.forEach(row => profiles.push(rowProfile(row)));
+  data.contracts.forEach(row => profiles.push(rowProfile(row)));
+  data.recurringPayments.forEach(row => profiles.push(rowProfile(row)));
+  data.integrations.clover.recurringPlanMembers.forEach(row => profiles.push(rowProfile(row)));
+  data.vehicles.forEach(row => profiles.push(rowProfile({ ...row, customer: row.currentCustomer || row.customer || '', vehicle: vehicleNameFromParts(row), amount: row.rate || row.price || row.weeklyAmount || 0 })));
+  const richness = item => ['customer', 'phone', 'email', 'vehicle', 'vin', 'licensePlate', 'tempTag', 'tracker', 'cloverPaymentSource', 'cardLast4'].reduce((sum, field) => sum + (weakValue(field, item[field]) ? 0 : 1), 0);
+  const richest = candidates => candidates.filter(Boolean).sort((a, b) => richness(b) - richness(a))[0] || null;
+  function bestMatch(row) {
+    const profile = rowProfile(row);
+    const cid = String(profile.cloverCustomerId || '').trim();
+    if (cid) {
+      const hit = richest(profiles.filter(item => String(item.cloverCustomerId || '').trim() === cid && (item.phone || item.email || item.vehicle || item.cloverPaymentSource)));
+      if (hit) return hit;
+    }
+    const phone = phoneKey(profile.phone);
+    if (phone) {
+      const hit = richest(profiles.filter(item => phoneKey(item.phone) === phone && (item.customer || item.vehicle || item.email || item.cloverPaymentSource)));
+      if (hit) return hit;
+    }
+    const email = emailKey(profile.email);
+    if (email) {
+      const hit = richest(profiles.filter(item => emailKey(item.email) === email && (item.customer || item.vehicle || item.phone || item.cloverPaymentSource)));
+      if (hit) return hit;
+    }
+    if (profile.customer) {
+      return richest(profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
+    }
+    return null;
+  }
+  const fields = ['customer', 'phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'amount', 'weeklyAmount', 'frequency', 'cloverCustomerId', 'cloverPaymentSource', 'cardLabel', 'cardLast4', 'cardSavedAt', 'paymentSetup'];
+  let recurringFilled = 0, customerFilled = 0, contractFilled = 0;
+  [...data.recurringPayments, ...data.integrations.clover.recurringPlanMembers].forEach(row => {
+    const match = bestMatch(row);
+    if (match) recurringFilled += fillBlank(row, match, fields);
+  });
+  data.customers.forEach(row => {
+    const match = bestMatch(row);
+    if (match) customerFilled += fillBlank(row, match, fields);
+  });
+  data.contracts.forEach(row => {
+    const match = bestMatch(row);
+    if (match) contractFilled += fillBlank(row, match, ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
+  });
+  data.integrations.profileEnrichment = {
+    updatedAt: new Date().toISOString(),
+    recurringFieldsFilled: recurringFilled,
+    customerFieldsFilled: customerFilled,
+    contractFieldsFilled: contractFilled
+  };
+  return data.integrations.profileEnrichment;
+}
+function vehicleNameFromParts(row = {}) {
+  return row.name || [row.year, row.make, row.model].filter(Boolean).join(' ').trim() || [row.year, row.makeModel].filter(Boolean).join(' ').trim() || 'Vehicle';
+}
 async function loadVehicleImport() {
   try {
     const body = JSON.parse(await fs.readFile(VEHICLE_IMPORT_FILE, 'utf8'));
@@ -330,7 +459,8 @@ async function mergeVehicleImport(data) {
     });
   });
 
-  data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked, maintenanceImported };
+  const profileEnrichment = enrichLinkedProfiles(data);
+  data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked, maintenanceImported, profileEnrichment };
   return data.integrations.vehicleSheet;
 }
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
@@ -904,6 +1034,7 @@ async function syncCloverIntoData(data, options = {}) {
   data.integrations.clover.environment = CLOVER_ENV;
   data.integrations.clover.merchantId = CLOVER_MERCHANT_ID;
   data.integrations.clover.accessTokenMasked = 'stored in Render';
+  result.profileEnrichment = enrichLinkedProfiles(data);
   return result;
 }
 async function runAutoSync(options = {}) {
