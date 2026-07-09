@@ -2393,3 +2393,123 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .accounting-lane strong,
   .api-lane strong{font-size:21px}
 }
+
+/* Dense staff work pages: keep information sharp and compact. */
+.view-maintenance .card:hover,
+.view-maintenance .section:hover,
+.view-maintenance .item:hover,
+.view-maintenance .mechanic-card:hover,
+.view-fleet .card:hover,
+.view-fleet .section:hover,
+.view-fleet .item:hover,
+.view-fleet .mechanic-card:hover,
+.view-operations .card:hover,
+.view-operations .section:hover,
+.view-operations .item:hover,
+.view-mechanic-portal .card:hover,
+.view-mechanic-portal .section:hover,
+.view-mechanic-portal .item:hover,
+.view-mechanic-portal .mechanic-card:hover,
+.view-manager-portal .card:hover,
+.view-manager-portal .section:hover,
+.view-manager-portal .item:hover{
+  transform:none;
+}
+.view-maintenance .table tbody tr:hover td,
+.view-fleet .table tbody tr:hover td,
+.view-operations .table tbody tr:hover td,
+.view-mechanic-portal .table tbody tr:hover td,
+.view-manager-portal .table tbody tr:hover td{
+  background:rgba(240,184,58,.06);
+}
+.compact-service-board,
+.compact-fleet-board{
+  margin-bottom:12px;
+}
+.compact-service-board .table td:first-child,
+.compact-fleet-board .table td:first-child,
+.view-mechanic-portal .mechanic-card .muted{
+  min-width:220px;
+}
+.compact-service-board .muted,
+.compact-fleet-board .muted,
+.view-mechanic-portal .mechanic-card .muted{
+  color:#d9e3eb;
+  font-size:12px;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+.view-maintenance .portal-note,
+.view-fleet .portal-note,
+.view-operations .portal-note{
+  margin-top:10px;
+}
+
+@media(max-width:760px){
+  .view-maintenance .staff-tabs,
+  .view-fleet .staff-tabs,
+  .view-operations .staff-tabs{
+    margin-bottom:8px;
+  }
+  .view-maintenance .compact-service-board,
+  .view-fleet .compact-fleet-board,
+  .view-operations .compact-service-board,
+  .view-operations .compact-fleet-board{
+    padding:12px;
+  }
+  .compact-service-board .table td:first-child,
+  .compact-fleet-board .table td:first-child,
+  .view-mechanic-portal .mechanic-card .muted{
+    min-width:0;
+  }
+  .compact-service-board .table tr,
+  .compact-fleet-board .table tr{
+    margin-bottom:7px;
+    padding:6px;
+  }
+  .compact-service-board .table td,
+  .compact-fleet-board .table td{
+    grid-template-columns:74px minmax(0,1fr)!important;
+    gap:7px;
+    padding:6px 4px!important;
+  }
+  .compact-service-board .section-head,
+  .compact-fleet-board .section-head{
+    margin-bottom:8px;
+  }
+  .compact-service-board .local-search,
+  .compact-fleet-board .local-search{
+    margin-bottom:8px;
+  }
+}
+
+/* Keep operational information sharp. Hover movement makes dense text look blurry on phone/desktop. */
+.admin-shell .card:hover,
+.admin-shell .section:hover,
+.admin-shell .item:hover,
+.admin-shell .lead-card:hover,
+.admin-shell .mechanic-card:hover,
+.admin-shell .ops-item:hover,
+.admin-shell .today-metric:hover,
+.admin-shell .payment-lane:hover,
+.admin-shell .fleet-lane:hover,
+.admin-shell .workflow-step:hover,
+.admin-shell .readiness-card:hover,
+.admin-shell .accounting-lane:hover,
+.admin-shell .api-lane:hover,
+.admin-shell .claim-lane:hover,
+.admin-shell .application-lane:hover,
+.admin-shell .message-lane:hover,
+.admin-shell .access-lane:hover,
+.admin-shell .match-lane:hover{
+  transform:none!important;
+  filter:none!important;
+}
+.admin-shell .table tbody tr:hover td,
+.admin-shell .table tr:hover td{
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.local-search{
+  filter:none!important;
+}
