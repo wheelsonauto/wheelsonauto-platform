@@ -2513,3 +2513,110 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .local-search{
   filter:none!important;
 }
+
+/* Final no-blur pass: every staff information surface stays sharp on hover. */
+.admin-shell .card,
+.admin-shell .section,
+.admin-shell .item,
+.admin-shell .lead-card,
+.admin-shell .mechanic-card,
+.admin-shell .ops-item,
+.admin-shell .due-row,
+.admin-shell .mini-row,
+.admin-shell .payment-next-item,
+.admin-shell .service-next-item,
+.admin-shell .claim-next-item,
+.admin-shell .fleet-next-item,
+.admin-shell .match-next-item,
+.admin-shell .accounting-next-item,
+.admin-shell .access-next-item,
+.admin-shell .timeline-item,
+.admin-shell .customer-pay-card,
+.admin-shell .company-card,
+.admin-shell .health-card,
+.admin-shell .blueprint-card,
+.admin-shell .api-phase,
+.admin-shell .executive-card,
+.admin-shell .today-focus-main,
+.admin-shell .today-metric,
+.admin-shell .payment-lane,
+.admin-shell .service-lane,
+.admin-shell .fleet-lane,
+.admin-shell .workflow-step,
+.admin-shell .readiness-card,
+.admin-shell .accounting-lane,
+.admin-shell .api-lane,
+.admin-shell .claim-lane,
+.admin-shell .application-lane,
+.admin-shell .message-lane,
+.admin-shell .access-lane,
+.admin-shell .match-lane,
+.admin-shell .compact-service-board,
+.admin-shell .compact-fleet-board{
+  filter:none!important;
+  transform:none!important;
+  backface-visibility:visible!important;
+  will-change:auto!important;
+}
+.admin-shell .card:hover,
+.admin-shell .section:hover,
+.admin-shell .item:hover,
+.admin-shell .lead-card:hover,
+.admin-shell .mechanic-card:hover,
+.admin-shell .ops-item:hover,
+.admin-shell .due-row:hover,
+.admin-shell .mini-row:hover,
+.admin-shell .payment-next-item:hover,
+.admin-shell .service-next-item:hover,
+.admin-shell .claim-next-item:hover,
+.admin-shell .fleet-next-item:hover,
+.admin-shell .match-next-item:hover,
+.admin-shell .accounting-next-item:hover,
+.admin-shell .access-next-item:hover,
+.admin-shell .timeline-item:hover,
+.admin-shell .customer-pay-card:hover,
+.admin-shell .company-card:hover,
+.admin-shell .health-card:hover,
+.admin-shell .blueprint-card:hover,
+.admin-shell .api-phase:hover,
+.admin-shell .executive-card:hover,
+.admin-shell .today-focus-main:hover,
+.admin-shell .today-metric:hover,
+.admin-shell .payment-lane:hover,
+.admin-shell .service-lane:hover,
+.admin-shell .fleet-lane:hover,
+.admin-shell .workflow-step:hover,
+.admin-shell .readiness-card:hover,
+.admin-shell .accounting-lane:hover,
+.admin-shell .api-lane:hover,
+.admin-shell .claim-lane:hover,
+.admin-shell .application-lane:hover,
+.admin-shell .message-lane:hover,
+.admin-shell .access-lane:hover,
+.admin-shell .match-lane:hover,
+.admin-shell .compact-service-board:hover,
+.admin-shell .compact-fleet-board:hover,
+.admin-shell .btn:hover{
+  filter:none!important;
+  transform:none!important;
+}
+.admin-shell .table tbody tr:hover,
+.admin-shell .table tbody tr:hover td,
+.admin-shell .table tr:hover,
+.admin-shell .table tr:hover td,
+.admin-shell .table th,
+.admin-shell .quickbar{
+  filter:none!important;
+  transform:none!important;
+  backdrop-filter:none!important;
+  will-change:auto!important;
+}
+.admin-shell .nav button:hover,
+.admin-shell .tabs button:hover,
+.admin-shell .staff-tabs button:hover,
+.admin-shell .quickbar button:hover,
+.admin-shell .quickbar .btn:hover{
+  filter:none!important;
+  transform:none!important;
+  will-change:auto!important;
+}
