@@ -1268,6 +1268,46 @@ function cleanAutopayPayload(payload) {
     createdAt: payload.createdAt || new Date().toISOString()
   };
 }
+function assignAutopayVehicle(data, autopay) {
+  if (!autopay || !autopay.customer || (!autopay.vehicleId && !autopay.vehicle)) return;
+  data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  const customerKey = normKey(autopay.customer);
+  const vehicle = data.vehicles.find(row => (autopay.vehicleId && row.id === autopay.vehicleId) || (autopay.vehicle && normKey(vehicleNameFromParts(row)) === normKey(autopay.vehicle)));
+  if (!vehicle) return;
+  const vehicleName = vehicleNameFromParts(vehicle);
+  const tag = vehicle.plate || vehicle.stock || autopay.licensePlate || autopay.plate || '';
+  vehicle.currentCustomer = autopay.customer;
+  vehicle.status = String(autopay.status || '').toLowerCase() === 'active' ? 'Rented' : 'Pending application';
+  vehicle.rate = autopay.amount || vehicle.rate || vehicle.price || 0;
+  vehicle.price = autopay.amount || vehicle.price || vehicle.rate || 0;
+  vehicle.manuallyEditedAt = new Date().toISOString();
+  autopay.vehicleId = vehicle.id || autopay.vehicleId;
+  autopay.vehicle = vehicleName;
+  autopay.vin = vehicle.vin || autopay.vin || '';
+  autopay.licensePlate = tag;
+  autopay.plate = tag;
+  autopay.tempTag = vehicle.tempTag || autopay.tempTag || '';
+  autopay.tracker = vehicle.tracker || autopay.tracker || '';
+  const customer = data.customers.find(row => normKey(row.name) === customerKey);
+  if (customer) {
+    customer.vehicle = vehicleName;
+    customer.vehicleId = autopay.vehicleId;
+    customer.weeklyAmount = autopay.amount || customer.weeklyAmount || 0;
+    customer.licensePlate = tag;
+    customer.vin = autopay.vin;
+    customer.tempTag = autopay.tempTag;
+    customer.tracker = autopay.tracker;
+  }
+  const contract = data.contracts.find(row => normKey(row.customer) === customerKey);
+  if (contract) {
+    contract.vehicle = vehicleName;
+    contract.weekly = autopay.amount || contract.weekly || 0;
+    contract.status = String(autopay.status || '').toLowerCase() === 'active' ? 'Active' : (contract.status || 'Pending pickup');
+    contract.updatedAt = new Date().toISOString();
+  }
+}
 function cleanApiProviderPayload(payload) {
   const now = new Date().toISOString();
   return {
@@ -1753,6 +1793,7 @@ function createCardSetupRequest(data, payload) {
   autopay.cardSetupUrl = request.url;
   autopay.cloverPlanId = request.cloverPlanId;
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
+  assignAutopayVehicle(data, autopay);
   if (cardOnlyUpdate) {
     Object.assign(existingAutopay, {
       cardSetupRequestId: request.id,
@@ -2468,6 +2509,7 @@ const server = http.createServer(async (req, res) => {
       const autopay = cleanAutopayPayload(payload);
       data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
       data.customers = Array.isArray(data.customers) ? data.customers : [];
+      assignAutopayVehicle(data, autopay);
       const customerKey = normKey(autopay.customer);
       const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
       const existingAutopay = payload.reactivateExisting ? data.recurringPayments.find(row => (reactivateId && (row.id === reactivateId || row.cardSetupRequestId === reactivateId)) || (customerKey && normKey(row.customer) === customerKey)) : null;
