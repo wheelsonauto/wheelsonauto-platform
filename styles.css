@@ -2936,3 +2936,27 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   color:#17202a!important;
   border-color:#cfd6dc!important;
 }
+
+/* iPhone zoom guard: mobile Safari zooms into focused fields below 16px. */
+@media(max-width:760px){
+  input,
+  select,
+  textarea,
+  .admin-shell .field input,
+  .admin-shell .field select,
+  .admin-shell .field textarea,
+  .local-search input,
+  .global-search input,
+  .modal .field input,
+  .modal .field select,
+  .modal .field textarea,
+  .modal .global-search input{
+    font-size:16px!important;
+  }
+  .local-search input,
+  .modal .field input,
+  .modal .field select,
+  .modal .field textarea{
+    min-height:42px;
+  }
+}
