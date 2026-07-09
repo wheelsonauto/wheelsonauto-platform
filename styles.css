@@ -2423,16 +2423,19 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   background:rgba(240,184,58,.06);
 }
 .compact-service-board,
-.compact-fleet-board{
+.compact-fleet-board,
+.compact-claims-board{
   margin-bottom:12px;
 }
 .compact-service-board .table td:first-child,
 .compact-fleet-board .table td:first-child,
+.compact-claims-board .table td:first-child,
 .view-mechanic-portal .mechanic-card .muted{
   min-width:220px;
 }
 .compact-service-board .muted,
 .compact-fleet-board .muted,
+.compact-claims-board .muted,
 .view-mechanic-portal .mechanic-card .muted{
   color:#d9e3eb;
   font-size:12px;
@@ -2454,31 +2457,38 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .view-maintenance .compact-service-board,
   .view-fleet .compact-fleet-board,
   .view-operations .compact-service-board,
-  .view-operations .compact-fleet-board{
+  .view-operations .compact-fleet-board,
+  .view-operations .compact-claims-board,
+  .view-claims-issues .compact-claims-board{
     padding:12px;
   }
   .compact-service-board .table td:first-child,
   .compact-fleet-board .table td:first-child,
+  .compact-claims-board .table td:first-child,
   .view-mechanic-portal .mechanic-card .muted{
     min-width:0;
   }
   .compact-service-board .table tr,
-  .compact-fleet-board .table tr{
+  .compact-fleet-board .table tr,
+  .compact-claims-board .table tr{
     margin-bottom:7px;
     padding:6px;
   }
   .compact-service-board .table td,
-  .compact-fleet-board .table td{
+  .compact-fleet-board .table td,
+  .compact-claims-board .table td{
     grid-template-columns:74px minmax(0,1fr)!important;
     gap:7px;
     padding:6px 4px!important;
   }
   .compact-service-board .section-head,
-  .compact-fleet-board .section-head{
+  .compact-fleet-board .section-head,
+  .compact-claims-board .section-head{
     margin-bottom:8px;
   }
   .compact-service-board .local-search,
-  .compact-fleet-board .local-search{
+  .compact-fleet-board .local-search,
+  .compact-claims-board .local-search{
     margin-bottom:8px;
   }
 }
@@ -2551,8 +2561,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .admin-shell .message-lane,
 .admin-shell .access-lane,
 .admin-shell .match-lane,
-.admin-shell .compact-service-board,
-.admin-shell .compact-fleet-board{
+  .admin-shell .compact-service-board,
+  .admin-shell .compact-fleet-board,
+  .admin-shell .compact-claims-board{
   filter:none!important;
   transform:none!important;
   backface-visibility:visible!important;
@@ -2594,8 +2605,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .admin-shell .message-lane:hover,
 .admin-shell .access-lane:hover,
 .admin-shell .match-lane:hover,
-.admin-shell .compact-service-board:hover,
-.admin-shell .compact-fleet-board:hover,
+  .admin-shell .compact-service-board:hover,
+  .admin-shell .compact-fleet-board:hover,
+  .admin-shell .compact-claims-board:hover,
 .admin-shell .btn:hover{
   filter:none!important;
   transform:none!important;
@@ -2623,23 +2635,28 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 
 /* Fleet/service rows: keep hover readable. These rows were washing white on hover. */
 .admin-shell .compact-fleet-board,
-.admin-shell .compact-service-board{
+.admin-shell .compact-service-board,
+.admin-shell .compact-claims-board{
   background:linear-gradient(180deg,rgba(17,24,32,.98),rgba(14,20,26,.96))!important;
   border-color:rgba(240,184,58,.28)!important;
 }
 .admin-shell .compact-fleet-board .table-wrap,
-.admin-shell .compact-service-board .table-wrap{
+.admin-shell .compact-service-board .table-wrap,
+.admin-shell .compact-claims-board .table-wrap{
   background:rgba(7,10,14,.44)!important;
   border-color:rgba(240,184,58,.24)!important;
 }
 .admin-shell .compact-fleet-board .table tbody tr,
-.admin-shell .compact-service-board .table tbody tr{
+.admin-shell .compact-service-board .table tbody tr,
+.admin-shell .compact-claims-board .table tbody tr{
   background:rgba(255,255,255,.035)!important;
 }
 .admin-shell .compact-fleet-board .table tbody tr:nth-child(even) td,
 .admin-shell .compact-service-board .table tbody tr:nth-child(even) td,
+.admin-shell .compact-claims-board .table tbody tr:nth-child(even) td,
 .admin-shell .compact-fleet-board .table tbody tr td,
-.admin-shell .compact-service-board .table tbody tr td{
+.admin-shell .compact-service-board .table tbody tr td,
+.admin-shell .compact-claims-board .table tbody tr td{
   background:transparent!important;
   border-bottom-color:rgba(240,184,58,.16)!important;
   color:#f6fbff!important;
@@ -2651,16 +2668,19 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   outline-offset:-1px;
 }
 .admin-shell .compact-fleet-board .table tbody tr:hover td,
-.admin-shell .compact-service-board .table tbody tr:hover td{
+.admin-shell .compact-service-board .table tbody tr:hover td,
+.admin-shell .compact-claims-board .table tbody tr:hover td{
   background:transparent!important;
   color:#fff!important;
 }
 .admin-shell .compact-fleet-board .muted,
-.admin-shell .compact-service-board .muted{
+.admin-shell .compact-service-board .muted,
+.admin-shell .compact-claims-board .muted{
   color:#cfd9e1!important;
 }
 .admin-shell .compact-fleet-board .tag,
-.admin-shell .compact-service-board .tag{
+.admin-shell .compact-service-board .tag,
+.admin-shell .compact-claims-board .tag{
   border:1px solid rgba(240,184,58,.24)!important;
 }
 .staff-card-board .mechanic-cards{
@@ -2681,6 +2701,57 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 }
 .staff-card-board .mechanic-card .muted{
   color:#d9e3eb!important;
+}
+.modal .file-summary>div,
+.modal .timeline-item{
+  background:rgba(255,255,255,.055)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+  box-shadow:none!important;
+}
+.modal .file-summary>div:hover,
+.modal .timeline-item:hover{
+  background:rgba(240,184,58,.10)!important;
+  border-color:rgba(240,184,58,.34)!important;
+  filter:none!important;
+  transform:none!important;
+}
+.modal .file-summary span,
+.modal .timeline-item span{
+  color:#f0c45b!important;
+}
+.modal .file-summary small,
+.modal .timeline-item small,
+.modal .file-timeline .muted{
+  color:#d9e3eb!important;
+}
+.modal .file-summary strong{
+  color:#fff!important;
+}
+.modal .section{
+  background:transparent!important;
+  border-color:transparent!important;
+  box-shadow:none!important;
+}
+.admin-shell .payment-customers-panel,
+.admin-shell .customer-pay-card{
+  background:rgba(255,255,255,.055)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+}
+.admin-shell .customer-pay-card:hover{
+  background:rgba(240,184,58,.10)!important;
+  border-color:rgba(240,184,58,.36)!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.16)!important;
+  filter:none!important;
+  transform:none!important;
+}
+.admin-shell .customer-pay-card small,
+.admin-shell .customer-car-line span{
+  color:#d9e3eb!important;
+}
+.admin-shell .customer-car-line{
+  border-top-color:rgba(240,184,58,.18)!important;
 }
 @media(max-width:760px){
   .staff-card-board .mechanic-cards{
