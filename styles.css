@@ -1769,6 +1769,120 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
 }
 
+/* Staff portals: match the compact admin dashboard rhythm */
+.staff-tabs{
+  margin-bottom:12px;
+}
+.staff-stats{
+  margin-bottom:12px;
+}
+.manager-overview-grid{
+  display:grid;
+  grid-template-columns:minmax(320px,.92fr) minmax(0,1.08fr);
+  gap:12px;
+  align-items:start;
+}
+.manager-overview-grid>.fleet-command{
+  margin-bottom:0;
+}
+.manager-mini-board{
+  min-width:0;
+}
+.manager-mini-board .mini-list{
+  display:grid;
+  gap:8px;
+}
+.manager-mini-board .mini-row{
+  grid-template-columns:minmax(0,1fr) auto auto;
+}
+.portal-note{
+  margin-top:10px;
+}
+.view-manager-portal .manager-fleet-board .table-wrap,
+.view-manager-portal .section>.table-wrap,
+.view-mechanic-portal .mechanic-table-panel .table-wrap{
+  border:1px solid rgba(240,184,58,.14);
+  border-radius:10px;
+  background:rgba(255,255,255,.04);
+}
+
+@media(min-width:921px){
+  .view-manager-portal>.staff-tabs,
+  .view-mechanic-portal>.staff-tabs,
+  .view-manager-portal>.manager-overview-grid,
+  .view-manager-portal>.manager-fleet-board,
+  .view-manager-portal>section,
+  .view-manager-portal>.manager-safe-note,
+  .view-mechanic-portal>.mechanic-work-queue{
+    grid-column:1/-1!important;
+  }
+  .view-manager-portal .manager-fleet-board .table-wrap,
+  .view-manager-portal .section>.table-wrap{
+    max-height:560px;
+    overflow:auto;
+  }
+  .view-mechanic-portal .mechanic-workspace{
+    grid-template-columns:minmax(330px,.76fr) minmax(0,1.24fr);
+  }
+}
+
+@media(max-width:920px){
+  .manager-overview-grid{
+    grid-template-columns:1fr;
+  }
+}
+
+@media(max-width:760px){
+  .staff-tabs{
+    display:grid;
+    grid-auto-flow:column;
+    grid-auto-columns:minmax(112px,1fr);
+    overflow-x:auto;
+    gap:6px;
+    border-bottom:0;
+    padding-bottom:2px;
+    margin-bottom:8px;
+    scrollbar-width:none;
+  }
+  .staff-tabs::-webkit-scrollbar{display:none}
+  .staff-tabs button{
+    border:1px solid rgba(240,184,58,.22);
+    border-radius:999px;
+    background:rgba(255,255,255,.06);
+    color:#f2d88d;
+    padding:9px 10px;
+    white-space:nowrap;
+  }
+  .staff-tabs button.active{
+    background:linear-gradient(180deg,#ffd166,#f0b83a);
+    border-color:#ffe09a;
+    color:#111820;
+  }
+  .view-manager-portal .manager-overview-grid,
+  .view-mechanic-portal .mechanic-workspace{
+    gap:8px;
+  }
+  .manager-mini-board .mini-row,
+  .view-manager-portal .mini-row{
+    grid-template-columns:1fr;
+  }
+  .view-manager-portal .manager-fleet-board .table-wrap,
+  .view-manager-portal .section>.table-wrap{
+    max-height:none;
+    overflow:visible!important;
+  }
+  .view-manager-portal .manager-safe-note{
+    font-size:12px;
+    line-height:1.35;
+    padding:10px;
+    margin-bottom:82px!important;
+  }
+  .view-mechanic-portal .portal-note{
+    font-size:12px;
+    padding:10px;
+  }
+}
+
 /* Premium polish pass: keep WheelsOnAuto black/gold, improve finish */
 :root{
   --premium-radius:12px;
