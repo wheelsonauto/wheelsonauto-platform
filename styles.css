@@ -1085,6 +1085,17 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .customer-car-line span{font-size:12px;color:#b5c1ca;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .customer-pay-card .actions{justify-content:flex-start;gap:6px}
 .customer-pay-card .btn{padding:7px 9px;font-size:12px}
+.transaction-ledger .table-wrap{border:1px solid rgba(240,184,58,.14);border-radius:12px;overflow:auto;background:rgba(5,8,12,.28)}
+.transaction-ledger .table th{position:sticky;top:0;z-index:1;background:rgba(16,19,25,.96);color:#f0b83a;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.transaction-ledger .table td{vertical-align:middle;padding-top:12px;padding-bottom:12px}
+.transaction-ledger .table tbody tr:nth-child(even){background:rgba(255,255,255,.025)}
+.transaction-ledger .table tbody tr:hover{background:rgba(240,184,58,.07)}
+.transaction-ledger .money{font-size:16px}
+.transaction-ledger-summary{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0 12px}
+.transaction-ledger-summary span{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(240,184,58,.14);background:rgba(255,255,255,.045);border-radius:999px;padding:8px 11px;color:#c7d0d8;font-weight:800}
+.transaction-ledger-summary b{color:#f0b83a}
+.transaction-ledger-summary .good b{color:#7ee787}
+.transaction-ledger-summary .warn b{color:#f7c948}
 
 /* Operations combines fleet, service, and claims without three crowded side tabs */
 @media(min-width:921px){
