@@ -1064,13 +1064,18 @@ function cloverPaymentFallbackName(payment) {
   ].map(usefulPaymentName).find(Boolean);
   return direct || deepCloverPaymentName(payment);
 }
+function cloverPaymentDescriptionName(payment) {
+  const description = String(payment && (payment.description || payment.note || payment.memo) || '').trim();
+  const match = description.match(/WheelsonAuto\s+.*?payment\s+-\s+(.+)$/i);
+  return match ? usefulPaymentName(match[1]) : '';
+}
 function mapCloverPayment(payment) {
   const amount = Number(payment.amount || 0) / 100;
   const created = payment.createdTime ? new Date(payment.createdTime).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US');
   const customerSource = cloverPaymentCustomerSource(payment);
   const externalCustomerReference = cloverExternalCustomerReference(payment);
   const externalReferenceId = cloverExternalReference(payment);
-  const customer = cloverPersonName(customerSource) || usefulPaymentName(payment.customerName) || usefulPaymentName(externalCustomerReference) || cloverPaymentFallbackName(payment) || '';
+  const customer = cloverPersonName(customerSource) || usefulPaymentName(payment.customerName) || usefulPaymentName(externalCustomerReference) || cloverPaymentDescriptionName(payment) || cloverPaymentFallbackName(payment) || '';
   return {
     id: 'clover-payment-' + payment.id,
     cloverPaymentId: payment.id,
@@ -1085,6 +1090,7 @@ function mapCloverPayment(payment) {
     amount,
     status: payment.result === 'SUCCESS' ? 'Paid' : (payment.result || 'Recorded'),
     source: 'Clover',
+    notes: String(payment.description || payment.note || '').trim(),
     tone: payment.result === 'SUCCESS' ? 'good' : 'warn'
   };
 }
@@ -2093,7 +2099,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
     capture: true,
     ecomind: 'ecom',
     source,
-    description: 'WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment',
+    description: ('WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment - ' + (recurring.customer || 'Customer')).slice(0, 255),
     external_reference_id: ref,
     external_customer_reference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
     receipt_email: recurring.email || undefined
