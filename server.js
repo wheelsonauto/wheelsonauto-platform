@@ -1010,6 +1010,14 @@ function cloverPaymentOrderId(payment) {
   const order = payment && payment.order || {};
   return String(order.id || payment && payment.orderId || payment && payment.cloverOrderId || '').trim();
 }
+function cloverExternalReference(payment) {
+  payment = payment || {};
+  return String(payment.external_reference_id || payment.externalReferenceId || payment.externalPaymentId || payment.external_reference || '').trim();
+}
+function cloverExternalCustomerReference(payment) {
+  payment = payment || {};
+  return String(payment.external_customer_reference || payment.externalCustomerReference || payment.externalCustomerId || '').trim();
+}
 function usefulPaymentName(value) {
   value = String(value || '').trim();
   if (!value || value.length < 2 || value.length > 80) return '';
@@ -1060,12 +1068,16 @@ function mapCloverPayment(payment) {
   const amount = Number(payment.amount || 0) / 100;
   const created = payment.createdTime ? new Date(payment.createdTime).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US');
   const customerSource = cloverPaymentCustomerSource(payment);
-  const customer = cloverPersonName(customerSource) || usefulPaymentName(payment.customerName) || usefulPaymentName(payment.externalCustomerReference) || cloverPaymentFallbackName(payment) || '';
+  const externalCustomerReference = cloverExternalCustomerReference(payment);
+  const externalReferenceId = cloverExternalReference(payment);
+  const customer = cloverPersonName(customerSource) || usefulPaymentName(payment.customerName) || usefulPaymentName(externalCustomerReference) || cloverPaymentFallbackName(payment) || '';
   return {
     id: 'clover-payment-' + payment.id,
     cloverPaymentId: payment.id,
-    cloverCustomerId: String(customerSource.id || payment.customerId || payment.cloverCustomerId || payment.externalCustomerReference || '').trim(),
+    cloverCustomerId: String(customerSource.id || payment.customerId || payment.cloverCustomerId || (/^[A-Z0-9]{8,}$/.test(externalCustomerReference) ? externalCustomerReference : '') || '').trim(),
     cloverOrderId: cloverPaymentOrderId(payment),
+    externalReferenceId,
+    externalCustomerReference,
     employee: payment.employee && payment.employee.name ? payment.employee.name : '',
     date: created,
     customer: customer || 'Unmatched Clover payment',
@@ -1096,10 +1108,32 @@ async function enrichCloverPayment(payment) {
   }
   return mapCloverPayment(enriched);
 }
+function normalizedPaymentRecordId(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.replace(/^clover-payment-/i, '').replace(/^clover-manual-charge-/i, '');
+}
+function paymentRecordIds(item) {
+  item = item || {};
+  return [
+    item.cloverPaymentId,
+    item.cloverChargeId,
+    item.paymentId,
+    item.externalPaymentId,
+    item.chargeId,
+    item.id
+  ].map(normalizedPaymentRecordId).filter(Boolean);
+}
+function paymentRecordsMatch(a, b) {
+  const aIds = paymentRecordIds(a);
+  const bIds = paymentRecordIds(b);
+  if (!aIds.length || !bIds.length) return false;
+  return aIds.some(id => bIds.includes(id));
+}
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
   incoming.forEach(item => {
-    const index = next.findIndex(existing => existing.id === item.id);
+    const index = next.findIndex(existing => existing.id === item.id || paymentRecordsMatch(existing, item));
     if (index >= 0) {
       const existing = next[index];
       const weakIncomingName = !item.customer || item.customer === 'Unmatched Clover payment' || item.customer === 'Clover payment';
@@ -2075,18 +2109,39 @@ async function chargeSavedRecurringCard(data, payload, req) {
   const paid = status === 'paid' || status === 'succeeded' || status === 'success' || charge.paid === true || charge.captured === true;
   const payment = {
     id: 'clover-manual-charge-' + (charge.id || Date.now()),
+    cloverPaymentId: charge.id || charge.charge || '',
     cloverChargeId: charge.id || charge.charge || '',
+    externalReferenceId: ref,
+    externalCustomerReference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
     date: new Date().toLocaleString('en-US'),
     customer: recurring.customer,
+    phone: recurring.phone || '',
+    email: recurring.email || '',
+    vehicle: recurring.vehicle || '',
     method: 'Clover saved card',
     amount,
     status: paid ? 'Paid' : (charge.status || charge.result || 'Submitted'),
     tone: paid ? 'good' : 'warn',
     source: 'Clover saved-card charge',
-    notes: String(payload.note || '').trim()
+    notes: String(payload.note || '').trim(),
+    recurringPaymentId: recurring.id || '',
+    cloverCustomerId: recurring.cloverCustomerId || '',
+    cloverSubscriptionId: recurring.cloverSubscriptionId || ''
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   data.payments.unshift(payment);
+  const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
+  attempts.unshift({
+    id: 'attempt-clover-charge-' + (charge.id || Date.now()),
+    date: payment.date,
+    customer: payment.customer,
+    amount,
+    result: payment.status,
+    method: payment.method,
+    notes: payment.notes,
+    cloverPaymentId: payment.cloverPaymentId,
+    recurringPaymentId: payment.recurringPaymentId
+  });
   updateRecurringChargeState(data, recurring.id, {
     status: paid ? 'Active' : 'Payment submitted',
     tone: paid ? 'good' : 'warn',
@@ -2095,7 +2150,10 @@ async function chargeSavedRecurringCard(data, payload, req) {
     nextRun: String(payload.nextRun || recurring.nextRun || '').trim(),
     lastPaymentAt: new Date().toISOString(),
     lastCloverChargeId: payment.cloverChargeId,
-    lastManualChargeAt: new Date().toISOString()
+    lastManualChargeAt: new Date().toISOString(),
+    lastPaymentResult: payment.status,
+    lastPaymentNote: payment.notes,
+    paymentAttempts: attempts
   });
   await writeData(data);
   return { charge, payment, recurring };
