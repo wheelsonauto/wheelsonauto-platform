@@ -1803,9 +1803,18 @@ function createCardSetupRequest(data, payload) {
   data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
   const customerKey = normKey(autopay.customer);
   const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
-  const existingAutopay = payload.reactivateExisting ? data.recurringPayments.find(row => (reactivateId && (row.id === reactivateId || row.cardSetupRequestId === reactivateId)) || (customerKey && normKey(row.customer) === customerKey)) : null;
-  const cardOnlyUpdate = !!(payload.cardOnlyUpdate && existingAutopay);
-  if (existingAutopay) autopay.id = existingAutopay.id;
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  const cloverMembers = data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const existingAutopayById = payload.reactivateExisting && reactivateId ? data.recurringPayments.find(row => row.id === reactivateId || row.cardSetupRequestId === reactivateId || row.cloverSubscriptionId === reactivateId) : null;
+  const existingAutopayByName = payload.reactivateExisting && customerKey ? data.recurringPayments.find(row => normKey(row.customer) === customerKey) : null;
+  const existingMemberById = payload.reactivateExisting && reactivateId ? cloverMembers.find(row => row.id === reactivateId || row.cardSetupRequestId === reactivateId || row.cloverSubscriptionId === reactivateId) : null;
+  const existingMemberByName = payload.reactivateExisting && customerKey ? cloverMembers.find(row => normKey(row.customer) === customerKey) : null;
+  const existingAutopay = existingAutopayById || existingAutopayByName;
+  const existingMember = existingMemberById || existingMemberByName;
+  const cardTarget = existingAutopayById || existingMemberById || existingAutopayByName || existingMemberByName;
+  const cardOnlyUpdate = !!(payload.cardOnlyUpdate && cardTarget);
+  if (cardTarget) autopay.id = cardTarget.id || (existingAutopay && existingAutopay.id) || autopay.id;
   const request = {
     id: 'setup-' + crypto.randomBytes(12).toString('hex'),
     recurringPaymentId: autopay.id,
@@ -1823,19 +1832,21 @@ function createCardSetupRequest(data, payload) {
     firstRun: autopay.nextRun,
     chargeTime: autopay.chargeTime,
     cloverPlanId: String(payload.cloverPlanId || payload.planId || '').trim(),
+    cloverSubscriptionId: String(payload.cloverSubscriptionId || '').trim(),
     status: 'Open',
     source: 'WheelsonAuto card setup',
     createdAt: new Date().toISOString(),
     url: ''
   };
   request.url = PUBLIC_BASE_URL + '/setup-card/' + request.id;
+  request.cardOnlyUpdate = cardOnlyUpdate;
   autopay.cardSetupRequestId = request.id;
   autopay.cardSetupUrl = request.url;
   autopay.cloverPlanId = request.cloverPlanId;
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
-  assignAutopayVehicle(data, autopay);
+  if (!cardOnlyUpdate) assignAutopayVehicle(data, autopay);
   if (cardOnlyUpdate) {
-    Object.assign(existingAutopay, {
+    Object.assign(cardTarget, {
       cardSetupRequestId: request.id,
       cardSetupUrl: request.url,
       cardChangePendingAt: new Date().toISOString(),
@@ -1899,29 +1910,45 @@ async function completeCardSetup(data, request, payload) {
   request.cloverCustomerId = customer.id || '';
   request.cloverPaymentSource = cardSource || token;
   request.cloverCardId = String(savedCard.id || savedCard || '');
-  request.cloverSubscriptionId = subscription && subscription.id || '';
-  const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
-  if (recurring) {
-    recurring.status = 'Active';
-    recurring.tone = 'good';
-    recurring.paymentSetup = subscription ? 'Active in Clover' : 'Card saved for WheelsonAuto charges';
-    recurring.cloverCustomerId = customer.id || '';
-    recurring.cloverPaymentSource = cardSource || token;
-    recurring.cloverCardId = request.cloverCardId;
-    recurring.cloverSubscriptionId = request.cloverSubscriptionId;
-    recurring.cardLabel = payload.brand || savedCard.brand || savedCard.cardBrand || '';
-    recurring.cardLast4 = payload.last4 || savedCard.last4 || '';
-    recurring.cardSavedAt = new Date().toISOString();
-    recurring.autoChargeEnabled = true;
-    recurring.autopayManagedBy = 'WheelsonAuto';
-    recurring.notes = [recurring.notes, 'Customer authorized card-on-file through WheelsonAuto setup link.'].filter(Boolean).join('\n');
-  }
+  request.cloverSubscriptionId = subscription && subscription.id || request.cloverSubscriptionId || '';
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  const members = data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const allRows = [...data.recurringPayments, ...members];
+  const exactRecurringRows = allRows.filter(row => row && (row.id === request.recurringPaymentId || row.cardSetupRequestId === request.id || (request.cloverSubscriptionId && row.cloverSubscriptionId === request.cloverSubscriptionId)));
+  const recurringRows = exactRecurringRows.length ? exactRecurringRows : allRows.filter(row => row && request.customer && normKey(row.customer) === normKey(request.customer));
+  const seenRecurring = new Set();
+  const recurringPatch = {
+    status: 'Active',
+    tone: 'good',
+    paymentSetup: subscription ? 'Active in Clover' : 'Card saved for WheelsonAuto charges',
+    cloverCustomerId: customer.id || '',
+    cloverPaymentSource: cardSource || token,
+    cloverCardId: request.cloverCardId,
+    cardLabel: payload.brand || savedCard.brand || savedCard.cardBrand || '',
+    cardLast4: payload.last4 || savedCard.last4 || '',
+    cardSavedAt: new Date().toISOString(),
+    cardChangeCompletedAt: request.cardOnlyUpdate ? new Date().toISOString() : '',
+    cardChangePendingAt: '',
+    autoChargeEnabled: true,
+    autopayManagedBy: 'WheelsonAuto'
+  };
+  if (request.cloverSubscriptionId) recurringPatch.cloverSubscriptionId = request.cloverSubscriptionId;
+  recurringRows.forEach(row => {
+    const key = row.id || row.cloverSubscriptionId || row.customer;
+    if (!key || seenRecurring.has(key)) return;
+    seenRecurring.add(key);
+    Object.assign(row, recurringPatch, {
+      notes: [row.notes, request.cardOnlyUpdate ? 'Customer updated card-on-file through WheelsonAuto setup link.' : 'Customer authorized card-on-file through WheelsonAuto setup link.'].filter(Boolean).join('\n')
+    });
+  });
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   const existing = data.customers.find(c => String(c.name || '').toLowerCase() === String(request.customer || '').toLowerCase());
   const customerPatch = { cloverCustomerId: customer.id || '', cardLast4: payload.last4 || savedCard.last4 || '', cardLabel: payload.brand || savedCard.brand || savedCard.cardBrand || '', source: 'WheelsonAuto card setup' };
   if (existing) Object.assign(existing, customerPatch);
   await writeData(data);
-  return { customer, subscription, recurring };
+  return { customer, subscription, recurring: recurringRows[0] || null };
 }
 function allRecurringRows(data) {
   return [
