@@ -1126,6 +1126,10 @@ function paymentRecordIds(item) {
     item.cloverChargeId,
     item.paymentId,
     item.externalPaymentId,
+    item.externalReferenceId,
+    item.external_reference_id,
+    item.external_reference,
+    item.paymentRequestId,
     item.chargeId,
     item.id
   ].map(normalizedPaymentRecordId).filter(Boolean);
@@ -1136,14 +1140,28 @@ function paymentRecordsMatch(a, b) {
   if (!aIds.length || !bIds.length) return false;
   return aIds.some(id => bIds.includes(id));
 }
+function weakPaymentCustomer(value) {
+  const raw = String(value || '').trim();
+  return !raw || raw === 'Unmatched Clover payment' || raw === 'Clover payment' || raw === 'Unknown customer';
+}
+function mergePaymentRecord(existing, incoming) {
+  const weakIncomingName = weakPaymentCustomer(incoming.customer);
+  const weakExistingName = weakPaymentCustomer(existing.customer);
+  const merged = { ...existing, ...incoming };
+  if (weakIncomingName && !weakExistingName) merged.customer = existing.customer;
+  if (!weakIncomingName && weakExistingName) merged.customer = incoming.customer;
+  ['phone', 'email', 'vehicle', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId', 'externalReferenceId', 'externalCustomerReference'].forEach(key => {
+    if (!merged[key] && existing[key]) merged[key] = existing[key];
+  });
+  return merged;
+}
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
   incoming.forEach(item => {
     const index = next.findIndex(existing => existing.id === item.id || paymentRecordsMatch(existing, item));
     if (index >= 0) {
       const existing = next[index];
-      const weakIncomingName = !item.customer || item.customer === 'Unmatched Clover payment' || item.customer === 'Clover payment';
-      next[index] = { ...existing, ...item, customer: weakIncomingName && existing.customer ? existing.customer : item.customer };
+      next[index] = mergePaymentRecord(existing, item);
     }
     else next.unshift(item);
   });
