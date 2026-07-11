@@ -104,6 +104,28 @@ async function main() {
     const state = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
     assert(state.status === 200 && state.json, 'Owner could not read app state.');
 
+    const applyPage = await request(base, 'GET', '/apply');
+    assert(applyPage.status === 200 && applyPage.text.includes('WheelsonAuto'), 'Public application page did not load.');
+
+    const publicApplication = await request(base, 'POST', '/api/public/applications', {
+      json: {
+        id: 'smoke-public-app',
+        name: 'Smoke Applicant',
+        phone: '3135550111',
+        email: 'smoke-applicant@example.com',
+        vehicleId: 'veh-001',
+        vehicle: '2016 Ford Focus Hatch',
+        income: 4500,
+        down: 500
+      }
+    });
+    assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
+    const applicationState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
+    const savedApplication = (applicationState.json.applications || []).find(app => app.id === 'smoke-public-app');
+    const selectedVehicle = (applicationState.json.vehicles || []).find(vehicle => vehicle.id === 'veh-001');
+    assert(savedApplication && savedApplication.stage === 'New', 'Public application is missing from admin state.');
+    assert(selectedVehicle && selectedVehicle.status === 'Pending application', 'Public vehicle status did not move to Pending application.');
+
     const mechanic = await request(base, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
       json: {
@@ -174,10 +196,58 @@ async function main() {
     });
     assert(managerAutopay.status === 403, 'Manager recurring payment API should be blocked.');
 
+    const managerCardSetup = await request(base, 'POST', '/api/card-setup-requests', {
+      cookie: managerCookie,
+      json: { customer: 'Blocked Manager Card Setup', amount: 1, frequency: 'Weekly' }
+    });
+    assert(managerCardSetup.status === 403, 'Manager card setup API should be blocked.');
+
+    const mechanicCardSetup = await request(base, 'POST', '/api/card-setup-requests', {
+      cookie: mechanicCookie,
+      json: { customer: 'Blocked Mechanic Card Setup', amount: 1, frequency: 'Weekly' }
+    });
+    assert(mechanicCardSetup.status === 403, 'Mechanic card setup API should be blocked.');
+
+    const paymentLink = await request(base, 'POST', '/api/payment-links', {
+      cookie: ownerCookie,
+      json: {
+        customer: 'Smoke Payment Customer',
+        phone: '3135550122',
+        email: 'smoke-pay@example.com',
+        vehicle: '2016 Ford Focus Hatch',
+        amount: 12,
+        frequency: 'Weekly'
+      }
+    });
+    assert(paymentLink.status === 201 && paymentLink.json.ok && paymentLink.json.paymentLink.id, 'Owner payment link did not save.');
+    const publicPay = await request(base, 'GET', '/pay/' + paymentLink.json.paymentLink.id);
+    assert(publicPay.status === 200 && publicPay.text.includes('Smoke Payment Customer') && publicPay.text.includes('Pay securely with Clover'), 'Public payment link did not render.');
+    const missingPay = await request(base, 'GET', '/pay/missing-smoke-link');
+    assert(missingPay.status === 404 && missingPay.text.includes('Payment link not found'), 'Missing payment link should show a 404 page.');
+
+    const cardSetup = await request(base, 'POST', '/api/card-setup-requests', {
+      cookie: ownerCookie,
+      json: {
+        customer: 'Smoke Card Customer',
+        phone: '3135550133',
+        email: 'smoke-card@example.com',
+        vehicleId: 'veh-001',
+        amount: 13,
+        frequency: 'Weekly',
+        firstRun: '2026-07-18',
+        chargeTime: '18:00'
+      }
+    });
+    assert(cardSetup.status === 201 && cardSetup.json.ok && cardSetup.json.setupLink.id, 'Owner card setup link did not save.');
+    const publicSetup = await request(base, 'GET', '/setup-card/' + cardSetup.json.setupLink.id);
+    assert(publicSetup.status === 200 && publicSetup.text.includes('Set up automatic payments') && publicSetup.text.includes('Smoke Card Customer'), 'Public card setup link did not render.');
+    const missingSetup = await request(base, 'GET', '/setup-card/missing-smoke-setup');
+    assert(missingSetup.status === 404 && missingSetup.text.includes('Card setup link not found'), 'Missing card setup link should show a 404 page.');
+
     const messageStatus = await request(base, 'GET', '/api/messages/status', { cookie: managerCookie });
     assert(messageStatus.status === 200 && messageStatus.json.ok, 'Manager should read messaging status.');
 
-    console.log('Smoke tests passed: login, role accounts, messaging permissions, state write guard, and payment API guard.');
+    console.log('Smoke tests passed: login, role accounts, public application, payment/card setup links, messaging permissions, state write guard, and payment API guard.');
   } catch (err) {
     console.error(output);
     throw err;

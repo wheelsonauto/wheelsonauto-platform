@@ -35,7 +35,7 @@ const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-nav-qa">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-public-qa">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -701,7 +701,7 @@ function apiAllowedForUser(user, pathname) {
   const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
-  if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
+  if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments', '/api/card-setup-requests'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
 }
 function stateForUserWrite(current, incoming, user) {
@@ -821,7 +821,7 @@ function loginPage(message = '') {
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
   const clientData = publicMode ? {
-    vehicles: (data.vehicles || []).filter(v => ['Ready', 'Coming soon', 'Pending application'].includes(v.status)),
+    vehicles: (data.vehicles || []).filter(v => ['Ready', 'Available', 'Coming soon', 'Pending application'].includes(v.status)),
     business: data.business || { name: 'WheelsonAuto', website: 'wheelsonauto.com' },
     applications: [],
     customers: [],
@@ -2516,7 +2516,7 @@ const server = http.createServer(async (req, res) => {
       data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
       if (!data.applications.some(existing => existing.id === app.id)) data.applications.unshift(app);
       const selectedVehicle = data.vehicles.find(vehicle => vehicle.id === app.vehicleId);
-      if (selectedVehicle && ['Ready', 'Coming soon', 'Pending application'].includes(selectedVehicle.status)) {
+      if (selectedVehicle && ['Ready', 'Available', 'Coming soon', 'Pending application'].includes(selectedVehicle.status)) {
         selectedVehicle.status = 'Pending application';
         selectedVehicle.pendingApplicant = app.name || '';
         selectedVehicle.pendingApplicationId = app.id;
