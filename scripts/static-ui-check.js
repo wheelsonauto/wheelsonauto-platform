@@ -37,6 +37,118 @@ function functionSlice(name) {
   return '';
 }
 
+function topLevelFunctionNames() {
+  const names = [];
+  let quote = '';
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < app.length; index += 1) {
+    const char = app[index];
+    const next = app[index + 1];
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (!app.startsWith('function ', index)) continue;
+    const match = /^function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(app.slice(index, index + 160));
+    if (!match) continue;
+    const argsOpen = index + app.slice(index).indexOf('(');
+    let cursor = argsOpen;
+    let parenDepth = 0;
+    for (; cursor < app.length; cursor += 1) {
+      const token = app[cursor];
+      if (token === '(') parenDepth += 1;
+      else if (token === ')') {
+        parenDepth -= 1;
+        if (parenDepth === 0) break;
+      }
+    }
+    const open = app.indexOf('{', cursor);
+    if (open < 0) fail('Could not parse top-level function: ' + match[1]);
+    let depth = 0;
+    let innerQuote = '';
+    let innerEscaped = false;
+    let innerLineComment = false;
+    let innerBlockComment = false;
+    let end = -1;
+    for (let bodyIndex = open; bodyIndex < app.length; bodyIndex += 1) {
+      const token = app[bodyIndex];
+      const after = app[bodyIndex + 1];
+      if (innerLineComment) {
+        if (token === '\n') innerLineComment = false;
+        continue;
+      }
+      if (innerBlockComment) {
+        if (token === '*' && after === '/') {
+          innerBlockComment = false;
+          bodyIndex += 1;
+        }
+        continue;
+      }
+      if (innerQuote) {
+        if (innerEscaped) innerEscaped = false;
+        else if (token === '\\') innerEscaped = true;
+        else if (token === innerQuote) innerQuote = '';
+        continue;
+      }
+      if (token === '/' && after === '/') {
+        innerLineComment = true;
+        bodyIndex += 1;
+        continue;
+      }
+      if (token === '/' && after === '*') {
+        innerBlockComment = true;
+        bodyIndex += 1;
+        continue;
+      }
+      if (token === '"' || token === "'" || token === '`') {
+        innerQuote = token;
+        continue;
+      }
+      if (token === '{') depth += 1;
+      else if (token === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          end = bodyIndex + 1;
+          break;
+        }
+      }
+    }
+    if (end < 0) fail('Could not parse top-level function: ' + match[1]);
+    names.push(match[1]);
+    index = end - 1;
+  }
+  return names;
+}
+
 function actionSlice(action) {
   const needles = [
     "a==='" + action + "'",
@@ -129,8 +241,10 @@ if (missingNavViews.length) {
   fail('Navigation view(s) do not render: ' + missingNavViews.join(', '));
 }
 
-const duplicateFunctionNames = unique(app.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g), match => match[1])
-  .filter(name => [...app.matchAll(new RegExp('function\\s+' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\(', 'g'))].length > 1);
+const topLevelNames = topLevelFunctionNames();
+const duplicateTopLevelNames = [...new Set(topLevelNames.filter((name, index) => topLevelNames.indexOf(name) !== index))].sort();
+if (duplicateTopLevelNames.length) {
+  fail('Duplicate top-level function definition(s): ' + duplicateTopLevelNames.join(', '));
+}
 
 console.log('Static UI check passed: ' + staticActions.length + ' button actions, ' + staticViews.length + ' static view links, and ' + renderViews.size + ' render views are wired.');
-if (duplicateFunctionNames.length) console.log('Static UI check warning: duplicate function definitions present: ' + duplicateFunctionNames.join(', '));
