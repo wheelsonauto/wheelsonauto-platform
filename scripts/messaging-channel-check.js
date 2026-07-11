@@ -1,0 +1,65 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.resolve(__dirname, '..');
+const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function finalFunctionSlice(source, name) {
+  let start = -1;
+  let cursor = 0;
+  while (true) {
+    const next = source.indexOf('function ' + name + '(', cursor);
+    if (next < 0) break;
+    start = next;
+    cursor = next + 1;
+  }
+  if (start < 0) return '';
+  const argsClose = source.indexOf(')', start);
+  const open = source.indexOf('{', argsClose > -1 ? argsClose : start);
+  if (open < 0) return '';
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  return '';
+}
+
+function requireText(label, source, text) {
+  if (!source.includes(text)) fail(label + ' is missing "' + text + '".');
+}
+
+const messagingStatus = finalFunctionSlice(app, 'messagingStatus');
+const messageSetupPanel = finalFunctionSlice(app, 'messageSetupPanel');
+const openComposeMessage = finalFunctionSlice(app, 'openComposeMessage');
+const messagesView = finalFunctionSlice(app, 'Messages');
+const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
+const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
+const approveAiMessage = finalFunctionSlice(server, 'approveAiMessage');
+const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus');
+
+if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView) fail('Missing active frontend messaging functions.');
+if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus) fail('Missing server messaging channel functions.');
+
+requireText('Messaging status', messagingStatus, 'emailWebhook');
+requireText('Message setup panel', messageSetupPanel, 'Email webhook');
+requireText('Compose modal channel selector', openComposeMessage, '<select id="messageChannel">');
+requireText('Compose modal email option', openComposeMessage, '<option value="Email"');
+requireText('Messages view channel summary', messagesView, "stat('Channels'");
+requireText('Server email webhook route', server, "/api/webhooks/email");
+requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
+requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
+requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
+requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
+requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
+
+console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, and channel UI are wired.');

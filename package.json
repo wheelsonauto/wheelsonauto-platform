@@ -1,11 +1,14 @@
 {
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check app.js && node --check card-setup.js && node --check scripts/data-consistency-check.js && node --check scripts/api-route-check.js && node --check scripts/role-access-check.js && node --check scripts/responsive-style-check.js && node scripts/static-ui-check.js && node scripts/api-route-check.js && node scripts/role-access-check.js && node scripts/responsive-style-check.js && node scripts/data-consistency-check.js",
+    "check": "node --check server.js && node --check app.js && node --check card-setup.js && node --check scripts/data-consistency-check.js && node --check scripts/api-route-check.js && node --check scripts/role-access-check.js && node --check scripts/responsive-style-check.js && node --check scripts/messaging-channel-check.js && node --check scripts/workflow-integrity-check.js && node scripts/static-ui-check.js && node scripts/api-route-check.js && node scripts/role-access-check.js && node scripts/responsive-style-check.js && node scripts/messaging-channel-check.js && node scripts/data-consistency-check.js && node scripts/workflow-integrity-check.js",
     "data-check": "node scripts/data-consistency-check.js",
     "api-check": "node scripts/api-route-check.js",
     "role-check": "node scripts/role-access-check.js",
     "style-check": "node scripts/responsive-style-check.js",
+    "channel-check": "node scripts/messaging-channel-check.js",
+    "workflow-check": "node scripts/workflow-integrity-check.js",
+    "repair-data": "node scripts/repair-data.js",
     "ui-check": "node scripts/static-ui-check.js",
     "smoke": "node scripts/smoke-test.js"
   },

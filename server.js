@@ -1,5 +1,6 @@
 const http = require('http');
 const fs = require('fs/promises');
+const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -122,9 +123,200 @@ function repairDuplicateRecordIds(data, collectionName) {
   });
   return data;
 }
+function loadVehicleImportSync() {
+  try {
+    const body = JSON.parse(fsSync.readFileSync(VEHICLE_IMPORT_FILE, 'utf8'));
+    return Array.isArray(body.rows) ? body.rows : [];
+  } catch {
+    return [];
+  }
+}
+function importRowId(row, prefix) {
+  return prefix + String(row && row.rowNumber || '').padStart(3, '0');
+}
+function findVehicleForImportRow(data, row) {
+  const vehicles = Array.isArray(data && data.vehicles) ? data.vehicles : [];
+  const byVin = normKey(row && row.vin);
+  if (byVin) {
+    const exact = vehicles.find(vehicle => normKey(vehicle && vehicle.vin) === byVin);
+    if (exact) return exact;
+  }
+  const byPlate = normKey(row && row.licensePlate);
+  if (byPlate) {
+    const exact = vehicles.find(vehicle => normKey(vehicle && (vehicle.plate || vehicle.stock)) === byPlate);
+    if (exact) return exact;
+  }
+  const bySourceRow = String(row && row.rowNumber || '');
+  return vehicles.find(vehicle => String(vehicle && vehicle.sourceRow || '') === bySourceRow) || null;
+}
+function importRowVehiclePatch(row, vehicle) {
+  const weekly = moneyNumber(row && (row.weeklyAmount || row.weeklyAmountRaw));
+  const plate = (vehicle && (vehicle.plate || vehicle.stock)) || row.licensePlate || row.tempTag || '';
+  return {
+    vehicleId: vehicle && vehicle.id || '',
+    vehicle: vehicle ? vehicleNameFromParts(vehicle) : vehicleNameFromImport(row),
+    vin: vehicle && vehicle.vin || row.vin || '',
+    licensePlate: plate,
+    plate,
+    tempTag: vehicle && vehicle.tempTag || row.tempTag || '',
+    tracker: vehicle && vehicle.tracker || row.tracker || '',
+    amount: weekly || (vehicle && vehicle.rate) || 0,
+    weeklyAmount: weekly || (vehicle && vehicle.rate) || 0
+  };
+}
+function activeSheetRecord(row) {
+  return !/removed|returned|ended|closed|history/i.test(String(row && (row.status || row.stage) || ''));
+}
+function rowClaimsVehicle(row, vehicle) {
+  if (!row || !vehicle) return false;
+  if (row.vehicleId && vehicle.id && row.vehicleId === vehicle.id) return true;
+  if (row.vin && vehicle.vin && normKey(row.vin) === normKey(vehicle.vin)) return true;
+  const rowPlate = row.licensePlate || row.plate || row.tag;
+  const vehiclePlate = vehicle.plate || vehicle.stock;
+  if (rowPlate && vehiclePlate && normKey(rowPlate) === normKey(vehiclePlate)) return true;
+  return !!(row.vehicle && normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)));
+}
+function clearWrongVehicleClaims(data, vehicle, customerName, reason) {
+  const collections = [
+    ['customers', 'name'],
+    ['contracts', 'customer'],
+    ['recurringPayments', 'customer']
+  ];
+  let cleared = 0;
+  collections.forEach(([collectionName, customerField]) => {
+    const rows = Array.isArray(data[collectionName]) ? data[collectionName] : [];
+    rows.forEach(row => {
+      const rowCustomer = row[customerField] || row.customer || row.name || '';
+      if (!activeSheetRecord(row) || normKey(rowCustomer) === normKey(customerName) || !rowClaimsVehicle(row, vehicle)) return;
+      row.previousVehicleId = row.vehicleId || row.previousVehicleId || '';
+      row.previousVehicle = row.vehicle || row.previousVehicle || '';
+      row.previousVin = row.vin || row.previousVin || '';
+      row.previousPlate = row.licensePlate || row.plate || row.previousPlate || '';
+      row.vehicleId = '';
+      row.vehicle = '';
+      row.vin = '';
+      row.licensePlate = '';
+      row.plate = '';
+      row.tempTag = '';
+      row.tracker = '';
+      row.vehicleLinkStatus = 'Needs vehicle match';
+      row.notes = [row.notes, reason].filter(Boolean).join('\n');
+      row.updatedAt = new Date().toISOString();
+      cleared += 1;
+    });
+  });
+  const cloverRows = (((data.integrations || {}).clover || {}).recurringPlanMembers) || [];
+  cloverRows.forEach(row => {
+    const rowCustomer = row.customer || row.name || '';
+    if (!activeSheetRecord(row) || normKey(rowCustomer) === normKey(customerName) || !rowClaimsVehicle(row, vehicle)) return;
+    row.previousVehicleId = row.vehicleId || row.previousVehicleId || '';
+    row.previousVehicle = row.vehicle || row.previousVehicle || '';
+    row.previousVin = row.vin || row.previousVin || '';
+    row.previousPlate = row.licensePlate || row.plate || row.previousPlate || '';
+    row.vehicleId = '';
+    row.vehicle = '';
+    row.vin = '';
+    row.licensePlate = '';
+    row.plate = '';
+    row.tempTag = '';
+    row.tracker = '';
+    row.vehicleLinkStatus = 'Needs vehicle match';
+    row.notes = [row.notes, reason].filter(Boolean).join('\n');
+    row.updatedAt = new Date().toISOString();
+    cleared += 1;
+  });
+  return cleared;
+}
+function repairVehicleSheetLinkConflicts(data) {
+  const rows = loadVehicleImportSync().filter(row => row && row.customer);
+  if (!rows.length || !data) return 0;
+  data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  let repaired = 0;
+  rows.forEach(row => {
+    const vehicle = findVehicleForImportRow(data, row);
+    if (!vehicle) return;
+    const rowNumber = String(row.rowNumber || '').padStart(3, '0');
+    const patch = importRowVehiclePatch(row, vehicle);
+    const status = importVehicleStatus(row);
+    const customerName = String(row.customer || '').trim();
+    if (!vehicle.manuallyEditedAt && customerName && normKey(vehicle.currentCustomer) !== normKey(customerName)) {
+      vehicle.currentCustomer = customerName;
+      vehicle.status = status;
+      vehicle.sourceRow = row.rowNumber;
+      repaired += 1;
+    }
+    if (!vehicle.manuallyEditedAt && customerName) {
+      repaired += clearWrongVehicleClaims(data, vehicle, customerName, 'Vehicle link cleared automatically because the vehicle sheet assigns this car to ' + customerName + '. Payment history was kept.');
+    }
+    const customer = data.customers.find(item => item.id === importRowId(row, 'cus-sheet-') || String(item.importedVehicleRow || '') === String(row.rowNumber));
+    if (customer && String(customer.source || '').includes('Vehicle sheet import') && !customer.manuallyEditedAt) {
+      const wantsPatch = customer.vehicleId !== patch.vehicleId || normKey(customer.vin) !== normKey(patch.vin) || normKey(customer.name || customer.customer) !== normKey(customerName);
+      if (wantsPatch) {
+        Object.assign(customer, {
+          name: customerName,
+          customer: customerName,
+          stage: status === 'Rented' ? 'Active contract' : 'Vehicle history',
+          status: status === 'Rented' ? 'Active' : 'History',
+          tone: status === 'Rented' ? 'good' : 'warn',
+          source: 'Vehicle sheet import',
+          importedVehicleRow: row.rowNumber,
+          dateStarted: row.dateStarted || customer.dateStarted || '',
+          ...patch,
+          weeklyAmount: patch.weeklyAmount || customer.weeklyAmount || 0,
+          amount: patch.amount || customer.amount || 0,
+          repairedAt: new Date().toISOString()
+        });
+        repaired += 1;
+      }
+    }
+    const exactContract = data.contracts.find(item => item.id === importRowId(row, 'WOA-SHEET-'));
+    if (exactContract && String(exactContract.source || '').includes('Vehicle sheet import') && activeSheetRecord(exactContract)) {
+      const wantsPatch = exactContract.vehicleId !== patch.vehicleId || normKey(exactContract.vin) !== normKey(patch.vin) || normKey(exactContract.customer) !== normKey(customerName);
+      if (wantsPatch) {
+        Object.assign(exactContract, {
+          customer: customerName,
+          vehicle: patch.vehicle,
+          vehicleId: patch.vehicleId,
+          vin: patch.vin,
+          licensePlate: patch.licensePlate,
+          plate: patch.plate,
+          tempTag: patch.tempTag,
+          tracker: patch.tracker,
+          weekly: patch.weeklyAmount || exactContract.weekly || 0,
+          status: status === 'Rented' ? 'Active' : 'History',
+          tone: status === 'Rented' ? 'good' : 'warn',
+          dateStarted: row.dateStarted || exactContract.dateStarted || '',
+          repairedAt: new Date().toISOString()
+        });
+        repaired += 1;
+      }
+      data.contracts.forEach(other => {
+        if (other === exactContract || !activeSheetRecord(other)) return;
+        if (!String(other.source || '').includes('Vehicle sheet import')) return;
+        if (normKey(other.customer) === normKey(customerName) && (other.vehicleId === patch.vehicleId || normKey(other.vin) === normKey(patch.vin))) {
+          other.status = 'Removed';
+          other.tone = 'bad';
+          other.duplicateOf = exactContract.id;
+          other.removedAt = other.removedAt || new Date().toISOString();
+          other.notes = [other.notes, 'Removed duplicate vehicle-sheet customer file after automatic link repair.'].filter(Boolean).join('\n');
+          repaired += 1;
+        }
+      });
+    }
+  });
+  if (repaired) {
+    data.systemRepairs = data.systemRepairs || {};
+    data.systemRepairs.vehicleSheetLinkRepairAt = new Date().toISOString();
+    data.systemRepairs.vehicleSheetLinkRepairCount = (data.systemRepairs.vehicleSheetLinkRepairCount || 0) + repaired;
+  }
+  return repaired;
+}
 function repairDataIds(data) {
   repairDuplicateVehicleIds(data);
   repairDuplicateRecordIds(data, 'contracts');
+  repairVehicleSheetLinkConflicts(data);
   return data;
 }
 function nextUniqueVehicleId(data, base, vehicle) {
@@ -314,6 +506,7 @@ function publicMessagingStatus(data = {}) {
     voiceMode: 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages',
+    emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     aiProvider: OPENAI_API_KEY && WOA_AI_MODEL ? 'openai' : 'rules',
     aiEnabled: settings.aiEnabled,
     aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
@@ -387,6 +580,31 @@ function parseIncomingMessage(provider, headers, payload) {
     externalId: event.id || body.MessageSid || body.SmsSid || body.messageSid || body.id || '',
     media: event.media || body.MediaUrl0 || '',
     rawType: body.EventType || body.event_type || body.type || 'message.received'
+  };
+}
+function parseEmailAddress(value) {
+  if (!value) return '';
+  if (Array.isArray(value)) return parseEmailAddress(value[0]);
+  if (typeof value === 'object') return value.email || value.address || value.mail || '';
+  const text = String(value || '').trim();
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0] : text;
+}
+function parseIncomingEmail(provider, headers, payload) {
+  const body = payload || {};
+  const event = body.data || body.event || body;
+  const from = parseEmailAddress(event.from || body.from || body.From || event.sender || event.reply_to || event.replyTo);
+  const to = parseEmailAddress(event.to || body.to || body.To || event.recipient || event.recipients);
+  const textBody = event.text || event.text_body || event.body || body.text || body.body || body.TextBody || '';
+  const htmlBody = event.html || event.html_body || body.html || body.HtmlBody || '';
+  return {
+    provider: provider || body.provider || WOA_EMAIL_PROVIDER || 'email_webhook',
+    from,
+    to,
+    subject: event.subject || body.subject || body.Subject || 'Incoming email',
+    body: String(textBody || htmlBody || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+    externalId: event.id || body.id || body.message_id || body.MessageID || body.sg_message_id || headers['x-message-id'] || '',
+    rawType: body.type || body.event || 'email.received'
   };
 }
 async function sendProviderSms(to, body, meta = {}) {
@@ -1576,7 +1794,7 @@ function systemReadiness(data) {
     route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
-    route('POST', '/api/messages/send', 'Send or save customer text messages'),
+    route('POST', '/api/messages/send', 'Send or save customer SMS/email messages'),
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
@@ -1584,7 +1802,8 @@ function systemReadiness(data) {
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
     route('POST', '/api/webhooks/clover', 'Clover webhook intake'),
-    route('POST', '/api/webhooks/messages', 'Inbound SMS webhook intake')
+    route('POST', '/api/webhooks/messages', 'Inbound SMS webhook intake'),
+    route('POST', '/api/webhooks/email', 'Inbound email webhook intake')
   ];
   const missing = envChecks.filter(item => item[1] === 'Missing').map(item => item[0]);
   const records = {
@@ -3283,6 +3502,69 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
+    if (url.pathname === '/api/webhooks/email' && req.method === 'POST') {
+      if (MESSAGING_WEBHOOK_SECRET && url.searchParams.get('secret') !== MESSAGING_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== MESSAGING_WEBHOOK_SECRET) {
+        return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      }
+      const rawBody = await readBody(req);
+      const contentType = String(req.headers['content-type'] || '').toLowerCase();
+      const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
+      const inbound = parseIncomingEmail(url.searchParams.get('provider'), req.headers, payload);
+      const data = await readData();
+      const contact = findMessageContact(data, { email: inbound.from });
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
+      let inboundRecord = null;
+      let aiResult = null;
+      if (!exists) {
+        inboundRecord = {
+          id: 'msg-email-in-' + Date.now(),
+          externalId: inbound.externalId,
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          customer: contact.name || inbound.from || 'Unknown email',
+          email: inbound.from,
+          to: inbound.to,
+          direction: 'Inbound',
+          channel: 'Email',
+          template: 'Customer email',
+          subject: inbound.subject || 'Incoming email',
+          status: 'Received',
+          tone: 'blue',
+          body: inbound.body,
+          provider: inbound.provider,
+          source: 'Email webhook',
+          contactSource: contact.source || ''
+        };
+        data.messages.unshift(inboundRecord);
+        const settings = messageSettings(data);
+        if (settings.aiEnabled && settings.aiDrafts && inbound.body) {
+          aiResult = await createAiMessageDraft(data, {
+            messageId: inboundRecord.id,
+            externalId: inbound.externalId || inboundRecord.id,
+            customer: inboundRecord.customer,
+            email: inbound.from,
+            channel: 'Email',
+            body: inbound.body
+          }, { sourceMessageId: inbound.externalId || inboundRecord.id });
+          const plan = aiResult.plan || {};
+          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.email) {
+            try {
+              const approved = await approveAiMessage(data, { draftId: aiResult.draft.id, channel: 'Email' });
+              aiResult.sent = approved.sent;
+            } catch (err) {
+              aiResult.draft.status = 'Auto-send failed';
+              aiResult.draft.tone = 'warn';
+              aiResult.draft.error = String(err && err.message || err);
+            }
+          }
+        }
+        data.integrations = data.integrations || {};
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundChannel: 'Email', lastInboundFrom: maskEmail(inbound.from), lastError: '' };
+        await writeData(data);
+      }
+      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
+    }
     if (url.pathname === '/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));
       const username = form.get('username') || '';
@@ -3769,10 +4051,19 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, 'Server error: ' + String(err && err.message || err), 'text/plain; charset=utf-8');
   }
 });
-server.listen(PORT, HOST, () => {
-  console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
-  setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
-  setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
-  setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
-  setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => console.error('Background WOA autopay failed:', err && err.message || err)), WOA_AUTOPAY_MS);
-});
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
+    setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
+    setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
+    setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
+    setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => console.error('Background WOA autopay failed:', err && err.message || err)), WOA_AUTOPAY_MS);
+  });
+}
+module.exports = {
+  repairDataIds,
+  repairVehicleSheetLinkConflicts,
+  publicMessagingStatus,
+  parseIncomingEmail,
+  parseIncomingMessage
+};
