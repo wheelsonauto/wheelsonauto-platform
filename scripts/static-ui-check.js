@@ -22,7 +22,8 @@ function functionSlice(name) {
     cursor = next + 1;
   }
   if (start < 0) return '';
-  const open = app.indexOf('{', start);
+  const argsClose = app.indexOf(')', start);
+  const open = app.indexOf('{', argsClose > -1 ? argsClose : start);
   if (open < 0) return '';
   let depth = 0;
   for (let index = open; index < app.length; index += 1) {
@@ -34,6 +35,27 @@ function functionSlice(name) {
     }
   }
   return '';
+}
+
+function actionSlice(action) {
+  const needles = [
+    "a==='" + action + "'",
+    'a==="' + action + '"',
+    "b.dataset.action==='" + action + "'",
+    'b.dataset.action==="' + action + '"',
+    "b.dataset.action!=='" + action + "'",
+    'b.dataset.action!=="' + action + '"'
+  ];
+  let index = -1;
+  for (const needle of needles) index = Math.max(index, app.lastIndexOf(needle));
+  if (index < 0) return '';
+  return app.slice(Math.max(0, index - 2200), Math.min(app.length, index + 5200));
+}
+
+function assertIncludes(label, source, required) {
+  if (!source) fail(label + ' block was not found.');
+  const missing = required.filter(text => !source.includes(text));
+  if (missing.length) fail(label + ' is missing: ' + missing.join(', '));
 }
 
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
@@ -54,6 +76,20 @@ const unhandled = staticActions.filter(action => !handledActions.has(action));
 if (unhandled.length) {
   fail('Unhandled data-action button(s): ' + unhandled.join(', '));
 }
+
+assertIncludes('Open modal active definition', functionSlice('openModal'), ['aria-hidden', "style.display='grid'"]);
+assertIncludes('Close modal active definition', functionSlice('closeModal'), ['aria-hidden', "textContent=''", "innerHTML=''"]);
+assertIncludes('Auto refresh modal guard', app, ["if(modal&&modal.style.display==='grid')return"]);
+assertIncludes('Post-save refresh wrapper', app, ['var __wheelsonBaseSave=save', 'reconcileFleetCustomerLinks()', 'if(ok)await refreshData(true)']);
+
+const criticalActionRequirements = [
+  ['Vehicle save flow', 'save-vehicle', ['clearVehicleFromCustomerRecords', 'syncVehicleCustomerAssignment', 'await save()', 'closeModal()', "view='Operations'"]],
+  ['Customer file save flow', 'save-contract-file', ['resolveCustomerFileVehicle', 'transferVehicleToCustomer', 'updateRecurringState', 'await save()', 'closeModal()', "tab=removed?'History':'Active'"]],
+  ['Message send flow', 'send-message-now', ['/api/messages/send', 'channel:val', 'await refreshData(true)', 'closeModal()', "view='Messages'"]],
+  ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
+  ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'await save()', 'closeModal()', 'Maintenance()']]
+];
+criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 
 const functionNames = new Set(unique(app.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g), match => match[1]));
 const renderSlice = functionSlice('render');
