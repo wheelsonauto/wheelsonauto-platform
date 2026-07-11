@@ -3330,3 +3330,51 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
     margin-top:4px;
   }
 }
+
+/* Wide-screen alignment and quick tab response. */
+@media(min-width:1500px){
+  .admin-shell .main{
+    display:block;
+    width:min(100%,1560px);
+    margin-inline:auto;
+    padding-inline:48px;
+  }
+  .admin-shell .topbar.compact-title,
+  .admin-shell .payment-action-bar,
+  .admin-shell .tabs,
+  .admin-shell .card,
+  .admin-shell .section,
+  .admin-shell .dashboard-grid,
+  .admin-shell .layout,
+  .admin-shell .grid,
+  .admin-shell .today-focus,
+  .admin-shell .payments-main-flow,
+  .admin-shell .manager-overview-grid,
+  .admin-shell .mechanic-workspace{
+    max-width:100%;
+  }
+  .admin-shell .section-head,
+  .admin-shell .customer-pay-top,
+  .admin-shell .item-row,
+  .admin-shell .message-thread-head{
+    align-items:flex-start;
+  }
+  .admin-shell .section-head>div,
+  .admin-shell .customer-pay-top>div,
+  .admin-shell .item-row>div,
+  .admin-shell .message-thread-head>div{
+    min-width:0;
+  }
+}
+@media(min-width:1900px){
+  .admin-shell .main{
+    width:min(100%,1680px);
+    padding-inline:56px;
+  }
+}
+body.fast-tab-switch .admin-shell .main,
+body.fast-tab-switch .admin-shell .card,
+body.fast-tab-switch .admin-shell .section{
+  animation:none!important;
+  transition:none!important;
+}
