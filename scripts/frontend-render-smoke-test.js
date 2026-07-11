@@ -62,6 +62,7 @@ function element(id, documentRef) {
 }
 
 function makeDocument() {
+  let eventOrder = 0;
   const documentRef = {
     hidden: false,
     elements: {},
@@ -75,9 +76,14 @@ function makeDocument() {
       node.tagName = String(tag || '').toUpperCase();
       return node;
     },
-    addEventListener(type, handler) {
+    addEventListener(type, handler, options) {
       this.eventHandlers[type] = this.eventHandlers[type] || [];
-      this.eventHandlers[type].push(handler);
+      this.eventHandlers[type].push({
+        handler,
+        capture: options === true || !!(options && options.capture),
+        order: eventOrder
+      });
+      eventOrder += 1;
     },
     querySelectorAll(selector) {
       if (selector !== 'button[data-view]' && selector !== 'button[data-action]') return [];
@@ -171,6 +177,57 @@ function modalHtml(context) {
   return title + '\n' + body;
 }
 
+function fakeButton(context, dataset) {
+  const documentRef = context.document;
+  const button = element('button', documentRef);
+  const searchInput = element('local-search-input', documentRef);
+  searchInput.classList.add('local-search-input');
+  searchInput.focused = false;
+  searchInput.focus = () => {
+    searchInput.focused = true;
+  };
+  searchInput.dispatchEvent = event => {
+    const handlers = (documentRef.eventHandlers.input || []).slice().sort((a, b) => a.order - b.order);
+    handlers.forEach(item => item.handler({ target: searchInput, type: event.type || 'input' }));
+    return true;
+  };
+  const searchShell = {
+    querySelector(selector) {
+      return selector === '.local-search-input' ? searchInput : null;
+    }
+  };
+  button.dataset = { ...dataset };
+  button.textContent = dataset.text || 'Smoke button';
+  button.localSearchInput = searchInput;
+  button.closest = selector => {
+    if (selector === 'button') return button;
+    if (selector === 'button[data-action]') return button.dataset.action ? button : null;
+    if (selector === '.local-search') return searchShell;
+    return null;
+  };
+  return button;
+}
+
+async function dispatchClick(context, dataset) {
+  const button = fakeButton(context, dataset);
+  let stopped = false;
+  const event = {
+    target: { closest: selector => button.closest(selector) },
+    preventDefault() {},
+    stopImmediatePropagation() {
+      stopped = true;
+    }
+  };
+  const handlers = (context.document.eventHandlers.click || [])
+    .slice()
+    .sort((a, b) => (Number(b.capture) - Number(a.capture)) || (a.order - b.order));
+  for (const item of handlers) {
+    await item.handler(event);
+    if (stopped) break;
+  }
+  return button;
+}
+
 function renderView(context, view, tab, dashboardTab) {
   context.view = view;
   if (tab !== undefined) context.tab = tab;
@@ -189,6 +246,89 @@ function assertHealthy(label, output, required = []) {
 
 function assertNo(label, output, banned = []) {
   banned.forEach(text => assert(!output.includes(text), label + ' should not include: ' + text));
+}
+
+function localSearchSmoke(context) {
+  const rows = [
+    { textContent: '2016 Ford Focus VIN 1FADP3K24GL123456', style: {}, closest: () => null },
+    { textContent: '2024 Mitsubishi Mirage Tracker ACH-081', style: {}, closest: () => null }
+  ];
+  let emptyNode = null;
+  const searchMarker = {
+    insertAdjacentElement(_position, node) {
+      emptyNode = node;
+    }
+  };
+  const section = {
+    getAttribute(name) {
+      return name === 'data-limit' ? '0' : '';
+    },
+    querySelector(selector) {
+      if (selector === '.local-search-empty') return emptyNode;
+      if (selector === '.local-search') return searchMarker;
+      return null;
+    },
+    querySelectorAll() {
+      return rows;
+    }
+  };
+  context.applyLocalSearch(section, 'focus');
+  assert(rows[0].style.display === '', 'Local search should keep matching rows visible.');
+  assert(rows[1].style.display === 'none', 'Local search should hide nonmatching rows.');
+  assert(emptyNode && emptyNode.style.display === 'none', 'Local search empty message should stay hidden when matches exist.');
+  context.applyLocalSearch(section, 'not-a-real-row');
+  assert(rows.every(row => row.style.display === 'none'), 'Local search should hide every row when there are no matches.');
+  assert(emptyNode.style.display === '', 'Local search empty message should show when no matches exist.');
+}
+
+async function ownerInteractionSmoke() {
+  const context = makeContext({ name: 'Owner Interaction', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+
+  await dispatchClick(context, { view: 'Payments' });
+  assert(context.view === 'Payments', 'Owner data-view click should switch to Payments.');
+  assert(context.tab === 'Active', 'Payments data-view click should default to Active tab.');
+  assertHealthy('Owner clicked Payments', html(context), ['Payments & Customers', 'Active recurring customers']);
+
+  await dispatchClick(context, { tab: 'Transactions' });
+  assert(context.view === 'Payments' && context.tab === 'Transactions', 'Payments data-tab click should switch to Transactions.');
+  assertHealthy('Owner clicked Transactions tab', html(context), ['Transactions']);
+
+  await dispatchClick(context, { view: 'Operations', tab: 'Service' });
+  assert(context.view === 'Operations' && context.tab === 'Service', 'Cross-view tab click should open Operations Service.');
+  assertHealthy('Owner clicked Operations Service', html(context), ['Operations', 'Service work']);
+
+  context.view = 'Dashboard';
+  context.dashboardTab = 'Dues';
+  context.render();
+  await dispatchClick(context, { dashboardTab: 'Transactions' });
+  assert(context.dashboardTab === 'Transactions', 'Dashboard sub-tab click should switch dashboardTab.');
+  assertHealthy('Owner clicked dashboard transactions sub-tab', html(context), ['Transactions']);
+
+  await dispatchClick(context, { action: 'compose-message', id: 'new' });
+  assertHealthy('Owner compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
+  context.closeModal();
+
+  const searchButton = await dispatchClick(context, { localSearchRun: '1' });
+  assert(searchButton.localSearchInput.focused, 'Local search button should focus the local search field.');
+  localSearchSmoke(context);
+}
+
+async function managerInteractionSmoke() {
+  const context = makeContext({ name: 'Manager Interaction', role: 'Manager', homeView: 'Manager Portal', access: 'Manager access' });
+  await dispatchClick(context, { view: 'Messages' });
+  assert(context.view === 'Messages', 'Manager should be able to open Messages.');
+  assertHealthy('Manager clicked Messages', html(context), ['Messages', 'Customer conversations']);
+  await dispatchClick(context, { action: 'compose-message', id: 'new' });
+  assertHealthy('Manager compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
+}
+
+async function mechanicInteractionSmoke() {
+  const context = makeContext({ name: 'Mechanic Interaction', role: 'Mechanic', homeView: 'Mechanic Portal', access: 'Mechanic access' });
+  await dispatchClick(context, { view: 'Messages' });
+  assert(context.view === 'Mechanic Portal', 'Mechanic direct Messages click should stay on mechanic portal.');
+  assertHealthy('Mechanic denied Messages click', html(context), ['Mechanic Portal']);
+  await dispatchClick(context, { action: 'compose-message', id: 'new' });
+  assert(!modalHtml(context).includes('New message'), 'Mechanic direct compose-message action should not open the message modal.');
 }
 
 function ownerSmoke() {
@@ -257,9 +397,18 @@ function publicSmoke() {
   assertHealthy('Public apply', html(context), ['Apply', 'WheelsonAuto', 'public']);
 }
 
-ownerSmoke();
-managerSmoke();
-mechanicSmoke();
-publicSmoke();
+async function main() {
+  ownerSmoke();
+  await ownerInteractionSmoke();
+  managerSmoke();
+  await managerInteractionSmoke();
+  mechanicSmoke();
+  await mechanicInteractionSmoke();
+  publicSmoke();
+  console.log('Frontend render smoke passed: owner, manager, mechanic, public, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
+}
 
-console.log('Frontend render smoke passed: owner, manager, mechanic, public, key tabs, role scrub, and core modals render without localhost.');
+main().catch(err => {
+  console.error(err && err.stack || err);
+  process.exit(1);
+});
