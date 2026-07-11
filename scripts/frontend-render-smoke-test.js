@@ -248,6 +248,22 @@ function assertNo(label, output, banned = []) {
   banned.forEach(text => assert(!output.includes(text), label + ' should not include: ' + text));
 }
 
+function countOf(output, text) {
+  return String(output || '').split(text).length - 1;
+}
+
+function assertCountAtLeast(label, output, text, minimum) {
+  const count = countOf(output, text);
+  assert(count >= minimum, label + ' should include at least ' + minimum + ' "' + text + '" marker(s); found ' + count + '.');
+}
+
+function assertCompactBoard(label, output, markers = []) {
+  assertHealthy(label, output, markers);
+  assertCountAtLeast(label, output, 'card section', 1);
+  assert(output.includes('local-search') || output.includes('dashboard-mobile-tabs') || output.includes('message-status-strip'), label + ' should include local search, dashboard tabs, or a compact status strip.');
+  assert(!/style="[^"]*(?:background:\s*(?:#fff|white)|filter:\s*blur)/i.test(output), label + ' should not render inline white backgrounds or blur filters.');
+}
+
 function localSearchSmoke(context) {
   const rows = [
     { textContent: '2016 Ford Focus VIN 1FADP3K24GL123456', style: {}, closest: () => null },
@@ -398,21 +414,25 @@ async function mechanicInteractionSmoke() {
 
 function ownerSmoke() {
   const context = makeContext({ name: 'Owner Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
-  assertHealthy('Owner dashboard', html(context), ['Dashboard', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
+  assertCompactBoard('Owner dashboard', html(context), ['Dashboard', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
 
   [
-    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payment actions']],
-    ['Payments today', 'Payments', 'Today', ['Daily closeout', 'Today action list']],
-    ['Payments history', 'Payments', 'History', ['Customer history']],
-    ['Payments transactions', 'Payments', 'Transactions', ['Transactions']],
-    ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet']],
-    ['Operations service', 'Operations', 'Service', ['Service work']],
-    ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues']],
-    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Auto-ready replies', 'Needs admin approval']],
-    ['Settings', 'Settings', undefined, ['Settings']],
-    ['Website', 'Website', undefined, ['Website']],
-    ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout']]
-  ].forEach(([label, view, tab, required]) => assertHealthy(label, renderView(context, view, tab), required));
+    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
+    ['Payments today', 'Payments', 'Today', ['Daily closeout', 'Today action list', 'payment-command', 'customer-pay-list']],
+    ['Payments history', 'Payments', 'History', ['Customer history', 'customer-pay-list']],
+    ['Payments transactions', 'Payments', 'Transactions', ['Transactions', 'transaction-card', 'customer-pay-list']],
+    ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
+    ['Operations service', 'Operations', 'Service', ['Service work', 'staff-card-board']],
+    ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
+    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
+    ['Settings', 'Settings', undefined, ['Settings'], false],
+    ['Website', 'Website', undefined, ['Website'], false],
+    ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout'], false]
+  ].forEach(([label, view, tab, required, compact = true]) => {
+    const output = renderView(context, view, tab);
+    if (compact) assertCompactBoard(label, output, required);
+    else assertHealthy(label, output, required);
+  });
 
   context.openComposeMessage('new');
   assertHealthy('Compose message modal', modalHtml(context), ['New message', 'Text message', 'Email', 'Send / save message']);
@@ -423,33 +443,34 @@ function ownerSmoke() {
 
 function managerSmoke() {
   const context = makeContext({ name: 'Manager Smoke', role: 'Manager', homeView: 'Manager Portal', access: 'Manager access' });
-  assertHealthy('Manager portal', html(context), ['Manager Portal', 'Overview', 'Today manager queue']);
+  assertCompactBoard('Manager portal', html(context), ['Manager Portal', 'Overview', 'Today manager queue']);
 
   [
-    ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work']],
-    ['Manager messages', 'Messages', 'Inbox', ['Messages', 'Customer conversations', 'New text/email']],
-    ['Manager reports', 'Reports', undefined, ['Reports', 'Executive snapshot']],
-    ['Manager applications', 'Applications', 'Active', ['Applications']]
-  ].forEach(([label, view, tab, required]) => {
+    ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
+    ['Manager messages', 'Messages', 'Inbox', ['Messages', 'Customer conversations', 'New text/email', 'message-thread-grid'], true],
+    ['Manager reports', 'Reports', undefined, ['Reports', 'Executive snapshot'], false],
+    ['Manager applications', 'Applications', 'Active', ['Applications', 'table-wrap'], false]
+  ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
-    assertHealthy(label, output, required);
+    if (compact) assertCompactBoard(label, output, required);
+    else assertHealthy(label, output, required);
     assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="save-clover"', 'data-view="Settings"']);
   });
 }
 
 function mechanicSmoke() {
   const context = makeContext({ name: 'Mechanic Smoke', role: 'Mechanic', homeView: 'Mechanic Portal', access: 'Mechanic access' });
-  assertHealthy('Mechanic portal', html(context), ['Mechanic Portal', 'Priority work']);
+  assertCompactBoard('Mechanic portal', html(context), ['Mechanic Portal', 'Priority work']);
   assertNo('Mechanic portal', html(context), ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"']);
 
   [
-    ['Mechanic maintenance', 'Maintenance', 'Open', ['Maintenance', 'Open service work']],
-    ['Mechanic fleet', 'Fleet', 'Available', ['Fleet', 'Available fleet']],
-    ['Mechanic claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls & issues']]
+    ['Mechanic maintenance', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board']],
+    ['Mechanic fleet', 'Fleet', 'Available', ['Fleet', 'Available fleet', 'staff-card-board']],
+    ['Mechanic claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls & issues', 'staff-card-board']]
   ].forEach(([label, view, tab, required]) => {
     const output = renderView(context, view, tab);
-    assertHealthy(label, output, required);
-    assertNo(label, output, ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"', 'data-action="send-pay-link"']);
+    assertCompactBoard(label, output, required);
+    assertNo(label, output, ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"', 'data-action="send-pay-link"', 'class="money"']);
   });
 
   const blocked = renderView(context, 'Messages', 'Inbox');
