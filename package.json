@@ -1,8 +1,9 @@
 {
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check app.js && node --check card-setup.js && node --check scripts/data-consistency-check.js && node scripts/static-ui-check.js && node scripts/data-consistency-check.js",
+    "check": "node --check server.js && node --check app.js && node --check card-setup.js && node --check scripts/data-consistency-check.js && node scripts/static-ui-check.js && node scripts/api-route-check.js && node scripts/data-consistency-check.js",
     "data-check": "node scripts/data-consistency-check.js",
+    "api-check": "node scripts/api-route-check.js",
     "ui-check": "node scripts/static-ui-check.js",
     "smoke": "node scripts/smoke-test.js"
   },

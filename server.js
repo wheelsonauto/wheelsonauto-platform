@@ -42,6 +42,9 @@ const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND !== '0';
 const WOA_AI_REPLY_DRAFTS = process.env.WOA_AI_REPLY_DRAFTS !== '0';
 const WOA_EMAIL_ENABLED = process.env.WOA_EMAIL_ENABLED !== '0';
 const WOA_EMAIL_PROVIDER = String(process.env.WOA_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || 'not_configured').toLowerCase();
+const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-public-qa">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
@@ -284,11 +287,19 @@ function messageSettings(data = {}) {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false
   };
 }
+function emailProviderConfigured(provider) {
+  const name = String(provider || WOA_EMAIL_PROVIDER || '').toLowerCase();
+  if (!WOA_EMAIL_FROM) return false;
+  if (name === 'resend') return !!RESEND_API_KEY;
+  if (name === 'sendgrid') return !!SENDGRID_API_KEY;
+  return false;
+}
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const provider = MESSAGING_PROVIDER || 'not_configured';
   const emailIntegration = (((data.integrations || {}).email) || {});
   const emailProvider = String(emailIntegration.provider || WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
+  const emailConfigured = !!(settings.emailEnabled && (emailProviderConfigured(emailProvider) || emailIntegration.connected));
   const configured = !!(
     settings.enabled &&
     MESSAGING_FROM_NUMBER &&
@@ -313,8 +324,9 @@ function publicMessagingStatus(data = {}) {
     aiDrafts: settings.aiDrafts,
     emailEnabled: settings.emailEnabled,
     emailProvider,
-    emailConfigured: !!(settings.emailEnabled && emailIntegration.connected),
-    emailMode: 'Future email channel for receipts, approvals, documents, follow-ups, and customer conversations.',
+    emailConfigured,
+    emailFrom: emailConfigured ? 'stored in Render' : '',
+    emailMode: emailConfigured ? 'Email can send customer replies, receipts, approvals, documents, and follow-ups.' : 'Email channel is built in and will save drafts until an email provider is connected.',
     aiGuardrails: 'AI can answer normal texts/emails and send safe links. Charges, card changes, autopay edits, removals, disputes, receipts after payment, and unclear money requests require admin approval.'
   };
 }
@@ -322,6 +334,12 @@ function maskPhone(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.length < 4) return value ? 'saved' : '';
   return '***-***-' + digits.slice(-4);
+}
+function maskEmail(value) {
+  const text = String(value || '').trim();
+  const parts = text.split('@');
+  if (parts.length !== 2 || !parts[0]) return text ? 'saved' : '';
+  return parts[0][0] + '***@' + parts[1];
 }
 function messageContactCandidates(data = {}) {
   const rows = [];
@@ -401,6 +419,41 @@ async function sendProviderSms(to, body, meta = {}) {
     return { sent: true, status: (jsonBody.data && jsonBody.data.record_type) || 'Queued', provider: 'telnyx', externalId: jsonBody.data && jsonBody.data.id || '', response: jsonBody };
   }
   return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+}
+async function sendProviderEmail(to, subject, body, meta = {}) {
+  const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
+  if (!body) throw new Error('Email needs a message body.');
+  if (!to) return { sent: false, status: 'Needs email', provider, channel: 'Email', message: 'Add the customer email before sending.' };
+  const settings = meta.messagingSettings || { emailEnabled: WOA_EMAIL_ENABLED };
+  if (!settings.emailEnabled) return { sent: false, status: 'Email off', provider, channel: 'Email', message: 'Email messaging is turned off in WheelsonAuto settings or Render.' };
+  if (!WOA_EMAIL_FROM) return { sent: false, status: 'Email draft', provider, channel: 'Email', message: 'Add WOA_EMAIL_FROM in Render before live email sending.' };
+  const safeSubject = String(subject || 'WheelsonAuto message').trim().slice(0, 180) || 'WheelsonAuto message';
+  if (provider === 'resend' && RESEND_API_KEY) {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: WOA_EMAIL_FROM, to: [String(to).trim()], subject: safeSubject, text: body })
+    });
+    const jsonBody = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(jsonBody.message || jsonBody.error || 'Resend email failed.');
+    return { sent: true, status: 'Sent', provider: 'resend', channel: 'Email', externalId: jsonBody.id || '', response: jsonBody };
+  }
+  if (provider === 'sendgrid' && SENDGRID_API_KEY) {
+    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + SENDGRID_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: String(to).trim() }] }],
+        from: { email: WOA_EMAIL_FROM },
+        subject: safeSubject,
+        content: [{ type: 'text/plain', value: body }]
+      })
+    });
+    const text = await response.text().catch(() => '');
+    if (!response.ok) throw new Error(text || 'SendGrid email failed.');
+    return { sent: true, status: 'Sent', provider: 'sendgrid', channel: 'Email', externalId: response.headers.get('x-message-id') || '', response: text };
+  }
+  return { sent: false, status: 'Email draft', provider, channel: 'Email', message: 'Email provider is not connected yet. Email saved in WheelsonAuto.' };
 }
 function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn') {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -780,8 +833,10 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
     createdAt: stamp.toISOString(),
     customer: plan.customer || context.customerName || 'Customer',
     phone: plan.phone || context.phone || payload.phone || '',
+    email: context.email || payload.email || '',
     direction: plan.needsHuman ? 'AI action' : 'AI draft',
     channel: 'Star AI',
+    deliveryChannel: payload.channel || payload.deliveryChannel || (context.phone ? 'SMS' : (context.email ? 'Email' : 'SMS')),
     template: plan.intent || 'AI reply',
     subject: plan.summary || 'AI reply manager',
     status: plan.needsHuman ? 'Human needed' : (plan.approvalRequired ? 'Needs approval' : (plan.canAutoSend ? 'Auto-ready' : 'Draft ready')),
@@ -804,7 +859,12 @@ async function approveAiMessage(data, payload = {}) {
   const plan = draft.aiPlan || {};
   if (plan.needsHuman) throw new Error('This AI item needs a human reply first.');
   if (plan.approvalRequired && payload.approveMoneyAction !== true) throw new Error('This AI item prepares a money or account change. Open the customer/payment action and approve it there.');
-  const result = await sendProviderSms(draft.phone, draft.body, { customer: draft.customer, ai: true, messagingSettings: messageSettings(data) });
+  const deliveryChannel = String(payload.channel || draft.deliveryChannel || (draft.email && !draft.phone ? 'Email' : 'SMS')).toLowerCase();
+  const settings = messageSettings(data);
+  const result = deliveryChannel === 'email'
+    ? await sendProviderEmail(draft.email, draft.subject || 'WheelsonAuto message', draft.body, { customer: draft.customer, ai: true, messagingSettings: settings })
+    : await sendProviderSms(draft.phone, draft.body, { customer: draft.customer, ai: true, messagingSettings: settings });
+  const channel = result.channel || (deliveryChannel === 'email' ? 'Email' : 'SMS');
   const sent = {
     id: 'msg-ai-sent-' + Date.now(),
     externalId: result.externalId || '',
@@ -812,15 +872,16 @@ async function approveAiMessage(data, payload = {}) {
     createdAt: new Date().toISOString(),
     customer: draft.customer,
     phone: draft.phone,
+    email: draft.email || '',
     direction: 'Outbound',
-    channel: 'SMS',
+    channel,
     template: 'Star approved reply',
     subject: draft.subject || 'AI reply',
     status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
     tone: result.sent ? 'good' : 'warn',
     body: draft.body,
-    provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
-    source: result.sent ? 'Star AI + SMS provider' : 'Star AI draft',
+    provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+    source: result.sent ? ('Star AI + ' + channel + ' provider') : 'Star AI draft',
     aiApprovedAt: new Date().toISOString(),
     aiDraftId: draft.id
   };
@@ -3273,34 +3334,41 @@ const server = http.createServer(async (req, res) => {
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.integrations = data.integrations || {};
       const contact = findMessageContact(data, payload);
-      const to = payload.phone || contact.phone || '';
+      const channel = String(payload.channel || payload.deliveryChannel || 'SMS').toLowerCase() === 'email' ? 'Email' : 'SMS';
+      const phone = payload.phone || contact.phone || '';
+      const email = payload.email || contact.email || '';
+      const to = channel === 'Email' ? email : phone;
       const body = String(payload.body || payload.message || '').trim();
       const customer = payload.customer || contact.name || 'Customer';
       if (!body) return json(res, 400, { ok: false, error: 'Message body is required.' });
       let result;
       try {
-        result = await sendProviderSms(to, body, { customer, messagingSettings: messageSettings(data) });
+        const settings = messageSettings(data);
+        result = channel === 'Email'
+          ? await sendProviderEmail(to, payload.subject || payload.template || 'WheelsonAuto message', body, { customer, messagingSettings: settings })
+          : await sendProviderSms(to, body, { customer, messagingSettings: settings });
         const record = {
           id: 'msg-out-' + Date.now(),
           externalId: result.externalId || '',
           date: new Date().toLocaleString('en-US'),
           createdAt: new Date().toISOString(),
           customer,
-          phone: to,
+          phone,
+          email,
           to,
           direction: 'Outbound',
-          channel: 'SMS',
+          channel,
           template: payload.template || payload.subject || 'Manual message',
           subject: payload.subject || payload.template || 'Manual message',
           status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
           tone: result.sent ? 'good' : 'warn',
           body,
-          provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
-          source: result.sent ? 'SMS provider' : 'WheelsonAuto draft',
-          ownerMirror: !!MESSAGING_OWNER_NOTIFY_NUMBER
+          provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+          source: result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
+          ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER
         };
         data.messages.unshift(record);
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: maskPhone(to), lastError: '' };
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: '' };
         await writeData(data);
         return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, warning: result.message || '' });
       } catch (err) {
@@ -3309,16 +3377,17 @@ const server = http.createServer(async (req, res) => {
           date: new Date().toLocaleString('en-US'),
           createdAt: new Date().toISOString(),
           customer,
-          phone: to,
+          phone,
+          email,
           direction: 'Outbound',
-          channel: 'SMS',
+          channel,
           template: payload.template || payload.subject || 'Manual message',
           subject: payload.subject || payload.template || 'Manual message',
           status: 'Failed',
           tone: 'bad',
           body,
-          provider: MESSAGING_PROVIDER || 'not_configured',
-          source: 'SMS provider',
+          provider: channel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
+          source: channel + ' provider',
           error: String(err && err.message || err)
         };
         data.messages.unshift(record);
@@ -3337,6 +3406,8 @@ const server = http.createServer(async (req, res) => {
         ...payload,
         customer: payload.customer || (sourceMessage && sourceMessage.customer) || '',
         phone: payload.phone || (sourceMessage && (sourceMessage.phone || sourceMessage.from || sourceMessage.to)) || '',
+        email: payload.email || (sourceMessage && sourceMessage.email) || '',
+        channel: payload.channel || (sourceMessage && sourceMessage.channel === 'Email' ? 'Email' : ''),
         body: payload.body || payload.message || (sourceMessage && sourceMessage.body) || ''
       };
       const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true });
