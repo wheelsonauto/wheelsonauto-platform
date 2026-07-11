@@ -281,6 +281,63 @@ function localSearchSmoke(context) {
   assert(emptyNode.style.display === '', 'Local search empty message should show when no matches exist.');
 }
 
+async function actionModalSmoke(context) {
+  const vehicle = context.db.vehicles.find(row => row.id);
+  const maintenance = context.db.maintenance.find(row => row.id);
+  const claim = context.db.claims.find(row => row.id);
+  const contract = context.db.contracts.find(row => row.id);
+  const recurring = context.recurringRoster().find(row => row.id && String(row.status || '').toLowerCase() === 'active')
+    || context.recurringRoster().find(row => row.id);
+  const setupRecurring = context.recurringRoster().find(row => context.isCardSetupRow(row));
+
+  const checks = [
+    ['reset-password', '', ['Reset password', 'New password']],
+    ['new-autopay', '', ['Add recurring customer', 'Search ready fleet vehicle', 'First run date', 'Charge time']],
+    ['new-vehicle', '', ['Add vehicle', 'VIN', 'Old temp tag']],
+    ['new-maintenance', '', ['Add maintenance job', 'Vehicle', 'Due date']],
+    ['new-claim', '', ['Add claim or issue', 'Customer', 'Next follow-up']],
+    ['new-staff', '', ['Add staff account', 'Username', 'Password']],
+    ['new-message-template', '', ['Add message template', 'Message body']]
+  ];
+
+  if (vehicle) checks.push(['open-vehicle', vehicle.id, ['Edit vehicle:', 'VIN', 'Tracker', 'Return to fleet']]);
+  if (maintenance) {
+    checks.push(['open-maintenance', maintenance.id, ['Edit maintenance:', 'Due date', 'Save job']]);
+    checks.push(['complete-maintenance', maintenance.id, ['Complete maintenance:', 'Completed date', 'Mark done']]);
+  }
+  if (claim) {
+    checks.push(['open-claim', claim.id, ['Issue:', 'Provider / agency', 'Save issue']]);
+    checks.push(['mark-claim-paid', claim.id, ['Mark claim paid:', 'Amount paid', 'Save paid']]);
+  }
+  if (contract) {
+    checks.push(['open-contract', contract.id, ['Customer file:', 'Search / switch vehicle', 'Save file']]);
+  }
+  if (recurring) {
+    checks.push(['open-autopay', recurring.id, ['Recurring customer:', 'Edit autopay', 'Card on file']]);
+    checks.push(['change-autopay-date', recurring.id, ['Edit autopay:', 'Frequency', 'Charge day', 'Save autopay']]);
+    checks.push(['change-card-on-file', recurring.id, ['Card on file:', 'Next charge date', 'Create card setup link']]);
+    checks.push(['record-charge', recurring.id, ['charge:', 'Customer', 'Amount']]);
+    checks.push(['record-manual-charge', recurring.id, ['Manual payment record:', 'Result', 'Payment not found']]);
+    checks.push(['send-pay-link', recurring.id, ['Send payment link:', 'Amount for this link', 'Create link']]);
+    checks.push(['remove-autopay', recurring.id, ['Remove autopay:', 'Remove this recurring autopay?', 'Remove autopay']]);
+  }
+  if (setupRecurring) {
+    checks.push(['delete-card-setup', setupRecurring.id, ['Delete setup:', 'Delete this card setup row?', 'Delete setup']]);
+  }
+
+  for (const [actionName, id, required] of checks) {
+    await context.action(actionName, id || '', fakeButton(context, { action: actionName, id: id || '' }));
+    assertHealthy('Owner action modal ' + actionName, modalHtml(context), required);
+    context.closeModal();
+  }
+
+  if (contract) {
+    await dispatchClick(context, { action: 'end-contract-file', id: contract.id });
+    assertHealthy('Owner action click modal end-contract-file', modalHtml(context), ['End customer:', 'End date', 'End customer']);
+    context.closeModal();
+  }
+}
+
 async function ownerInteractionSmoke() {
   const context = makeContext({ name: 'Owner Interaction', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
 
@@ -311,6 +368,7 @@ async function ownerInteractionSmoke() {
   const searchButton = await dispatchClick(context, { localSearchRun: '1' });
   assert(searchButton.localSearchInput.focused, 'Local search button should focus the local search field.');
   localSearchSmoke(context);
+  await actionModalSmoke(context);
 }
 
 async function managerInteractionSmoke() {
@@ -320,6 +378,10 @@ async function managerInteractionSmoke() {
   assertHealthy('Manager clicked Messages', html(context), ['Messages', 'Customer conversations']);
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
   assertHealthy('Manager compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
+  context.closeModal();
+  const recurring = context.recurringRoster().find(row => row.id);
+  await dispatchClick(context, { action: 'record-charge', id: recurring && recurring.id || '' });
+  assert(!modalHtml(context).includes('Manual Clover charge') && !modalHtml(context).includes('Saved card needed'), 'Manager direct record-charge action should be blocked.');
 }
 
 async function mechanicInteractionSmoke() {
@@ -329,6 +391,9 @@ async function mechanicInteractionSmoke() {
   assertHealthy('Mechanic denied Messages click', html(context), ['Mechanic Portal']);
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
   assert(!modalHtml(context).includes('New message'), 'Mechanic direct compose-message action should not open the message modal.');
+  const recurring = context.recurringRoster().find(row => row.id);
+  await dispatchClick(context, { action: 'record-charge', id: recurring && recurring.id || '' });
+  assert(!modalHtml(context).includes('Manual Clover charge') && !modalHtml(context).includes('Saved card needed'), 'Mechanic direct record-charge action should be blocked.');
 }
 
 function ownerSmoke() {
