@@ -13,7 +13,14 @@ function unique(matches, map) {
 }
 
 function functionSlice(name) {
-  const start = app.indexOf('function ' + name + '(');
+  let start = -1;
+  let cursor = 0;
+  while (true) {
+    const next = app.indexOf('function ' + name + '(', cursor);
+    if (next < 0) break;
+    start = next;
+    cursor = next + 1;
+  }
   if (start < 0) return '';
   const open = app.indexOf('{', start);
   if (open < 0) return '';

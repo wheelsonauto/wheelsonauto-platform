@@ -2966,9 +2966,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   border-color:rgba(240,184,58,.48)!important;
 }
 .modal-head .btn{
-  background:#fff!important;
-  color:#17202a!important;
-  border-color:#cfd6dc!important;
+  background:rgba(240,184,58,.16)!important;
+  color:#fff3c9!important;
+  border-color:rgba(240,184,58,.34)!important;
 }
 
 /* iPhone zoom guard: mobile Safari zooms into focused fields below 16px. */
@@ -3142,7 +3142,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .view-manager-portal .mini-row:hover{
   background:rgba(240,184,58,.10)!important;
   border-color:rgba(240,184,58,.34)!important;
-  transform:translateY(-1px);
+  transform:none!important;
   filter:none!important;
   backdrop-filter:none!important;
 }
