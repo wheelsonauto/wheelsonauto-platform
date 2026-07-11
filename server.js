@@ -758,6 +758,33 @@ function redactStaffSecrets(data) {
   }
   return safe;
 }
+function stateForUserRead(data, user) {
+  const safe = redactStaffSecrets(data);
+  if (isOwnerUser(user)) return safe;
+  const role = String(user && user.role || '').toLowerCase();
+  delete safe.security;
+  delete safe.apiProviders;
+  delete safe.staffAccounts;
+  if (safe.integrations) {
+    delete safe.integrations.clover;
+    delete safe.integrations.apiProviders;
+  }
+  if (role === 'mechanic') {
+    const mechanic = {};
+    ['business', 'vehicles', 'maintenance', 'claims', 'customers', 'contracts', 'tasks', 'documents', 'organizations'].forEach(key => {
+      if (Object.prototype.hasOwnProperty.call(safe, key)) mechanic[key] = safe[key];
+    });
+    mechanic.integrations = {
+      messaging: {
+        provider: 'not_configured',
+        configured: false,
+        voiceMode: 'Messages are available to admin and manager accounts only.'
+      }
+    };
+    return mechanic;
+  }
+  return safe;
+}
 async function readBody(req) { let body = ''; for await (const chunk of req) body += chunk; return body; }
 function escapeHtml(value) { return String(value || '').replace(/[&<>\"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;' }[c])); }
 function normalizeLogin(value) {
@@ -833,7 +860,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
     documents: [],
     websiteLeads: [],
     integrations: { clover: {}, shopify: { store: 'wheelsonauto.com', embedPath: '/apply' } }
-  } : redactStaffSecrets(data);
+  } : stateForUserRead(data, user || { role: 'Owner' });
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
   const currentUser = publicMode ? null : (user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
@@ -2622,7 +2649,7 @@ const server = http.createServer(async (req, res) => {
     const user = sessionUser(req);
     if (!user) return send(res, 200, loginPage());
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
-    if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, await readData());
+    if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = JSON.parse(await readBody(req) || '{}');
       const current = await readData();

@@ -171,6 +171,22 @@ async function main() {
     });
     assert(mechanicMessage.status === 403, 'Mechanic message API should be blocked, got ' + mechanicMessage.status + '.');
 
+    const managerState = await request(base, 'GET', '/api/state', { cookie: managerCookie });
+    assert(managerState.status === 200 && Array.isArray(managerState.json.messages), 'Manager should receive message state.');
+    assert(managerState.json.messages.some(message => message.customer === 'Smoke Customer'), 'Manager state should include saved message history.');
+
+    const mechanicState = await request(base, 'GET', '/api/state', { cookie: mechanicCookie });
+    assert(mechanicState.status === 200 && mechanicState.json, 'Mechanic should receive role-filtered state.');
+    assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'messages'), 'Mechanic state should not include messages.');
+    assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'payments'), 'Mechanic state should not include payments.');
+    assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'recurringPayments'), 'Mechanic state should not include recurring payments.');
+
+    const managerHome = await request(base, 'GET', '/', { cookie: managerCookie });
+    assert(managerHome.status === 200 && managerHome.text.includes('Smoke test manager message.'), 'Manager initial page state should include messages.');
+    const mechanicHome = await request(base, 'GET', '/', { cookie: mechanicCookie });
+    assert(mechanicHome.status === 200, 'Mechanic initial page should load.');
+    assert(!mechanicHome.text.includes('Smoke test manager message.'), 'Mechanic initial page state should not include message history.');
+
     const beforeState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
     const beforeCount = (beforeState.json.messages || []).length;
     const injectedMessageId = 'mechanic-injected-message';
@@ -244,10 +260,54 @@ async function main() {
     const missingSetup = await request(base, 'GET', '/setup-card/missing-smoke-setup');
     assert(missingSetup.status === 404 && missingSetup.text.includes('Card setup link not found'), 'Missing card setup link should show a 404 page.');
 
+    const deleteSetup = await request(base, 'POST', '/api/card-setup-requests/delete', {
+      cookie: ownerCookie,
+      json: { setupRequestId: cardSetup.json.setupLink.id }
+    });
+    assert(deleteSetup.status === 200 && deleteSetup.json.ok, 'Owner could not delete a pending card setup request.');
+    const deletedSetupPage = await request(base, 'GET', '/setup-card/' + cardSetup.json.setupLink.id);
+    assert(deletedSetupPage.status === 404 && deletedSetupPage.text.includes('Card setup link not found'), 'Deleted card setup link should no longer render.');
+
+    const updateAutopay = await request(base, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: 'rec-001',
+        nextRun: '2026-07-20',
+        frequency: 'Weekly',
+        amount: 231,
+        status: 'Active',
+        paymentDay: 'Monday',
+        chargeTime: '19:15',
+        retryRule: 'Retry once then contact'
+      }
+    });
+    assert(updateAutopay.status === 200 && updateAutopay.json.ok, 'Owner could not update autopay schedule.');
+    const updatedAutopayState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
+    const updatedAutopay = (updatedAutopayState.json.recurringPayments || []).find(row => row.id === 'rec-001');
+    assert(updatedAutopay && updatedAutopay.nextRun === '2026-07-20', 'Autopay next run did not persist.');
+    assert(updatedAutopay.amount === 231 && updatedAutopay.chargeTime === '19:15', 'Autopay amount/time did not persist.');
+
+    const notFoundCharge = await request(base, 'POST', '/api/integrations/clover/manual-charge', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: 'rec-003', amount: 229, note: 'Smoke payment not found check' }
+    });
+    assert(notFoundCharge.status === 409 && notFoundCharge.json.payment, 'Saved-card charge without source should save payment-not-found result.');
+    assert(notFoundCharge.json.payment.customer === 'Tania Williams', 'Payment-not-found result should keep the customer name.');
+    assert(notFoundCharge.json.payment.status.includes('Payment not found'), 'Payment-not-found result should use a clear status.');
+
+    const removeAutopay = await request(base, 'POST', '/api/recurring-payments/remove', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: 'rec-003', note: 'Smoke remove autopay check' }
+    });
+    assert(removeAutopay.status === 200 && removeAutopay.json.ok, 'Owner could not remove autopay.');
+    const removedAutopayState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
+    const removedAutopay = (removedAutopayState.json.recurringPayments || []).find(row => row.id === 'rec-003');
+    assert(removedAutopay && removedAutopay.status === 'Removed', 'Removed autopay should stay in history with Removed status.');
+
     const messageStatus = await request(base, 'GET', '/api/messages/status', { cookie: managerCookie });
     assert(messageStatus.status === 200 && messageStatus.json.ok, 'Manager should read messaging status.');
 
-    console.log('Smoke tests passed: login, role accounts, public application, payment/card setup links, messaging permissions, state write guard, and payment API guard.');
+    console.log('Smoke tests passed: login, role accounts, public application, payment/card setup links, role-filtered state, messaging permissions, autopay updates/removal, payment-not-found tracking, state write guard, and payment API guard.');
   } catch (err) {
     console.error(output);
     throw err;
