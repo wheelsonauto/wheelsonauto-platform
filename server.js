@@ -4061,6 +4061,7 @@ if (require.main === module) {
   });
 }
 module.exports = {
+  server,
   repairDataIds,
   repairVehicleSheetLinkConflicts,
   publicMessagingStatus,
