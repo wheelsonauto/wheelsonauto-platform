@@ -35,6 +35,8 @@ requireText('Mobile sticky modal actions', '.modal-body>.actions:last-child');
 requireText('Mobile quickbar fixed position', 'position:fixed');
 requireText('Mobile quickbar safe-area padding', 'safe-area-inset-bottom');
 requireText('Mobile quickbar labels', '.quickbar button span');
+requireText('Mobile tabs wrap guard', 'Mobile tab fit guard: section tabs wrap instead of clipping off-screen.');
+requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
 requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', '#111820', 'border-color:rgba(240,184,58,.42)', '!important']);
 requireBlock('Modal inner cards', '.modal .card,', ['background:rgba(255,255,255,.055)', 'filter:none']);

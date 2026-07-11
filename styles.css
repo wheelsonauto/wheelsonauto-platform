@@ -3471,3 +3471,26 @@ body.fast-tab-switch .admin-shell .section{
     flex:1 1 100%;
   }
 }
+
+/* Mobile tab fit guard: section tabs wrap instead of clipping off-screen. */
+@media(max-width:760px){
+  .admin-shell .tabs{
+    display:grid!important;
+    grid-template-columns:repeat(auto-fit,minmax(72px,1fr));
+    gap:5px;
+    overflow:visible!important;
+    max-width:100%;
+    width:100%;
+    padding-bottom:0;
+  }
+  .admin-shell .tabs button{
+    flex:initial!important;
+    min-width:0;
+    width:100%;
+    justify-content:center;
+    text-align:center;
+    white-space:normal;
+    line-height:1.12;
+    padding:8px 7px;
+  }
+}
