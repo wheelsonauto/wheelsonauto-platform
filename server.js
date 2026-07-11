@@ -27,8 +27,15 @@ const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY ||
 const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || process.env.CLOVER_API_ACCESS_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
+const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
+const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
+const MESSAGING_OWNER_NOTIFY_NUMBER = process.env.WOA_MESSAGING_OWNER_NOTIFY_NUMBER || process.env.MESSAGING_OWNER_NOTIFY_NUMBER || '';
+const MESSAGING_WEBHOOK_SECRET = process.env.WOA_MESSAGING_WEBHOOK_SECRET || process.env.MESSAGING_WEBHOOK_SECRET || '';
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
+const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260709-no-blur">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-messages">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -150,6 +157,133 @@ function compactKey(value) {
 function phoneKey(value) {
   const digits = String(value || '').replace(/\D/g, '');
   return digits.length >= 7 ? digits.slice(-10) : '';
+}
+function publicMessagingStatus() {
+  const provider = MESSAGING_PROVIDER || 'not_configured';
+  const configured = !!(
+    MESSAGING_FROM_NUMBER &&
+    ((provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ||
+      (provider === 'telnyx' && TELNYX_API_KEY))
+  );
+  return {
+    provider,
+    configured,
+    fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
+    voiceMode: 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
+    ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
+    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages'
+  };
+}
+function maskPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length < 4) return value ? 'saved' : '';
+  return '***-***-' + digits.slice(-4);
+}
+function messageContactCandidates(data = {}) {
+  const rows = [];
+  (data.customers || []).forEach(row => rows.push({ name: row.name || row.customer || '', phone: row.phone || '', email: row.email || '', source: 'customer' }));
+  (data.contracts || []).forEach(row => rows.push({ name: row.customer || row.name || '', phone: row.phone || '', email: row.email || '', source: 'customer file' }));
+  (data.recurringPayments || []).forEach(row => rows.push({ name: row.customer || row.name || '', phone: row.phone || '', email: row.email || '', source: 'autopay' }));
+  ((((data.integrations || {}).clover || {}).recurringPlanMembers) || []).forEach(row => rows.push({ name: row.customer || row.name || '', phone: row.phone || '', email: row.email || '', source: 'clover recurring' }));
+  return rows.filter(row => row.name || row.phone || row.email);
+}
+function findMessageContact(data, payload = {}) {
+  const phone = phoneKey(payload.phone || payload.from || payload.to || '');
+  const email = emailKey(payload.email || '');
+  const name = normKey(payload.customer || payload.name || '');
+  const contacts = messageContactCandidates(data);
+  if (phone) {
+    const match = contacts.find(row => phoneKey(row.phone) === phone);
+    if (match) return match;
+  }
+  if (email) {
+    const match = contacts.find(row => emailKey(row.email) === email);
+    if (match) return match;
+  }
+  if (name) {
+    const match = contacts.find(row => softNameMatch(row.name, name));
+    if (match) return match;
+  }
+  return { name: payload.customer || payload.name || '', phone: payload.phone || payload.from || '', email: payload.email || '', source: '' };
+}
+function cleanPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length === 10) return '+1' + digits;
+  if (digits.length === 11 && digits[0] === '1') return '+' + digits;
+  return String(value || '').trim();
+}
+function parseIncomingMessage(provider, headers, payload) {
+  const body = payload || {};
+  const event = body.data && body.data.payload ? body.data.payload : body;
+  const fromObj = event.from || body.From || body.from || {};
+  const toObj = event.to || body.To || body.to || {};
+  return {
+    provider: provider || body.provider || MESSAGING_PROVIDER || 'webhook',
+    from: typeof fromObj === 'object' ? (fromObj.phone_number || fromObj.number || '') : fromObj,
+    to: Array.isArray(toObj) ? (toObj[0] && (toObj[0].phone_number || toObj[0].number) || '') : (typeof toObj === 'object' ? (toObj.phone_number || toObj.number || '') : toObj),
+    body: event.text || event.body || body.Body || body.body || body.message || '',
+    externalId: event.id || body.MessageSid || body.SmsSid || body.messageSid || body.id || '',
+    media: event.media || body.MediaUrl0 || '',
+    rawType: body.EventType || body.event_type || body.type || 'message.received'
+  };
+}
+async function sendProviderSms(to, body, meta = {}) {
+  const provider = MESSAGING_PROVIDER;
+  if (!body) throw new Error('Message needs a message body.');
+  if (!to) return { sent: false, status: 'Needs phone', provider: provider || 'not_configured', message: 'Add the customer phone number before sending.' };
+  if (!MESSAGING_FROM_NUMBER) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Add the hosted SMS number in Render first.' };
+  if (provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+    const form = new URLSearchParams({ From: MESSAGING_FROM_NUMBER, To: cleanPhone(to), Body: body });
+    const auth = Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64');
+    const response = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + encodeURIComponent(TWILIO_ACCOUNT_SID) + '/Messages.json', {
+      method: 'POST',
+      headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form
+    });
+    const jsonBody = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(jsonBody.message || 'Twilio message failed.');
+    return { sent: true, status: jsonBody.status || 'Sent', provider: 'twilio', externalId: jsonBody.sid || '', response: jsonBody };
+  }
+  if (provider === 'telnyx' && TELNYX_API_KEY) {
+    const response = await fetch('https://api.telnyx.com/v2/messages', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TELNYX_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: MESSAGING_FROM_NUMBER, to: cleanPhone(to), text: body, messaging_profile_id: process.env.TELNYX_MESSAGING_PROFILE_ID || undefined })
+    });
+    const jsonBody = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error((jsonBody.errors && jsonBody.errors[0] && jsonBody.errors[0].detail) || jsonBody.message || 'Telnyx message failed.');
+    return { sent: true, status: (jsonBody.data && jsonBody.data.record_type) || 'Queued', provider: 'telnyx', externalId: jsonBody.data && jsonBody.data.id || '', response: jsonBody };
+  }
+  return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+}
+function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn') {
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const customer = row.customer || row.name || 'Customer';
+  const today = new Date().toLocaleDateString('en-US');
+  const duplicate = data.messages.some(item =>
+    item.customer === customer &&
+    item.template === template &&
+    String(item.date || '').startsWith(today)
+  );
+  if (duplicate) return false;
+  data.messages.unshift({
+    id: 'msg-auto-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7),
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer,
+    phone: row.phone || '',
+    email: row.email || '',
+    direction: 'Outbound task',
+    channel: 'SMS',
+    template,
+    subject: template,
+    status,
+    tone,
+    body,
+    recurringPaymentId: row.id || '',
+    source: 'WheelsonAuto automation'
+  });
+  return true;
 }
 function emailKey(value) {
   return String(value || '').trim().toLowerCase();
@@ -786,10 +920,13 @@ function systemReadiness(data) {
     route('POST', '/api/tasks', 'Dispatch task creation'),
     route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
     route('POST', '/api/payment-links', 'Customer payment links'),
+    route('GET', '/api/messages/status', 'Messaging integration status'),
+    route('POST', '/api/messages/send', 'Send or save customer text messages'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
-    route('POST', '/api/webhooks/clover', 'Clover webhook intake')
+    route('POST', '/api/webhooks/clover', 'Clover webhook intake'),
+    route('POST', '/api/webhooks/messages', 'Inbound SMS webhook intake')
   ];
   const missing = envChecks.filter(item => item[1] === 'Missing').map(item => item[0]);
   const records = {
@@ -2258,6 +2395,7 @@ async function runWheelsonAutoAutopay(options = {}) {
           row.lastAutoChargeError = String(err && err.message || err);
           row.lastAutoChargeAttemptDate = dateKey;
           row.lastAutoChargeAttemptAt = new Date().toISOString();
+          queueCustomerMessage(data, row, 'Payment not found', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. We could not confirm today\'s payment of $' + Number(row.amount || 0).toLocaleString() + '. Please contact us so we can verify your payment source.', 'warn');
           result.notFound = (result.notFound || 0) + 1;
           result.errors.push((row.customer || row.id) + ': ' + payment.status);
           continue;
@@ -2271,6 +2409,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeError = String(err && err.message || err);
         row.lastAutoChargeAttemptDate = dateKey;
         row.lastAutoChargeAttemptAt = new Date().toISOString();
+        queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
         result.errors.push((row.customer || row.id) + ': ' + row.lastAutoChargeError);
       }
     }
@@ -2406,6 +2545,62 @@ const server = http.createServer(async (req, res) => {
         return json(res, 400, { ok: false, error: request.lastError });
       }
     }
+    if (url.pathname === '/api/webhooks/messages' && req.method === 'POST') {
+      if (MESSAGING_WEBHOOK_SECRET && url.searchParams.get('secret') !== MESSAGING_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== MESSAGING_WEBHOOK_SECRET) {
+        return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      }
+      const rawBody = await readBody(req);
+      const contentType = String(req.headers['content-type'] || '').toLowerCase();
+      const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
+      const inbound = parseIncomingMessage(url.searchParams.get('provider'), req.headers, payload);
+      const data = await readData();
+      const contact = findMessageContact(data, { phone: inbound.from });
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
+      if (!exists) {
+        data.messages.unshift({
+          id: 'msg-in-' + Date.now(),
+          externalId: inbound.externalId,
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          customer: contact.name || inbound.from || 'Unknown texter',
+          phone: inbound.from,
+          to: inbound.to,
+          direction: 'Inbound',
+          channel: 'SMS',
+          template: 'Customer reply',
+          subject: 'Incoming text',
+          status: 'Received',
+          tone: 'blue',
+          body: inbound.body,
+          provider: inbound.provider,
+          source: 'SMS webhook',
+          contactSource: contact.source || ''
+        });
+        if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER) !== phoneKey(inbound.from)) {
+          data.messages.unshift({
+            id: 'msg-mirror-' + Date.now(),
+            date: new Date().toLocaleString('en-US'),
+            createdAt: new Date().toISOString(),
+            customer: contact.name || inbound.from || 'Unknown texter',
+            phone: MESSAGING_OWNER_NOTIFY_NUMBER,
+            direction: 'Owner mirror',
+            channel: 'SMS',
+            template: 'Owner notification',
+            subject: 'Customer text mirrored to owner phone',
+            status: 'Ready to send',
+            tone: 'warn',
+            body: 'WheelsonAuto text from ' + (contact.name || inbound.from || 'customer') + ': ' + inbound.body,
+            provider: MESSAGING_PROVIDER,
+            source: 'WheelsonAuto mirror'
+          });
+        }
+        data.integrations = data.integrations || {};
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(), lastInboundAt: new Date().toISOString(), lastInboundFrom: maskPhone(inbound.from), lastError: '' };
+        await writeData(data);
+      }
+      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '' });
+    }
     if (url.pathname === '/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));
       const username = form.get('username') || '';
@@ -2432,6 +2627,67 @@ const server = http.createServer(async (req, res) => {
       const current = await readData();
       await writeData(stateForUserWrite(current, incoming, user));
       return json(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/messages/status' && req.method === 'GET') return json(res, 200, { ok: true, messaging: publicMessagingStatus() });
+    if (url.pathname === '/api/messages/send' && req.method === 'POST') {
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.integrations = data.integrations || {};
+      const contact = findMessageContact(data, payload);
+      const to = payload.phone || contact.phone || '';
+      const body = String(payload.body || payload.message || '').trim();
+      const customer = payload.customer || contact.name || 'Customer';
+      if (!body) return json(res, 400, { ok: false, error: 'Message body is required.' });
+      let result;
+      try {
+        result = await sendProviderSms(to, body, { customer });
+        const record = {
+          id: 'msg-out-' + Date.now(),
+          externalId: result.externalId || '',
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          customer,
+          phone: to,
+          to,
+          direction: 'Outbound',
+          channel: 'SMS',
+          template: payload.template || payload.subject || 'Manual message',
+          subject: payload.subject || payload.template || 'Manual message',
+          status: result.sent ? (result.status || 'Sent') : 'Ready to send',
+          tone: result.sent ? 'good' : 'warn',
+          body,
+          provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+          source: result.sent ? 'SMS provider' : 'WheelsonAuto draft',
+          ownerMirror: !!MESSAGING_OWNER_NOTIFY_NUMBER
+        };
+        data.messages.unshift(record);
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(), lastOutboundAt: new Date().toISOString(), lastOutboundTo: maskPhone(to), lastError: '' };
+        await writeData(data);
+        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, warning: result.message || '' });
+      } catch (err) {
+        const record = {
+          id: 'msg-out-failed-' + Date.now(),
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          customer,
+          phone: to,
+          direction: 'Outbound',
+          channel: 'SMS',
+          template: payload.template || payload.subject || 'Manual message',
+          subject: payload.subject || payload.template || 'Manual message',
+          status: 'Failed',
+          tone: 'bad',
+          body,
+          provider: MESSAGING_PROVIDER || 'not_configured',
+          source: 'SMS provider',
+          error: String(err && err.message || err)
+        };
+        data.messages.unshift(record);
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(), lastError: record.error, lastFailedAt: new Date().toISOString() };
+        await writeData(data);
+        return json(res, 502, { ok: false, error: record.error, message: record });
+      }
     }
     if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {
       const data = await readData();
