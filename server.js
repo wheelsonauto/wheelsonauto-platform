@@ -40,6 +40,8 @@ const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
 const WOA_STAR_AI_ENABLED = process.env.WOA_STAR_AI_ENABLED !== '0';
 const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND !== '0';
 const WOA_AI_REPLY_DRAFTS = process.env.WOA_AI_REPLY_DRAFTS !== '0';
+const WOA_EMAIL_ENABLED = process.env.WOA_EMAIL_ENABLED !== '0';
+const WOA_EMAIL_PROVIDER = String(process.env.WOA_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || 'not_configured').toLowerCase();
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-public-qa">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
@@ -207,12 +209,15 @@ function messageSettings(data = {}) {
     enabled: WOA_MESSAGING_ENABLED && saved.enabled !== false,
     aiEnabled: WOA_STAR_AI_ENABLED && saved.aiEnabled !== false,
     aiAutoSend: WOA_AI_AUTO_SEND && saved.aiAutoSend !== false,
-    aiDrafts: WOA_AI_REPLY_DRAFTS && saved.aiDrafts !== false
+    aiDrafts: WOA_AI_REPLY_DRAFTS && saved.aiDrafts !== false,
+    emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false
   };
 }
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const provider = MESSAGING_PROVIDER || 'not_configured';
+  const emailIntegration = (((data.integrations || {}).email) || {});
+  const emailProvider = String(emailIntegration.provider || WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
   const configured = !!(
     settings.enabled &&
     MESSAGING_FROM_NUMBER &&
@@ -233,9 +238,13 @@ function publicMessagingStatus(data = {}) {
     aiModel: WOA_AI_MODEL ? 'stored in Render' : '',
     aiName: 'Star AI',
     aiShortName: 'Star',
-    aiAutoSend: settings.aiEnabled && settings.aiAutoSend,
-    aiDrafts: settings.aiEnabled && settings.aiDrafts,
-    aiGuardrails: 'AI can answer normal texts and send safe links. Charges, card changes, autopay edits, removals, disputes, and unclear money requests require admin approval.'
+    aiAutoSend: settings.aiAutoSend,
+    aiDrafts: settings.aiDrafts,
+    emailEnabled: settings.emailEnabled,
+    emailProvider,
+    emailConfigured: !!(settings.emailEnabled && emailIntegration.connected),
+    emailMode: 'Future email channel for receipts, approvals, documents, follow-ups, and customer conversations.',
+    aiGuardrails: 'AI can answer normal texts/emails and send safe links. Charges, card changes, autopay edits, removals, disputes, receipts after payment, and unclear money requests require admin approval.'
   };
 }
 function maskPhone(value) {
@@ -446,7 +455,9 @@ function aiFindCustomerContext(data, payload = {}) {
       claimsAndTolls: (data.claims || []).length,
       tasks: (data.tasks || []).length,
       apiProviders: (data.apiProviders || []).length,
-      ezPassReady: !!(((data.integrations || {}).ezpass || {}).connected)
+      ezPassReady: !!(((data.integrations || {}).ezpass || {}).connected),
+      emailReady: messageSettings(data).emailEnabled && !!(((data.integrations || {}).email || {}).connected),
+      emailProvider: (((data.integrations || {}).email || {}).provider) || WOA_EMAIL_PROVIDER
     }
   };
 }
@@ -627,6 +638,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
         customerMessage: payload.body || payload.message || payload.text || '',
         platformContext: aiContextSummary(context),
         allowedWithoutApproval: ['general reply', 'payment link draft/send', 'card setup link draft/send', 'maintenance scheduling'],
+        futureChannels: ['SMS now', 'email when provider is connected', 'receipts after approved payments', 'EZPass/tolls after provider is connected'],
         requiresAdminApproval: ['saved-card charge', 'toll or claim charge', 'autopay date/time/frequency change', 'card removal', 'account removal', 'refund/dispute', 'paid outside app verification', 'receipt after charge confirmation']
       })
     }
@@ -3160,7 +3172,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.integrations = data.integrations || {};
       data.integrations.messaging = data.integrations.messaging || {};
-      ['enabled', 'aiEnabled', 'aiAutoSend', 'aiDrafts'].forEach(key => {
+      ['enabled', 'aiEnabled', 'aiAutoSend', 'aiDrafts', 'emailEnabled'].forEach(key => {
         if (Object.prototype.hasOwnProperty.call(payload, key)) data.integrations.messaging[key] = payload[key] !== false;
       });
       data.integrations.messaging.updatedAt = new Date().toISOString();

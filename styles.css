@@ -3207,6 +3207,12 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .message-status-line small{
   color:#d9e3eb;
 }
+.mini-badge-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-top:7px;
+}
 .view-messages .message-setup{
   margin-top:0;
 }
@@ -3227,6 +3233,23 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   border-color:rgba(240,184,58,.34)!important;
   filter:none!important;
   backdrop-filter:none!important;
+}
+@media(min-width:921px){
+  .view-messages{
+    grid-template-columns:1fr!important;
+  }
+  .view-messages>.topbar,
+  .view-messages>.tabs,
+  .view-messages>.stats,
+  .view-messages>.message-status-strip,
+  .view-messages>.star-ai-panel,
+  .view-messages>section:not(.message-playbook){
+    grid-column:1/-1!important;
+  }
+  .view-messages .message-thread-grid,
+  .view-messages .message-history-list{
+    grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+  }
 }
 .nav-group:not([open])>div{
   display:none!important;
