@@ -34,6 +34,12 @@ const MESSAGING_WEBHOOK_SECRET = process.env.WOA_MESSAGING_WEBHOOK_SECRET || pro
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.WOA_OPENAI_API_KEY || '';
+const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || '';
+const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
+const WOA_STAR_AI_ENABLED = process.env.WOA_STAR_AI_ENABLED !== '0';
+const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND !== '0';
+const WOA_AI_REPLY_DRAFTS = process.env.WOA_AI_REPLY_DRAFTS !== '0';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-public-qa">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
@@ -195,20 +201,41 @@ function phoneKey(value) {
   const digits = String(value || '').replace(/\D/g, '');
   return digits.length >= 7 ? digits.slice(-10) : '';
 }
-function publicMessagingStatus() {
+function messageSettings(data = {}) {
+  const saved = (((data.integrations || {}).messaging) || {});
+  return {
+    enabled: WOA_MESSAGING_ENABLED && saved.enabled !== false,
+    aiEnabled: WOA_STAR_AI_ENABLED && saved.aiEnabled !== false,
+    aiAutoSend: WOA_AI_AUTO_SEND && saved.aiAutoSend !== false,
+    aiDrafts: WOA_AI_REPLY_DRAFTS && saved.aiDrafts !== false
+  };
+}
+function publicMessagingStatus(data = {}) {
+  const settings = messageSettings(data);
   const provider = MESSAGING_PROVIDER || 'not_configured';
   const configured = !!(
+    settings.enabled &&
     MESSAGING_FROM_NUMBER &&
     ((provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ||
       (provider === 'telnyx' && TELNYX_API_KEY))
   );
   return {
     provider,
+    enabled: settings.enabled,
     configured,
     fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
     voiceMode: 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
-    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages'
+    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages',
+    aiProvider: OPENAI_API_KEY && WOA_AI_MODEL ? 'openai' : 'rules',
+    aiEnabled: settings.aiEnabled,
+    aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
+    aiModel: WOA_AI_MODEL ? 'stored in Render' : '',
+    aiName: 'Star AI',
+    aiShortName: 'Star',
+    aiAutoSend: settings.aiEnabled && settings.aiAutoSend,
+    aiDrafts: settings.aiEnabled && settings.aiDrafts,
+    aiGuardrails: 'AI can answer normal texts and send safe links. Charges, card changes, autopay edits, removals, disputes, and unclear money requests require admin approval.'
   };
 }
 function maskPhone(value) {
@@ -268,6 +295,8 @@ async function sendProviderSms(to, body, meta = {}) {
   const provider = MESSAGING_PROVIDER;
   if (!body) throw new Error('Message needs a message body.');
   if (!to) return { sent: false, status: 'Needs phone', provider: provider || 'not_configured', message: 'Add the customer phone number before sending.' };
+  const settings = meta.messagingSettings || { enabled: WOA_MESSAGING_ENABLED };
+  if (!settings.enabled) return { sent: false, status: 'Messaging off', provider: provider || 'not_configured', message: 'Messaging is turned off in WheelsonAuto settings or Render.' };
   if (!MESSAGING_FROM_NUMBER) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Add the hosted SMS number in Render first.' };
   if (provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
     const form = new URLSearchParams({ From: MESSAGING_FROM_NUMBER, To: cleanPhone(to), Body: body });
@@ -321,6 +350,402 @@ function queueCustomerMessage(data, row = {}, template, status, body, tone = 'wa
     source: 'WheelsonAuto automation'
   });
   return true;
+}
+function aiMoney(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  return '$' + amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+function aiCustomerFirstName(value) {
+  const first = String(value || '').trim().split(/\s+/).filter(Boolean)[0] || '';
+  return first || 'there';
+}
+function aiContains(text, words) {
+  const source = String(text || '').toLowerCase();
+  return words.some(word => source.includes(word));
+}
+function aiMatches(text, pattern) {
+  return pattern.test(String(text || '').toLowerCase());
+}
+function aiLatestPayment(data, context) {
+  const name = normKey(context.customerName);
+  const recurringId = String(context.recurring && context.recurring.id || '');
+  const cloverId = String(context.recurring && context.recurring.cloverCustomerId || '');
+  const rows = (data.payments || []).filter(row => {
+    if (recurringId && String(row.recurringPaymentId || '') === recurringId) return true;
+    if (cloverId && String(row.cloverCustomerId || row.customerId || '') === cloverId) return true;
+    if (name && softNameMatch(row.customer, name)) return true;
+    return false;
+  });
+  return rows.sort((a, b) => String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || '')))[0] || null;
+}
+function aiFindCustomerContext(data, payload = {}) {
+  enrichLinkedProfiles(data);
+  const contact = findMessageContact(data, payload);
+  const phone = phoneKey(payload.phone || payload.from || contact.phone || '');
+  const email = emailKey(payload.email || contact.email || '');
+  const name = normKey(payload.customer || contact.name || payload.name || '');
+  const recurringRows = allRecurringRows(data);
+  let recurring = null;
+  if (payload.recurringPaymentId || payload.id) recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+  if (!recurring && phone) recurring = recurringRows.find(row => phoneKey(row.phone) === phone);
+  if (!recurring && email) recurring = recurringRows.find(row => emailKey(row.email) === email);
+  if (!recurring && name) recurring = recurringRows.find(row => softNameMatch(row.customer, name));
+  const customerRows = data.customers || [];
+  let customer = null;
+  if (phone) customer = customerRows.find(row => phoneKey(row.phone) === phone);
+  if (!customer && email) customer = customerRows.find(row => emailKey(row.email) === email);
+  if (!customer && name) customer = customerRows.find(row => softNameMatch(row.name || row.customer, name));
+  const contractRows = data.contracts || [];
+  let contract = null;
+  if (phone) contract = contractRows.find(row => phoneKey(row.phone) === phone);
+  if (!contract && email) contract = contractRows.find(row => emailKey(row.email) === email);
+  if (!contract && name) contract = contractRows.find(row => softNameMatch(row.customer || row.name, name));
+  const customerName = (recurring && recurring.customer) || (customer && (customer.name || customer.customer)) || (contract && (contract.customer || contract.name)) || contact.name || payload.customer || payload.from || 'Customer';
+  const vehicleId = (recurring && recurring.vehicleId) || (customer && customer.vehicleId) || (contract && contract.vehicleId) || '';
+  let vehicle = vehicleId ? (data.vehicles || []).find(row => row.id === vehicleId) : null;
+  if (!vehicle && customerName) vehicle = (data.vehicles || []).find(row => softNameMatch(row.currentCustomer || row.customer, customerName));
+  const vehicleName = vehicle ? vehicleNameFromParts(vehicle) : ((recurring && recurring.vehicle) || (customer && customer.vehicle) || (contract && contract.vehicle) || '');
+  if (!vehicle && vehicleName) vehicle = (data.vehicles || []).find(row => normKey(vehicleNameFromParts(row)) === normKey(vehicleName));
+  const latestPayment = aiLatestPayment(data, { customerName, recurring });
+  const maintenance = (data.maintenance || []).filter(row => {
+    if (vehicle && (row.vehicleId === vehicle.id || normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)))) return true;
+    return customerName && softNameMatch(row.customer, customerName);
+  }).slice(0, 6);
+  const claims = (data.claims || []).filter(row => {
+    if (customerName && softNameMatch(row.customer, customerName)) return true;
+    if (vehicle && (row.vehicleId === vehicle.id || normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)))) return true;
+    return false;
+  }).slice(0, 8);
+  const openClaims = claims.filter(row => !/paid|closed|done|removed/i.test(String(row.status || 'Open')) && Number(row.amount || 0) > 0);
+  const latestMessages = (data.messages || []).filter(row => {
+    if (/AI draft|AI action/i.test(String(row.direction || ''))) return false;
+    if (phone && phoneKey(row.phone || row.from || row.to) === phone) return true;
+    return customerName && softNameMatch(row.customer, customerName);
+  }).slice(0, 8);
+  return {
+    contact,
+    customerName,
+    phone: payload.phone || contact.phone || (recurring && recurring.phone) || (customer && customer.phone) || (contract && contract.phone) || '',
+    email: payload.email || contact.email || (recurring && recurring.email) || (customer && customer.email) || (contract && contract.email) || '',
+    recurring,
+    customer,
+    contract,
+    vehicle,
+    vehicleName,
+    latestPayment,
+    maintenance,
+    claims,
+    openClaims,
+    latestMessages,
+    platformModules: {
+      payments: (data.payments || []).length,
+      recurringPayments: recurringRows.length,
+      vehicles: (data.vehicles || []).length,
+      maintenance: (data.maintenance || []).length,
+      claimsAndTolls: (data.claims || []).length,
+      tasks: (data.tasks || []).length,
+      apiProviders: (data.apiProviders || []).length,
+      ezPassReady: !!(((data.integrations || {}).ezpass || {}).connected)
+    }
+  };
+}
+function aiContextSummary(context) {
+  const r = context.recurring || {};
+  const v = context.vehicle || {};
+  const amount = aiMoney(r.amount || r.weeklyAmount || context.customer && context.customer.weeklyAmount || v.rate || 0);
+  return {
+    customer: context.customerName,
+    phone: context.phone ? maskPhone(context.phone) : '',
+    email: context.email || '',
+    vehicle: context.vehicleName || '',
+    vin: v.vin || r.vin || context.customer && context.customer.vin || context.contract && context.contract.vin || '',
+    tag: v.plate || v.stock || r.plate || r.licensePlate || '',
+    tracker: v.tracker || r.tracker || '',
+    amount,
+    frequency: r.frequency || '',
+    nextRun: r.nextRun || '',
+    chargeTime: r.chargeTime || '',
+    paymentStatus: r.status || '',
+    paymentSetup: r.paymentSetup || (r.cloverPaymentSource ? 'Card linked' : ''),
+    lastPayment: context.latestPayment ? [context.latestPayment.status, aiMoney(context.latestPayment.amount), context.latestPayment.date].filter(Boolean).join(' ') : '',
+    openClaims: context.openClaims.map(row => ({ id: row.id || '', type: row.type || 'Balance', amount: aiMoney(row.amount || 0), status: row.status || 'Open' })),
+    maintenance: context.maintenance.map(row => ({ id: row.id || '', vehicle: row.vehicle || context.vehicleName || '', type: row.type || row.issue || 'Service', due: row.due || row.nextDue || '', status: row.status || '' })),
+    modules: context.platformModules
+  };
+}
+function aiPlanRules(data, payload = {}, context = null) {
+  const ctx = context || aiFindCustomerContext(data, payload);
+  const body = String(payload.body || payload.message || payload.text || '').trim();
+  const lower = body.toLowerCase();
+  const recurring = ctx.recurring || {};
+  const openClaim = ctx.openClaims[0] || null;
+  const customer = ctx.customerName || payload.customer || 'Customer';
+  const first = aiCustomerFirstName(customer);
+  const amountText = aiMoney(payload.amount || recurring.amount || recurring.weeklyAmount || (openClaim && openClaim.amount) || 0);
+  const vehicleText = ctx.vehicleName ? ' for the ' + ctx.vehicleName : '';
+  const dueText = recurring.nextRun ? ' Your next scheduled payment is ' + recurring.nextRun + (recurring.chargeTime ? ' at ' + recurring.chargeTime + '.' : '.') : '';
+  const humanWords = ['accident', 'police', 'lawyer', 'attorney', 'lawsuit', 'sue', 'refund', 'chargeback', 'insurance', 'stolen', 'repo', 'repossession', 'complaint', 'angry', 'mad', 'cancel', 'remove me', 'stop autopay', 'stop payment'];
+  const dateWords = ['change date', 'move date', 'move my payment', 'change my payment', 'change autopay', 'switch day', 'different day', 'next week', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  let actionType = 'reply';
+  let intent = 'general_reply';
+  let approvalRequired = false;
+  let needsHuman = false;
+  let tone = 'blue';
+  let confidence = 0.72;
+  let reply = 'Hi ' + first + ', this is WheelsonAuto. I can help with that. Let me pull up your account and we will follow up shortly.';
+  const reasons = [];
+  if (!body) {
+    needsHuman = true;
+    actionType = 'human_review';
+    intent = 'empty_message';
+    reply = 'Hi ' + first + ', this is WheelsonAuto. I got your message, but I need a little more detail so we can help you.';
+    reasons.push('No customer message body was provided.');
+  } else if (aiContains(lower, humanWords)) {
+    needsHuman = true;
+    actionType = 'human_review';
+    intent = 'sensitive_or_dispute';
+    tone = 'bad';
+    confidence = 0.9;
+    reply = 'Hi ' + first + ', this is WheelsonAuto. I understand. I am sending this to our team so a person can review your account and respond the right way.';
+    reasons.push('Sensitive, dispute, cancellation, legal, or account-removal wording needs a human.');
+  } else if (aiMatches(lower, /charge (me|my card)|run (it|my card)|take (it|the payment)|pay it now|card on file|use my card/)) {
+    actionType = 'charge_saved_card';
+    intent = 'charge_request';
+    approvalRequired = true;
+    tone = 'warn';
+    confidence = 0.88;
+    reply = 'Hi ' + first + ', I see your request to run the payment' + vehicleText + '. I am sending it to the office for approval, and we will confirm once it is processed.';
+    reasons.push('Customer requested a saved-card charge. Admin approval is required before money moves.');
+  } else if (aiContains(lower, ['payment link', 'pay link', 'send link', 'link to pay', 'can i pay', 'how do i pay']) || aiMatches(lower, /\blink\b.*\bpay\b|\bpay\b.*\blink\b/)) {
+    actionType = 'send_payment_link';
+    intent = 'payment_link';
+    tone = 'good';
+    confidence = 0.9;
+    reply = 'Hi ' + first + ', no problem. I can send you a secure WheelsonAuto payment link' + (amountText ? ' for ' + amountText : '') + '.';
+    reasons.push('A payment link is safe because the customer still chooses to pay through Clover checkout.');
+  } else if (aiContains(lower, ['change card', 'new card', 'update card', 'card setup', 'save card', 'replace card', 'card on file'])) {
+    actionType = 'send_card_setup';
+    intent = 'card_update';
+    tone = 'good';
+    confidence = 0.86;
+    reply = 'Hi ' + first + ', I can send a secure card setup link so you can update your card on file. WheelsonAuto will not see your full card number.';
+    reasons.push('Card setup link is safe; the customer enters card details in Clover secure fields.');
+  } else if (aiContains(lower, ['toll', 'ez pass', 'ezpass', 'violation', 'ticket', 'reimbursement', 'claim', 'receipt'])) {
+    actionType = openClaim ? 'send_claim_link' : 'human_review';
+    intent = 'toll_claim_or_receipt';
+    approvalRequired = !!openClaim;
+    needsHuman = !openClaim;
+    tone = openClaim ? 'warn' : 'blue';
+    confidence = 0.82;
+    reply = openClaim
+      ? 'Hi ' + first + ', I found the open ' + (openClaim.type || 'balance') + (openClaim.amount ? ' for ' + aiMoney(openClaim.amount) : '') + '. I am sending it to the office for approval before any charge or receipt is sent.'
+      : 'Hi ' + first + ', I got your toll/receipt question. I am sending this to the office so we can check the account and respond with the right details.';
+    reasons.push(openClaim ? 'Toll/claim/reimbursement balance found; approval required before collection or receipt.' : 'No open toll/claim balance was matched yet.');
+  } else if (aiContains(lower, dateWords) || aiMatches(lower, /\b\d{1,2}\/\d{1,2}\b|\b\d{4}-\d{2}-\d{2}\b/)) {
+    actionType = 'change_autopay_date';
+    intent = 'schedule_change';
+    approvalRequired = true;
+    tone = 'warn';
+    confidence = 0.84;
+    reply = 'Hi ' + first + ', I see you want to change your autopay date. I am sending that request to the office for approval so the schedule is updated correctly.' + dueText;
+    reasons.push('Autopay date/time/frequency changes require admin approval.');
+  } else if (aiContains(lower, ['maintenance', 'oil change', 'inspection', 'service', 'appointment', 'schedule', 'what time', 'time do i come', 'come in'])) {
+    actionType = 'maintenance_schedule';
+    intent = 'maintenance_or_schedule';
+    tone = 'good';
+    confidence = 0.8;
+    reply = 'Hi ' + first + ', we can help schedule that' + vehicleText + '. What day and time works best for you?';
+    reasons.push('Normal scheduling/service conversation can be answered by AI.');
+  } else if (aiContains(lower, ['paid', 'i paid', 'already paid', 'cash', 'zelle', 'outside app'])) {
+    actionType = 'paid_outside_review';
+    intent = 'paid_outside_app';
+    approvalRequired = true;
+    tone = 'warn';
+    confidence = 0.8;
+    reply = 'Hi ' + first + ', thank you for letting us know. I am sending this to the office to verify and mark your account correctly.';
+    reasons.push('Paid-outside-app claims need admin verification before account status changes.');
+  } else {
+    reply = 'Hi ' + first + ', this is WheelsonAuto. Thanks for reaching out.' + dueText + ' We will take care of this and follow up if we need anything else.';
+    reasons.push('General customer message can receive a normal human-sounding reply.');
+  }
+  const canAutoSend = !approvalRequired && !needsHuman && ['reply', 'send_payment_link', 'send_card_setup', 'maintenance_schedule'].includes(actionType);
+  return {
+    ok: true,
+    mode: 'rules',
+    intent,
+    actionType,
+    approvalRequired,
+    needsHuman,
+    canAutoSend,
+    confidence,
+    tone,
+    reply,
+    summary: actionType.replace(/_/g, ' ') + ' for ' + customer,
+    reasons,
+    related: {
+      recurringPaymentId: recurring.id || '',
+      cloverCustomerId: recurring.cloverCustomerId || '',
+      claimId: openClaim && openClaim.id || '',
+      amount: Number(payload.amount || recurring.amount || recurring.weeklyAmount || openClaim && openClaim.amount || 0),
+      nextRun: recurring.nextRun || '',
+      chargeTime: recurring.chargeTime || '',
+      vehicleId: ctx.vehicle && ctx.vehicle.id || '',
+      vehicle: ctx.vehicleName || ''
+    },
+    customer,
+    phone: ctx.phone || payload.phone || '',
+    context: aiContextSummary(ctx)
+  };
+}
+function sanitizeAiPlan(plan, fallback) {
+  const safe = { ...(fallback || {}), ...(plan || {}) };
+  safe.ok = true;
+  safe.reply = String(safe.reply || (fallback && fallback.reply) || '').trim().slice(0, 900);
+  safe.intent = String(safe.intent || 'general_reply').slice(0, 80);
+  safe.actionType = String(safe.actionType || 'reply').slice(0, 80);
+  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review'].includes(safe.actionType);
+  safe.needsHuman = !!safe.needsHuman || safe.actionType === 'human_review';
+  safe.canAutoSend = !!safe.canAutoSend && !safe.approvalRequired && !safe.needsHuman;
+  safe.confidence = Math.max(0, Math.min(1, Number(safe.confidence || 0.7)));
+  safe.tone = ['good', 'warn', 'bad', 'blue'].includes(safe.tone) ? safe.tone : (safe.needsHuman ? 'bad' : safe.approvalRequired ? 'warn' : 'blue');
+  safe.reasons = Array.isArray(safe.reasons) ? safe.reasons.slice(0, 6).map(String) : [];
+  safe.related = { ...((fallback && fallback.related) || {}), ...(safe.related || {}) };
+  safe.context = (fallback && fallback.context) || safe.context || {};
+  return safe;
+}
+async function openAiReplyPlan(data, payload, context, fallback) {
+  if (!OPENAI_API_KEY || !WOA_AI_MODEL) return fallback;
+  const input = [
+    {
+      role: 'developer',
+      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Use the platform context only. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, or saved-card action has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        customerMessage: payload.body || payload.message || payload.text || '',
+        platformContext: aiContextSummary(context),
+        allowedWithoutApproval: ['general reply', 'payment link draft/send', 'card setup link draft/send', 'maintenance scheduling'],
+        requiresAdminApproval: ['saved-card charge', 'toll or claim charge', 'autopay date/time/frequency change', 'card removal', 'account removal', 'refund/dispute', 'paid outside app verification', 'receipt after charge confirmation']
+      })
+    }
+  ];
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + OPENAI_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: WOA_AI_MODEL, input, reasoning: { effort: 'low' } })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error && body.error.message || 'OpenAI response failed.');
+    const text = body.output_text || (body.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('\n');
+    const parsed = JSON.parse(String(text || '{}').replace(/^```json|```$/g, '').trim());
+    return sanitizeAiPlan({ ...parsed, mode: 'openai' }, fallback);
+  } catch (err) {
+    return sanitizeAiPlan({ ...fallback, mode: 'rules', aiError: String(err && err.message || err) }, fallback);
+  }
+}
+function appendLinkToReply(reply, label, url) {
+  if (!url || String(reply || '').includes(url)) return reply;
+  return String(reply || '').trim() + '\n\n' + label + ': ' + url;
+}
+function prepareAiSafeLink(data, plan, context) {
+  if (!plan || plan.needsHuman || plan.approvalRequired) return plan;
+  const recurring = context.recurring || {};
+  if (plan.actionType === 'send_payment_link') {
+    const amount = Number(plan.related && plan.related.amount || recurring.amount || recurring.weeklyAmount || 0);
+    if (!amount || amount <= 0) {
+      plan.needsHuman = true;
+      plan.canAutoSend = false;
+      plan.status = 'Human needed';
+      plan.reasons = [...(plan.reasons || []), 'No payment amount was found for the secure link.'];
+      plan.reply = 'Hi ' + aiCustomerFirstName(plan.customer || context.customerName) + ', I can help with a secure payment link. I am sending this to the office first so we send the correct amount.';
+      return plan;
+    }
+    data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+    const request = createPaymentRequest(data, {
+      recurringPaymentId: recurring.id || plan.related && plan.related.recurringPaymentId || '',
+      customer: context.customerName || plan.customer || '',
+      phone: context.phone || plan.phone || '',
+      email: context.email || '',
+      vehicle: context.vehicleName || '',
+      amount,
+      frequency: recurring.frequency || 'Payment'
+    });
+    data.paymentRequests.unshift(request);
+    if (recurring.id) updateRecurringChargeState(data, recurring.id, { lastPaymentLinkAt: new Date().toISOString(), lastPaymentLinkUrl: request.url });
+    plan.related = { ...(plan.related || {}), paymentLinkId: request.id, paymentLinkUrl: request.url };
+    plan.reply = appendLinkToReply(plan.reply, 'Secure payment link', request.url);
+    plan.summary = 'Secure payment link ready for ' + (plan.customer || context.customerName || 'customer');
+  }
+  return plan;
+}
+async function createAiMessageDraft(data, payload = {}, options = {}) {
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const context = aiFindCustomerContext(data, payload);
+  const fallback = aiPlanRules(data, payload, context);
+  let plan = await openAiReplyPlan(data, payload, context, fallback);
+  plan = prepareAiSafeLink(data, plan, context);
+  const duplicateKey = String(options.sourceMessageId || payload.messageId || payload.externalId || '');
+  const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
+  if (existing && !options.forceNew) return { plan, draft: existing, existing: true };
+  const stamp = new Date();
+  const draft = {
+    id: 'msg-ai-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7),
+    date: stamp.toLocaleString('en-US'),
+    createdAt: stamp.toISOString(),
+    customer: plan.customer || context.customerName || 'Customer',
+    phone: plan.phone || context.phone || payload.phone || '',
+    direction: plan.needsHuman ? 'AI action' : 'AI draft',
+    channel: 'Star AI',
+    template: plan.intent || 'AI reply',
+    subject: plan.summary || 'AI reply manager',
+    status: plan.needsHuman ? 'Human needed' : (plan.approvalRequired ? 'Needs approval' : (plan.canAutoSend ? 'Auto-ready' : 'Draft ready')),
+    tone: plan.tone || 'blue',
+    body: plan.reply,
+    aiPlan: plan,
+    aiSourceMessageId: duplicateKey,
+    recurringPaymentId: plan.related && plan.related.recurringPaymentId || '',
+    claimId: plan.related && plan.related.claimId || '',
+    source: 'WheelsonAuto Star AI'
+  };
+  data.messages.unshift(draft);
+  return { plan, draft, existing: false };
+}
+async function approveAiMessage(data, payload = {}) {
+  const id = String(payload.draftId || payload.id || '').trim();
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const draft = data.messages.find(item => item.id === id);
+  if (!draft) throw new Error('AI draft was not found.');
+  const plan = draft.aiPlan || {};
+  if (plan.needsHuman) throw new Error('This AI item needs a human reply first.');
+  if (plan.approvalRequired && payload.approveMoneyAction !== true) throw new Error('This AI item prepares a money or account change. Open the customer/payment action and approve it there.');
+  const result = await sendProviderSms(draft.phone, draft.body, { customer: draft.customer, ai: true, messagingSettings: messageSettings(data) });
+  const sent = {
+    id: 'msg-ai-sent-' + Date.now(),
+    externalId: result.externalId || '',
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer: draft.customer,
+    phone: draft.phone,
+    direction: 'Outbound',
+    channel: 'SMS',
+    template: 'Star approved reply',
+    subject: draft.subject || 'AI reply',
+    status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
+    tone: result.sent ? 'good' : 'warn',
+    body: draft.body,
+    provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    source: result.sent ? 'Star AI + SMS provider' : 'Star AI draft',
+    aiApprovedAt: new Date().toISOString(),
+    aiDraftId: draft.id
+  };
+  draft.status = result.sent ? 'Approved + sent' : 'Approved + saved';
+  draft.tone = sent.tone;
+  draft.approvedAt = sent.aiApprovedAt;
+  data.messages.unshift(sent);
+  return { sent, result, draft };
 }
 function emailKey(value) {
   return String(value || '').trim().toLowerCase();
@@ -899,6 +1324,10 @@ async function appHtml({ publicMode = false, user = null } = {}) {
     websiteLeads: [],
     integrations: { clover: {}, shopify: { store: 'wheelsonauto.com', embedPath: '/apply' } }
   } : stateForUserRead(data, user || { role: 'Owner' });
+  if (!publicMode) {
+    clientData.integrations = clientData.integrations || {};
+    clientData.integrations.messaging = { ...(clientData.integrations.messaging || {}), ...publicMessagingStatus(data) };
+  }
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
   const currentUser = publicMode ? null : (user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
@@ -988,6 +1417,9 @@ function systemReadiness(data) {
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
     route('POST', '/api/messages/send', 'Send or save customer text messages'),
+    route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
+    route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
+    route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
@@ -2623,8 +3055,10 @@ const server = http.createServer(async (req, res) => {
       const contact = findMessageContact(data, { phone: inbound.from });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
+      let inboundRecord = null;
+      let aiResult = null;
       if (!exists) {
-        data.messages.unshift({
+        inboundRecord = {
           id: 'msg-in-' + Date.now(),
           externalId: inbound.externalId,
           date: new Date().toLocaleString('en-US'),
@@ -2642,7 +3076,29 @@ const server = http.createServer(async (req, res) => {
           provider: inbound.provider,
           source: 'SMS webhook',
           contactSource: contact.source || ''
-        });
+        };
+        data.messages.unshift(inboundRecord);
+        const settings = messageSettings(data);
+        if (settings.aiEnabled && settings.aiDrafts && inbound.body) {
+          aiResult = await createAiMessageDraft(data, {
+            messageId: inboundRecord.id,
+            externalId: inbound.externalId || inboundRecord.id,
+            customer: inboundRecord.customer,
+            phone: inbound.from,
+            body: inbound.body
+          }, { sourceMessageId: inbound.externalId || inboundRecord.id });
+          const plan = aiResult.plan || {};
+          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.phone) {
+            try {
+              const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
+              aiResult.sent = approved.sent;
+            } catch (err) {
+              aiResult.draft.status = 'Auto-send failed';
+              aiResult.draft.tone = 'warn';
+              aiResult.draft.error = String(err && err.message || err);
+            }
+          }
+        }
         if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER) !== phoneKey(inbound.from)) {
           data.messages.unshift({
             id: 'msg-mirror-' + Date.now(),
@@ -2662,10 +3118,10 @@ const server = http.createServer(async (req, res) => {
           });
         }
         data.integrations = data.integrations || {};
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(), lastInboundAt: new Date().toISOString(), lastInboundFrom: maskPhone(inbound.from), lastError: '' };
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundFrom: maskPhone(inbound.from), lastError: '' };
         await writeData(data);
       }
-      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '' });
+      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
     if (url.pathname === '/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));
@@ -2694,7 +3150,24 @@ const server = http.createServer(async (req, res) => {
       await writeData(stateForUserWrite(current, incoming, user));
       return json(res, 200, { ok: true });
     }
-    if (url.pathname === '/api/messages/status' && req.method === 'GET') return json(res, 200, { ok: true, messaging: publicMessagingStatus() });
+    if (url.pathname === '/api/messages/status' && req.method === 'GET') {
+      const data = await readData();
+      return json(res, 200, { ok: true, messaging: publicMessagingStatus(data) });
+    }
+    if (url.pathname === '/api/messages/settings' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change messaging and Star AI settings.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.messaging = data.integrations.messaging || {};
+      ['enabled', 'aiEnabled', 'aiAutoSend', 'aiDrafts'].forEach(key => {
+        if (Object.prototype.hasOwnProperty.call(payload, key)) data.integrations.messaging[key] = payload[key] !== false;
+      });
+      data.integrations.messaging.updatedAt = new Date().toISOString();
+      data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
+      await writeData(data);
+      return json(res, 200, { ok: true, messaging: data.integrations.messaging });
+    }
     if (url.pathname === '/api/messages/send' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
       const data = await readData();
@@ -2707,7 +3180,7 @@ const server = http.createServer(async (req, res) => {
       if (!body) return json(res, 400, { ok: false, error: 'Message body is required.' });
       let result;
       try {
-        result = await sendProviderSms(to, body, { customer });
+        result = await sendProviderSms(to, body, { customer, messagingSettings: messageSettings(data) });
         const record = {
           id: 'msg-out-' + Date.now(),
           externalId: result.externalId || '',
@@ -2728,7 +3201,7 @@ const server = http.createServer(async (req, res) => {
           ownerMirror: !!MESSAGING_OWNER_NOTIFY_NUMBER
         };
         data.messages.unshift(record);
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(), lastOutboundAt: new Date().toISOString(), lastOutboundTo: maskPhone(to), lastError: '' };
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: maskPhone(to), lastError: '' };
         await writeData(data);
         return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, warning: result.message || '' });
       } catch (err) {
@@ -2750,9 +3223,42 @@ const server = http.createServer(async (req, res) => {
           error: String(err && err.message || err)
         };
         data.messages.unshift(record);
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(), lastError: record.error, lastFailedAt: new Date().toISOString() };
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastError: record.error, lastFailedAt: new Date().toISOString() };
         await writeData(data);
         return json(res, 502, { ok: false, error: record.error, message: record });
+      }
+    }
+    if (url.pathname === '/api/messages/ai-reply' && req.method === 'POST') {
+      if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
+      const sourceMessage = payload.messageId ? (data.messages || []).find(item => item.id === payload.messageId) : null;
+      const request = {
+        ...payload,
+        customer: payload.customer || (sourceMessage && sourceMessage.customer) || '',
+        phone: payload.phone || (sourceMessage && (sourceMessage.phone || sourceMessage.from || sourceMessage.to)) || '',
+        body: payload.body || payload.message || (sourceMessage && sourceMessage.body) || ''
+      };
+      const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true });
+      data.integrations = data.integrations || {};
+      data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiDraftAt: new Date().toISOString(), lastError: '' };
+      await writeData(data);
+      return json(res, 201, { ok: true, plan: aiResult.plan, draft: aiResult.draft, existing: aiResult.existing });
+    }
+    if (url.pathname === '/api/messages/ai-action' && req.method === 'POST') {
+      if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
+      try {
+        const approved = await approveAiMessage(data, payload);
+        data.integrations = data.integrations || {};
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiApprovalAt: new Date().toISOString(), lastError: '' };
+        await writeData(data);
+        return json(res, approved.result.sent ? 200 : 202, { ok: true, sent: !!approved.result.sent, message: approved.sent, draft: approved.draft, warning: approved.result.message || '' });
+      } catch (err) {
+        return json(res, 409, { ok: false, error: String(err && err.message || err) });
       }
     }
     if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {

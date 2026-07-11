@@ -179,15 +179,52 @@ async function main() {
     });
     assert([200, 202].includes(managerMessage.status) && managerMessage.json.ok, 'Manager could not save/send a message.');
 
+    const managerStarDraft = await request(base, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Smoke Customer', phone: '3135550199', body: 'What time can I come in for service?' }
+    });
+    assert(managerStarDraft.status === 201 && managerStarDraft.json.ok, 'Manager could not create a Star AI reply.');
+    assert(managerStarDraft.json.draft && managerStarDraft.json.draft.channel === 'Star AI', 'Star AI draft should be saved in message history.');
+    assert(managerStarDraft.json.plan && managerStarDraft.json.plan.canAutoSend === true, 'Safe service question should be auto-ready.');
+
+    const managerStarSend = await request(base, 'POST', '/api/messages/ai-action', {
+      cookie: managerCookie,
+      json: { draftId: managerStarDraft.json.draft.id }
+    });
+    assert([200, 202].includes(managerStarSend.status) && managerStarSend.json.ok, 'Manager could not approve/send a safe Star AI reply.');
+
     const mechanicMessage = await request(base, 'POST', '/api/messages/send', {
       cookie: mechanicCookie,
       json: { customer: 'Smoke Customer', phone: '3135550199', body: 'Smoke test mechanic message.' }
     });
     assert(mechanicMessage.status === 403, 'Mechanic message API should be blocked, got ' + mechanicMessage.status + '.');
 
+    const mechanicStar = await request(base, 'POST', '/api/messages/ai-reply', {
+      cookie: mechanicCookie,
+      json: { customer: 'Smoke Customer', phone: '3135550199', body: 'Blocked Star message.' }
+    });
+    assert(mechanicStar.status === 403, 'Mechanic Star AI API should be blocked, got ' + mechanicStar.status + '.');
+
+    const starOff = await request(base, 'POST', '/api/messages/settings', {
+      cookie: ownerCookie,
+      json: { aiEnabled: false }
+    });
+    assert(starOff.status === 200 && starOff.json.messaging.aiEnabled === false, 'Owner should be able to turn Star AI off.');
+    const starBlocked = await request(base, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Smoke Customer', phone: '3135550199', body: 'Star should be off.' }
+    });
+    assert(starBlocked.status === 423, 'Star AI should respect app-level off switch.');
+    const starOn = await request(base, 'POST', '/api/messages/settings', {
+      cookie: ownerCookie,
+      json: { aiEnabled: true, aiAutoSend: true }
+    });
+    assert(starOn.status === 200 && starOn.json.messaging.aiEnabled === true, 'Owner should be able to turn Star AI back on.');
+
     const managerState = await request(base, 'GET', '/api/state', { cookie: managerCookie });
     assert(managerState.status === 200 && Array.isArray(managerState.json.messages), 'Manager should receive message state.');
     assert(managerState.json.messages.some(message => message.customer === 'Smoke Customer'), 'Manager state should include saved message history.');
+    assert(managerState.json.messages.some(message => message.channel === 'Star AI' || message.aiDraftId), 'Manager state should include Star AI history.');
 
     const mechanicState = await request(base, 'GET', '/api/state', { cookie: mechanicCookie });
     assert(mechanicState.status === 200 && mechanicState.json, 'Mechanic should receive role-filtered state.');
@@ -321,7 +358,7 @@ async function main() {
     const messageStatus = await request(base, 'GET', '/api/messages/status', { cookie: managerCookie });
     assert(messageStatus.status === 200 && messageStatus.json.ok, 'Manager should read messaging status.');
 
-    console.log('Smoke tests passed: login, role accounts, public application, payment/card setup links, role-filtered state, messaging permissions, autopay updates/removal, payment-not-found tracking, state write guard, and payment API guard.');
+    console.log('Smoke tests passed: login, role accounts, public application, payment/card setup links, role-filtered state, messaging + Star AI permissions/settings, autopay updates/removal, payment-not-found tracking, state write guard, and payment API guard.');
   } catch (err) {
     console.error(output);
     throw err;
