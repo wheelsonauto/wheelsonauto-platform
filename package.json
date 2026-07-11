@@ -1,7 +1,8 @@
 {
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check app.js && node --check card-setup.js",
+    "check": "node --check server.js && node --check app.js && node --check card-setup.js && node scripts/static-ui-check.js",
+    "ui-check": "node scripts/static-ui-check.js",
     "smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {},
