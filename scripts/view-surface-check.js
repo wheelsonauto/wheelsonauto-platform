@@ -1,0 +1,320 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.resolve(__dirname, '..');
+const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function finalFunctionSlice(source, name) {
+  let start = -1;
+  let cursor = 0;
+  while (true) {
+    const next = source.indexOf('function ' + name + '(', cursor);
+    if (next < 0) break;
+    start = next;
+    cursor = next + 1;
+  }
+  if (start < 0) return '';
+  const argsClose = source.indexOf(')', start);
+  const open = source.indexOf('{', argsClose > -1 ? argsClose : start);
+  if (open < 0) return '';
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  return '';
+}
+
+function strings(source) {
+  return [...source.matchAll(/(['"])((?:\\.|(?!\1).)*)\1/g)].map(match => match[2]);
+}
+
+function assertIncludes(label, source, required) {
+  if (!source) fail(label + ' block was not found.');
+  const missing = required.filter(text => !source.includes(text));
+  if (missing.length) fail(label + ' is missing: ' + missing.join(', '));
+}
+
+function assertExcludes(label, source, banned) {
+  if (!source) fail(label + ' block was not found.');
+  const present = banned.filter(text => source.includes(text));
+  if (present.length) fail(label + ' should not include: ' + present.join(', '));
+}
+
+function assertStringsInclude(label, source, required) {
+  const values = strings(source);
+  const missing = required.filter(value => !values.includes(value));
+  if (missing.length) fail(label + ' is missing strings: ' + missing.join(', '));
+}
+
+function renderViews() {
+  const render = finalFunctionSlice(app, 'render');
+  const match = render.match(/\(\{([^}]+)\}\[view\]\|\|Dashboard\)\(\)/);
+  if (!match) fail('Could not find render view map.');
+  const views = new Map();
+  for (const item of match[1].matchAll(/'([^']+)'\s*:\s*([A-Za-z_$][\w$]*)/g)) {
+    views.set(item[1], item[2]);
+  }
+  return views;
+}
+
+[
+  'Dashboard',
+  'Payments',
+  'Operations',
+  'Messages',
+  'MechanicPortal',
+  'ManagerPortal',
+  'Maintenance',
+  'Fleet',
+  'ClaimsIssues',
+  'Reports',
+  'Website',
+  'Settings',
+  'mobileQuickbar',
+  'navForRole',
+  'hydrateLocalSearches',
+  'openComposeMessage',
+  'messageSetupPanel',
+  'starAiPanel',
+  'staffServiceCard',
+  'staffClaimCard',
+  'paymentRecurringCard',
+  'paymentCustomerCard',
+  'paymentCardSection'
+].forEach(name => {
+  if (!finalFunctionSlice(app, name)) fail('Missing final frontend function: ' + name);
+});
+
+const views = renderViews();
+[
+  'Dashboard',
+  'Payments',
+  'Operations',
+  'Messages',
+  'Mechanic Portal',
+  'Manager Portal',
+  'Maintenance',
+  'Fleet',
+  'Claims & Issues',
+  'Reports',
+  'Website',
+  'Settings'
+].forEach(view => {
+  if (!views.has(view)) fail('Render map is missing view: ' + view);
+});
+
+const dashboard = finalFunctionSlice(app, 'Dashboard');
+assertIncludes('Dashboard surface', dashboard, [
+  'dueOrTouchedToday',
+  'pendingToday',
+  'failedToday',
+  'paymentState',
+  'transactionCustomerName',
+  'localSearch',
+  'dashboardDueRows',
+  'Today&rsquo;s dues & contact',
+  'Service due',
+  'Transactions'
+]);
+
+const payments = finalFunctionSlice(app, 'Payments');
+assertIncludes('Payments surface', payments, [
+  'paymentCloseoutBoard',
+  'dailyCloseout',
+  'Active',
+  'Today',
+  'History',
+  'Transactions',
+  'paymentRecurringCard',
+  'paymentCustomerCard',
+  'paymentTransactionCard',
+  'Payment actions',
+  'Existing customer',
+  'Add autopay'
+]);
+
+const paymentCardSection = finalFunctionSlice(app, 'paymentCardSection');
+assertIncludes('Payment card section helper', paymentCardSection, ['localSearch', 'customer-pay-list', 'data-limit']);
+
+const paymentRecurringCard = finalFunctionSlice(app, 'paymentRecurringCard');
+assertIncludes('Recurring payment cards', paymentRecurringCard, [
+  'paymentContactFor',
+  'paymentVehicleInfo',
+  'VIN ',
+  'latestPaymentFor',
+  'recurringDateText',
+  'cardActionButtons'
+]);
+
+const paymentCustomerCard = finalFunctionSlice(app, 'paymentCustomerCard');
+assertIncludes('Customer payment/history cards', paymentCustomerCard, [
+  'historyChargeButtons',
+  'textCustomerButton',
+  'customerFileButton',
+  'open-vehicle',
+  'VIN missing'
+]);
+
+const operations = finalFunctionSlice(app, 'Operations');
+assertIncludes('Operations surface', operations, [
+  'Fleet',
+  'Assigned',
+  'Service',
+  'Claims',
+  'staffFleetCard',
+  'staffServiceCard',
+  'staffClaimCard',
+  'data-limit',
+  'localSearch'
+]);
+
+const maintenance = finalFunctionSlice(app, 'Maintenance');
+assertIncludes('Maintenance surface', maintenance, [
+  'Open',
+  'Overdue',
+  'Monthly',
+  'Completed',
+  'staffServiceCard',
+  'Search service by customer, VIN, tag, tracker, issue'
+]);
+
+const fleet = finalFunctionSlice(app, 'Fleet');
+assertIncludes('Fleet surface', fleet, [
+  'Available',
+  'Prep',
+  'Assigned',
+  'staffFleetCard',
+  'staffPrepCard',
+  'Search available fleet by VIN, tag, tracker',
+  'Search assigned cars by customer, VIN, tag, tracker'
+]);
+
+const claims = finalFunctionSlice(app, 'ClaimsIssues');
+assertIncludes('Claims surface', claims, [
+  'Open',
+  'History',
+  'All',
+  'staffClaimCard',
+  'Search claims by customer, vehicle, plate, ref, type'
+]);
+
+const mechanicPortal = finalFunctionSlice(app, 'MechanicPortal');
+assertIncludes('Mechanic portal surface', mechanicPortal, [
+  'Work',
+  'Overdue',
+  'All open',
+  'History',
+  'mechanicJobCards',
+  'mechanic-workspace',
+  'no payment or settings controls'
+]);
+assertExcludes('Mechanic portal surface', mechanicPortal, ['Messages', 'Payments', 'New text/email']);
+
+const managerPortal = finalFunctionSlice(app, 'ManagerPortal');
+assertIncludes('Manager portal surface', managerPortal, [
+  'Overview',
+  'Fleet',
+  'Applications',
+  'Service',
+  'Issues',
+  'fleetCommandPanel',
+  'Search manager queue',
+  'manager-overview-grid'
+]);
+
+const messages = finalFunctionSlice(app, 'Messages');
+assertIncludes('Messages and Star surface', messages, [
+  'Inbox',
+  'Star',
+  'Queue',
+  'Templates',
+  'History',
+  'Setup',
+  'New text/email',
+  'Email live',
+  'Email draft',
+  'starAiPanel',
+  'starAiLane',
+  'Search customer, phone, email, VIN, tag, payment, or text',
+  'Approval'
+]);
+
+const compose = finalFunctionSlice(app, 'openComposeMessage');
+assertIncludes('Compose message modal', compose, [
+  '<select id="messageChannel">',
+  '<option value="SMS"',
+  '<option value="Email"',
+  'messageEmail'
+]);
+assertIncludes('Message send action', app, ['/api/messages/send', 'channel:val', 'send-message-now']);
+
+const starPanel = finalFunctionSlice(app, 'starAiPanel');
+assertIncludes('Star AI panel', starPanel, [
+  'Built-in message manager',
+  'email',
+  'EZPass/tolls',
+  'receipts',
+  'toggle-email-messaging',
+  'toggle-star-ai',
+  'toggle-star-autosend',
+  'Need approval',
+  'Human needed'
+]);
+
+const setupPanel = finalFunctionSlice(app, 'messageSetupPanel');
+assertIncludes('Messaging setup panel', setupPanel, [
+  'emailWebhook',
+  'Email',
+  'Star'
+]);
+
+const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
+const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
+assertIncludes('Staff service cards', staffServiceCard, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance']);
+assertIncludes('Staff claim cards', staffClaimCard, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link']);
+
+const quickbar = finalFunctionSlice(app, 'mobileQuickbar');
+assertStringsInclude('Mobile quickbar labels', quickbar, ['Dashboard', 'Payments', 'Operations', 'Messages', 'Settings', 'Manager Portal', 'Reports', 'Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
+assertExcludes('Mobile quickbar raw letter labels', quickbar, ["['Dashboard','D']", "['Payments','P']", "['Mechanic Portal','M']"]);
+
+const nav = finalFunctionSlice(app, 'navForRole');
+assertIncludes('Role navigation', nav, [
+  "if(r==='mechanic')return['Mechanic Portal','Maintenance','Fleet','Claims & Issues']",
+  "if(r==='manager')return['Manager Portal','Today','Customers','Applications','Operations','Fleet','Dispatch','Maintenance','Documents','Tolls','Insurance','Claims & Issues','Messages','Reports']"
+]);
+
+const localSearch = finalFunctionSlice(app, 'hydrateLocalSearches');
+assertIncludes('Local section search', localSearch, ['.card.section', '.local-search', '.message-thread-grid', '.mechanic-cards']);
+
+assertIncludes('Server email and Star backend', server, [
+  '/api/webhooks/email',
+  'sendProviderEmail',
+  'api.resend.com/emails',
+  'api.sendgrid.com/v3/mail/send',
+  'futureChannels',
+  'email when provider is connected',
+  'Charges, card changes, autopay edits, removals, disputes, receipts after payment',
+  'Star AI, the built-in WheelsonAuto AI manager'
+]);
+
+assertIncludes('Modal, mobile, and no-blur style surface', css, [
+  'Final modal polish: keep every popup readable across admin, manager, mechanic, and public flows.',
+  'Final no-blur pass: every staff information surface stays sharp on hover.',
+  '.quickbar button span',
+  '.message-thread-grid',
+  '.staff-card-board',
+  '.mechanic-workspace'
+]);
+
+console.log('View surface check passed: admin, manager, mechanic, mobile, modal/search, and Star email surfaces are wired.');
