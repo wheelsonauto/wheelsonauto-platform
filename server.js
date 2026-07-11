@@ -60,20 +60,57 @@ const woaAutopayStatus = {
   lastResult: null
 };
 
+function stableVehicleId(base, vehicle) {
+  const source = [vehicle && vehicle.vin, vehicle && vehicle.plate, vehicle && vehicle.stock, vehicle && vehicle.name, vehicle && vehicle.currentCustomer].filter(Boolean).join('|') || JSON.stringify(vehicle || {});
+  return String(base || 'veh') + '-' + crypto.createHash('sha1').update(source).digest('hex').slice(0, 8);
+}
+function repairDuplicateVehicleIds(data) {
+  if (!data || !Array.isArray(data.vehicles)) return data;
+  const seen = new Set();
+  data.vehicles.forEach(vehicle => {
+    const original = String(vehicle && vehicle.id || '').trim() || 'veh';
+    if (!seen.has(original)) {
+      vehicle.id = original;
+      seen.add(original);
+      return;
+    }
+    let next = stableVehicleId(original, vehicle);
+    let count = 2;
+    while (seen.has(next)) {
+      next = stableVehicleId(original + '-' + count, vehicle);
+      count += 1;
+    }
+    vehicle.id = next;
+    seen.add(next);
+  });
+  return data;
+}
+function nextUniqueVehicleId(data, base, vehicle) {
+  const ids = new Set((data.vehicles || []).map(row => String(row && row.id || '').trim()).filter(Boolean));
+  if (!ids.has(base)) return base;
+  let next = stableVehicleId(base, vehicle);
+  let count = 2;
+  while (ids.has(next)) {
+    next = stableVehicleId(base + '-' + count, vehicle);
+    count += 1;
+  }
+  return next;
+}
 async function readData() {
-  try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); }
+  try { return repairDuplicateVehicleIds(JSON.parse(await fs.readFile(DATA_FILE, 'utf8'))); }
   catch {
     try {
       await fs.mkdir(DATA_DIR, { recursive: true });
       const seed = JSON.parse(await fs.readFile(SEED_FILE, 'utf8'));
       await writeData(seed);
-      return seed;
+      return repairDuplicateVehicleIds(seed);
     } catch {
       return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
     }
   }
 }
 async function writeData(data) {
+  repairDuplicateVehicleIds(data);
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpFile = DATA_FILE + '.tmp';
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
@@ -493,7 +530,8 @@ async function mergeVehicleImport(data) {
       }
     }
     else {
-      data.vehicles.push({ id: 'veh-sheet-' + String(row.rowNumber).padStart(3, '0'), ...vehiclePatch });
+      const vehicleId = nextUniqueVehicleId(data, 'veh-sheet-' + String(row.rowNumber).padStart(3, '0'), vehiclePatch);
+      data.vehicles.push({ id: vehicleId, ...vehiclePatch });
       [row.vin, row.licensePlate, row.tempTag].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), data.vehicles.length - 1));
     }
     const currentVehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));

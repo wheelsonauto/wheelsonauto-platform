@@ -104,6 +104,20 @@ async function main() {
     const state = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
     assert(state.status === 200 && state.json, 'Owner could not read app state.');
 
+    const duplicateVehicleState = JSON.parse(JSON.stringify(state.json));
+    duplicateVehicleState.vehicles = duplicateVehicleState.vehicles || [];
+    duplicateVehicleState.vehicles.push(
+      { id: 'veh-duplicate-smoke', name: 'Smoke Duplicate One', vin: 'SMOKEDUPEVIN001', plate: 'DUP-001', status: 'Ready' },
+      { id: 'veh-duplicate-smoke', name: 'Smoke Duplicate Two', vin: 'SMOKEDUPEVIN002', plate: 'DUP-002', status: 'Ready' }
+    );
+    const duplicateWrite = await request(base, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateVehicleState });
+    assert(duplicateWrite.status === 200 && duplicateWrite.json.ok, 'Owner could not write duplicate vehicle smoke state.');
+    const duplicateRead = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
+    const duplicateSmokeVehicles = (duplicateRead.json.vehicles || []).filter(vehicle => String(vehicle.name || '').startsWith('Smoke Duplicate'));
+    const duplicateSmokeIds = new Set(duplicateSmokeVehicles.map(vehicle => vehicle.id));
+    assert(duplicateSmokeVehicles.length === 2, 'Duplicate vehicle repair should preserve both vehicles.');
+    assert(duplicateSmokeIds.size === 2, 'Duplicate vehicle repair should assign unique IDs.');
+
     const applyPage = await request(base, 'GET', '/apply');
     assert(applyPage.status === 200 && applyPage.text.includes('WheelsonAuto'), 'Public application page did not load.');
 

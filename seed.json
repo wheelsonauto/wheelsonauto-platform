@@ -59,6 +59,22 @@
       "color": "White",
       "odometer": 120880,
       "gps": "Not connected"
+    },
+    {
+      "id": "veh-005",
+      "name": "2014 GMC Acadia",
+      "vin": "1GKKRNED8EJ123456",
+      "plate": "ACD-230",
+      "rate": 230,
+      "down": 485,
+      "status": "Rented",
+      "tone": "bad",
+      "miles": "700/week",
+      "contractMonths": 19,
+      "color": "Gray",
+      "odometer": 118420,
+      "gps": "Needs review",
+      "currentCustomer": "Ramon Price"
     }
   ],
   "applications": [
