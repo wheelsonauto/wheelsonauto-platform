@@ -700,6 +700,7 @@ function apiAllowedForUser(user, pathname) {
   const role = String(user && user.role || '').toLowerCase();
   const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
+  if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
 }
@@ -707,7 +708,7 @@ function stateForUserWrite(current, incoming, user) {
   if (isOwnerUser(user)) return preserveStaffLoginSecrets(current, incoming);
   const role = String(user && user.role || '').toLowerCase();
   const allowed = role === 'mechanic'
-    ? ['maintenance', 'messages', 'vehicles']
+    ? ['maintenance', 'vehicles']
     : role === 'manager'
       ? ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'websiteLeads']
       : ['messages'];

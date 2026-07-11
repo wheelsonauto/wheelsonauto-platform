@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js && node --check app.js && node --check card-setup.js",
+    "smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {},
   "engines": {
