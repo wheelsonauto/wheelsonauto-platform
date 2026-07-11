@@ -3171,9 +3171,81 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   background:rgba(255,255,255,.035)!important;
   color:#edf3f7!important;
 }
+.compact-message-stats{
+  margin-bottom:12px;
+}
+.compact-message-stats .stat{
+  min-height:82px;
+  padding:13px 15px;
+}
+.compact-message-stats .stat b{
+  font-size:24px;
+}
+.message-tabs{
+  margin-bottom:12px;
+}
+.message-status-strip{
+  padding:12px 14px!important;
+  margin-bottom:12px;
+}
+.message-status-line{
+  display:grid;
+  grid-template-columns:minmax(180px,.5fr) minmax(220px,1fr) auto;
+  gap:12px;
+  align-items:center;
+}
+.message-status-line strong{
+  display:block;
+  color:#fff6df;
+}
+.message-status-line span{
+  display:block;
+  color:#f0b83a;
+  font-size:13px;
+  margin-top:2px;
+}
+.message-status-line small{
+  color:#d9e3eb;
+}
+.view-messages .message-setup{
+  margin-top:0;
+}
+.view-messages .message-thread-grid{
+  align-items:stretch;
+}
+.view-messages .message-thread-card,
+.view-messages .message-card{
+  background:rgba(255,255,255,.06)!important;
+  border-color:rgba(240,184,58,.20)!important;
+  color:#f7fbff!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
+.view-messages .message-thread-card:hover,
+.view-messages .message-card:hover{
+  background:rgba(240,184,58,.10)!important;
+  border-color:rgba(240,184,58,.34)!important;
+  filter:none!important;
+  backdrop-filter:none!important;
+}
 @media(max-width:760px){
   .login-card{
     padding:22px!important;
+  }
+  .compact-message-stats{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:8px!important;
+  }
+  .compact-message-stats .stat{
+    min-height:72px;
+    padding:10px!important;
+  }
+  .message-status-line{
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+  .message-status-line .btn{
+    width:100%;
   }
   .view-mechanic-portal .staff-stats,
   .view-manager-portal .staff-stats{
