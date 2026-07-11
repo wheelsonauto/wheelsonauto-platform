@@ -62,6 +62,18 @@ vehicles.forEach(vehicle => {
   const key = norm(vehicleName(vehicle));
   if (key && !vehicleByName.has(key)) vehicleByName.set(key, vehicle);
 });
+function linkedVehicle(row, label, collectionName) {
+  if (!row.vehicleId) return null;
+  const vehicle = vehicleById.get(String(row.vehicleId));
+  if (!vehicle) {
+    add(errors, `${collectionName} points to missing vehicle id`, `${label} -> ${row.vehicleId}`);
+    return null;
+  }
+  if (row.vehicle && norm(row.vehicle) && norm(row.vehicle) !== norm(vehicleName(vehicle))) {
+    add(errors, `${collectionName} vehicle text does not match linked vehicle id`, `${label} -> ${row.vehicle} / ${vehicleName(vehicle)}`);
+  }
+  return vehicle;
+}
 
 const people = new Set();
 customers.forEach(customer => {
@@ -88,7 +100,7 @@ recurring.forEach(row => {
   const active = !isRemoved(row.status);
   if (active && weakCustomerName(row.customer)) add(errors, 'Active recurring row is missing customer name', row.id || '');
   if (active && Number(row.amount || row.weeklyAmount || 0) <= 0) add(errors, 'Active recurring row is missing amount', label);
-  if (row.vehicleId && !vehicleById.has(String(row.vehicleId))) add(errors, 'Recurring row points to missing vehicle id', `${label} -> ${row.vehicleId}`);
+  linkedVehicle(row, label, 'Recurring row');
   if (!row.vehicleId && row.vehicle && !vehicleByName.has(norm(row.vehicle))) add(warnings, 'Recurring row vehicle text does not match fleet', `${label} -> ${row.vehicle}`);
   if (active && !String(row.nextRun || row.adminNextRun || '').trim()) add(warnings, 'Active recurring row is missing next charge date', label);
 });
@@ -96,14 +108,14 @@ recurring.forEach(row => {
 customers.forEach(customer => {
   const label = customer.name || customer.customer || customer.id || 'Unknown customer';
   if (weakCustomerName(label)) add(errors, 'Customer row is missing name', customer.id || '');
-  if (customer.vehicleId && !vehicleById.has(String(customer.vehicleId))) add(errors, 'Customer points to missing vehicle id', `${label} -> ${customer.vehicleId}`);
+  linkedVehicle(customer, label, 'Customer');
   if (!customer.vehicleId && customer.vehicle && !vehicleByName.has(norm(customer.vehicle))) add(warnings, 'Customer vehicle text does not match fleet', `${label} -> ${customer.vehicle}`);
 });
 
 contracts.forEach(contract => {
   const label = contract.customer || contract.id || 'Unknown customer file';
   if (!isRemoved(contract.status) && weakCustomerName(contract.customer)) add(errors, 'Active customer file is missing customer name', contract.id || '');
-  if (contract.vehicleId && !vehicleById.has(String(contract.vehicleId))) add(errors, 'Customer file points to missing vehicle id', `${label} -> ${contract.vehicleId}`);
+  linkedVehicle(contract, label, 'Customer file');
   if (!contract.vehicleId && contract.vehicle && !vehicleByName.has(norm(contract.vehicle))) add(warnings, 'Customer file vehicle text does not match fleet', `${label} -> ${contract.vehicle}`);
 });
 
@@ -119,7 +131,7 @@ payments.forEach(payment => {
 
 maintenance.forEach(job => {
   const label = job.vehicle || job.vehicleId || job.id || 'Unknown maintenance job';
-  if (job.vehicleId && !vehicleById.has(String(job.vehicleId))) add(errors, 'Maintenance job points to missing vehicle id', `${label} -> ${job.vehicleId}`);
+  linkedVehicle(job, label, 'Maintenance job');
   if (!job.vehicleId && job.vehicle && !vehicleByName.has(norm(job.vehicle))) add(warnings, 'Maintenance vehicle text does not match fleet', `${label} -> ${job.vehicle}`);
 });
 

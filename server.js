@@ -72,6 +72,10 @@ function stableVehicleId(base, vehicle) {
   const source = [vehicle && vehicle.vin, vehicle && vehicle.plate, vehicle && vehicle.stock, vehicle && vehicle.name, vehicle && vehicle.currentCustomer].filter(Boolean).join('|') || JSON.stringify(vehicle || {});
   return String(base || 'veh') + '-' + crypto.createHash('sha1').update(source).digest('hex').slice(0, 8);
 }
+function stableRecordId(base, row) {
+  const source = [row && row.customer, row && row.vehicle, row && row.vin, row && row.plate, row && row.licensePlate, row && row.dateStarted].filter(Boolean).join('|') || JSON.stringify(row || {});
+  return String(base || 'row') + '-' + crypto.createHash('sha1').update(source).digest('hex').slice(0, 8);
+}
 function repairDuplicateVehicleIds(data) {
   if (!data || !Array.isArray(data.vehicles)) return data;
   const seen = new Set();
@@ -93,6 +97,33 @@ function repairDuplicateVehicleIds(data) {
   });
   return data;
 }
+function repairDuplicateRecordIds(data, collectionName) {
+  const rows = data && data[collectionName];
+  if (!Array.isArray(rows)) return data;
+  const seen = new Set();
+  rows.forEach(row => {
+    const original = String(row && row.id || '').trim() || collectionName.slice(0, -1) || 'row';
+    if (!seen.has(original)) {
+      row.id = original;
+      seen.add(original);
+      return;
+    }
+    let next = stableRecordId(original, row);
+    let count = 2;
+    while (seen.has(next)) {
+      next = stableRecordId(original + '-' + count, row);
+      count += 1;
+    }
+    row.id = next;
+    seen.add(next);
+  });
+  return data;
+}
+function repairDataIds(data) {
+  repairDuplicateVehicleIds(data);
+  repairDuplicateRecordIds(data, 'contracts');
+  return data;
+}
 function nextUniqueVehicleId(data, base, vehicle) {
   const ids = new Set((data.vehicles || []).map(row => String(row && row.id || '').trim()).filter(Boolean));
   if (!ids.has(base)) return base;
@@ -104,21 +135,61 @@ function nextUniqueVehicleId(data, base, vehicle) {
   }
   return next;
 }
+function buildVehicleImportIndex(vehicles = []) {
+  const byVin = new Map();
+  const byPlate = new Map();
+  const byTempTag = new Map();
+  vehicles.forEach((vehicle, index) => {
+    const vin = normKey(vehicle && vehicle.vin);
+    const plate = normKey(vehicle && (vehicle.plate || vehicle.stock));
+    const tempTag = normKey(vehicle && vehicle.tempTag);
+    if (vin) byVin.set(vin, index);
+    if (plate) byPlate.set(plate, index);
+    if (tempTag) {
+      const existing = byTempTag.get(tempTag);
+      byTempTag.set(tempTag, existing === undefined ? index : null);
+    }
+  });
+  return { byVin, byPlate, byTempTag };
+}
+function vehicleImportIndexMatch(indexes, row = {}) {
+  const vin = normKey(row.vin);
+  const plate = normKey(row.licensePlate);
+  const tempTag = normKey(row.tempTag);
+  if (vin && indexes.byVin.has(vin)) return indexes.byVin.get(vin);
+  if (plate && indexes.byPlate.has(plate)) return indexes.byPlate.get(plate);
+  if (tempTag && indexes.byTempTag.has(tempTag)) {
+    const match = indexes.byTempTag.get(tempTag);
+    if (match !== null) return match;
+  }
+  return -1;
+}
+function addVehicleImportIndexKeys(indexes, vehicle, index) {
+  const vin = normKey(vehicle && vehicle.vin);
+  const plate = normKey(vehicle && (vehicle.plate || vehicle.stock));
+  const tempTag = normKey(vehicle && vehicle.tempTag);
+  if (vin) indexes.byVin.set(vin, index);
+  if (plate) indexes.byPlate.set(plate, index);
+  if (tempTag) {
+    const existing = indexes.byTempTag.get(tempTag);
+    indexes.byTempTag.set(tempTag, existing === undefined ? index : null);
+  }
+}
 async function readData() {
-  try { return repairDuplicateVehicleIds(JSON.parse(await fs.readFile(DATA_FILE, 'utf8'))); }
+  try { return repairDataIds(JSON.parse(await fs.readFile(DATA_FILE, 'utf8'))); }
   catch {
     try {
       await fs.mkdir(DATA_DIR, { recursive: true });
       const seed = JSON.parse(await fs.readFile(SEED_FILE, 'utf8'));
       await writeData(seed);
-      return repairDuplicateVehicleIds(seed);
+      return repairDataIds(seed);
     } catch {
       return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
     }
   }
 }
 async function writeData(data) {
-  repairDuplicateVehicleIds(data);
+  repairDataIds(data);
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpFile = DATA_FILE + '.tmp';
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
@@ -828,6 +899,20 @@ function rowProfile(row = {}) {
     paymentSetup: row.paymentSetup || ''
   };
 }
+function sameProfileVehicle(a = {}, b = {}) {
+  const vehicleIdA = String(a.vehicleId || '').trim();
+  const vehicleIdB = String(b.vehicleId || '').trim();
+  if (vehicleIdA && vehicleIdB && vehicleIdA === vehicleIdB) return true;
+  const vinA = normKey(a.vin);
+  const vinB = normKey(b.vin);
+  if (vinA && vinB && vinA === vinB) return true;
+  const plateA = normKey(a.licensePlate || a.plate);
+  const plateB = normKey(b.licensePlate || b.plate);
+  if (plateA && plateB && plateA === plateB) return true;
+  const vehicleA = normKey(a.vehicle);
+  const vehicleB = normKey(b.vehicle);
+  return !!(vehicleA && vehicleB && vehicleA === vehicleB);
+}
 function enrichLinkedProfiles(data) {
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
@@ -862,7 +947,9 @@ function enrichLinkedProfiles(data) {
       if (hit) return hit;
     }
     if (profile.customer) {
-      return richest(profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
+      const exactName = richest(profiles.filter(item => item.customer && normKey(item.customer) === normKey(profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
+      if (exactName) return exactName;
+      return richest(profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && sameProfileVehicle(item, profile) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
     }
     return null;
   }
@@ -911,8 +998,7 @@ async function mergeVehicleImport(data) {
   data.integrations.clover = data.integrations.clover || {};
   data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
 
-  const vehicleIndex = new Map();
-  data.vehicles.forEach((vehicle, index) => [vehicle.vin, vehicle.plate, vehicle.stock].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), index)));
+  const vehicleIndex = buildVehicleImportIndex(data.vehicles);
   const customerIndex = new Map();
   data.customers.forEach((customer, index) => customerIndex.set(normKey(customer.name), index));
   const contractIndex = new Map();
@@ -949,9 +1035,9 @@ async function mergeVehicleImport(data) {
       source: 'Vehicle sheet import',
       sourceRow: row.rowNumber
     };
-    const vehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));
-    if (vehicleKey) {
-      const existingVehicle = data.vehicles[vehicleIndex.get(vehicleKey)];
+    let vehicleIndexMatch = vehicleImportIndexMatch(vehicleIndex, row);
+    if (vehicleIndexMatch >= 0) {
+      const existingVehicle = data.vehicles[vehicleIndexMatch];
       if (existingVehicle.manuallyEditedAt) {
         Object.assign(existingVehicle, {
           source: existingVehicle.source || vehiclePatch.source,
@@ -969,10 +1055,10 @@ async function mergeVehicleImport(data) {
     else {
       const vehicleId = nextUniqueVehicleId(data, 'veh-sheet-' + String(row.rowNumber).padStart(3, '0'), vehiclePatch);
       data.vehicles.push({ id: vehicleId, ...vehiclePatch });
-      [row.vin, row.licensePlate, row.tempTag].filter(Boolean).forEach(key => vehicleIndex.set(normKey(key), data.vehicles.length - 1));
+      vehicleIndexMatch = data.vehicles.length - 1;
+      addVehicleImportIndexKeys(vehicleIndex, data.vehicles[vehicleIndexMatch], vehicleIndexMatch);
     }
-    const currentVehicleKey = [row.vin, row.licensePlate, row.tempTag].filter(Boolean).map(normKey).find(key => vehicleIndex.has(key));
-    const currentVehicle = currentVehicleKey ? data.vehicles[vehicleIndex.get(currentVehicleKey)] : null;
+    const currentVehicle = vehicleIndexMatch >= 0 ? data.vehicles[vehicleIndexMatch] : null;
     const oilDone = importedOilDate(row.oilChangeDate);
     const outOfLot = status === 'Rented' && !isInLotImport(row);
     if (!outOfLot) {
@@ -1061,6 +1147,7 @@ async function mergeVehicleImport(data) {
     if (weekly) {
       const contractKey = customerKey + '|' + normKey(vehicleName);
       const contractPatch = { customer: row.customer, vehicle: vehicleName, weekly, status: 'Active', tone: 'good', dateStarted: row.dateStarted || '', nextDue: '', balance: 0, autopay: 'Clover recurring', paymentProvider: 'Clover', tracker: row.tracker || '', source: 'Vehicle sheet import' };
+      if (currentVehicle) Object.assign(contractPatch, { vehicleId: currentVehicle.id, vin: currentVehicle.vin || row.vin || '', licensePlate: currentVehicle.plate || row.licensePlate || '', plate: currentVehicle.plate || row.licensePlate || '', tempTag: currentVehicle.tempTag || row.tempTag || '' });
       if (contractIndex.has(contractKey)) Object.assign(data.contracts[contractIndex.get(contractKey)], contractPatch);
       else {
         data.contracts.push({ id: 'WOA-SHEET-' + String(row.rowNumber).padStart(3, '0'), paidWeeks: 0, totalWeeks: 82, ...contractPatch });
