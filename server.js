@@ -47,7 +47,7 @@ const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-public-qa">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-star-qa-2">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -3333,7 +3333,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
     if (await staticFile(res, url.pathname)) return;
-    if (url.pathname === '/apply' && req.method === 'GET') return send(res, 200, await appHtml({ publicMode: true }));
+    if (url.pathname === '/apply' && req.method === 'GET') return send(res, 200, await appHtml({ publicMode: true }), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname.startsWith('/setup-card/') && req.method === 'GET') {
       const requestId = url.pathname.split('/').filter(Boolean)[1];
       const data = await readData();
@@ -4046,7 +4046,7 @@ const server = http.createServer(async (req, res) => {
       setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), 0);
       return json(res, 200, { ok: true });
     }
-    return send(res, 200, await appHtml({ publicMode: false, user }));
+    return send(res, 200, await appHtml({ publicMode: false, user }), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
   } catch (err) {
     send(res, 500, 'Server error: ' + String(err && err.message || err), 'text/plain; charset=utf-8');
   }
