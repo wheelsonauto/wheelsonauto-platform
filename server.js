@@ -567,6 +567,7 @@ function publicMessagingStatus(data = {}) {
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
+    webhookSecretConfigured: !!MESSAGING_WEBHOOK_SECRET,
     aiProvider: OPENAI_API_KEY && WOA_AI_MODEL ? 'openai' : 'rules',
     aiEnabled: settings.aiEnabled,
     aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
@@ -3337,6 +3338,13 @@ function stateForUserRead(data, user) {
   const owner = isOwnerUser(user);
   if (!owner) safe = dataScopedToOrganization(safe, userOrganizationId(user));
   enrichLinkedProfiles(safe);
+  safe.integrations = safe.integrations || {};
+  safe.integrations.messaging = { ...(safe.integrations.messaging || {}), ...publicMessagingStatus(data) };
+  if (owner) {
+    safe.integrations.clover = safe.integrations.clover || {};
+    safe.integrations.clover.webhookSecretConfigured = !!CLOVER_WEBHOOK_SECRET;
+    safe.integrations.clover.webhookSecretStatus = CLOVER_WEBHOOK_SECRET ? 'Configured' : 'Needs shared secret';
+  }
   if (owner) return safe;
   const role = String(user && user.role || '').toLowerCase();
   delete safe.security;

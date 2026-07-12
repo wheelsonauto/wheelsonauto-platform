@@ -77,6 +77,7 @@ requireText('Server notification settings route', server, "/api/notifications/em
 requireText('Server notification test route', server, "/api/notifications/email/test");
 requireText('Server daily closeout notification route', server, "/api/notifications/daily-closeout");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
+requireText('Server public webhook secret status', publicMessagingStatus, 'webhookSecretConfigured');
 requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
 requireText('Customer portal message route', server, "/customer/message");
 requireText('Customer portal message notification event', server, 'customer_message');

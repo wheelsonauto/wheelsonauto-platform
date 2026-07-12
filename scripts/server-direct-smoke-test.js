@@ -663,6 +663,9 @@ async function main() {
     assert(messagingWebhookHealth && Number(messagingWebhookHealth.count) === 0 && messagingWebhookHealth.tone === 'good', 'Owner system health should include the messaging webhook secret readiness row.');
     const cloverWebhookHealth = ownerHealth.json.issues.find(row => row.key === 'clover_webhook_secret');
     assert(cloverWebhookHealth && Number(cloverWebhookHealth.count) === 0 && cloverWebhookHealth.tone === 'good', 'Owner system health should include the Clover webhook secret readiness row.');
+    const ownerRuntimeState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(ownerRuntimeState.json.integrations && ownerRuntimeState.json.integrations.messaging && ownerRuntimeState.json.integrations.messaging.webhookSecretConfigured === true, 'Owner state should expose safe messaging webhook readiness without exposing the secret.');
+    assert(ownerRuntimeState.json.integrations.clover && ownerRuntimeState.json.integrations.clover.webhookSecretConfigured === true, 'Owner state should expose safe Clover webhook readiness without exposing the secret.');
     const portalHealth = ownerHealth.json.issues.find(row => row.key === 'customer_portal_access');
     assert(portalHealth && Number(portalHealth.count) > 0 && /login-ready/i.test(portalHealth.detail || ''), 'Owner system health should flag active customers whose portal record is not login ready.');
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
