@@ -157,7 +157,7 @@ assertIncludes('Mechanic read data', strings(mechanicReadMatch[1]), ['vehicles',
 assertExcludes('Mechanic read data', strings(mechanicReadMatch[1]), ['payments', 'recurringPayments', 'apiProviders']);
 if (!/configured:\s*false/.test(mechanicReadMatch[1])) fail('Mechanic messaging read state should be disabled.');
 if (!/scrubMechanicMoneyFields/.test(stateForUserRead)) fail('Mechanic read state should scrub money fields.');
-assertIncludes('Staff read redaction', stateForUserRead, ['delete safe.auditLogs']);
+assertIncludes('Staff read redaction', stateForUserRead, ['delete safe.auditLogs', 'scrubPrivateOperationalFields', 'enrichLinkedProfiles(safe)']);
 
 const mechanicWriteMatch = stateForUserWrite.match(/role === 'mechanic'\s*\?\s*\[((?:.|\n)*?)\]/m);
 const managerWriteMatch = stateForUserWrite.match(/role === 'manager'\s*\?\s*\[((?:.|\n)*?)\]/m);
@@ -165,6 +165,7 @@ if (!mechanicWriteMatch || !managerWriteMatch) fail('Could not find staff write 
 assertIncludes('Mechanic write data', strings(mechanicWriteMatch[1]), ['maintenance', 'vehicles']);
 assertExcludes('Mechanic write data', strings(mechanicWriteMatch[1]), ['messages', 'payments', 'recurringPayments', 'integrations']);
 if (!/sanitizeMechanicCollectionWrite/.test(stateForUserWrite)) fail('Mechanic write state should sanitize money and customer assignment fields.');
+if (!/preservePrivateOperationalFields/.test(server)) fail('Staff saves should preserve hidden owner-only payment/source fields.');
 assertIncludes('Manager write data', strings(managerWriteMatch[1]), ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'tasks']);
 assertExcludes('Manager write data', strings(managerWriteMatch[1]), ['payments', 'recurringPayments', 'integrations', 'apiProviders', 'staffAccounts', 'customerAccounts']);
 

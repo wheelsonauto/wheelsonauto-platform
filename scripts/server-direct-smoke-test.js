@@ -509,6 +509,17 @@ async function main() {
       paymentToken: 'secret-payment-token',
       raw: { private: 'secret-raw-value' }
     });
+    portalPrivacyState.customers = portalPrivacyState.customers || [];
+    let portalPrivacyCustomer = portalPrivacyState.customers.find(row => row.name === 'Alicia Brown' || row.customer === 'Alicia Brown');
+    if (!portalPrivacyCustomer) {
+      portalPrivacyCustomer = { id: 'direct-customer-privacy-file', organizationId: 'org-wheelsonauto', name: 'Alicia Brown' };
+      portalPrivacyState.customers.unshift(portalPrivacyCustomer);
+    }
+    Object.assign(portalPrivacyCustomer, {
+      cloverPaymentSource: 'customer-secret-source-token',
+      paymentToken: 'customer-secret-payment-token',
+      raw: { private: 'customer-secret-raw-value' }
+    });
     portalPrivacyState.documents = portalPrivacyState.documents || [];
     portalPrivacyState.documents.unshift(
       {
@@ -544,6 +555,14 @@ async function main() {
     );
     const portalPrivacyWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: portalPrivacyState });
     assert(portalPrivacyWrite.status === 200 && portalPrivacyWrite.json.ok, 'Owner could not seed customer portal privacy fields.');
+    const managerPrivacyRead = await request(server, 'GET', '/api/state', { cookie: managerCookie });
+    assert(managerPrivacyRead.status === 200 && !JSON.stringify(managerPrivacyRead.json).includes('secret-source-token') && !JSON.stringify(managerPrivacyRead.json).includes('secret-payment-token') && !JSON.stringify(managerPrivacyRead.json).includes('secret-raw-value') && !JSON.stringify(managerPrivacyRead.json).includes('customer-secret-source-token'), 'Manager state should not expose raw saved-card/source secrets.');
+    const managerPrivacySave = await request(server, 'PUT', '/api/state', { cookie: managerCookie, json: managerPrivacyRead.json });
+    assert(managerPrivacySave.status === 200 && managerPrivacySave.json.ok, 'Manager should be able to save scrubbed operational state.');
+    const ownerPrivacyAfterManagerSave = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(JSON.stringify(ownerPrivacyAfterManagerSave.json).includes('customer-secret-source-token') && JSON.stringify(ownerPrivacyAfterManagerSave.json).includes('customer-secret-payment-token'), 'Manager save should preserve hidden owner-only customer payment fields.');
+    const mechanicPrivacyRead = await request(server, 'GET', '/api/state', { cookie: mechanicCookie });
+    assert(mechanicPrivacyRead.status === 200 && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-source-token') && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-payment-token') && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-raw-value'), 'Mechanic state should not expose raw saved-card/source secrets.');
 
     const publicApplyPage = await request(server, 'GET', '/apply');
     assert(publicApplyPage.status === 200 && publicApplyPage.text.includes('window.__PUBLIC_MODE__=true'), 'Public application page should render in public mode.');

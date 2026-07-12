@@ -2195,12 +2195,14 @@ function enrichLinkedProfiles(data) {
     const match = bestMatch(row);
     if (match) contractFilled += fillBlank(row, match, ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
   });
-  data.integrations.profileEnrichment = {
-    updatedAt: new Date().toISOString(),
-    recurringFieldsFilled: recurringFilled,
-    customerFieldsFilled: customerFilled,
-    contractFieldsFilled: contractFilled
-  };
+  if (recurringFilled || customerFilled || contractFilled || !data.integrations.profileEnrichment) {
+    data.integrations.profileEnrichment = {
+      updatedAt: new Date().toISOString(),
+      recurringFieldsFilled: recurringFilled,
+      customerFieldsFilled: customerFilled,
+      contractFieldsFilled: contractFilled
+    };
+  }
   return data.integrations.profileEnrichment;
 }
 function vehicleNameFromParts(row = {}) {
@@ -2469,10 +2471,21 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey'];
+function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
+  const safe = { ...(newRow || {}) };
+  PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(oldRow, field) && !Object.prototype.hasOwnProperty.call(safe, field)) {
+      safe[field] = oldRow[field];
+    }
+  });
+  return safe;
+}
 function mergeScopedCollection(currentRows, incomingRows, user) {
   if (!Array.isArray(incomingRows) || isOwnerUser(user)) return incomingRows;
   const keep = (Array.isArray(currentRows) ? currentRows : []).filter(row => !rowVisibleToUserOrganization(row, user));
-  const owned = incomingRows.map(row => ({ ...row, organizationId: rowOrganizationId(row) === MAIN_ORG_ID && userOrganizationId(user) !== MAIN_ORG_ID ? userOrganizationId(user) : rowOrganizationId(row) }));
+  const currentById = new Map((Array.isArray(currentRows) ? currentRows : []).map(row => [String(row && row.id || ''), row || {}]));
+  const owned = incomingRows.map(row => preservePrivateOperationalFields(currentById.get(String(row && row.id || '')) || {}, { ...row, organizationId: rowOrganizationId(row) === MAIN_ORG_ID && userOrganizationId(user) !== MAIN_ORG_ID ? userOrganizationId(user) : rowOrganizationId(row) }));
   return keep.concat(owned);
 }
 const MECHANIC_MONEY_FIELDS = ['amount', 'cost', 'price', 'rate', 'weekly', 'weeklyAmount', 'balance', 'down', 'deposit', 'payment', 'paymentAmount', 'profit', 'income', 'recovery', 'recoveryAmount', 'deductible'];
@@ -2713,7 +2726,7 @@ function auditChangedSections(current = {}, next = {}) {
   });
   return details.slice(0, 24);
 }
-const AUDIT_PRIVATE_FIELDS = new Set(['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey']);
+const AUDIT_PRIVATE_FIELDS = new Set(PRIVATE_OPERATIONAL_FIELDS);
 function auditComparableValue(value) {
   if (Array.isArray(value)) return value.map(auditComparableValue);
   if (!value || typeof value !== 'object') return value;
@@ -2817,6 +2830,7 @@ function redactStaffSecrets(data) {
 }
 function stateForUserRead(data, user) {
   const safe = redactStaffSecrets(data);
+  enrichLinkedProfiles(safe);
   if (isOwnerUser(user)) return safe;
   const role = String(user && user.role || '').toLowerCase();
   delete safe.security;
@@ -2828,6 +2842,9 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
+  ['recurringPayments', 'payments', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications'].forEach(key => {
+    if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
+  });
   Object.keys(safe).forEach(key => {
     if (!Array.isArray(safe[key])) return;
     safe[key] = key === 'organizations'
@@ -2952,7 +2969,17 @@ function moneyText(value) {
 }
 function stripPrivateCustomerFields(row = {}) {
   const safe = { ...row };
-  ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey'].forEach(key => delete safe[key]);
+  PRIVATE_OPERATIONAL_FIELDS.forEach(key => delete safe[key]);
+  return safe;
+}
+function scrubPrivateOperationalFields(value) {
+  if (Array.isArray(value)) return value.map(scrubPrivateOperationalFields);
+  if (!value || typeof value !== 'object') return value;
+  const safe = {};
+  Object.entries(value).forEach(([field, fieldValue]) => {
+    if (AUDIT_PRIVATE_FIELDS.has(field)) return;
+    safe[field] = scrubPrivateOperationalFields(fieldValue);
+  });
   return safe;
 }
 function dataScopedToOrganization(data = {}, organizationId = MAIN_ORG_ID) {
@@ -6132,6 +6159,7 @@ const server = http.createServer(async (req, res) => {
       const incoming = JSON.parse(await readBody(req) || '{}');
       const current = await readData();
       const nextState = stateForUserWrite(current, incoming, user);
+      enrichLinkedProfiles(nextState);
       const changes = auditChangedSections(current, nextState);
       await queueStateChangeNotifications(current, nextState, user);
       if (changes.length) appendAuditLog(nextState, user, 'Platform state saved', changes);
