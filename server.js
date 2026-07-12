@@ -915,6 +915,13 @@ function closeoutRecurringChargeable(row = {}) {
 }
 function closeoutVerificationItems(data = {}) {
   const items = [];
+  const vehicleContext = row => {
+    const vehicle = row.vehicle || row.vehicleName || '';
+    const vin = row.vin ? 'VIN ' + row.vin : '';
+    const tag = row.licensePlate || row.plate || row.tag || row.tempTag || '';
+    const tracker = row.tracker ? 'Tracker ' + row.tracker : '';
+    return [vehicle, vin, tag ? 'Tag ' + tag : '', tracker].filter(Boolean).join(' | ');
+  };
   (data.documents || []).filter(row => {
     const status = String(row.status || '').toLowerCase();
     return row.requiresVerification === true || status.includes('need') || status.includes('review') || status.includes('pending');
@@ -922,7 +929,7 @@ function closeoutVerificationItems(data = {}) {
     items.push({
       type: 'Document proof',
       customer: row.customer || 'Unassigned',
-      detail: [row.type || 'Document', row.vehicle || '', row.reference || row.policyNumber || '', row.proofUrl || row.url || ''].filter(Boolean).join(' | ')
+      detail: [row.type || 'Document', vehicleContext(row), row.reference || row.policyNumber || '', row.expires ? 'Expires ' + row.expires : '', row.proofUrl || row.url || ''].filter(Boolean).join(' | ')
     });
   });
   (data.payments || []).filter(row => {
@@ -932,21 +939,21 @@ function closeoutVerificationItems(data = {}) {
     items.push({
       type: 'Paid outside app',
       customer: closeoutUsefulCustomerName(row) || row.customer || 'Unassigned',
-      detail: [moneyText(row.amount || 0), row.date || row.createdAt || '', row.method || row.type || '', row.notes || ''].filter(Boolean).join(' | ')
+      detail: [moneyText(row.amount || 0), vehicleContext(row), row.date || row.createdAt || '', row.method || row.type || '', row.proofUrl || row.url || row.notes || ''].filter(Boolean).join(' | ')
     });
   });
   (data.maintenance || []).filter(row => String(row.source || '').toLowerCase().includes('customer portal') && (row.proofUrl || row.url || row.evidence)).forEach(row => {
     items.push({
       type: 'Service proof',
       customer: row.customer || 'Unassigned',
-      detail: [row.type || row.issue || 'Service', row.vehicle || '', row.due || row.nextDue || '', row.proofUrl || row.url || row.evidence || ''].filter(Boolean).join(' | ')
+      detail: [row.type || row.issue || 'Service', vehicleContext(row), row.due || row.nextDue || '', row.proofUrl || row.url || row.evidence || ''].filter(Boolean).join(' | ')
     });
   });
   (data.claims || []).filter(row => String(row.source || '').toLowerCase().includes('customer portal') && (row.proofUrl || row.url || row.evidence)).forEach(row => {
     items.push({
       type: 'Claim / toll proof',
       customer: row.customer || 'Unassigned',
-      detail: [row.type || 'Issue', moneyText(row.amount || 0), row.incidentDate || row.nextFollowUp || '', row.proofUrl || row.url || row.evidence || ''].filter(Boolean).join(' | ')
+      detail: [row.type || 'Issue', moneyText(row.amount || 0), vehicleContext(row), row.incidentDate || row.nextFollowUp || '', row.proofUrl || row.url || row.evidence || ''].filter(Boolean).join(' | ')
     });
   });
   return items.slice(0, 30);
