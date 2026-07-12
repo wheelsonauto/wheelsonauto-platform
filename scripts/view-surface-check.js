@@ -259,8 +259,11 @@ assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   'Notice photo/link',
   'Proof link/note: ',
   'customerPortalServiceRow',
+  'customerPortalPaymentRow',
   'customerPortalChecklistText',
   'VIN ',
+  'Tag ',
+  'payment.source',
   'Tracker '
 ]);
 
