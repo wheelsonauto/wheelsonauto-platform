@@ -48,8 +48,10 @@ const transactionCustomerName = finalFunctionSlice('transactionCustomerName');
 const transactionPossibleMatches = finalFunctionSlice('transactionPossibleMatches');
 const transactionCandidateNote = finalFunctionSlice('transactionCandidateNote');
 const applyTransactionCandidate = finalFunctionSlice('applyTransactionCandidate');
+const paymentTruthQueueRows = finalFunctionSlice('paymentTruthQueueRows');
+const paymentTruthQueueBoard = finalFunctionSlice('paymentTruthQueueBoard');
 
-if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
+if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout || !paymentTruthQueueRows || !paymentTruthQueueBoard) {
   fail('Missing core payment workflow functions.');
 }
 
@@ -128,6 +130,22 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   "data-tab=\"'+esc(l[4])+'\"",
   "'Today'"
 ].forEach(text => requireText('Payment closeout board', paymentCloseout, text));
+
+[
+  'Data truth queue',
+  'payment-truth-queue',
+  'Vehicle link',
+  'VIN / tag / tracker',
+  'Contact missing',
+  'Payment not found',
+  'Unmatched payment',
+  'Open card setup',
+  'Portal login',
+  'transactionCustomerName(p,roster)',
+  'starQaOpenCardSetupLinks()',
+  'missingCustomerPortalRecords()',
+  'assignmentConflict'
+].forEach(text => requireText('Payment/customer/fleet truth queue', paymentTruthQueueRows + paymentTruthQueueBoard + app, text));
 
 if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")) {
   fail('Payments still contains stale Attention tab wiring.');

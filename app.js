@@ -505,6 +505,35 @@ MessagesFast=function(){
 Messages=MessagesFast;
 
 function trackerName(v){v=v||{};return String(v.tracker||v.trackerName||v.gps||v.gpsTracker||v.device||v.deviceName||v.trackerId||'').trim()}
+function paymentTruthQueueRows(){
+  var rows=[],roster=recurringRoster(),cars=db.vehicles||[],payments=db.payments||[];
+  function add(tone,type,title,detail,action){rows.push({tone:tone,type:type,title:title,detail:detail,action:action||''})}
+  roster.forEach(function(r){var s=String(r.status||'').toLowerCase();if(!r.customer||s.indexOf('removed')>=0||s.indexOf('history')>=0)return;var c=findCustomerByName(r.customer)||{},con=findContractByCustomer(r.customer)||{},car=findVehicle(r.vehicleId||c.vehicleId||con.vehicleId)||findVehicleByCustomer(r.customer)||{};var tag=car.plate||car.stock||r.licensePlate||r.plate||c.licensePlate||'',vin=car.vin||r.vin||c.vin||'',trk=trackerName(car)||r.tracker||c.tracker||'',contact=r.phone||r.email||c.phone||c.email||con.phone||con.email;if(!(car.id||r.vehicle||c.vehicle||con.vehicle))add('warn','Vehicle link',r.customer,'Active autopay/customer file is missing a vehicle link before charges, service, reports, and messages can be fully trusted.',customerFileButton(r.customer,'Open file'));else if(!vin||!tag||!trk)add('warn','VIN / tag / tracker',r.customer,[car.id?vehicleName(car):(r.vehicle||c.vehicle||con.vehicle||'Vehicle'),vin?'VIN saved':'VIN missing',tag?'Tag '+tag:'Tag missing',trk?'Tracker '+trk:'Tracker missing'].join(' | '),(car.id?'<button class="btn" data-action="open-vehicle" data-id="'+esc(car.id)+'">Car</button>':'')+customerFileButton(r.customer,'File'));if(!contact)add('warn','Contact missing',r.customer,'No phone or email saved, so Star/SMS/email follow-up cannot work for this customer.',customerFileButton(r.customer,'File'));var st=paymentState(r).key;if(st==='notfound'||st==='setup')add('warn',st==='notfound'?'Payment not found':'Card setup',r.customer,money(r.amount||0)+' '+(r.frequency||'payment')+' needs card/payment setup review before autopay is reliable.','<button class="btn" data-view="Payments" data-tab="Today">Today</button>'+customerFileButton(r.customer,'File'))});
+  cars.filter(function(v){return String(v.status||'').toLowerCase()!=='removed'}).forEach(function(v){if(String(v.assignmentConflict||'').trim())add('bad','Assignment conflict',vehicleName(v),[v.assignmentConflict,v.vin?'VIN '+v.vin:'VIN missing',v.plate||v.stock?'Tag '+(v.plate||v.stock):'Tag missing',trackerName(v)?'Tracker '+trackerName(v):'Tracker missing'].filter(Boolean).join(' | '),'<button class="btn primary" data-action="open-vehicle" data-id="'+esc(v.id)+'">Fix car</button>')});
+  payments.filter(function(p){return transactionCustomerName(p,roster)==='Customer match needed'}).slice(0,12).forEach(function(p){add('bad','Unmatched payment',money(p.amount||0)+' '+(p.status||'Payment'),[p.date||'',p.method||p.type||'',p.notes||p.source||'Needs customer match'].filter(Boolean).join(' | '),'<button class="btn" data-view="Payments" data-tab="Transactions">Transactions</button>')});
+  starQaOpenCardSetupLinks().slice(0,8).forEach(function(r){add('warn','Open card setup',r.customer||'Customer',[(r.vehicle||'No vehicle linked'),money(r.amount||0),r.status||'Open setup link'].filter(Boolean).join(' | '),'<button class="btn" data-view="Messages" data-tab="Queue">Queue</button>'+customerFileButton(r.customer,'File'))});
+  missingCustomerPortalRecords().slice(0,8).forEach(function(c){add('blue','Portal login',c.name||c.customer||'Customer','Create portal access for receipts, proof, messages, card changes, and service requests.',customerPortalButton(c.name||c.customer,'Portal'))});
+  return rows
+}
+function paymentTruthQueueBoard(){
+  var rows=paymentTruthQueueRows(),bad=rows.filter(function(r){return r.tone==='bad'}).length,warn=rows.filter(function(r){return r.tone==='warn'}).length,shown=rows.slice(0,10);
+  return '<section class="card section payment-truth-queue" data-limit="10"><div class="section-head"><div><h2>Data truth queue</h2><p>Fix these before charging, closeout, reports, tolls, claims, messages, or Star automation are trusted.</p></div><div class="star-command-stats"><span class="bad">'+bad+' critical</span><span class="warn">'+warn+' review</span></div></div>'+localSearch('Search truth queue by customer, VIN, tag, tracker, payment, setup, portal, or issue')+'<div class="role-command-grid">'+(shown.length?shown.map(function(r){return '<div class="role-command-card '+esc(r.tone)+'"><div class="role-command-top"><div><strong>'+esc(r.title)+'</strong><small>'+esc(r.detail)+'</small></div>'+badge(r.type,r.tone)+'</div><div class="actions">'+(r.action||'<button class="btn" data-view="Payments" data-tab="Active">Review</button>')+'</div></div>'}).join(''):'<div class="item">Payment, customer, and fleet truth looks clean enough for the current records.</div>')+'</div><div class="notice">This queue is not a second customer list. It only shows records where money, customer, car, VIN/tag, tracker, contact, portal, or transaction matching needs attention.</div></section>'
+}
+var __woaPaymentsTruthQueueBase=Payments;
+Payments=function(){
+  __woaPaymentsTruthQueueBase();
+  var main=document.querySelector('.main.view-payments-customers'),tabs=main&&main.querySelector('.tabs'),rootEl=document.getElementById('root');
+  if(main&&!main.querySelector('.payment-truth-queue')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=paymentTruthQueueBoard();
+    if(tabs)tabs.insertAdjacentElement('beforebegin',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }else if(!main&&rootEl&&String(rootEl.innerHTML||'').indexOf('payment-truth-queue')<0){
+    rootEl.innerHTML=String(rootEl.innerHTML||'').replace('<div class="tabs">',paymentTruthQueueBoard()+'<div class="tabs">');
+    hydrateLocalSearches();
+  }
+}
 function platformReadinessItems(){
   var roster=recurringRoster(),cars=db.vehicles||[],jobs=customerMaintenanceJobs(),claims=db.claims||[],payments=db.payments||[],messages=db.messages||[],apps=db.applications||[],staff=db.staffAccounts||[],orgsList=orgs(),apiReview=apiProviderReviewRows(),todayRows=roster.filter(function(r){return dueOrTouchedToday(r)}),collected=collectedAmountForDate(todayKey()),expected=todayRows.reduce(function(s,r){return s+Number(r.amount||0)},0);
   var paymentAttention=roster.filter(function(r){var k=paymentState(r).key;return ['retry','contact','setup','notfound'].indexOf(k)>=0}).length;

@@ -106,6 +106,8 @@ function renderViews() {
   'paymentRecurringCard',
   'paymentCustomerCard',
   'paymentCardSection',
+  'paymentTruthQueueRows',
+  'paymentTruthQueueBoard',
   'vehicleTrackingStatus',
   'vehicleTrackingLine',
   'verificationDocs',
@@ -170,6 +172,29 @@ assertIncludes('Payments surface', payments, [
 
 const paymentCardSection = finalFunctionSlice(app, 'paymentCardSection');
 assertIncludes('Payment card section helper', paymentCardSection, ['localSearch', 'customer-pay-list', 'data-limit']);
+
+const paymentTruthQueueRows = finalFunctionSlice(app, 'paymentTruthQueueRows');
+const paymentTruthQueueBoard = finalFunctionSlice(app, 'paymentTruthQueueBoard');
+assertIncludes('Payments truth queue rows', paymentTruthQueueRows, [
+  'Vehicle link',
+  'VIN / tag / tracker',
+  'Contact missing',
+  'Payment not found',
+  'Card setup',
+  'Assignment conflict',
+  'Unmatched payment',
+  'Open card setup',
+  'Portal login'
+]);
+assertIncludes('Payments truth queue board', paymentTruthQueueBoard + app, [
+  'Data truth queue',
+  'payment-truth-queue',
+  'Fix these before charging, closeout, reports, tolls, claims, messages, or Star automation are trusted.',
+  'Search truth queue by customer, VIN, tag, tracker, payment, setup, portal, or issue',
+  'This queue is not a second customer list',
+  '__woaPaymentsTruthQueueBase',
+  'paymentTruthQueueBoard()'
+]);
 
 assertIncludes('Payment receipt surface', app, [
   'paymentReceiptBody',

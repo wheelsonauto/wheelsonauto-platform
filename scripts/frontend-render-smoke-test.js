@@ -429,8 +429,8 @@ function ownerSmoke() {
   assertCompactBoard('Owner dashboard', html(context), ['Dashboard', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
 
   [
-    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
-    ['Payments today', 'Payments', 'Today', ['Daily closeout', 'Today action list', 'payment-command', 'customer-pay-list']],
+    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Data truth queue', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
+    ['Payments today', 'Payments', 'Today', ['Payments & Customers', 'Data truth queue', 'Daily closeout', 'Today action list', 'payment-command', 'customer-pay-list']],
     ['Payments history', 'Payments', 'History', ['Customer history', 'customer-pay-list']],
     ['Payments transactions', 'Payments', 'Transactions', ['Transactions', 'transaction-card', 'customer-pay-list']],
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
