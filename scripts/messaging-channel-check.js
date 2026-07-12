@@ -87,6 +87,8 @@ requireText('Owner notification event filter', queueOwnerEmailNotification, 'set
 requireText('Daily closeout notification payload', server, 'dailyCloseoutNotificationPayload');
 requireText('Daily closeout paid-outside summary', server, 'paidOutsideAmount');
 requireText('Daily closeout contact summary', server, 'peopleToContact');
+requireText('Daily closeout contact rows', server, 'contactRows');
+requireText('Daily closeout contact list body', server, 'Contact list:');
 requireText('Daily closeout Clover summary', server, 'cloverCollected');
 requireText('Daily closeout verification payload', server, 'closeoutVerificationItems');
 requireText('Daily closeout verification body', server, 'Verification inbox:');

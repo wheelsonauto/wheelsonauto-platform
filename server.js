@@ -1097,6 +1097,24 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const pending = pendingToday.concat(chargeable).concat(cardLinked).concat(setupNeeded).concat(paymentNotFound);
   const stillOpenAmount = Math.max(0, expected - collected);
   const peopleToContact = failedTwice.length + paymentNotFound.length;
+  const closeoutContactItem = (row, status) => {
+    const vehicle = reportVehicleFor(data, row.customer, row.vehicleId);
+    return {
+      customer: row.customer || row.name || 'Unknown customer',
+      amount: Number(row.amount || row.weeklyAmount || 0),
+      status,
+      phone: row.phone || '',
+      email: row.email || '',
+      vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || ''),
+      vin: vehicle.vin || row.vin || '',
+      tag: vehicle.plate || vehicle.stock || row.licensePlate || row.plate || '',
+      tracker: vehicle.tracker || row.tracker || ''
+    };
+  };
+  const contactRows = failedTwice.map(row => closeoutContactItem(row, 'Failed twice - contact now'))
+    .concat(paymentNotFound.map(row => closeoutContactItem(row, 'Payment not found - verify Clover/card')))
+    .concat(failedOnce.map(row => closeoutContactItem(row, 'Failed once - retry watch')))
+    .concat(setupNeeded.map(row => closeoutContactItem(row, 'Setup needed - send card link')));
   const verificationItems = closeoutVerificationItems(data);
   const assignmentConflicts = assignmentConflictRows(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
@@ -1130,6 +1148,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Customers to review:',
     ...(recurring.length ? recurring.slice(0, 20).map(row => '- ' + (row.customer || 'Unknown customer') + ' | ' + moneyText(row.amount || row.weeklyAmount || 0) + ' | ' + closeoutRecurringState(row, dateKeyValue) + ' | ' + (row.vehicle || row.vin || 'No vehicle linked')) : ['- No due/failed customers in closeout.']),
     '',
+    'Contact list:',
+    ...(contactRows.length ? contactRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + (item.phone || item.email || 'No contact saved') + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.tracker ? ' | Tracker ' + item.tracker : '')) : ['- No failed-twice, payment-not-found, retry-watch, or setup-needed customers need follow-up.']),
+    '',
     'Recent transactions:',
     ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.']),
     '',
@@ -1162,6 +1183,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       failedOnce: failedOnce.length,
       failedTwice: failedTwice.length,
       peopleToContact,
+      contactRows: contactRows.slice(0, 50),
       paidOutsideApp: paidOutsidePayments.length,
       paidOutsideAmount,
       cloverCollected,

@@ -964,6 +964,29 @@ async function main() {
       cloverCustomerId: 'direct-closeout-clover-customer',
       status: 'Active'
     }, {
+      id: 'rec-direct-closeout-failed-twice',
+      customer: 'Direct Closeout Failed Twice',
+      phone: '3135552222',
+      email: 'direct-closeout-failed-twice@example.com',
+      vehicleId: 'veh-direct-closeout-failed-twice',
+      vehicle: '2024 Direct Failed Twice Car',
+      amount: 50,
+      frequency: 'Weekly',
+      nextRun: '2099-12-31',
+      failedAttempts: 2,
+      status: '2x failed - contact customer'
+    }, {
+      id: 'rec-direct-closeout-payment-not-found',
+      customer: 'Direct Closeout Payment Missing',
+      phone: '3135553333',
+      email: 'direct-closeout-payment-missing@example.com',
+      vehicleId: 'veh-direct-closeout-payment-not-found',
+      vehicle: '2024 Direct Missing Payment Car',
+      amount: 60,
+      frequency: 'Weekly',
+      nextRun: '2099-12-31',
+      status: 'Payment not found'
+    }, {
       id: 'rec-direct-report-candidate',
       customer: 'Direct Report Candidate',
       phone: '3135550456',
@@ -987,6 +1010,8 @@ async function main() {
       status: 'Active'
     });
     closeoutDedupData.vehicles.unshift(
+      { id: 'veh-direct-closeout-failed-twice', year: 2024, make: 'Direct', model: 'Failed Twice Car', vin: 'DIRECTFAILED2VIN', plate: 'DIR-F2X', tracker: 'TRK-F2X', status: 'Rented', currentCustomer: 'Direct Closeout Failed Twice' },
+      { id: 'veh-direct-closeout-payment-not-found', year: 2024, make: 'Direct', model: 'Missing Payment Car', vin: 'DIRECTPAYMISSINGVIN', plate: 'DIR-PNF', tracker: 'TRK-PNF', status: 'Rented', currentCustomer: 'Direct Closeout Payment Missing' },
       { id: 'veh-direct-report-candidate', year: 2024, make: 'Direct', model: 'Report Candidate Car', vin: 'DIRECTREPORTVIN', plate: 'DIR-RPT', tracker: 'TRK-RPT', status: 'Rented', currentCustomer: 'Direct Report Candidate' },
       { id: 'veh-direct-report-candidate-backup', year: 2024, make: 'Direct', model: 'Report Candidate Backup', vin: 'DIRECTREPORTBACKUPVIN', plate: 'DIR-RP2', tracker: 'TRK-RP2', status: 'Rented', currentCustomer: 'Direct Report Candidate Backup' }
     );
@@ -1022,13 +1047,15 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.paidOutsideApp === 1 && closeoutDedupNotification.json.summary.paidOutsideAmount === 45, 'Daily closeout should break out paid-outside-app records separately.');
     assert(closeoutDedupNotification.json.summary.cloverCollected === 1356 && closeoutDedupNotification.json.summary.cloverTransactions === 3, 'Daily closeout should keep Clover collected totals separate from paid-outside-app records.');
     assert(closeoutDedupNotification.json.summary.pendingToday >= 1 && closeoutDedupNotification.json.summary.stillOpenAmount === Math.max(0, closeoutDedupNotification.json.summary.expected - closeoutDedupNotification.json.summary.collected), 'Daily closeout should expose due customer counts and still-open amount.');
-    assert(closeoutDedupNotification.json.summary.peopleToContact === 0 && closeoutDedupNotification.json.summary.paidTransactions === 4, 'Daily closeout should expose contact and paid transaction counts.');
+    assert(closeoutDedupNotification.json.summary.peopleToContact === 2 && closeoutDedupNotification.json.summary.paidTransactions === 4, 'Daily closeout should expose contact and paid transaction counts.');
+    assert(Array.isArray(closeoutDedupNotification.json.summary.contactRows) && closeoutDedupNotification.json.summary.contactRows.some(row => row.customer === 'Direct Closeout Failed Twice' && row.vin === 'DIRECTFAILED2VIN') && closeoutDedupNotification.json.summary.contactRows.some(row => row.customer === 'Direct Closeout Payment Missing' && row.tag === 'DIR-PNF'), 'Daily closeout should return structured contact rows with customer, VIN, and tag evidence.');
     assert(closeoutDedupNotification.json.summary.vehicleAssignmentConflicts >= 1, 'Daily closeout should expose vehicle assignment conflicts before owner signoff.');
     assert(closeoutDedupNotification.json.summary.signedOff === true && closeoutDedupNotification.json.summary.signedBy === 'Owner Smoke', 'Daily closeout should expose saved owner signoff metadata.');
     assert(closeoutDedupNotification.json.summary.signoffSnapshot && closeoutDedupNotification.json.summary.signoffSnapshot.collected === 1401, 'Daily closeout should carry the frozen signoff snapshot.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689'), 'Daily closeout message should include signoff status and snapshot numbers.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Paid outside app: 1 / $45'), 'Daily closeout body should show paid-outside-app totals.');
+    assert(String(closeoutDedupNotification.json.message.body || '').includes('Contact list:') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Failed Twice | $50 | Failed twice - contact now') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Payment Missing | $60 | Payment not found - verify Clover/card'), 'Daily closeout body should list exact customers needing follow-up.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Vehicle assignment conflicts:') && String(closeoutDedupNotification.json.message.body || '').includes('DIRECTCONFLICTVIN'), 'Daily closeout body should list vehicle assignment conflicts with VIN/tag evidence.');
 
     const receiptDraft = await request(server, 'POST', '/api/messages/send', {
