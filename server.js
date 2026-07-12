@@ -1393,6 +1393,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const paymentNotFound = dueRows.filter(row => closeoutRecurringState(row, today) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row, today) === 'Setup needed');
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
+  const assignmentConflicts = assignmentConflictRows(scoped);
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const verificationItems = closeoutVerificationItems(scoped);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
@@ -1400,6 +1401,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Failed twice', failedTwice.length, failedTwice.length ? 'Review' : 'Clean', 'Star QA', 'Customers failed twice and should be contacted before closeout');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Payment not found', paymentNotFound.length, paymentNotFound.length ? 'Review' : 'Clean', 'Star QA', 'Saved-card/payment records need Clover review');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'Review' : 'Clean', 'Star QA', 'Transactions without customer names need matching before receipts, disputes, and reports');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'Review' : 'Clean', 'Star QA', 'Vehicles with more than one active customer/autopay claim must be resolved before closeout, service, messages, or reports are trusted');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'Review' : 'Clean', 'Star QA', 'Customers need card setup or card-on-file repair');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
@@ -1434,6 +1436,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const cloverCollectedToday = cloverPaymentsToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const expectedToday = dueToday.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
+  const assignmentConflicts = assignmentConflictRows(scoped);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
@@ -1465,17 +1468,18 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(1, 'failed_twice', 'Failed twice', failedTwice.length, failedTwice.length ? 'bad' : 'good', 'Payments', 'Today', 'Customers need contact before closeout.');
   issue(2, 'payment_not_found', 'Payment not found', notFound.length, notFound.length ? 'warn' : 'good', 'Payments', 'Today', 'Saved-card/payment records need Clover review.');
   issue(3, 'unmatched_payments', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'bad' : 'good', 'Payments', 'Transactions', 'Transactions need customer names for receipts, disputes, and reports.');
-  issue(4, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
-  issue(5, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
-  issue(6, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
-  issue(7, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
-  issue(8, 'insurance_proof', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing verified insurance proof.');
-  issue(9, 'background_checks', 'Background checks', missingBackground.length, missingBackground.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing background verification.');
-  issue(10, 'missing_contact', 'Missing contact', missingContact.length, missingContact.length ? 'warn' : 'good', 'Payments', 'Active', 'Customers need phone or email before Star can follow up.');
-  issue(11, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
-  issue(12, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
-  issue(13, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
-  if (isOwnerUser(user)) issue(14, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(4, 'vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'bad' : 'good', 'Operations', 'Fleet', 'Resolve cars claimed by more than one active customer/autopay before closeout, service, messages, or reports.');
+  issue(5, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
+  issue(6, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
+  issue(7, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
+  issue(8, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
+  issue(9, 'insurance_proof', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing verified insurance proof.');
+  issue(10, 'background_checks', 'Background checks', missingBackground.length, missingBackground.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing background verification.');
+  issue(11, 'missing_contact', 'Missing contact', missingContact.length, missingContact.length ? 'warn' : 'good', 'Payments', 'Active', 'Customers need phone or email before Star can follow up.');
+  issue(12, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
+  issue(13, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
+  issue(14, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
+  if (isOwnerUser(user)) issue(15, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -1492,6 +1496,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
       failedOnce: failedOnce.length,
       failedTwice: failedTwice.length,
       paymentNotFound: notFound.length,
+      vehicleAssignmentConflicts: assignmentConflicts.length,
       peopleToContact: failedTwice.length + notFound.length,
       setupNeeded: setupNeeded.length,
       paidOutsideApp: paidOutsideToday.length,
@@ -2230,6 +2235,11 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     });
   });
   return { vehicleAssignmentsSynced, linkedRowsSynced, serviceRowsSynced, assignmentConflicts: conflicts };
+}
+function assignmentConflictRows(data = {}) {
+  return (Array.isArray(data.vehicles) ? data.vehicles : []).filter(vehicle => {
+    return String(vehicle.assignmentConflict || '').trim() && !/removed/i.test(String(vehicle.status || ''));
+  });
 }
 function enrichLinkedProfiles(data) {
   data.customers = Array.isArray(data.customers) ? data.customers : [];
@@ -3383,6 +3393,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
+  const assignmentConflicts = assignmentConflictRows(scoped);
   const verificationItems = closeoutVerificationItems(scoped);
   const truthCheck = (key, label, count, severity, detail, view, tab = '') => ({
     key,
@@ -3398,6 +3409,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('failed_twice', 'Failed twice', failedTwice.length, 'critical', 'Customers that failed twice should be contacted before closeout.', 'Payments', 'Today'),
     truthCheck('payment_not_found', 'Payment not found', paymentNotFound.length, 'critical', 'Saved-card/payment records need Clover review before they can be trusted.', 'Payments', 'Today'),
     truthCheck('unmatched_payments', 'Unmatched payments', unmatchedPayments.length, 'critical', 'Transactions must have a customer name before receipts, disputes, and reports are reliable.', 'Payments', 'Transactions'),
+    truthCheck('vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, 'critical', 'Vehicles claimed by more than one active customer/autopay must be resolved before closeout, service, messages, or reports are trusted.', 'Operations', 'Fleet'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
     truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),

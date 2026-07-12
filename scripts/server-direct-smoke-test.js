@@ -247,6 +247,23 @@ async function main() {
     assert(driftVehicle && driftVehicle.currentCustomer === 'New Drift Customer', 'Active autopay should repair stale vehicle current customer.');
     assert(driftRecurring && driftRecurring.vin === 'DIRECTDRIFTVIN' && driftRecurring.plate === 'DIR-DRIFT' && driftRecurring.tracker === 'TRK-DRIFT', 'Active autopay should inherit vehicle VIN/tag/tracker during truth repair.');
     assert(driftService && driftService.customer === 'New Drift Customer' && driftService.previousCustomer === 'Old Drift Customer' && driftService.vin === 'DIRECTDRIFTVIN', 'Open service should follow repaired active vehicle assignment.');
+    const assignmentConflictState = JSON.parse(JSON.stringify(driftRepairRead.json));
+    assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-conflict', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Conflict Car', vin: 'DIRECTCONFLICTVIN', plate: 'DIR-CNF', tracker: 'TRK-CNF', status: 'Rented' });
+    assignmentConflictState.recurringPayments.unshift(
+      { id: 'rec-direct-conflict-one', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict One', vehicleId: 'veh-direct-assignment-conflict', amount: 111, status: 'Active', nextRun: '2026-07-24' },
+      { id: 'rec-direct-conflict-two', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Two', vehicleId: 'veh-direct-assignment-conflict', amount: 112, status: 'Active', nextRun: '2026-07-24' }
+    );
+    const assignmentConflictWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: assignmentConflictState });
+    assert(assignmentConflictWrite.status === 200 && assignmentConflictWrite.json.ok, 'Owner could not save assignment conflict scenario.');
+    const assignmentConflictRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const conflictVehicle = (assignmentConflictRead.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
+    assert(conflictVehicle && /Direct Conflict One/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(conflictVehicle.assignmentConflict || ''), 'Competing active autopays should mark the vehicle assignment conflict.');
+    const conflictHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    assert(conflictHealth.json.issues.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1), 'System health should flag vehicle assignment conflicts.');
+    const conflictReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
+    assert(conflictReadiness.json.truthChecks.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1), 'System readiness should flag vehicle assignment conflicts.');
+    const conflictReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
+    assert(conflictReport.text.includes('Vehicle assignment conflicts') && conflictReport.text.includes('DIRECTCONFLICTVIN'), 'Deep report should include vehicle assignment conflict QA and fleet evidence.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {

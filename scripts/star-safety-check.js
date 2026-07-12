@@ -143,6 +143,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Dispute match review',
   'Missing contact',
   'Setup / not found',
+  'Vehicle assignment conflicts',
   'Sensitive changes',
   'Star can flag issues and draft fixes',
   'money moves, card changes, removals, disputes, and receipts still require admin approval'
@@ -153,6 +154,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Contact failed-twice customers',
   'Match transactions',
   'Review dispute matches',
+  'Resolve vehicle assignment conflicts',
   'Link autopay to vehicles',
   'Clear verification inbox',
   'Review today sensitive changes',
