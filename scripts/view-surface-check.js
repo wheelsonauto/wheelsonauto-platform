@@ -296,6 +296,7 @@ assertIncludes('Customer portal message privacy', customerPortalState + customer
   'customerPortalVisibleMessage',
   'stripCustomerPortalMessage',
   'cardSetupRequests: cardSetupRequests.map(stripPrivateCustomerFields)',
+  'customerAction',
   'star ai',
   'aiPlan',
   'aiDraftId',

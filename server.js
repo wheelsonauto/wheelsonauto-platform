@@ -3590,7 +3590,8 @@ function customerPortalVisibleMessage(row = {}) {
   const meta = String([row.channel, row.source, row.direction, row.template, row.subject, row.status].filter(Boolean).join(' ')).toLowerCase();
   const direction = String(row.direction || '').toLowerCase();
   const status = String(row.status || '').toLowerCase();
-  if (row.aiPlan || row.aiSourceMessageId || /ai draft|ai action|internal log|notification|owner email/.test(meta)) return false;
+  const customerAction = /customer portal/.test(meta) && /customer action|inbound/.test(direction);
+  if ((row.aiPlan || row.aiSourceMessageId || /ai draft|ai action|internal log|notification|owner email/.test(meta)) && !customerAction) return false;
   if (/star ai/.test(meta) && !(row.aiDraftId && /outbound/.test(direction) && /sent|delivered/.test(status))) return false;
   if (String(row.channel || '').toLowerCase() === 'customer portal') return true;
   if (/outbound|sent|delivered|received/.test(meta) && !/draft|needs approval|human needed|needs admin/.test(meta)) return true;
