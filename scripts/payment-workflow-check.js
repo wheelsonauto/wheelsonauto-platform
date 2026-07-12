@@ -88,6 +88,8 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   'Verification inbox',
   'Vehicle conflicts',
   'assignmentConflicts',
+  'Resolve \'+assignmentConflicts.length+\' vehicle assignment conflict',
+  'Review \'+verifyItems.length+\' verification/proof item',
   'No vehicle assignment conflicts are waiting for closeout review',
   'Edit car',
   'verifyRows',

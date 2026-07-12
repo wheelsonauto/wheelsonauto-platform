@@ -251,6 +251,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'dataOk',
   'dataIssueCount',
   'autopay_vehicle_link',
+  "vehicle_assignment_conflict', 'Vehicle assignment conflicts'",
+  "'Operations', 'Assigned'",
   'Customer/payment/fleet truth',
   'Data truth'
 ].forEach(text => requireText('System readiness truth checks', server + app, text));

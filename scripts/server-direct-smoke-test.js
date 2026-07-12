@@ -259,9 +259,9 @@ async function main() {
     const conflictVehicle = (assignmentConflictRead.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
     assert(conflictVehicle && /Direct Conflict One/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(conflictVehicle.assignmentConflict || ''), 'Competing active autopays should mark the vehicle assignment conflict.');
     const conflictHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
-    assert(conflictHealth.json.issues.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1), 'System health should flag vehicle assignment conflicts.');
+    assert(conflictHealth.json.issues.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System health should flag vehicle assignment conflicts and route to Operations / Assigned.');
     const conflictReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
-    assert(conflictReadiness.json.truthChecks.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1), 'System readiness should flag vehicle assignment conflicts.');
+    assert(conflictReadiness.json.truthChecks.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System readiness should flag vehicle assignment conflicts and route to Operations / Assigned.');
     const conflictReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(conflictReport.text.includes('Vehicle assignment conflicts') && conflictReport.text.includes('DIRECTCONFLICTVIN'), 'Deep report should include vehicle assignment conflict QA and fleet evidence.');
 

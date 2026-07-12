@@ -1474,7 +1474,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(1, 'failed_twice', 'Failed twice', failedTwice.length, failedTwice.length ? 'bad' : 'good', 'Payments', 'Today', 'Customers need contact before closeout.');
   issue(2, 'payment_not_found', 'Payment not found', notFound.length, notFound.length ? 'warn' : 'good', 'Payments', 'Today', 'Saved-card/payment records need Clover review.');
   issue(3, 'unmatched_payments', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'bad' : 'good', 'Payments', 'Transactions', 'Transactions need customer names for receipts, disputes, and reports.');
-  issue(4, 'vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'bad' : 'good', 'Operations', 'Fleet', 'Resolve cars claimed by more than one active customer/autopay before closeout, service, messages, or reports.');
+  issue(4, 'vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'bad' : 'good', 'Operations', 'Assigned', 'Resolve cars claimed by more than one active customer/autopay before closeout, service, messages, or reports.');
   issue(5, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
   issue(6, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
   issue(7, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
@@ -3415,7 +3415,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('failed_twice', 'Failed twice', failedTwice.length, 'critical', 'Customers that failed twice should be contacted before closeout.', 'Payments', 'Today'),
     truthCheck('payment_not_found', 'Payment not found', paymentNotFound.length, 'critical', 'Saved-card/payment records need Clover review before they can be trusted.', 'Payments', 'Today'),
     truthCheck('unmatched_payments', 'Unmatched payments', unmatchedPayments.length, 'critical', 'Transactions must have a customer name before receipts, disputes, and reports are reliable.', 'Payments', 'Transactions'),
-    truthCheck('vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, 'critical', 'Vehicles claimed by more than one active customer/autopay must be resolved before closeout, service, messages, or reports are trusted.', 'Operations', 'Fleet'),
+    truthCheck('vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, 'critical', 'Vehicles claimed by more than one active customer/autopay must be resolved before closeout, service, messages, or reports are trusted.', 'Operations', 'Assigned'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
     truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),
