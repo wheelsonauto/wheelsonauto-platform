@@ -368,6 +368,7 @@ async function main() {
     });
     assert(customerLogin.status === 200 && customerLogin.json.ok, 'Owner could not create customer login.');
     assert(customerLogin.json.loginUrl.endsWith('/customer/login'), 'Customer login URL should be returned.');
+    assert(customerLogin.json.account.loginReady === true, 'Customer login API should mark password-backed accounts as login ready.');
     assert(!customerLogin.json.account.passwordHash && !customerLogin.json.account.passwordSalt, 'Customer login API should not expose password secrets.');
     assert(customerLogin.json.account.contractId || customerLogin.json.account.customerId || customerLogin.json.account.vehicleId || customerLogin.json.account.recurringPaymentId, 'Customer login should auto-link to an existing customer file, vehicle, contract, or autopay record.');
 

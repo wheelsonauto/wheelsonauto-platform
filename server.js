@@ -2805,6 +2805,7 @@ function staffStatusActive(row) {
 }
 function safeCustomerAccount(account = {}) {
   const safe = { ...account };
+  safe.loginReady = !!(account.passwordHash && account.passwordSalt && staffStatusActive(account));
   delete safe.passwordHash;
   delete safe.passwordSalt;
   delete safe.password;
