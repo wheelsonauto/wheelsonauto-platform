@@ -4084,6 +4084,7 @@ function cloverWebhookDisputeClaim(event = {}) {
     || '';
   const objectId = String(event.objectId || event.id || deepFindWebhookValue(event, /^(objectId|object_id|eventId|event_id)$/i) || '').trim();
   const disputeId = String(event.disputeId || event.chargebackId || deepFindWebhookValue(event, /^(dispute|disputeId|dispute_id|chargeback|chargebackId|chargeback_id|case|caseId|case_id)$/i) || '').trim();
+  const cloverCustomerId = String(event.cloverCustomerId || event.customerId || deepFindWebhookValue(event, /^(customer|customerId|customer_id|cloverCustomerId|clover_customer_id)$/i) || '').trim();
   const amountRaw = deepFindWebhookValue(event, /^(amount|disputedAmount|chargebackAmount|amount_disputed)$/i);
   const amountNumber = Number(amountRaw || 0);
   const amount = amountNumber > 999 ? amountNumber / 100 : amountNumber;
@@ -4101,6 +4102,7 @@ function cloverWebhookDisputeClaim(event = {}) {
     disputeId,
     paymentId,
     cloverPaymentId: paymentId,
+    cloverCustomerId,
     reference: paymentId || objectId || disputeId,
     notes: 'Created automatically from Clover dispute/chargeback webhook. Review and match before contacting the customer.',
     createdAt: new Date().toISOString()

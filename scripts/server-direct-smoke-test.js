@@ -206,6 +206,22 @@ async function main() {
     assert(webhookClaim && webhookClaim.customer === 'Direct Webhook Dispute Customer', 'Clover dispute webhook should match the customer by payment ID: ' + JSON.stringify(webhookClaim || null));
     assert(webhookClaim.customerMatchSource === 'Payment record', 'Clover dispute webhook should record the payment-match source.');
 
+    const customerWebhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
+      headers: { 'x-clover-webhook-secret': 'direct-clover-secret' },
+      json: {
+        type: 'chargeback.created',
+        customer: { id: 'direct-dispute-customer-id' },
+        dispute: { id: 'disp-direct-customer-webhook' },
+        amount: 11100,
+        reason: 'Customer-id only dispute opened in Clover'
+      }
+    });
+    assert(customerWebhookDispute.status === 200 && customerWebhookDispute.json.ok, 'Clover customer-id dispute webhook should be accepted.');
+    const customerWebhookRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const customerWebhookClaim = (customerWebhookRead.json.claims || []).find(claim => claim.disputeId === 'disp-direct-customer-webhook');
+    assert(customerWebhookClaim && customerWebhookClaim.customer === 'Direct Recurring Dispute Customer', 'Clover dispute webhook should match by customer ID when payment ID is missing: ' + JSON.stringify(customerWebhookClaim || null));
+    assert(customerWebhookClaim.customerMatchSource === 'Recurring customer', 'Customer-id dispute webhook should record recurring customer match source.');
+
     const directAutopayFile = await request(server, 'POST', '/api/recurring-payments', {
       cookie: ownerCookie,
       json: {
