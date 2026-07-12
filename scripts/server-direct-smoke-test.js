@@ -868,8 +868,10 @@ async function main() {
     const customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const savedPortalMessage = (customerPortalMessageRead.json.messages || []).find(message => message.channel === 'Customer portal' && message.customer === 'Alicia Brown' && /update my card/i.test(message.body || ''));
     assert(savedPortalMessage, 'Customer portal message should be saved in staff Messages.');
+    assert(savedPortalMessage.status === 'Needs admin review' && savedPortalMessage.approvalRequired === true && savedPortalMessage.intent === 'Money/account question', 'Customer portal money/card questions should be triaged for admin review.');
+    assert(savedPortalMessage.vehicleId === 'veh-003' && savedPortalMessage.vin === '3LN6L2G91FR123456' && savedPortalMessage.plate === 'LNZ-229' && Number(savedPortalMessage.amount) === 229, 'Customer portal messages should carry vehicle, VIN/tag, and payment context into staff Messages.');
     assert((customerPortalMessageRead.json.messages || []).some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === savedPortalMessage.id), 'Customer portal message should create a Star draft for staff review.');
-    assert((customerPortalMessageRead.json.messages || []).some(note => note.event === 'customer_message' && /Alicia Brown/.test(note.subject || '')), 'Customer portal message should notify the owner by email when notifications are configured.');
+    assert((customerPortalMessageRead.json.messages || []).some(note => note.event === 'customer_message' && /money\/account review/i.test(note.subject || '') && /Admin approval required: Yes/.test(note.body || '')), 'Customer portal message should notify the owner by email with triage and approval context.');
 
     const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');

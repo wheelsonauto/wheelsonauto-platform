@@ -3486,6 +3486,25 @@ function customerPortalState(data, account) {
     generatedAt: new Date().toISOString()
   };
 }
+function customerPortalMessageTriage(body = '') {
+  const text = String(body || '').toLowerCase();
+  if (/(charge|charged|payment|pay|paid|autopay|card|refund|dispute|toll|ticket|violation|balance|receipt|remove|cancel|end|return)/i.test(text)) {
+    return {
+      intent: 'Money/account question',
+      subject: 'Customer portal money/account review',
+      status: 'Needs admin review',
+      tone: /(refund|dispute|cancel|remove|end|return|charged wrong|not mine|fraud)/i.test(text) ? 'bad' : 'warn',
+      requiresAdminApproval: true
+    };
+  }
+  if (/(service|maintenance|oil|repair|tire|brake|engine|light|inspection|fix|noise|tow)/i.test(text)) {
+    return { intent: 'Service question', subject: 'Customer portal service message', status: 'Service review', tone: 'warn', requiresAdminApproval: false };
+  }
+  if (/(insurance|license|document|proof|registration|background|income|contract)/i.test(text)) {
+    return { intent: 'Document question', subject: 'Customer portal document message', status: 'Document review', tone: 'warn', requiresAdminApproval: false };
+  }
+  return { intent: 'General question', subject: 'Customer portal message', status: 'Received', tone: 'blue', requiresAdminApproval: false };
+}
 function customerPortalList(rows, empty, render) {
   return rows && rows.length ? rows.map(render).join('') : '<div class="customer-empty">' + escapeHtml(empty) + '</div>';
 }
@@ -6148,25 +6167,41 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && String(item.status || 'Active').toLowerCase() !== 'disabled');
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const portal = customerPortalState(data, account);
+      const summary = portal.summary || {};
+      const recurring = portal.recurring || {};
+      const vehicle = portal.vehicle || {};
+      const triage = customerPortalMessageTriage(body);
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       const message = {
         id: 'msg-customer-portal-' + Date.now(),
         date: new Date().toLocaleString('en-US'),
         createdAt: new Date().toISOString(),
-        customer: account.customer || account.name || 'Customer',
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customer: summary.customer || account.customer || account.name || 'Customer',
         phone: account.phone || '',
         email: account.email || '',
         direction: 'Inbound',
         channel: 'Customer portal',
         template: 'Customer portal message',
-        subject: 'Customer portal message',
-        status: 'Received',
-        tone: 'blue',
+        subject: triage.subject,
+        status: triage.status,
+        tone: triage.tone,
+        intent: triage.intent,
+        approvalRequired: triage.requiresAdminApproval,
         body,
         source: 'Customer portal',
         customerAccountId: account.id,
-        recurringPaymentId: account.recurringPaymentId || '',
-        vehicleId: account.vehicleId || ''
+        recurringPaymentId: recurring.id || account.recurringPaymentId || '',
+        vehicleId: vehicle.id || account.vehicleId || '',
+        vehicle: summary.vehicle || vehicleNameFromParts(vehicle) || recurring.vehicle || '',
+        vin: summary.vin || vehicle.vin || recurring.vin || '',
+        licensePlate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
+        plate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
+        tracker: summary.tracker || vehicle.tracker || recurring.tracker || '',
+        amount: recurring.amount || recurring.weeklyAmount || 0,
+        nextRun: recurring.nextRun || summary.nextRun || '',
+        chargeTime: recurring.chargeTime || summary.chargeTime || ''
       };
       data.messages.unshift(message);
       const settings = messageSettings(data);
@@ -6182,14 +6217,22 @@ const server = http.createServer(async (req, res) => {
       }
       await queueOwnerEmailNotification(data, 'customer_message', {
         customer: message.customer,
-        subject: 'Customer portal message - ' + message.customer,
+        subject: triage.subject + ' - ' + message.customer,
         body: [
           'A customer sent a message from the WheelsonAuto portal.',
           'Customer: ' + message.customer,
           'Phone: ' + (message.phone || 'Not saved'),
           'Email: ' + (message.email || 'Not saved'),
+          'Intent: ' + triage.intent,
+          'Status: ' + triage.status,
+          'Admin approval required: ' + (triage.requiresAdminApproval ? 'Yes' : 'No'),
+          message.vehicle ? 'Vehicle: ' + message.vehicle : '',
+          message.vin ? 'VIN: ' + message.vin : '',
+          message.plate ? 'Tag/plate: ' + message.plate : '',
+          message.amount ? 'Payment amount: ' + moneyText(message.amount) : '',
+          message.nextRun ? 'Next charge: ' + message.nextRun + (message.chargeTime ? ' ' + message.chargeTime : '') : '',
           'Message: ' + body
-        ].join('\n')
+        ].filter(Boolean).join('\n')
       });
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
