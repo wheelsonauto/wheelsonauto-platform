@@ -237,6 +237,11 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 
 [
   'Company accounts',
+  'Franchise readiness',
+  'Staff scoping',
+  'isolated database storage',
+  'per-company',
+  'tenant isolation',
   'Add staff',
   'Staff list',
   'company-scoped workspace',
