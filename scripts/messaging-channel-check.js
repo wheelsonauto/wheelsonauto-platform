@@ -42,6 +42,7 @@ const messagingStatus = finalFunctionSlice(app, 'messagingStatus');
 const messageSetupPanel = finalFunctionSlice(app, 'messageSetupPanel');
 const openComposeMessage = finalFunctionSlice(app, 'openComposeMessage');
 const messagesView = finalFunctionSlice(app, 'Messages');
+const messageTemplateDefaults = finalFunctionSlice(app, 'messageTemplateDefaults');
 const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
 const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
 const approveAiMessage = finalFunctionSlice(server, 'approveAiMessage');
@@ -49,7 +50,7 @@ const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus'
 const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotification');
 const queueOwnerEmailNotification = finalFunctionSlice(server, 'queueOwnerEmailNotification');
 
-if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView) fail('Missing active frontend messaging functions.');
+if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
 if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
@@ -63,6 +64,10 @@ requireText('Compose modal email option', openComposeMessage, '<option value="Em
 requireText('Messages view channel summary', messagesView, "stat('Channels'");
 requireText('Messages inbox layout', messagesView, 'message-inbox-layout');
 requireText('Messages conversation panel', app, 'messageConversationPanel');
+requireText('Insurance proof template', messageTemplateDefaults, 'Insurance proof request');
+requireText('Background verification template', messageTemplateDefaults, 'Background verification');
+requireText('Document received template', messageTemplateDefaults, 'Document received');
+requireText('Daily closeout follow-up template', messageTemplateDefaults, 'Daily closeout follow-up');
 requireText('Thread reply action', app, 'send-thread-message');
 requireText('Star custom prompt action', app, 'star-ai-custom');
 requireText('Server email webhook route', server, "/api/webhooks/email");
