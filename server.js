@@ -1498,6 +1498,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const verificationItems = closeoutVerificationItems(scoped);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
+  const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalAccountForName(scoped, name));
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Failed twice', failedTwice.length, failedTwice.length ? 'Review' : 'Clean', 'Star QA', 'Customers failed twice and should be contacted before closeout');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Payment not found', paymentNotFound.length, paymentNotFound.length ? 'Review' : 'Clean', 'Star QA', 'Saved-card/payment records need Clover review');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'Review' : 'Clean', 'Star QA', 'Transactions without customer names need matching before receipts, disputes, and reports');
@@ -1509,6 +1510,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Verification inbox', verificationItems.length, verificationItems.length ? 'Review' : 'Clean', 'Star QA', 'Customer proof, paid-outside, service, toll, claim, and document reviews waiting');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Background checks', missingBackground.length, missingBackground.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing background verification');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'Review' : 'Clean', 'Star QA', 'Active customers without a customer portal login');
   if (isOwnerUser(user)) (scoped.auditLogs || []).forEach(audit => addReportRow(rows, 'Audit trail', audit.at || '', audit.user || '', audit.companyName || '', '', '', '', audit.action || 'Audit', 0, audit.role || '', 'WheelsonAuto', audit.details || ''));
   return rows;
 }
@@ -1549,6 +1551,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   });
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
+  const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalAccountForName(scoped, name));
   const verificationInbox = closeoutVerificationItems(scoped);
   const openService = (scoped.maintenance || []).filter(item => {
     const status = String(item.status || '').toLowerCase();
@@ -1585,7 +1588,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(14, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
   issue(15, 'stale_payment_requests', 'Stale payment links', stalePaymentRequests.length, stalePaymentRequests.length ? 'warn' : 'good', 'Messages', 'Queue', 'Hosted checkout links open more than 24 hours need follow-up.');
   issue(16, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
-  if (isOwnerUser(user)) issue(17, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(17, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have portal login access for receipts, messages, proof, card changes, and service requests.');
+  if (isOwnerUser(user)) issue(18, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -2831,6 +2835,27 @@ function findCustomerAccountByLogin(data, username, password) {
     if (!staffStatusActive(account)) return false;
     const names = [account.username, account.email, account.phone, account.name, account.customer].map(normalizeLogin).filter(Boolean);
     return names.includes(cleanUser) && verifyPasswordRecord(password, account);
+  }) || null;
+}
+function customerPortalAccountForName(data = {}, name = '') {
+  const key = normKey(name);
+  if (!key) return null;
+  const customer = (data.customers || []).find(row => normKey(row.name || row.customer) === key) || {};
+  const contract = (data.contracts || []).find(row => normKey(row.customer || row.name) === key) || {};
+  const recurring = allRecurringRows(data).find(row => normKey(row.customer || row.name) === key) || {};
+  const vehicle = reportVehicleFor(data, name, customer.vehicleId || contract.vehicleId || recurring.vehicleId);
+  const phones = [customer.phone, contract.phone, recurring.phone].map(phoneKey).filter(Boolean);
+  const emails = [customer.email, contract.email, recurring.email].map(emailKey).filter(Boolean);
+  return (data.customerAccounts || []).find(account => {
+    if (!staffStatusActive(account)) return false;
+    if (normKey(account.name || account.customer) === key || normKey(account.customer) === key) return true;
+    if (account.customerId && customer.id && account.customerId === customer.id) return true;
+    if (account.contractId && contract.id && account.contractId === contract.id) return true;
+    if (account.recurringPaymentId && recurring.id && account.recurringPaymentId === recurring.id) return true;
+    if (account.vehicleId && vehicle.id && account.vehicleId === vehicle.id) return true;
+    if (phoneKey(account.phone) && phones.includes(phoneKey(account.phone))) return true;
+    if (emailKey(account.email) && emails.includes(emailKey(account.email))) return true;
+    return false;
   }) || null;
 }
 function cleanCustomerAccountPayload(payload, existing = null) {
