@@ -244,6 +244,7 @@ const criticalActionRequirements = [
   ['Staff account save flow', 'save-staff', ['/api/staff-accounts', 'await refreshData(true)', 'closeModal()', 'Settings()']],
   ['API provider save flow', 'save-api-provider', ['/api/api-providers', 'await refreshData(true)', 'closeModal()', 'ApiRoadmap()']],
   ['API task creation flow', 'create-api-task', ['/api/tasks', 'await refreshData(true)', 'closeModal()', 'Dispatch()']],
+  ['Launch proof task creation flow', 'create-launch-proof-task', ['/api/tasks', 'ifleetLaunchProofItems()', 'await refreshData(true)', 'Dispatch()']],
   ['Company staff prefill flow', 'new-staff', ['staffOrgPrefill', 'orgOptions(staffOrgPrefill)', 'staffOrg']],
   ['Email notification test flow', 'send-email-notification-test', ['/api/notifications/email/test', 'notificationEmailTo', 'notification-event:checked', "tab='Setup'", 'Messages()']],
   ['Dispute match accept flow', 'apply-claim-match', ['applyClaimCandidate', 'Dispute match accepted', 'await save()', 'ClaimsIssues()']],
