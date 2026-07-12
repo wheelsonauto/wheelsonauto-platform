@@ -345,10 +345,22 @@ async function main() {
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
 
+    const portalMessageNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
+      cookie: ownerCookie,
+      json: { emailRecipients: ['notify@example.com'], emailEnabled: true }
+    });
+    assert(portalMessageNotificationSettings.status === 200 && portalMessageNotificationSettings.json.ok, 'Owner could not enable portal message notifications.');
+
+    const customerPortalMessageNoAuth = await request(server, 'POST', '/customer/message', { form: { body: 'I need help with my account.' } });
+    assert(customerPortalMessageNoAuth.status === 302 && customerPortalMessageNoAuth.location === '/customer/login', 'Customer portal messages should require customer login.');
+
     const customerPortalMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, form: { body: 'Can you help me update my card and confirm my next payment?' } });
     assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer', 'Customer portal message should return to portal.');
     const customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    assert((customerPortalMessageRead.json.messages || []).some(message => message.channel === 'Customer portal' && message.customer === 'Alicia Brown' && /update my card/i.test(message.body || '')), 'Customer portal message should be saved in staff Messages.');
+    const savedPortalMessage = (customerPortalMessageRead.json.messages || []).find(message => message.channel === 'Customer portal' && message.customer === 'Alicia Brown' && /update my card/i.test(message.body || ''));
+    assert(savedPortalMessage, 'Customer portal message should be saved in staff Messages.');
+    assert((customerPortalMessageRead.json.messages || []).some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === savedPortalMessage.id), 'Customer portal message should create a Star draft for staff review.');
+    assert((customerPortalMessageRead.json.messages || []).some(note => note.event === 'customer_message' && /Alicia Brown/.test(note.subject || '')), 'Customer portal message should notify the owner by email when notifications are configured.');
 
     const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');

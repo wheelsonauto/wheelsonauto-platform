@@ -70,6 +70,8 @@ requireText('Server notification test route', server, "/api/notifications/email/
 requireText('Server daily closeout notification route', server, "/api/notifications/daily-closeout");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
 requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
+requireText('Customer portal message route', server, "/customer/message");
+requireText('Customer portal message notification event', server, 'customer_message');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
