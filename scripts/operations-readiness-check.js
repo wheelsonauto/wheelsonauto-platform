@@ -147,6 +147,8 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Paid records',
   'Fleet profitability',
   'Customer truth',
+  'Verification inbox',
+  'WheelsonAuto verification',
   'customerRiskReportPanel',
   'Customer risk report',
   'Star QA',
