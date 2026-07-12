@@ -629,6 +629,10 @@ async function main() {
     assert(starCardSetup.json.plan.related.cardSetupRequestId, 'Star card setup should save the setup request ID.');
     const starCardState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((starCardState.json.cardSetupRequests || []).some(request => request.id === starCardSetup.json.plan.related.cardSetupRequestId && request.recurringPaymentId === 'direct-autopay-fail-once'), 'Star card setup request should attach to the existing autopay row.');
+    const starCardSetupPage = await request(server, 'GET', '/setup-card/' + starCardSetup.json.plan.related.cardSetupRequestId);
+    assert(starCardSetupPage.status === 200 && starCardSetupPage.text.includes('Set up automatic payments') && starCardSetupPage.text.includes('Direct Failed Once'), 'Star-created card setup page should render for the customer.');
+    assert(!starCardSetupPage.text.includes('secret-source-token') && !starCardSetupPage.text.includes('secret-payment-token') && !starCardSetupPage.text.includes('secret-raw-value'), 'Star-created card setup page should not expose private payment tokens.');
+    assert(!starCardSetupPage.text.includes('Direct Dispute Customer') && !starCardSetupPage.text.includes('direct-customer'), 'Star-created card setup page should not expose unrelated customer records.');
 
     const starDraft = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
