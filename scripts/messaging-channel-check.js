@@ -56,6 +56,7 @@ requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging notification status', messagingStatus, 'notificationEmail');
 requireText('Message setup panel', messageSetupPanel, 'Email webhook');
 requireText('Message setup notification email', messageSetupPanel, 'notificationEmailTo');
+requireText('Message setup notification events', messageSetupPanel, 'notificationEventOptions');
 requireText('Message setup notification test', messageSetupPanel, 'send-email-notification-test');
 requireText('Compose modal channel selector', openComposeMessage, '<select id="messageChannel">');
 requireText('Compose modal email option', openComposeMessage, '<option value="Email"');

@@ -299,6 +299,7 @@ assertIncludes('Messaging setup panel', setupPanel, [
   'Star',
   'Email notifications',
   'notificationEmailTo',
+  'notificationEventOptions',
   'send-email-notification-test'
 ]);
 

@@ -3511,6 +3511,30 @@ body.fast-tab-switch .admin-shell .section{
   color:#d9e3eb;
   font-size:12px;
 }
+.notification-event-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:7px;
+  margin:10px 0 12px;
+}
+.notification-event-grid label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:36px;
+  padding:8px 10px;
+  border:1px solid rgba(198,163,83,.24);
+  border-radius:10px;
+  background:rgba(255,255,255,.04);
+  color:#d9e3eb;
+  font-size:12px;
+  font-weight:800;
+}
+.notification-event-grid input{
+  width:16px;
+  height:16px;
+  accent-color:#c6a353;
+}
 @media(max-width:760px){
   .star-summary-grid{
     grid-template-columns:repeat(2,minmax(0,1fr));
@@ -3518,6 +3542,9 @@ body.fast-tab-switch .admin-shell .section{
   }
   .star-toggle-note .btn{
     flex:1 1 100%;
+  }
+  .notification-event-grid{
+    grid-template-columns:1fr;
   }
 }
 
