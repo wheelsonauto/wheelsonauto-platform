@@ -4745,10 +4745,13 @@ const server = http.createServer(async (req, res) => {
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const portal = customerPortalState(data, account);
       const recurring = portal.recurring || {};
-      const vehicle = portal.vehicle || {};
+      let vehicle = portal.vehicle || {};
       const summary = portal.summary || {};
       const customerName = summary.customer || account.customer || account.name || 'Customer';
-      const vehicleName = summary.vehicle || recurring.vehicle || vehicleNameFromParts(vehicle) || '';
+      const customerRecord = (data.customers || []).find(row => normKey(row.name || row.customer) === normKey(customerName)) || {};
+      const contractRecord = (data.contracts || []).find(row => normKey(row.customer || row.name) === normKey(customerName)) || {};
+      if (!vehicle.id) vehicle = (data.vehicles || []).find(row => row.id === (account.vehicleId || recurring.vehicleId || customerRecord.vehicleId || contractRecord.vehicleId || '')) || (data.vehicles || []).find(row => [recurring.vehicle, customerRecord.vehicle, contractRecord.vehicle, summary.vehicle].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || {};
+      const vehicleName = vehicle.id ? vehicleNameFromParts(vehicle) : (summary.vehicle || recurring.vehicle || '');
       const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
       const payment = {
         id: 'paid-outside-review-' + Date.now(),
