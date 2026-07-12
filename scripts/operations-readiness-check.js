@@ -174,6 +174,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Stale payment links',
   'Open card setup links',
   'Pending Star approvals',
+  'Card setup/change links waiting for customers to save chargeable cards',
+  'Star drafts/actions waiting for admin approval or human review',
   'Customer portal access',
   'customer_portal_access',
   'customerPortalAccountForName',

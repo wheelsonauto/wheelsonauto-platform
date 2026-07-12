@@ -24,7 +24,7 @@ Completed in this build pass:
 - Customer portal messages now triage money/card/autopay/toll/account requests as admin-review items with customer, vehicle, VIN/tag, payment amount, next charge, and approval context.
 - Customer portal message history now hides internal Star drafts, AI plans, notifications, and internal logs so customer logins only show customer-submitted messages and actual staff replies.
 - Mechanic Claims & Issues now filters out toll, Clover dispute, payment, reimbursement, and recovery records so mechanics only see vehicle issue work with VIN/tag/proof context.
-- Main app and server-rendered pages now use a fresh asset version (`platform-20260712-deep-tighten-5`) so new UI/role fixes do not get stuck behind stale browser cache after deploy.
+- Main app and server-rendered pages now use a fresh asset version (`platform-20260712-deep-tighten-6`) so new UI/role fixes do not get stuck behind stale browser cache after deploy.
 - Static UI regression checks now require account, company, API provider, and Dispatch task save flows to close their modals after successful saves.
 - Backend Star QA, reports, and system health now include default API provider readiness rows even before any provider records are manually created, so Clover, SMS, email, EZPass, insurance, tracker, accounting, marketing, and billing gaps stay visible.
 - Live-data protection now clearly reports when `data.json` has local business-data edits that are safely unstaged, instead of silently passing.
@@ -35,6 +35,7 @@ Completed in this build pass:
 - Owner daily closeout signoff snapshots now freeze open card setup/change link counts and pending Star approval counts beside money, failed-payment, stale-link, verification, and vehicle-conflict counts.
 - The visible Daily Closeout board now includes card setup link and Star approval rows plus summary reminders, so the day can be managed before signoff instead of only being audited afterward.
 - Daily closeout notification messages now include those frozen card setup link and Star approval counts in the signed snapshot line, matching what the owner saw in the app at signoff time.
+- Owner CSV/report exports now include Daily Closeout rows for open card setup links and pending Star approvals, keeping reports aligned with Dashboard, Messages, Star QA, and closeout signoff.
 
 Checks passed at this checkpoint:
 
