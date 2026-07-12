@@ -142,11 +142,13 @@ async function main() {
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
+    duplicateState.maintenance = duplicateState.maintenance || [];
     duplicateState.payments.unshift(
       { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-dispute-customer@example.com' },
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
+    duplicateState.maintenance.unshift({ id: 'mnt-direct-autopay-file-open', vehicleId: 'veh-direct-autopay-file', vehicle: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tracker: 'TRK-AUTO', customer: 'Previous Direct Service Customer', type: 'Monthly inspection', issue: 'Open inspection should follow reassigned vehicle', due: '2026-07-20', status: 'Scheduled' });
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
@@ -225,10 +227,12 @@ async function main() {
     const directCustomer = (directAutopayFileRead.json.customers || []).find(row => row.name === 'Direct Autopay File Customer');
     const directContract = (directAutopayFileRead.json.contracts || []).find(row => row.customer === 'Direct Autopay File Customer');
     const directVehicle = (directAutopayFileRead.json.vehicles || []).find(row => row.id === 'veh-direct-autopay-file');
+    const directOpenMaintenance = (directAutopayFileRead.json.maintenance || []).find(row => row.id === 'mnt-direct-autopay-file-open');
     assert(directRecurring && directRecurring.vehicleId === 'veh-direct-autopay-file' && directRecurring.vin === 'DIRECTAUTOPAYFILEVIN', 'New autopay should keep selected vehicle VIN/tag/tracker on the recurring row.');
     assert(directCustomer && directCustomer.vehicleId === 'veh-direct-autopay-file' && directCustomer.vin === 'DIRECTAUTOPAYFILEVIN' && directCustomer.weeklyAmount === 123, 'New autopay should create a connected customer record.');
     assert(directContract && directContract.vehicleId === 'veh-direct-autopay-file' && directContract.vin === 'DIRECTAUTOPAYFILEVIN' && directContract.weekly === 123, 'New autopay should create a rich customer file.');
     assert(directVehicle && directVehicle.currentCustomer === 'Direct Autopay File Customer' && directVehicle.status === 'Rented', 'Selected vehicle should move from Ready to assigned/rented for the new autopay customer.');
+    assert(directOpenMaintenance && directOpenMaintenance.customer === 'Direct Autopay File Customer' && directOpenMaintenance.previousCustomer === 'Previous Direct Service Customer' && directOpenMaintenance.vin === 'DIRECTAUTOPAYFILEVIN' && directOpenMaintenance.plate === 'DIR-AUTO' && directOpenMaintenance.tracker === 'TRK-AUTO', 'Open service work should follow the reassigned vehicle with customer/VIN/tag/tracker context.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {

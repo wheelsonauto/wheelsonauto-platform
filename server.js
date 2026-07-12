@@ -3971,6 +3971,30 @@ function assignAutopayVehicle(data, autopay) {
   autopay.plate = tag;
   autopay.tempTag = vehicle.tempTag || autopay.tempTag || '';
   autopay.tracker = vehicle.tracker || autopay.tracker || '';
+  (data.maintenance || []).forEach(job => {
+    const status = String(job.status || '').toLowerCase();
+    if (status.includes('complete') || status.includes('fixed') || status.includes('closed')) return;
+    const jobPlate = String(job.plate || job.licensePlate || '').trim();
+    const matchesVehicle = (job.vehicleId && job.vehicleId === vehicle.id) ||
+      (job.vehicle && normKey(job.vehicle) === normKey(vehicleName)) ||
+      (job.vin && vehicle.vin && normKey(job.vin) === normKey(vehicle.vin)) ||
+      (jobPlate && tag && normKey(jobPlate) === normKey(tag));
+    if (!matchesVehicle) return;
+    const oldJobCustomer = String(job.customer || '').trim();
+    job.customer = autopay.customer;
+    job.vehicleId = vehicle.id || job.vehicleId || '';
+    job.vehicle = vehicleName;
+    job.vin = vehicle.vin || job.vin || '';
+    job.licensePlate = tag || job.licensePlate || '';
+    job.plate = tag || job.plate || '';
+    job.tempTag = vehicle.tempTag || job.tempTag || '';
+    job.tracker = vehicle.tracker || job.tracker || '';
+    job.customerSyncedAt = new Date().toISOString();
+    if (oldJobCustomer && normKey(oldJobCustomer) !== customerKey) {
+      job.previousCustomer = oldJobCustomer;
+      job.notes = [job.notes, 'Open service customer updated from ' + oldJobCustomer + ' to ' + autopay.customer + ' after vehicle reassignment.'].filter(Boolean).join('\n');
+    }
+  });
   const customer = data.customers.find(row => normKey(row.name) === customerKey);
   if (customer) {
     customer.vehicle = vehicleName;
