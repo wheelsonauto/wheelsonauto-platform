@@ -444,6 +444,8 @@ async function main() {
     assert(customerResetRequest.status === 200 && customerResetRequest.text.includes('request was sent'), 'Customer reset request did not save.');
     const resetRequestState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(resetRequestState.json.messages.some(message => message.event === 'customer_password_reset' && message.customer === 'Alicia Brown'), 'Customer reset request should be saved in Messages.');
+    const resetRequestedAccount = (resetRequestState.json.customerAccounts || []).find(account => account.id === 'direct-customer-login');
+    assert(resetRequestedAccount && resetRequestedAccount.passwordResetStatus === 'Requested' && resetRequestedAccount.passwordResetRequestedAt, 'Customer reset request should mark the customer portal login for owner follow-up.');
 
     const portalPrivacyState = JSON.parse(JSON.stringify(resetRequestState.json));
     portalPrivacyState.recurringPayments = portalPrivacyState.recurringPayments || [];
@@ -687,6 +689,28 @@ async function main() {
     const customerLogout = await request(server, 'GET', '/customer/logout', { cookie: reenabledCustomerCookie });
     assert(customerLogout.status === 302 && customerLogout.location === '/customer/login', 'Customer logout should redirect to customer login.');
     assertSecureCookie(customerLogout.cookie, 'Customer logout', { clear: true });
+
+    const resetCustomerPassword = await request(server, 'POST', '/api/customer-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-customer-login',
+        name: 'Alicia Brown',
+        customer: 'Alicia Brown',
+        username: 'direct-customer',
+        password: 'DirectCustomer456!',
+        phone: '(856) 555-0171',
+        email: 'alicia@example.com',
+        recurringPaymentId: 'rec-001',
+        status: 'Active'
+      }
+    });
+    assert(resetCustomerPassword.status === 200 && resetCustomerPassword.json.ok && resetCustomerPassword.json.account.passwordResetStatus === 'Reset complete', 'Owner password reset should clear the customer reset request.');
+    assert(!resetCustomerPassword.json.account.passwordHash && !resetCustomerPassword.json.account.passwordSalt, 'Customer reset response should not expose password secrets.');
+    const oldCustomerPasswordAttempt = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer123!' } });
+    assert(oldCustomerPasswordAttempt.status === 401, 'Old customer password should stop working after owner reset.');
+    const newCustomerPasswordAttempt = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer456!' } });
+    assert(newCustomerPasswordAttempt.status === 302, 'New owner-set customer password should sign in.');
+    assertSecureCookie(newCustomerPasswordAttempt.cookie, 'Customer reset password login');
 
     const notificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
       cookie: ownerCookie,

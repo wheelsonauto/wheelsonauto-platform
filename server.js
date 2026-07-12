@@ -1985,7 +1985,16 @@ function cleanCustomerAccountPayload(payload, existing = null) {
     account.passwordUpdatedAt = existing.passwordUpdatedAt || '';
   }
   const password = String(payload.password || '').trim();
-  if (password) Object.assign(account, createPasswordRecord(password));
+  if (password) {
+    Object.assign(account, createPasswordRecord(password));
+    account.passwordResetStatus = 'Reset complete';
+    account.passwordResetResolvedAt = new Date().toISOString();
+  } else {
+    account.passwordResetRequestedAt = existing && existing.passwordResetRequestedAt || '';
+    account.passwordResetStatus = existing && existing.passwordResetStatus || '';
+    account.passwordResetIdentity = existing && existing.passwordResetIdentity || '';
+    account.passwordResetResolvedAt = existing && existing.passwordResetResolvedAt || '';
+  }
   delete account.password;
   return account;
 }
@@ -4644,6 +4653,11 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const account = findCustomerAccountByIdentity(data, identity);
       const customer = account && (account.name || account.customer) || identity;
+      if (account) {
+        account.passwordResetRequestedAt = new Date().toISOString();
+        account.passwordResetStatus = 'Requested';
+        account.passwordResetIdentity = identity;
+      }
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({
         id: 'msg-customer-reset-' + Date.now(),
@@ -4660,7 +4674,8 @@ const server = http.createServer(async (req, res) => {
         tone: account ? 'warn' : 'bad',
         body: 'Customer requested login help for: ' + identity + '. Verify identity before changing the password.',
         source: 'Customer portal',
-        event: 'customer_password_reset'
+        event: 'customer_password_reset',
+        customerAccountId: account && account.id || ''
       });
       await queueOwnerEmailNotification(data, 'customer_password_reset', {
         customer,
