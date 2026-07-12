@@ -5208,7 +5208,10 @@ const server = http.createServer(async (req, res) => {
           body,
           provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
           source: result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
-          ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER
+          ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER,
+          paymentId: payload.paymentId || '',
+          recurringPaymentId: payload.recurringPaymentId || '',
+          claimId: payload.claimId || ''
         };
         data.messages.unshift(record);
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: '' };
@@ -5231,6 +5234,9 @@ const server = http.createServer(async (req, res) => {
           body,
           provider: channel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
           source: channel + ' provider',
+          paymentId: payload.paymentId || '',
+          recurringPaymentId: payload.recurringPaymentId || '',
+          claimId: payload.claimId || '',
           error: String(err && err.message || err)
         };
         data.messages.unshift(record);

@@ -757,6 +757,22 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.transactions === 2, 'Daily closeout should report unique transaction rows after dedupe.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777'), 'Daily closeout should keep the customer name for deduped Clover transactions.');
 
+    const receiptDraft = await request(server, 'POST', '/api/messages/send', {
+      cookie: ownerCookie,
+      json: {
+        customer: 'Direct Closeout Customer',
+        email: 'direct-closeout@example.com',
+        channel: 'Email',
+        subject: 'WheelsonAuto payment receipt $777',
+        template: 'Payment receipt',
+        body: 'Receipt for Direct Closeout Customer payment pay-closeout-dedup.',
+        paymentId: 'clover-payment-closeout-dedup-two'
+      }
+    });
+    assert([200, 202].includes(receiptDraft.status) && receiptDraft.json.ok, 'Payment receipt message should send or save as a draft.');
+    assert(receiptDraft.json.message.paymentId === 'clover-payment-closeout-dedup-two', 'Payment receipt message should keep the linked payment ID.');
+    assert(receiptDraft.json.message.template === 'Payment receipt', 'Payment receipt message should be labeled as a receipt.');
+
     const closeoutNotification = await request(server, 'POST', '/api/notifications/daily-closeout', {
       cookie: ownerCookie,
       json: {}

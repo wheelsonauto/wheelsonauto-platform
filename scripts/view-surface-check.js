@@ -149,6 +149,14 @@ assertIncludes('Payments surface', payments, [
 const paymentCardSection = finalFunctionSlice(app, 'paymentCardSection');
 assertIncludes('Payment card section helper', paymentCardSection, ['localSearch', 'customer-pay-list', 'data-limit']);
 
+assertIncludes('Payment receipt surface', app, [
+  'paymentReceiptBody',
+  'send-payment-receipt',
+  'Payment receipt',
+  '/api/messages/send',
+  'paymentId:p.id'
+]);
+
 const documents = finalFunctionSlice(app, 'Documents');
 assertIncludes('Documents surface', documents + app + server, [
   'Portal visibility',
