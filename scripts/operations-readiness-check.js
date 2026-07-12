@@ -207,6 +207,9 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Vehicle assignment conflicts:',
   'Paid-outside, document, service, toll, claim, or proof items waiting for review',
   'send-daily-closeout-email',
+  'signoff-daily-closeout',
+  'Daily closeout signed off',
+  'closeoutSnapshot',
   'print-daily-closeout',
   'Star closeout summary',
   'auditEvents'

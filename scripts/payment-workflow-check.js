@@ -97,6 +97,12 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
 ].forEach(text => requireText('Daily closeout board', dailyCloseout, text));
 
 [
+  'signoff-daily-closeout',
+  'closeoutSnapshot',
+  'Daily closeout signed off'
+].forEach(text => requireText('Daily closeout signoff flow', app, text));
+
+[
   'Retry watch',
   'Not found',
   'Setup needed',

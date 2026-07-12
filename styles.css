@@ -3161,6 +3161,32 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .closeout-board .btn{
   min-height:36px;
 }
+.closeout-signoff-summary{
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:8px;
+  margin:10px 0;
+}
+.closeout-signoff-summary span{
+  border:1px solid rgba(240,184,58,.18);
+  background:rgba(255,255,255,.055);
+  border-radius:10px;
+  padding:10px;
+  display:grid;
+  gap:2px;
+  min-width:0;
+}
+.closeout-signoff-summary strong{
+  color:#f5c967;
+  font-size:17px;
+  line-height:1.1;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.closeout-signoff-summary small{
+  color:rgba(247,251,255,.72);
+  font-weight:850;
+}
 .view-mechanic-portal .mechanic-work-queue,
 .view-mechanic-portal .staff-card-board,
 .view-manager-portal .manager-mini-board,
@@ -3610,6 +3636,15 @@ body.fast-tab-switch .admin-shell .section{
 .admin-shell .message-thread-head>div,
 .admin-shell .item-row>div{
   min-width:0;
+}
+
+@media(max-width:720px){
+  .closeout-signoff-summary{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .closeout-signoff-summary span:last-child{
+    grid-column:1/-1;
+  }
 }
 
 @media print{
