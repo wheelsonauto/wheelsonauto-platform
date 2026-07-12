@@ -474,8 +474,28 @@ async function main() {
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
+    assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Report payment'), 'Customer portal should include paid-outside-app reporting.');
     assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
+
+    const customerPaidOutsideNoAuth = await request(server, 'POST', '/customer/paid-outside');
+    assert(customerPaidOutsideNoAuth.status === 302 && customerPaidOutsideNoAuth.location === '/customer/login', 'Customer paid-outside report should require customer login.');
+
+    const customerPaidOutside = await request(server, 'POST', '/customer/paid-outside', {
+      cookie: customerCookie,
+      form: {
+        amount: '229',
+        method: 'Cash',
+        paidDate: '2026-08-02',
+        note: 'Receipt handed to office during smoke test.'
+      }
+    });
+    assert(customerPaidOutside.status === 302 && customerPaidOutside.location === '/customer', 'Customer paid-outside report should return to the portal.');
+    const customerPaidOutsideState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const paidOutsideCandidates = (customerPaidOutsideState.json.payments || []).filter(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown');
+    const paidOutsidePayment = paidOutsideCandidates.find(item => item.status === 'Paid outside app - needs verification' && item.date === '2026-08-02' && String(item.notes || '').includes('smoke test'));
+    assert(paidOutsidePayment && paidOutsidePayment.amount === 229 && paidOutsidePayment.vehicleId === 'veh-003' && paidOutsidePayment.vin === '3LN6L2G91FR123456' && paidOutsidePayment.requiresVerification === true, 'Customer paid-outside report should create a review-only linked payment record: ' + JSON.stringify(paidOutsideCandidates));
+    assert((customerPaidOutsideState.json.messages || []).some(message => message.paymentId === paidOutsidePayment.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification'), 'Customer paid-outside report should be logged in Messages for staff review.');
 
     const customerServiceNoAuth = await request(server, 'POST', '/customer/service-request');
     assert(customerServiceNoAuth.status === 302 && customerServiceNoAuth.location === '/customer/login', 'Customer service request should require customer login.');

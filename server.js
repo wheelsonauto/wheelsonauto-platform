@@ -2314,9 +2314,10 @@ function customerPortalHtml(account, state) {
   const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || '';
   const customerName = account.name || account.customer || summary.customer || 'Customer';
   const portalMessageForm = '<form method="POST" action="/customer/message" class="customer-message-form"><label>Message WheelsonAuto<textarea name="body" maxlength="1200" placeholder="Type a payment, service, card, toll, or account question..."></textarea></label><button class="btn primary" type="submit">Send message</button><small>Messages arrive in the WheelsonAuto inbox for admin/manager follow-up.</small></form>';
+  const portalPaidOutsideForm = '<form method="POST" action="/customer/paid-outside" class="customer-message-form customer-paid-outside-form"><label>Report payment made outside app<input name="amount" type="number" step="0.01" min="0" value="' + escapeHtml(amount || '') + '"></label><label>Method<select name="method"><option>Cash</option><option>Zelle</option><option>Cash App</option><option>Money order</option><option>Clover terminal</option><option>Other</option></select></label><label>Payment date<input name="paidDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Note / proof placeholder<textarea name="note" maxlength="1200" placeholder="Receipt number, who accepted it, screenshot note, or any proof detail..."></textarea></label><button class="btn primary" type="submit">Report payment</button><small>This alerts WheelsonAuto to verify before marking the account paid.</small></form>';
   const portalServiceForm = '<form method="POST" action="/customer/service-request" class="customer-message-form customer-service-form"><label>Request service<select name="type"><option>Monthly inspection / oil change</option><option>Repair issue</option><option>Tire / brake concern</option><option>Warning light</option><option>Other service request</option></select></label><label>Preferred date<input name="preferredDate" type="date"></label><label>Notes<textarea name="notes" maxlength="1200" placeholder="Tell us what is going on with the vehicle..."></textarea></label><button class="btn primary" type="submit">Send service request</button><small>This creates a WheelsonAuto service item connected to your vehicle and customer file.</small></form>';
   const cardChangeForm = customerPortalActionForm('/customer/card-change', 'Change card on file', 'Opens a secure Clover card setup link. WheelsonAuto never sees the full card number.', 'customer-card-form');
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div><div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -2424,6 +2425,7 @@ function systemReadiness(data) {
     route('GET', '/customer/login', 'Customer login page'),
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
+    route('POST', '/customer/paid-outside', 'Customer portal paid-outside-app report'),
     route('POST', '/customer/service-request', 'Customer portal maintenance/service request'),
     route('POST', '/customer/card-change', 'Customer portal card-on-file change request'),
     route('GET', '/api/customer/portal-state', 'Customer-only account state'),
@@ -4643,6 +4645,99 @@ const server = http.createServer(async (req, res) => {
           'Email: ' + (message.email || 'Not saved'),
           'Message: ' + body
         ].join('\n')
+      });
+      await writeData(data);
+      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+    }
+    if (url.pathname === '/customer/paid-outside' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req));
+      const amount = Number(form.get('amount') || 0);
+      const method = String(form.get('method') || 'Outside app').trim().slice(0, 80);
+      const paidDate = String(form.get('paidDate') || '').trim();
+      const note = String(form.get('note') || '').trim().slice(0, 1200);
+      if (!Number.isFinite(amount) || amount <= 0) return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
+      const context = aiFindCustomerContext(scopedData, {
+        customer: account.customer || account.name,
+        phone: account.phone,
+        email: account.email,
+        recurringPaymentId: account.recurringPaymentId,
+        id: account.recurringPaymentId
+      });
+      const recurring = context.recurring || {};
+      const vehicle = context.vehicle || {};
+      const customerName = context.customerName || account.customer || account.name || 'Customer';
+      const vehicleName = context.vehicleName || recurring.vehicle || '';
+      const tag = vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
+      const payment = {
+        id: 'paid-outside-review-' + Date.now(),
+        date: paidDate || new Date().toLocaleString('en-US'),
+        createdAt: new Date().toISOString(),
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customer: customerName,
+        phone: account.phone || context.phone || '',
+        email: account.email || context.email || '',
+        vehicle: vehicleName,
+        vehicleId: account.vehicleId || vehicle.id || recurring.vehicleId || '',
+        vin: vehicle.vin || recurring.vin || '',
+        licensePlate: tag,
+        plate: tag,
+        tempTag: vehicle.tempTag || recurring.tempTag || '',
+        tracker: vehicle.tracker || recurring.tracker || '',
+        recurringPaymentId: recurring.id || account.recurringPaymentId || '',
+        cloverCustomerId: recurring.cloverCustomerId || '',
+        method: method + ' outside app',
+        amount,
+        status: 'Paid outside app - needs verification',
+        tone: 'warn',
+        source: 'Customer portal',
+        notes: note || 'Customer reported an outside-app payment from the portal.',
+        proof: note || '',
+        requiresVerification: true,
+        customerAccountId: account.id
+      };
+      data.payments = Array.isArray(data.payments) ? data.payments : [];
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.payments.unshift(payment);
+      const message = {
+        id: 'msg-customer-paid-outside-' + Date.now(),
+        date: new Date().toLocaleString('en-US'),
+        createdAt: new Date().toISOString(),
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customer: customerName,
+        phone: payment.phone,
+        email: payment.email,
+        direction: 'Customer action',
+        channel: 'Customer portal',
+        template: 'Paid outside app',
+        subject: 'Customer reported outside payment',
+        status: 'Needs admin verification',
+        tone: 'warn',
+        body: [
+          'Customer reported a payment outside WheelsonAuto.',
+          'Amount: ' + moneyText(amount),
+          'Method: ' + method,
+          'Payment date: ' + (paidDate || 'Not specified'),
+          'Vehicle: ' + (vehicleName || 'Not linked'),
+          tag ? 'Tag/plate: ' + tag : '',
+          'Note/proof: ' + (note || 'No proof note provided')
+        ].filter(Boolean).join('\n'),
+        source: 'Customer portal',
+        customerAccountId: account.id,
+        paymentId: payment.id,
+        recurringPaymentId: payment.recurringPaymentId,
+        vehicleId: payment.vehicleId
+      };
+      data.messages.unshift(message);
+      await queueOwnerEmailNotification(data, 'customer_message', {
+        customer: customerName,
+        subject: 'Paid outside app needs verification - ' + customerName,
+        body: message.body
       });
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
