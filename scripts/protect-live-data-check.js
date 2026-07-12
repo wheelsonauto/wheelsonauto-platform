@@ -16,4 +16,11 @@ if (stagedFiles.includes('data.json')) {
   fail('data.json is staged. Unstage it before committing so live business data is not overwritten.');
 }
 
-console.log('Live data protection check passed: data.json is not staged.');
+let dirtyLiveData = '';
+try {
+  dirtyLiveData = execFileSync('git', ['diff', '--name-only', '--', 'data.json'], { encoding: 'utf8' }).trim();
+} catch (err) {
+  fail('Could not inspect live data working-tree status: ' + String(err && err.message || err));
+}
+
+console.log('Live data protection check passed: data.json is not staged.' + (dirtyLiveData ? ' Local live-data edits are present and safely unstaged.' : ''));

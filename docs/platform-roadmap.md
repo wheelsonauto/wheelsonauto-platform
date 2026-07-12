@@ -27,6 +27,7 @@ Completed in this build pass:
 - Main app and server-rendered pages now use a fresh asset version (`platform-20260712-deep-tighten-1`) so new UI/role fixes do not get stuck behind stale browser cache after deploy.
 - Static UI regression checks now require account, company, API provider, and Dispatch task save flows to close their modals after successful saves.
 - Backend Star QA, reports, and system health now include default API provider readiness rows even before any provider records are manually created, so Clover, SMS, email, EZPass, insurance, tracker, accounting, marketing, and billing gaps stay visible.
+- Live-data protection now clearly reports when `data.json` has local business-data edits that are safely unstaged, instead of silently passing.
 
 Checks passed at this checkpoint:
 
