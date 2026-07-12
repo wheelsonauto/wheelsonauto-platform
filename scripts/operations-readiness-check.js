@@ -148,7 +148,18 @@ const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
   'candidate.tracker',
   'send-claim-link',
   'Provider / agency',
-  'Next follow-up'
+  'Next follow-up',
+  'disputeRecoveryBoard',
+  'disputeRecoveryIssue',
+  'Dispute / recovery bridge',
+  'Needs customer/payment match',
+  'Ready to collect',
+  'Proof needed',
+  'Deadline soon',
+  'API/provider needed',
+  'Clover dispute',
+  'reimbursement',
+  'open-api-provider'
 ].forEach(text => requireText('Claims/tolls/disputes surface', claims + claimMatchNote + staffClaimCard + app, text));
 
 [

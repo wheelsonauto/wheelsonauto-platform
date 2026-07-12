@@ -561,6 +561,8 @@ assertIncludes('Recurring customer portal card actions', recurringCardActionButt
 const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
 const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
 const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
+const disputeRecoveryBoard = finalFunctionSlice(app, 'disputeRecoveryBoard');
+const disputeRecoveryIssue = finalFunctionSlice(app, 'disputeRecoveryIssue');
 const starHealth = finalFunctionSlice(app, 'starSystemHealthPanelFresh') || finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = (finalFunctionSlice(app, 'starQaManagerPanel') || '') + (finalFunctionSlice(app, 'starQaManagerPanelFresh') || '');
 const starExport = finalFunctionSlice(app, 'starSystemHealthExport');
@@ -569,6 +571,7 @@ const staffFleetCard = finalFunctionSlice(app, 'staffFleetCard');
 const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 assertIncludes('Staff service cards', staffServiceCard + app + css, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance', 'proofLine', 'Open proof', 'proof-line']);
 assertIncludes('Staff claim cards', staffClaimCard + app + css, ['isMechanicVisibleClaim', 'roleName()===\'mechanic\'', 'Vehicle issue', 'open-claim', 'send-claim-link', 'claimMatchNote', 'proofLine', 'Open proof', 'proof-line', 'mechanic?\'vehicle issues\'']);
+assertIncludes('Dispute recovery bridge', disputeRecoveryBoard + disputeRecoveryIssue + app + css, ['Dispute / recovery bridge', 'Needs customer/payment match', 'Ready to collect', 'Proof needed', 'Deadline soon', 'API/provider needed', 'Clover disputes', 'tolls, violations', 'reimbursements', 'open-api-provider', 'send-claim-link', 'apply-claim-match', 'Star can draft the customer text', 'dispute-recovery-board', 'dispute-recovery-grid', 'dispute-recovery-card']);
 assertIncludes('Tracker health layer', trackerStatus + app, ['Tracker offline', 'Tracker stale', 'Tracker setup', 'trackerLastPing', 'trackerLocation']);
 assertIncludes('Staff fleet tracker cards', staffFleetCard, ['vehicleTrackingBadge', 'vehicleTrackingLine', 'Assignment conflict', 'compact-conflict', 'Claimed by']);
 assertIncludes('Star QA truth-layer checks', starHealth + app, ['Autopay vehicle link', 'missingVehicle', 'Vehicle assignment conflicts', 'assignmentConflicts', 'Open payment links', 'Open card setup links', 'Pending Star approvals', 'openCardSetupLinks', 'pendingStarApprovals', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review', 'Dispute match review', 'Toll/violation recovery', 'tollRecovery', 'API provider readiness', 'apiProviderReviewRows', 'Customer portal access', 'missingCustomerPortals', 'Sensitive changes', 'Verification inbox', 'Customer proof, paid-outside, service, toll, claim, and document reviews should be cleared before closeout', 'customer uploads stay pending until staff approves', 'starWebhookReadinessCards', 'SMS/email webhook secret', 'Clover webhook secret']);
