@@ -878,9 +878,10 @@ async function main() {
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
     assert(customerPortal.text.includes('Open payment requests') && customerPortal.text.includes('direct-customer-open-payment-link') && customerPortal.text.includes('Pay securely') && customerPortal.text.includes('days open'), 'Customer portal should show linked open payment requests with age.');
-    assert(!customerPortal.text.includes('direct-customer-paid-payment-link') && !customerPortal.text.includes('Old paid link'), 'Customer portal should not show paid/closed payment requests in the open payment request panel.');
-    assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Report payment'), 'Customer portal should include paid-outside-app reporting.');
-    assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
+	    assert(!customerPortal.text.includes('direct-customer-paid-payment-link') && !customerPortal.text.includes('Old paid link'), 'Customer portal should not show paid/closed payment requests in the open payment request panel.');
+	    assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Report payment'), 'Customer portal should include paid-outside-app reporting.');
+	    assert(customerPortal.text.includes('/customer/receipt-request') && customerPortal.text.includes('Request receipt'), 'Customer portal should include receipt request workflow.');
+	    assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Report issue'), 'Customer portal should include toll/claim/issue reporting.');
     assert(customerPortal.text.includes('/customer/document-update') && customerPortal.text.includes('Send document / proof update'), 'Customer portal should include document/proof update intake.');
     assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
@@ -910,11 +911,21 @@ async function main() {
     assert(managerPaidOutsideReview.status === 403, 'Manager should not be allowed to verify paid-outside money reports.');
     const paidOutsideReview = await request(server, 'POST', '/api/verification/paid-outside', { cookie: ownerCookie, json: { paymentId: paidOutsidePayment.id, action: 'verify', note: 'Verified against cash receipt in smoke test.' } });
     assert(paidOutsideReview.status === 200 && paidOutsideReview.json.ok && paidOutsideReview.json.payment.status === 'Paid outside app', 'Owner should be able to verify paid-outside proof.');
-    const paidOutsideReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    assert((paidOutsideReviewRead.json.payments || []).some(item => item.id === paidOutsidePayment.id && item.requiresVerification === false && item.status === 'Paid outside app' && String(item.notes || '').includes('Verified by')), 'Verified paid-outside report should leave review mode and keep proof notes.');
-    assert((paidOutsideReviewRead.json.auditLogs || []).some(item => item.action === 'Paid-outside payment verified' && String(item.details || '').includes('Alicia Brown')), 'Paid-outside verification should be audit logged.');
+	    const paidOutsideReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+	    assert((paidOutsideReviewRead.json.payments || []).some(item => item.id === paidOutsidePayment.id && item.requiresVerification === false && item.status === 'Paid outside app' && String(item.notes || '').includes('Verified by')), 'Verified paid-outside report should leave review mode and keep proof notes.');
+	    assert((paidOutsideReviewRead.json.auditLogs || []).some(item => item.action === 'Paid-outside payment verified' && String(item.details || '').includes('Alicia Brown')), 'Paid-outside verification should be audit logged.');
 
-    const customerServiceNoAuth = await request(server, 'POST', '/customer/service-request');
+	    const customerReceiptNoAuth = await request(server, 'POST', '/customer/receipt-request');
+	    assert(customerReceiptNoAuth.status === 302 && customerReceiptNoAuth.location === '/customer/login', 'Customer receipt request should require customer login.');
+	    const customerReceiptRequest = await request(server, 'POST', '/customer/receipt-request', { cookie: customerCookie, form: { paymentHint: 'Need receipt for the latest $229 payment.' } });
+	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer', 'Customer receipt request should return to the customer portal.');
+	    const customerReceiptState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+	    const receiptMessage = (customerReceiptState.json.messages || []).find(item => item.event === 'customer_receipt_request' && item.customer === 'Alicia Brown');
+	    assert(receiptMessage && receiptMessage.status === 'Needs admin approval' && receiptMessage.aiPlan && receiptMessage.aiPlan.actionType === 'send_receipt' && receiptMessage.aiPlan.approvalRequired === true, 'Customer receipt request should create an admin-approved send_receipt message.');
+	    assert(receiptMessage.vin === '3LN6L2G91FR123456' && receiptMessage.plate === 'LNZ-229' && Number(receiptMessage.amount || 0) > 0, 'Customer receipt request should keep vehicle, VIN/tag, and payment amount context.');
+	    assert((customerReceiptState.json.auditLogs || []).some(row => row.action === 'Customer portal receipt requested' && String(row.details || '').includes('Alicia Brown')), 'Customer receipt request should be audit logged.');
+
+	    const customerServiceNoAuth = await request(server, 'POST', '/customer/service-request');
     assert(customerServiceNoAuth.status === 302 && customerServiceNoAuth.location === '/customer/login', 'Customer service request should require customer login.');
 
     const customerServiceRequest = await request(server, 'POST', '/customer/service-request', {
@@ -1683,7 +1694,7 @@ async function main() {
     const ownerAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const auditLogs = ownerAuditState.json.auditLogs || [];
     const auditActions = auditLogs.map(row => row.action);
-    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Staff password help requested', 'Customer password help requested', 'Customer portal paid-outside reported', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
+    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Staff password help requested', 'Customer password help requested', 'Customer portal paid-outside reported', 'Customer portal receipt requested', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
       assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
     });
     assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');

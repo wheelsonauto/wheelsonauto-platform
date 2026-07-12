@@ -62,6 +62,7 @@ Completed in this build pass:
 - Star QA now surfaces SMS/email and Clover webhook-secret readiness cards in the app using safe booleans, so provider setup gaps are visible without exposing secrets.
 - Owner deep reports and fallback CSV exports now include SMS/email and Clover webhook-secret readiness rows, keeping closeout/export reviews aligned with Star QA without exposing secret values.
 - Missing SMS/email and Clover webhook secrets now surface as owner priority-queue and Star manager setup items, and the API provider defaults name the exact Render keys needed before live webhook automation.
+- Customer portal now has a dedicated receipt-request workflow that creates an admin-approved `send_receipt` message with customer, vehicle, VIN/tag, payment context, email notification, and audit log instead of auto-sending receipts.
 
 Checks passed at this checkpoint:
 

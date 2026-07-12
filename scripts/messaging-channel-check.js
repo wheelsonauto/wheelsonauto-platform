@@ -80,6 +80,8 @@ requireText('Server public email webhook status', publicMessagingStatus, 'emailW
 requireText('Server public webhook secret status', publicMessagingStatus, 'webhookSecretConfigured');
 requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
 requireText('Customer portal message route', server, "/customer/message");
+requireText('Customer portal receipt request route', server, "/customer/receipt-request");
+requireText('Customer portal receipt approval guard', server, "actionType: 'send_receipt'");
 requireText('Customer portal message notification event', server, 'customer_message');
 requireText('Staff password reset notification event', server + app, 'staff_password_reset');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
