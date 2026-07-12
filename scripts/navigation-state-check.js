@@ -117,7 +117,7 @@ const allowedTabsByView = {
   Applications: ['Pipeline', 'Active', 'Approved', 'Contract', 'Denied', 'Removed'],
   Payments: ['Active', 'Today', 'History', 'Transactions'],
   Operations: ['Fleet', 'Assigned', 'Service', 'Claims'],
-  Fleet: ['Available', 'Prep', 'Assigned'],
+  Fleet: ['Available', 'Prep', 'Assigned', 'VIN review'],
   Maintenance: ['Open', 'Overdue', 'Monthly', 'Completed'],
   'Claims & Issues': ['Open', 'History', 'All'],
   Messages: ['Inbox', 'Star', 'Queue', 'Templates', 'History', 'Setup'],
