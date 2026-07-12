@@ -391,6 +391,7 @@ assertIncludes('Operations surface', operations, [
 ]);
 
 const maintenance = finalFunctionSlice(app, 'Maintenance');
+const serviceInspectionBoard = finalFunctionSlice(app, 'serviceInspectionBoard');
 assertIncludes('Maintenance surface', maintenance, [
   'Open',
   'Overdue',
@@ -398,6 +399,20 @@ assertIncludes('Maintenance surface', maintenance, [
   'Completed',
   'staffServiceCard',
   'Search service by customer, VIN, tag, tracker, issue'
+]);
+assertIncludes('Service inspection command board', serviceInspectionBoard + maintenance + css, [
+  'Inspection command',
+  'Monthly inspection',
+  'oil-change cycle',
+  'Overdue service',
+  'Due today',
+  'Monthly / oil cycle',
+  'Identity gaps',
+  'Checklist / signoff',
+  'Completed this month',
+  'service-inspection-board',
+  'service-inspection-grid',
+  'service-inspection-card'
 ]);
 
 const fleet = finalFunctionSlice(app, 'Fleet');

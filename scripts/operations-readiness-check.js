@@ -98,8 +98,19 @@ const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
   'open-maintenance',
   'vehicleIdentityLine',
   'VIN:',
-  'Tracker:'
-].forEach(text => requireText('Maintenance/service surface', maintenance + staffServiceCard + vehicleIdentityLine, text));
+  'Tracker:',
+  'serviceInspectionBoard',
+  'Inspection command',
+  'Monthly inspection',
+  'oil-change cycle',
+  'Overdue service',
+  'Due today',
+  'Monthly / oil cycle',
+  'Identity gaps',
+  'Checklist / signoff',
+  'Completed this month',
+  'service-inspection-board'
+].forEach(text => requireText('Maintenance/service surface', maintenance + staffServiceCard + vehicleIdentityLine + app, text));
 
 [
   'isMonthlyMaintenance',
