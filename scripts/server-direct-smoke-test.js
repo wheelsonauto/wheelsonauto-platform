@@ -365,6 +365,8 @@ async function main() {
     const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');
     assert(customerPortalState.json.portal.recurring.customer === 'Alicia Brown', 'Customer portal should link the assigned recurring payment.');
+    assert(!JSON.stringify(customerPortalState.json).includes('Direct Dispute Customer'), 'Customer portal state should not expose another customer payment/dispute record.');
+    assert(!customerPortal.text.includes('Direct Dispute Customer'), 'Customer portal page should not render another customer record.');
     assert(!JSON.stringify(customerPortalState.json).includes('passwordHash'), 'Customer portal state should not expose password secrets.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-source-token'), 'Customer portal state should not expose saved-card payment sources.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-payment-token'), 'Customer portal state should not expose payment tokens.');
