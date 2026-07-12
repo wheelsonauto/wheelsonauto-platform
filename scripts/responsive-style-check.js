@@ -64,6 +64,8 @@ requireBlock('Customer pay hover cards', '.admin-shell .customer-pay-card:hover{
 requireBlock('Text-fit card containers', '.admin-shell .customer-pay-card,', ['min-width:0']);
 requireBlock('Text-fit card text', '.admin-shell .customer-pay-card strong,', ['overflow-wrap:anywhere', 'max-width:100%', 'word-break:normal']);
 requireBlock('Text-fit row children', '.admin-shell .customer-pay-top>div,', ['min-width:0']);
+requireBlock('Closeout print mode', 'body.print-closeout-mode .closeout-board{', ['position:absolute!important', 'background:rgb(255,255,255)!important', 'box-shadow:none!important']);
+requireBlock('Closeout print button hiding', 'body.print-closeout-mode .closeout-board .btn,', ['display:none!important']);
 requireAnyBlock('Customer portal shell', '.customer-portal{', ['min-height:100vh', 'display:grid', 'gap:18px']);
 requireAnyBlock('Customer portal hero', '.customer-hero{', ['width:min(1180px,100%)', 'grid-template-columns:1fr minmax(0,1.4fr) auto', 'border-radius:14px']);
 requireAnyBlock('Customer portal summary grid', '.customer-summary-grid{', ['grid-template-columns:repeat(4,minmax(0,1fr))']);

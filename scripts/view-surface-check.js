@@ -166,6 +166,8 @@ assertIncludes('Daily closeout notes surface', app + server, [
   'Owner closeout notes',
   'closeoutOwnerNotes',
   'save-closeout-note',
+  'print-daily-closeout',
+  'printDailyCloseout',
   'ownerNote',
   'dailyCloseouts'
 ]);
