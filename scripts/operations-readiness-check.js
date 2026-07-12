@@ -353,6 +353,9 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 
 [
   'cleanApiProviderPayload',
+  'apiProviderReviewRows',
+  'api_provider_readiness',
+  'API provider readiness',
   '/api/api-providers',
   'lastTestResult',
   'envKeys',

@@ -1504,6 +1504,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
+  const apiProviderReview = apiProviderReviewRows(scoped);
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const verificationItems = closeoutVerificationItems(scoped);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
@@ -1517,6 +1518,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Toll/violation recovery', tollRecoveryAmount, tollRecovery.length ? (tollMatchReview.length ? 'Review' : 'Open') : 'Clean', 'Star QA', tollRecovery.length + ' open toll/violation item(s), ' + tollMatchReview.length + ' need customer/vehicle/plate review before charge or message');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'Review' : 'Clean', 'Star QA', apiProviderReview.length ? apiProviderReview.map(provider => (provider.name || provider.group || 'API provider') + ' - ' + (provider.status || 'Needs setup')).slice(0, 8).join(' | ') : 'Provider dependency matrix is clean or intentionally not created yet');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing contact', missingContact.length, missingContact.length ? 'Review' : 'Clean', 'Star QA', 'Customers without phone or email cannot receive Star follow-up');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Verification inbox', verificationItems.length, verificationItems.length ? 'Review' : 'Clean', 'Star QA', 'Customer proof, paid-outside, service, toll, claim, and document reviews waiting');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
@@ -1576,6 +1578,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
+  const apiProviderReview = apiProviderReviewRows(scoped);
   const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
@@ -1604,7 +1607,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(16, 'stale_payment_requests', 'Stale payment links', stalePaymentRequests.length, stalePaymentRequests.length ? 'warn' : 'good', 'Messages', 'Queue', 'Hosted checkout links open more than 24 hours need follow-up.');
   issue(17, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
   issue(18, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
-  if (isOwnerUser(user)) issue(19, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  if (isOwnerUser(user)) issue(19, 'api_provider_readiness', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'warn' : 'good', 'API Roadmap', '', 'Provider dependency matrix needs env keys, endpoint, live test plan, and last test result before Star or workflows can rely on it.');
+  if (isOwnerUser(user)) issue(20, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -3715,6 +3719,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
+  const apiProviderReview = apiProviderReviewRows(scoped);
   const truthCheck = (key, label, count, severity, detail, view, tab = '') => ({
     key,
     label,
@@ -3737,6 +3742,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),
     truthCheck('missing_contact', 'Missing contact', missingContact.length, 'warning', 'Customers need phone or email before Star can follow up.', 'Payments', 'Active'),
     truthCheck('toll_violation_recovery', 'Toll/violation recovery', tollRecovery.length, tollMatchReview.length ? 'critical' : 'warning', 'Open tolls/violations total ' + moneyText(tollRecoveryAmount) + '; each row needs customer, vehicle, plate/VIN, proof, and payment-link follow-up before charging.', 'Claims & Issues'),
+    truthCheck('api_provider_readiness', 'API provider readiness', apiProviderReview.length, 'warning', 'Provider records need env keys, endpoint/route, live test plan, and last test result before Star, messages, EZPass, insurance, tracker, accounting, or disputes can rely on them.', 'API Roadmap'),
     truthCheck('verification_inbox', 'Verification inbox', verificationItems.length, 'warning', 'Customer proof, paid-outside, service, toll, claim, and document items need staff review.', 'Documents')
   ];
   const dataCriticalIssues = truthChecks.filter(item => item.severity === 'critical' && item.count > 0);
@@ -4109,6 +4115,15 @@ function isTollViolationClaim(claim = {}) {
 }
 function tollViolationRecoveryRows(data = {}) {
   return (data.claims || []).filter(claim => isTollViolationClaim(claim) && !/paid|closed/i.test(String(claim.status || 'Open')));
+}
+function apiProviderReviewRows(data = {}) {
+  return (data.apiProviders || []).filter(provider => {
+    const status = String(provider.status || 'API needed').toLowerCase();
+    const connected = status.includes('connected');
+    const hasLiveReadyProof = ['envKeys', 'endpoint', 'liveTest', 'lastTestResult'].every(key => String(provider[key] || '').trim());
+    if (connected) return !hasLiveReadyProof;
+    return /needed|blocked|setup|draft|review|not connected|waiting|planned|provider/i.test(status);
+  });
 }
 function claimIdentityTokens(claim = {}) {
   return [
