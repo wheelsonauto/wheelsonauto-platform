@@ -3494,6 +3494,14 @@ function stripCustomerPortalMessage(row = {}) {
   if (/star ai/i.test(String(safe.channel || ''))) safe.channel = 'WheelsonAuto';
   return safe;
 }
+function stripCustomerPortalPayment(row = {}) {
+  const safe = stripPrivateCustomerFields(row);
+  ['error', 'lastAutoChargeError', 'cloverPaymentId', 'cloverChargeId', 'externalReferenceId', 'externalCustomerReference', 'cloverCustomerId', 'cloverSubscriptionId', 'paymentSourceId'].forEach(key => delete safe[key]);
+  if (/fail|not found|declined|error/i.test(String(safe.status || '') + ' ' + String(safe.notes || ''))) {
+    safe.notes = 'Please contact WheelsonAuto if you have questions about this payment status.';
+  }
+  return safe;
+}
 function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) {
   const visibleDocs = (scopedData.documents || []).filter(row => {
     if (!customerPortalRecordMatches(row, identity, 'document')) return false;
@@ -3645,7 +3653,7 @@ function customerPortalState(data, account) {
     recurring: stripPrivateCustomerFields(primaryRecurring),
     vehicle: stripPrivateCustomerFields(primaryVehicle),
     vehicles: vehicles.map(stripPrivateCustomerFields),
-    payments: payments.map(stripPrivateCustomerFields),
+    payments: payments.map(stripCustomerPortalPayment),
     maintenance: maintenance.map(stripPrivateCustomerFields),
     claims: claims.map(stripPrivateCustomerFields),
     messages: messages.map(stripCustomerPortalMessage),

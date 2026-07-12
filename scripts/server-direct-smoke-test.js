@@ -672,6 +672,24 @@ async function main() {
       raw: { private: 'customer-secret-raw-value' }
     });
     portalPrivacyState.paymentRequests = portalPrivacyState.paymentRequests || [];
+    portalPrivacyState.payments = portalPrivacyState.payments || [];
+    portalPrivacyState.payments.unshift({
+      id: 'direct-customer-private-payment-row',
+      organizationId: 'org-wheelsonauto',
+      customer: 'Alicia Brown',
+      recurringPaymentId: 'rec-002',
+      vehicleId: 'veh-003',
+      vehicle: '2015 Lincoln MKZ',
+      vin: '3LN6L2G91FR123456',
+      amount: 229,
+      status: '1x failed - retrying',
+      source: 'Clover saved-card charge',
+      notes: 'Customer-visible status with internal Clover decline code',
+      error: 'secret-clover-error',
+      lastAutoChargeError: 'secret-last-charge-error',
+      cloverPaymentId: 'secret-clover-payment-id',
+      externalReferenceId: 'secret-external-reference'
+    });
     portalPrivacyState.paymentRequests.unshift(
       {
         id: 'direct-customer-open-payment-link',
@@ -952,6 +970,8 @@ async function main() {
     assert(!JSON.stringify(customerPortalState.json).includes('secret-payment-token'), 'Customer portal state should not expose payment tokens.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-raw-value'), 'Customer portal state should not expose raw provider payloads.');
     assert(!JSON.stringify(customerPortalState.json.portal.messages || []).includes('approvalRequired') && !JSON.stringify(customerPortalState.json.portal.messages || []).includes('customerAccountId'), 'Customer portal message history should not expose staff triage fields or internal account ids.');
+    assert(!JSON.stringify(customerPortalState.json.portal.payments || []).includes('secret-clover-error') && !JSON.stringify(customerPortalState.json.portal.payments || []).includes('secret-clover-payment-id') && !JSON.stringify(customerPortalState.json.portal.payments || []).includes('secret-external-reference'), 'Customer portal payments should not expose Clover/internal error or reference fields.');
+    assert((customerPortalState.json.portal.payments || []).some(payment => payment.id === 'direct-customer-private-payment-row' && /Please contact WheelsonAuto/.test(payment.notes || '')), 'Customer portal failed payments should show a clean customer-safe note.');
 
     const customerBlockedState = await request(server, 'GET', '/api/state', { cookie: customerCookie });
     assert(customerBlockedState.status === 200 && customerBlockedState.text.includes('WheelsonAuto Portal'), 'Customer session should not access staff/admin API state.');
