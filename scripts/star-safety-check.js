@@ -45,6 +45,7 @@ const aiRules = finalFunctionSlice(server, 'aiPlanRules');
 const sanitize = finalFunctionSlice(server, 'sanitizeAiPlan');
 const openAiPlan = finalFunctionSlice(server, 'openAiReplyPlan');
 const safeLinks = finalFunctionSlice(server, 'prepareAiSafeLink');
+const preparedAction = finalFunctionSlice(server, 'starPreparedAction');
 const aiDraft = finalFunctionSlice(server, 'createAiMessageDraft');
 const aiFindContext = finalFunctionSlice(server, 'aiFindCustomerContext');
 const aiContext = finalFunctionSlice(server, 'aiContextSummary');
@@ -118,9 +119,23 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star safe link preparation', safeLinks, text));
 
 [
+  'function starPreparedAction',
+  'requiresAdminApproval',
+  'vehicle',
+  'vin',
+  'tag',
+  'amount',
+  'paymentLinkUrl',
+  'cardSetupUrl',
+  'No charge was run',
+  'No schedule was changed'
+].forEach(text => requireText('Star prepared action metadata', preparedAction, text));
+
+[
   "status: plan.needsHuman ? 'Human needed' : (plan.approvalRequired ? 'Needs approval'",
   "source: 'WheelsonAuto Star AI'",
   'aiPlan: plan',
+  'plan.preparedAction = starPreparedAction',
   'options.user',
   'recurringPaymentId',
   'claimId'
@@ -198,12 +213,19 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star QA manager suggestions', starQaManager, text));
 
 [
+  'star-prepared-action',
+  'p.preparedAction'
+].forEach(text => requireText('Star prepared action UI card', app, text));
+
+[
   "p.actionType==='charge_saved_card'",
   "data-action=\"record-charge\"",
   "p.actionType==='change_autopay_date'",
   "data-action=\"change-autopay-date\"",
   "p.actionType==='send_payment_link'",
-  "data-action=\"send-pay-link\""
+  "data-action=\"send-pay-link\"",
+  "p.actionType==='send_card_setup'",
+  "data-action=\"change-card-on-file\""
 ].forEach(text => requireText('Star UI approval routing', starActions, text));
 
 console.log('Star safety check passed: AI drafts are contextual, safe links are controlled, and money/account actions require admin approval.');

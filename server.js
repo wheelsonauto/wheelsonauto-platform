@@ -2335,12 +2335,71 @@ function prepareAiSafeLink(data, plan, context) {
   }
   return plan;
 }
+function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
+  const recurring = context.recurring || {};
+  const fields = messageContextFields(context, payload);
+  const related = { ...(plan.related || {}) };
+  const actionType = String(plan.actionType || 'reply');
+  const labelMap = {
+    reply: 'Reply',
+    send_payment_link: 'Send payment link',
+    send_card_setup: 'Send card setup link',
+    charge_saved_card: 'Review saved-card charge',
+    change_autopay_date: 'Review autopay schedule change',
+    paid_outside_review: 'Verify paid outside app',
+    send_receipt: 'Review receipt request',
+    send_account_statement: 'Review account statement',
+    send_claim_link: 'Review toll/claim payment link',
+    maintenance_schedule: 'Schedule service',
+    human_review: 'Human review'
+  };
+  const amount = Number(related.amount || fields.amount || recurring.amount || recurring.weeklyAmount || 0);
+  const requiresAdminApproval = !!plan.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'paid_outside_review', 'send_receipt', 'send_account_statement', 'send_claim_link'].includes(actionType);
+  const customer = fields.customer || plan.customer || context.customerName || 'Customer';
+  const vehicle = fields.vehicle || context.vehicleName || related.vehicle || '';
+  const tag = fields.plate || fields.licensePlate || related.plate || '';
+  const prepared = {
+    type: actionType,
+    label: labelMap[actionType] || actionType.replace(/_/g, ' '),
+    status: plan.needsHuman ? 'Human review needed' : (requiresAdminApproval ? 'Needs admin approval' : (plan.canAutoSend ? 'Ready to send' : 'Draft ready')),
+    requiresAdminApproval,
+    canAutoSend: !!plan.canAutoSend && !requiresAdminApproval && !plan.needsHuman,
+    customer,
+    phone: fields.phone || plan.phone || context.phone || '',
+    email: fields.email || context.email || '',
+    recurringPaymentId: related.recurringPaymentId || fields.recurringPaymentId || recurring.id || '',
+    cloverCustomerId: related.cloverCustomerId || recurring.cloverCustomerId || '',
+    vehicleId: fields.vehicleId || related.vehicleId || '',
+    vehicle,
+    vin: fields.vin || related.vin || '',
+    tag,
+    tracker: fields.tracker || related.tracker || '',
+    amount: Number.isFinite(amount) && amount > 0 ? amount : 0,
+    frequency: fields.frequency || recurring.frequency || '',
+    nextRun: related.nextRun || recurring.nextRun || '',
+    chargeTime: related.chargeTime || recurring.chargeTime || recurring.paymentTime || '',
+    claimId: related.claimId || '',
+    paymentLinkId: related.paymentLinkId || '',
+    paymentLinkUrl: related.paymentLinkUrl || '',
+    cardSetupRequestId: related.cardSetupRequestId || '',
+    cardSetupUrl: related.cardSetupUrl || '',
+    providerSetupNeeded: actionType === 'reply' || actionType === 'maintenance_schedule' ? !publicMessagingStatus(data).configured && !publicMessagingStatus(data).emailConfigured : false,
+    adminGuardrail: requiresAdminApproval ? 'Star prepared this action only. An admin must approve it in the matching payment/customer workflow before anything sensitive happens.' : 'Safe reply/link draft prepared. Provider setup may still be required before it sends live.'
+  };
+  if (prepared.paymentLinkUrl) prepared.status = 'Payment link ready';
+  if (prepared.cardSetupUrl) prepared.status = 'Card setup link ready';
+  if (actionType === 'charge_saved_card') prepared.adminGuardrail = 'No charge was run. Open Review charge and confirm the saved-card payment manually.';
+  if (actionType === 'change_autopay_date') prepared.adminGuardrail = 'No schedule was changed. Open Edit autopay, choose the date/time/frequency, then save.';
+  if (actionType === 'paid_outside_review') prepared.adminGuardrail = 'No payment was marked paid. Verify method, proof, date, amount, and notes first.';
+  return prepared;
+}
 async function createAiMessageDraft(data, payload = {}, options = {}) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const context = aiFindCustomerContext(data, payload, options.user || { role: 'Owner' });
   const fallback = aiPlanRules(data, payload, context);
   let plan = await openAiReplyPlan(data, payload, context, fallback);
   plan = prepareAiSafeLink(data, plan, context);
+  plan.preparedAction = starPreparedAction(data, plan, context, payload);
   const duplicateKey = String(options.sourceMessageId || payload.messageId || payload.externalId || '');
   const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
   if (existing && !options.forceNew) return { plan, draft: existing, existing: true };

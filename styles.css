@@ -3560,6 +3560,37 @@ body.fast-tab-switch .admin-shell .section{
   color:#d9e3eb;
   font-size:12px;
 }
+.star-prepared-action{
+  display:grid;
+  gap:8px;
+  margin:4px 0;
+  padding:10px 12px;
+  border:1px solid rgba(240,211,148,.22);
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(240,211,148,.12),rgba(255,255,255,.045));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
+}
+.star-prepared-action>div{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.star-prepared-action strong{
+  color:#f7df9b;
+}
+.star-prepared-action small{
+  display:block;
+  margin-top:2px;
+  color:#c9d2db;
+  font-size:12px;
+}
+.star-prepared-action p{
+  margin:0;
+  color:#dce4ea;
+  font-size:12px;
+  line-height:1.45;
+}
 .notification-event-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));

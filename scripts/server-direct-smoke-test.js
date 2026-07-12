@@ -1631,6 +1631,8 @@ async function main() {
     assert(starCardSetup.json.plan.context && starCardSetup.json.plan.context.systemHealth && Array.isArray(starCardSetup.json.plan.context.systemHealth.nextActions), 'Star drafts should include compact system health context.');
     assert(String(starCardSetup.json.draft.body || '').includes('/setup-card/'), 'Star card setup reply should include a secure setup link.');
     assert(starCardSetup.json.plan.related.cardSetupRequestId, 'Star card setup should save the setup request ID.');
+    assert(starCardSetup.json.plan.preparedAction && starCardSetup.json.plan.preparedAction.type === 'send_card_setup' && starCardSetup.json.plan.preparedAction.cardSetupRequestId === starCardSetup.json.plan.related.cardSetupRequestId, 'Star card setup should expose a prepared card setup action.');
+    assert(starCardSetup.json.plan.preparedAction.vehicle && starCardSetup.json.plan.preparedAction.vin, 'Star prepared card setup action should include vehicle and VIN context when those fields exist.');
     const starCardState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((starCardState.json.cardSetupRequests || []).some(request => request.id === starCardSetup.json.plan.related.cardSetupRequestId && request.recurringPaymentId === 'direct-autopay-fail-once'), 'Star card setup request should attach to the existing autopay row.');
     assert((starCardState.json.auditLogs || []).some(row => row.action === 'Star AI reply drafted' && String(row.details || '').includes('Direct Failed Once') && String(row.details || '').includes('Card setup link prepared')), 'Star card setup drafts should create an owner audit trail.');
@@ -1658,6 +1660,8 @@ async function main() {
       json: { customer: 'Direct Failed Once', phone: '3135550444', channel: 'SMS', body: 'Can you charge the card on file right now?' }
     });
     assert(starChargeDraft.status === 201 && starChargeDraft.json.plan.actionType === 'charge_saved_card' && starChargeDraft.json.plan.approvalRequired === true, 'Star should classify saved-card charge requests as approval-required money actions.');
+    assert(starChargeDraft.json.plan.preparedAction && starChargeDraft.json.plan.preparedAction.type === 'charge_saved_card' && starChargeDraft.json.plan.preparedAction.requiresAdminApproval === true, 'Star saved-card charge request should expose a review-only prepared action.');
+    assert(/No charge was run/i.test(starChargeDraft.json.plan.preparedAction.adminGuardrail || ''), 'Star charge prepared action should clearly say no charge was run.');
     const blockedStarChargeSend = await request(server, 'POST', '/api/messages/ai-action', {
       cookie: managerCookie,
       json: { draftId: starChargeDraft.json.draft.id, channel: 'SMS' }
