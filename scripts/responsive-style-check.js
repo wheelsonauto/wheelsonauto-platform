@@ -43,6 +43,7 @@ requireText('Fast tab switch guard', 'body.fast-tab-switch');
 requireText('Final no-blur guard', 'Final no-blur pass: every staff information surface stays sharp on hover.');
 requireText('Fleet/service no-white-hover guard', 'Fleet/service rows: keep hover readable. These rows were washing white on hover.');
 requireText('Final modal polish guard', 'Final modal polish: keep every popup readable across admin, manager, mechanic, and public flows.');
+requireText('Final text-fit guard', 'Final text-fit guard: cards must wrap long names, VIN/tag lines, service notes, and message previews instead of clipping.');
 requireText('iPhone zoom guard', 'font-size:16px!important');
 requireText('Mobile sticky modal actions', '.modal-body>.actions:last-child');
 requireText('Mobile quickbar fixed position', 'position:fixed');
@@ -60,6 +61,9 @@ requireBlock('Mechanic portal cards', '.view-mechanic-portal .mechanic-card,', [
 requireBlock('Mechanic/manager hover cards', '.view-mechanic-portal .mechanic-card:hover,', ['background:rgba(240,184,58,.10)', 'filter:none', 'transform:none']);
 requireBlock('Customer pay cards', '.admin-shell .customer-pay-card{', ['background:rgba(255,255,255,.055)', '!important']);
 requireBlock('Customer pay hover cards', '.admin-shell .customer-pay-card:hover{', ['background:rgba(240,184,58,.10)', '!important']);
+requireBlock('Text-fit card containers', '.admin-shell .customer-pay-card,', ['min-width:0']);
+requireBlock('Text-fit card text', '.admin-shell .customer-pay-card strong,', ['overflow-wrap:anywhere', 'max-width:100%', 'word-break:normal']);
+requireBlock('Text-fit row children', '.admin-shell .customer-pay-top>div,', ['min-width:0']);
 requireAnyBlock('Customer portal shell', '.customer-portal{', ['min-height:100vh', 'display:grid', 'gap:18px']);
 requireAnyBlock('Customer portal hero', '.customer-hero{', ['width:min(1180px,100%)', 'grid-template-columns:1fr minmax(0,1.4fr) auto', 'border-radius:14px']);
 requireAnyBlock('Customer portal summary grid', '.customer-summary-grid{', ['grid-template-columns:repeat(4,minmax(0,1fr))']);

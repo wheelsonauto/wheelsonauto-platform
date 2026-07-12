@@ -3570,3 +3570,44 @@ body.fast-tab-switch .admin-shell .section{
     padding:8px 7px;
   }
 }
+
+/* Final text-fit guard: cards must wrap long names, VIN/tag lines, service notes, and message previews instead of clipping. */
+.admin-shell .customer-pay-card,
+.admin-shell .mechanic-card,
+.admin-shell .message-thread-card,
+.admin-shell .message-card,
+.admin-shell .mini-row,
+.admin-shell .item,
+.admin-shell .company-card{
+  min-width:0;
+}
+.admin-shell .customer-pay-card strong,
+.admin-shell .customer-pay-card small,
+.admin-shell .customer-pay-card b,
+.admin-shell .customer-pay-card span,
+.admin-shell .customer-car-line,
+.admin-shell .customer-car-line b,
+.admin-shell .customer-car-line span,
+.admin-shell .mechanic-card strong,
+.admin-shell .mechanic-card .muted,
+.admin-shell .mechanic-card div,
+.admin-shell .message-thread-card strong,
+.admin-shell .message-thread-card small,
+.admin-shell .message-thread-body,
+.admin-shell .message-card strong,
+.admin-shell .message-card small,
+.admin-shell .mini-row strong,
+.admin-shell .mini-row small,
+.admin-shell .item-row strong,
+.admin-shell .company-card strong,
+.admin-shell .company-card small{
+  min-width:0;
+  max-width:100%;
+  overflow-wrap:anywhere;
+  word-break:normal;
+}
+.admin-shell .customer-pay-top>div,
+.admin-shell .message-thread-head>div,
+.admin-shell .item-row>div{
+  min-width:0;
+}
