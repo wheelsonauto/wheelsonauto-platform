@@ -410,7 +410,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -881,7 +881,7 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   if (text.includes('setup') || text.includes('waiting') || text.includes('pending')) return 'Setup needed';
   return 'Pending';
 }
-function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
+function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), ownerNote = '') {
   const recurring = allRecurringRows(data).filter(row => {
     if (!row) return false;
     return recurringDateKey(row) === dateKeyValue || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === dateKeyValue || /fail|not found|retry|contact/i.test(String(row.status || ''));
@@ -892,6 +892,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const failed = recurring.filter(row => /Failed|not found/i.test(closeoutRecurringState(row, dateKeyValue)));
   const pending = recurring.filter(row => ['Pending', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
+  const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
+  const closeoutNote = String(ownerNote || savedNote && savedNote.note || '').trim();
   const lines = [
     'WheelsonAuto daily closeout for ' + dateKeyValue,
     '',
@@ -900,6 +902,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
     'Still open or setup/not-found: ' + pending.length,
     'Failed once/twice/not-found: ' + failed.length,
     'Today transactions recorded: ' + payments.length,
+    ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
     'Customers to review:',
     ...(recurring.length ? recurring.slice(0, 20).map(row => '- ' + (row.customer || 'Unknown customer') + ' | ' + moneyText(row.amount || row.weeklyAmount || 0) + ' | ' + closeoutRecurringState(row, dateKeyValue) + ' | ' + (row.vehicle || row.vin || 'No vehicle linked')) : ['- No due/failed customers in closeout.']),
@@ -912,7 +915,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
     subject: 'WheelsonAuto daily closeout - ' + dateKeyValue,
     body: lines.join('\n'),
     template: 'Daily closeout',
-    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length }
+    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length, ownerNote: closeoutNote }
   };
 }
 function maintenanceDueForNotification(item = {}, dateKeyValue = localDateKey()) {
@@ -5165,7 +5168,19 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const settings = emailNotificationSettings(data);
       if (!settings.emailRecipients.length) return json(res, 400, { ok: false, error: 'Add a notification email in Messages setup first.' });
-      const closeout = dailyCloseoutNotificationPayload(data, payload.dateKey || localDateKey());
+      const dateKeyValue = payload.dateKey || localDateKey();
+      if (String(payload.ownerNote || '').trim()) {
+        data.dailyCloseouts = Array.isArray(data.dailyCloseouts) ? data.dailyCloseouts : [];
+        let noteRow = data.dailyCloseouts.find(row => row.dateKey === dateKeyValue);
+        if (!noteRow) {
+          noteRow = { id: 'closeout-' + dateKeyValue, dateKey: dateKeyValue };
+          data.dailyCloseouts.unshift(noteRow);
+        }
+        noteRow.note = String(payload.ownerNote || '').trim();
+        noteRow.updatedAt = new Date().toISOString();
+        noteRow.updatedBy = user.name || user.role || 'Owner';
+      }
+      const closeout = dailyCloseoutNotificationPayload(data, dateKeyValue, payload.ownerNote || '');
       const result = await queueOwnerEmailNotification(data, 'daily_closeout', closeout);
       if (!result) return json(res, 409, { ok: false, error: 'Daily closeout notifications are turned off in notification settings.' });
       await writeData(data);

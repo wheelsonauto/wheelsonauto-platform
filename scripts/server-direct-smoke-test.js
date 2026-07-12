@@ -775,14 +775,17 @@ async function main() {
 
     const closeoutNotification = await request(server, 'POST', '/api/notifications/daily-closeout', {
       cookie: ownerCookie,
-      json: {}
+      json: { ownerNote: 'Owner smoke note: count cash drawer and call failed-twice customers.' }
     });
     assert([200, 202].includes(closeoutNotification.status) && closeoutNotification.json.ok, 'Daily closeout notification failed.');
     assert(closeoutNotification.json.message.event === 'daily_closeout', 'Daily closeout should save a daily_closeout notification message.');
     assert(closeoutNotification.json.summary && Object.prototype.hasOwnProperty.call(closeoutNotification.json.summary, 'collected'), 'Daily closeout should return a money summary.');
+    assert(String(closeoutNotification.json.message.body || '').includes('Owner smoke note'), 'Daily closeout should include the owner closeout note in the message body.');
+    assert(closeoutNotification.json.summary.ownerNote === 'Owner smoke note: count cash drawer and call failed-twice customers.', 'Daily closeout summary should return the owner note.');
     const notificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(notificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Notified Applicant'), 'Application notification should be saved in Messages.');
     assert(notificationState.json.messages.some(message => message.event === 'daily_closeout'), 'Daily closeout notification should be saved in Messages.');
+    assert((notificationState.json.dailyCloseouts || []).some(row => row.note === 'Owner smoke note: count cash drawer and call failed-twice customers.'), 'Daily closeout owner note should be saved to state.');
 
     const alertState = JSON.parse(JSON.stringify(notificationState.json));
     alertState.maintenance = alertState.maintenance || [];

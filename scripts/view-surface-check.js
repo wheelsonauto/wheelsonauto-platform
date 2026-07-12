@@ -157,6 +157,14 @@ assertIncludes('Payment receipt surface', app, [
   'paymentId:p.id'
 ]);
 
+assertIncludes('Daily closeout notes surface', app + server, [
+  'Owner closeout notes',
+  'closeoutOwnerNotes',
+  'save-closeout-note',
+  'ownerNote',
+  'dailyCloseouts'
+]);
+
 const documents = finalFunctionSlice(app, 'Documents');
 assertIncludes('Documents surface', documents + app + server, [
   'Portal visibility',
