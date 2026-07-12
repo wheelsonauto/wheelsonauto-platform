@@ -163,10 +163,12 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Failed once',
   'Contact now',
   'Today Clover transactions',
+  'Sensitive changes',
   'send-daily-closeout-email',
   'print-daily-closeout',
-  'Star closeout summary'
-].forEach(text => requireText('Daily closeout operations board', dailyCloseout + app, text));
+  'Star closeout summary',
+  'auditEvents'
+].forEach(text => requireText('Daily closeout operations board', dailyCloseout + app + server, text));
 
 [
   'Company accounts',

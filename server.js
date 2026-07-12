@@ -900,6 +900,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const failed = recurring.filter(row => /Failed|not found/i.test(closeoutRecurringState(row, dateKeyValue)));
   const pending = recurring.filter(row => ['Pending', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
+  const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
   const closeoutNote = String(ownerNote || savedNote && savedNote.note || '').trim();
   const lines = [
@@ -916,14 +917,17 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     ...(recurring.length ? recurring.slice(0, 20).map(row => '- ' + (row.customer || 'Unknown customer') + ' | ' + moneyText(row.amount || row.weeklyAmount || 0) + ' | ' + closeoutRecurringState(row, dateKeyValue) + ' | ' + (row.vehicle || row.vin || 'No vehicle linked')) : ['- No due/failed customers in closeout.']),
     '',
     'Recent transactions:',
-    ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.'])
+    ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.']),
+    '',
+    'Sensitive changes today:',
+    ...(auditEvents.length ? auditEvents.map(row => '- ' + (row.action || 'Audit') + ' | ' + (row.user || 'Unknown') + ' | ' + (row.details || 'No detail')) : ['- No owner/staff changes recorded today.'])
   ];
   return {
     customer: 'WheelsonAuto',
     subject: 'WheelsonAuto daily closeout - ' + dateKeyValue,
     body: lines.join('\n'),
     template: 'Daily closeout',
-    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length, ownerNote: closeoutNote }
+    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length, auditEvents: auditEvents.length, ownerNote: closeoutNote }
   };
 }
 function maintenanceDueForNotification(item = {}, dateKeyValue = localDateKey()) {

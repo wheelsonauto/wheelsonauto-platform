@@ -169,7 +169,9 @@ assertIncludes('Daily closeout notes surface', app + server, [
   'print-daily-closeout',
   'printDailyCloseout',
   'ownerNote',
-  'dailyCloseouts'
+  'dailyCloseouts',
+  'Sensitive changes',
+  'auditEvents'
 ]);
 
 const documents = finalFunctionSlice(app, 'Documents');
