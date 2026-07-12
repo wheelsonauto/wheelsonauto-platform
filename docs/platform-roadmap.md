@@ -1,6 +1,43 @@
 # WheelsonAuto Platform Roadmap
 
-Last updated: 2026-07-04
+Last updated: 2026-07-12
+
+## 2026-07-12 Build Checkpoint
+
+Current checkpoint is focused on tightening the platform, not redesigning it.
+
+Completed in this build pass:
+
+- Staff and customer password help flows are wired through Messages and owner follow-up.
+- Daily closeout supports owner notes, owner signoff, frozen signoff snapshot, print, and email/draft notification.
+- Deep reports now include safe Messages / communications rows without exposing passwords, hashes, tokens, card sources, or payment-source secrets.
+- Daily closeout notification returns structured contact rows for failed-twice and payment-not-found customers with customer, amount, phone/email, vehicle, VIN, tag, and tracker evidence.
+- Messages Queue now explicitly surfaces payment-not-found customers and enriches queue items with vehicle/VIN/tag/tracker context for search and Star drafting.
+- Star queue drafts preserve customer phone/email context and still require admin approval for money/account actions.
+- Clover dispute and claim possible matches now show phone, email, reference, autopay, Clover customer, VIN, tag, tracker, and match reason in both UI evidence and deep reports.
+- API Roadmap provider records are owner-only, task-backed, and cannot be marked Connected without env-key names, endpoint, live-test plan, and last-test result.
+
+Checks passed at this checkpoint:
+
+- `pnpm run check`
+- `pnpm run live-data-check`
+- `node scripts/frontend-render-smoke-test.js`
+- `node scripts/responsive-style-check.js`
+- `node scripts/static-ui-check.js`
+
+Live data status:
+
+- `data.json` was not staged or committed.
+- Live-data check has 0 errors.
+- Known live-data warning: `2013 BMW 528XI` is missing VIN.
+
+Publish status:
+
+- Local branch is ahead of GitHub with committed code changes.
+- Push from this environment was blocked by DNS/network policy and then escalated push was rejected.
+- To publish from the Mac terminal when ready:
+  `cd "/Users/khaled/Documents/Codex/2026-07-03/browser-plugin-browser-openai-bundled/work/wheelsonauto-platform-clean" && git push origin main`
+- Render should deploy from GitHub after that push.
 
 ## Product Direction
 
