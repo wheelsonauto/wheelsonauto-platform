@@ -245,7 +245,11 @@ assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   'Receipt photo link',
   'Photo link, dashboard light photo note',
   'Notice photo/link',
-  'Proof link/note: '
+  'Proof link/note: ',
+  'customerPortalServiceRow',
+  'customerPortalChecklistText',
+  'VIN ',
+  'Tracker '
 ]);
 
 const insurance = finalFunctionSlice(app, 'Insurance');
