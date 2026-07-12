@@ -471,6 +471,8 @@ async function main() {
     assert(mechanicReport.status === 403, 'Mechanic should not be able to download deep financial reports.');
     const mechanicHealth = await request(server, 'GET', '/api/system/health', { cookie: mechanicCookie });
     assert(mechanicHealth.status === 403, 'Mechanic should not be able to read the money/system health snapshot.');
+    const mechanicReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: mechanicCookie });
+    assert(mechanicReadiness.status === 403, 'Mechanic should not be able to read readiness truth checks.');
     const staffLogout = await request(server, 'GET', '/logout', { cookie: managerCookie });
     assert(staffLogout.status === 302 && staffLogout.location === '/', 'Staff logout should redirect to the login shell.');
     assertSecureCookie(staffLogout.cookie, 'Staff/admin logout', { clear: true });

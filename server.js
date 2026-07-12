@@ -2619,7 +2619,7 @@ function apiAllowedForUser(user, pathname) {
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/reports')) return false;
-  if (role === 'mechanic' && pathname.startsWith('/api/system/health')) return false;
+  if (role === 'mechanic' && pathname.startsWith('/api/system')) return false;
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments', '/api/card-setup-requests'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
 }
