@@ -1150,6 +1150,18 @@ function reportCustomerRisk(data = {}, name = '', recurring = {}, vehicle = {}) 
   if (['Failed once', 'Failed twice', 'Payment not found', 'Setup needed'].includes(status)) issues.push(status);
   return issues.join(' | ') || 'Clean';
 }
+function reportClaimCandidateNote(claim = {}) {
+  return (claim.matchCandidates || []).slice(0, 3).map(candidate => {
+    return [
+      'Possible match ' + (candidate.customer || 'customer'),
+      candidate.vehicle || '',
+      candidate.vin ? 'VIN ' + candidate.vin : '',
+      candidate.plate ? 'Tag ' + candidate.plate : '',
+      candidate.tracker ? 'Tracker ' + candidate.tracker : '',
+      candidate.matchReason || ''
+    ].filter(Boolean).join(' / ');
+  }).join(' || ');
+}
 function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
   enrichLinkedProfiles(scoped);
@@ -1202,7 +1214,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   });
   (scoped.claims || []).forEach(claim => {
     const vehicle = reportVehicleFor(scoped, claim.customer, claim.vehicleId);
-    addReportRow(rows, 'Claims / tolls / disputes', claim.createdAt || claim.incidentDate || claim.nextFollowUp || '', claim.customer || 'Unmatched', vehicle.id ? vehicleNameFromParts(vehicle) : (claim.vehicle || ''), vehicle.vin || claim.vin || '', vehicle.plate || vehicle.stock || claim.plate || claim.reference || '', vehicle.tracker || claim.tracker || '', claim.type || 'Issue', claim.amount || 0, claim.status || 'Open', claim.source || claim.provider || claim.agency || 'Manual', reportCsvNote([claim.notes, claim.customerMatchStatus, claim.externalId || claim.caseId || claim.disputeId, claim.deadline ? 'Deadline ' + claim.deadline : '', claim.evidence || claim.proofUrl || '']));
+    addReportRow(rows, 'Claims / tolls / disputes', claim.createdAt || claim.incidentDate || claim.nextFollowUp || '', claim.customer || 'Unmatched', vehicle.id ? vehicleNameFromParts(vehicle) : (claim.vehicle || ''), vehicle.vin || claim.vin || '', vehicle.plate || vehicle.stock || claim.plate || claim.reference || '', vehicle.tracker || claim.tracker || '', claim.type || 'Issue', claim.amount || 0, claim.status || 'Open', claim.source || claim.provider || claim.agency || 'Manual', reportCsvNote([claim.notes, claim.customerMatchStatus, reportClaimCandidateNote(claim), claim.externalId || claim.caseId || claim.disputeId, claim.deadline ? 'Deadline ' + claim.deadline : '', claim.evidence || claim.proofUrl || '']));
   });
   (scoped.applications || []).forEach(app => addReportRow(rows, 'Applications', app.submittedAt || app.createdAt || '', app.name || app.customer || '', app.vehicle || '', app.vin || '', app.plate || '', app.tracker || '', 'Application', app.down || 0, app.stage || app.status || 'New', 'Website/apply', reportCsvNote([app.phone, app.email, app.license, app.employer, app.notes])));
   (scoped.documents || []).filter(doc => !doc.system).forEach(doc => {
@@ -1263,6 +1275,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
     return due && due <= today;
   });
   const openClaims = (scoped.claims || []).filter(claim => !/paid|closed/i.test(String(claim.status || 'Open')));
+  const disputeMatchReview = openClaims.filter(claim => String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || (/dispute|chargeback|clover/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' '))) && weakClaimCustomer(claim.customer)));
   const auditToday = isOwnerUser(user) ? (scoped.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === today) : [];
   const issues = [];
   function issue(priority, key, label, count, tone, view, tab, detail) {
@@ -1280,7 +1293,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(10, 'missing_contact', 'Missing contact', missingContact.length, missingContact.length ? 'warn' : 'good', 'Payments', 'Active', 'Customers need phone or email before Star can follow up.');
   issue(11, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
   issue(12, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
-  if (isOwnerUser(user)) issue(13, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(13, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
+  if (isOwnerUser(user)) issue(14, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -3437,6 +3451,44 @@ function findClaimPaymentRequest(data, claim = {}) {
   if (link) return requests.find(request => request.url === link || request.checkoutHref === link) || null;
   return null;
 }
+function claimProfileForCustomer(data, customer) {
+  const key = normKey(customer);
+  if (!key) return {};
+  const rows = [
+    ...(data.customers || []),
+    ...(data.contracts || []),
+    ...allRecurringRows(data)
+  ];
+  return rows.find(row => normKey(row.customer || row.name || row.currentCustomer) === key) || {};
+}
+function claimVehicleFromSource(data, row = {}, customer = '') {
+  const vehicles = data.vehicles || [];
+  const vehicleId = String(row.vehicleId || '').trim();
+  if (vehicleId) {
+    const found = vehicles.find(vehicle => String(vehicle.id || '') === vehicleId);
+    if (found) return found;
+  }
+  const vin = normKey(row.vin);
+  if (vin) {
+    const found = vehicles.find(vehicle => normKey(vehicle.vin) === vin);
+    if (found) return found;
+  }
+  const plate = normKey(row.plate || row.licensePlate || row.tag || row.tempTag || row.stock);
+  if (plate) {
+    const found = vehicles.find(vehicle => [vehicle.plate, vehicle.stock, vehicle.tempTag, vehicle.licensePlate].map(normKey).includes(plate));
+    if (found) return found;
+  }
+  const vehicleName = normKey(row.vehicle || row.vehicleName || row.name);
+  if (vehicleName) {
+    const found = vehicles.find(vehicle => normKey(vehicleNameFromParts(vehicle)) === vehicleName || normKey(vehicle.name) === vehicleName);
+    if (found) return found;
+  }
+  const customerKey = normKey(customer);
+  if (customerKey) {
+    return vehicles.find(vehicle => normKey(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo) === customerKey) || null;
+  }
+  return null;
+}
 function claimPossibleMatches(data, claim = {}) {
   const amount = Number(claim.amount || 0);
   if (!amount || amount <= 0) return [];
@@ -3450,13 +3502,27 @@ function claimPossibleMatches(data, claim = {}) {
     const key = kind + '|' + normKey(customer) + '|' + normalizedPaymentRecordId(row.id || row.cloverPaymentId || row.paymentId || row.cloverCustomerId || '');
     if (seen.has(key)) return;
     seen.add(key);
+    const profile = claimProfileForCustomer(data, customer);
+    const merged = { ...profile, ...row };
+    const vehicle = claimVehicleFromSource(data, merged, customer) || {};
+    const vehicleLabel = merged.vehicle || merged.vehicleName || (vehicle.id ? vehicleNameFromParts(vehicle) : '');
+    const plate = merged.plate || merged.licensePlate || merged.tag || merged.tempTag || vehicle.plate || vehicle.stock || vehicle.tempTag || '';
     candidates.push({
       type: kind,
       customer,
       amount: candidateAmount,
       date: row.date || row.createdAt || row.nextRun || '',
-      vehicle: row.vehicle || row.vehicleName || '',
-      reference: row.cloverPaymentId || row.paymentId || row.id || row.cloverCustomerId || ''
+      vehicleId: merged.vehicleId || vehicle.id || '',
+      vehicle: vehicleLabel,
+      vin: merged.vin || vehicle.vin || '',
+      plate,
+      tracker: merged.tracker || vehicle.tracker || '',
+      phone: merged.phone || '',
+      email: merged.email || '',
+      cloverCustomerId: merged.cloverCustomerId || '',
+      recurringPaymentId: merged.recurringPaymentId || (kind === 'Recurring' ? merged.id : '') || '',
+      reference: row.cloverPaymentId || row.paymentId || row.id || row.cloverCustomerId || '',
+      matchReason: kind + ' has the same amount as this dispute. Review the customer, vehicle, VIN/tag, and date before accepting.'
     });
   }
   (data.payments || []).forEach(row => add('Payment', row));

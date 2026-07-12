@@ -136,13 +136,14 @@ async function main() {
     duplicateState.vehicles.push(
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate One', vin: 'DIRECTVIN001', plate: 'DIR-001', status: 'Ready' },
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate Two', vin: 'DIRECTVIN002', plate: 'DIR-002', status: 'Ready' },
-      { id: 'veh-direct-autopay-file', year: 2026, make: 'Direct', model: 'Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tempTag: 'TMP-AUTO', tracker: 'TRK-AUTO', status: 'Ready' }
+      { id: 'veh-direct-autopay-file', year: 2026, make: 'Direct', model: 'Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tempTag: 'TMP-AUTO', tracker: 'TRK-AUTO', status: 'Ready' },
+      { id: 'veh-direct-dispute-car', year: 2025, make: 'Direct', model: 'Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tempTag: 'TMP-DSP', tracker: 'TRK-DSP', currentCustomer: 'Direct Dispute Customer', status: 'Rented' }
     );
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
     duplicateState.payments.unshift(
-      { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover' },
+      { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-dispute-customer@example.com' },
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
@@ -168,7 +169,13 @@ async function main() {
     assert(unmatchedDispute && unmatchedDispute.customerMatchStatus === 'Needs payment/customer match', 'Unmatched Clover dispute should be clearly flagged for manual match.');
     const candidateDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-candidate-dispute');
     assert(candidateDispute && candidateDispute.customerMatchStatus === 'Needs payment/customer match', 'Amount-only Clover dispute should still require manual match.');
-    assert((candidateDispute.matchCandidates || []).some(candidate => candidate.customer === 'Direct Dispute Customer'), 'Amount-only Clover dispute should surface possible customer/payment matches.');
+    const disputeCandidate = (candidateDispute.matchCandidates || []).find(candidate => candidate.customer === 'Direct Dispute Customer');
+    assert(disputeCandidate, 'Amount-only Clover dispute should surface possible customer/payment matches.');
+    assert(disputeCandidate.vehicleId === 'veh-direct-dispute-car', 'Dispute match candidate should carry vehicle ID evidence.');
+    assert(disputeCandidate.vin === 'DIRECTDISPUTEVIN' && disputeCandidate.plate === 'DIR-DSP', 'Dispute match candidate should carry VIN and tag evidence.');
+    assert(disputeCandidate.tracker === 'TRK-DSP', 'Dispute match candidate should carry tracker evidence.');
+    assert(disputeCandidate.phone === '3135550199' && disputeCandidate.email === 'direct-dispute-customer@example.com', 'Dispute match candidate should carry contact evidence.');
+    assert(String(disputeCandidate.matchReason || '').includes('same amount'), 'Dispute match candidate should explain why it was suggested.');
 
     const blockedWebhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
       json: {
@@ -444,9 +451,10 @@ async function main() {
     const ownerReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, Star QA, and audit sections.');
+    assert(ownerReport.text.includes('Possible match Direct Dispute Customer') && ownerReport.text.includes('DIRECTDISPUTEVIN') && ownerReport.text.includes('Tag DIR-DSP'), 'Owner deep report should include possible dispute customer/vehicle evidence.');
     const ownerHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(ownerHealth.status === 200 && ownerHealth.json.summary && ownerHealth.json.star && Array.isArray(ownerHealth.json.issues), 'Owner system health should return summary, Star, and issue rows.');
-    assert(ownerHealth.json.issues.some(row => row.key === 'unmatched_payments') && ownerHealth.json.issues.some(row => row.key === 'missing_vin'), 'Owner system health should include payment and fleet truth checks.');
+    assert(ownerHealth.json.issues.some(row => row.key === 'unmatched_payments') && ownerHealth.json.issues.some(row => row.key === 'missing_vin') && ownerHealth.json.issues.some(row => row.key === 'dispute_match_review'), 'Owner system health should include payment, dispute, and fleet truth checks.');
     const managerHealth = await request(server, 'GET', '/api/system/health', { cookie: managerCookie });
     assert(managerHealth.status === 200 && managerHealth.json.organizationId === 'org-wheelsonauto' && managerHealth.json.star.canAssist === true, 'Manager system health should be available and scoped.');
     const mechanicReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: mechanicCookie });

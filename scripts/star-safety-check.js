@@ -140,6 +140,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 [
   'Missing VIN',
   'Unmatched payments',
+  'Dispute match review',
   'Missing contact',
   'Setup / not found',
   'Sensitive changes',
@@ -151,6 +152,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Star QA manager',
   'Contact failed-twice customers',
   'Match transactions',
+  'Review dispute matches',
   'Link autopay to vehicles',
   'Clear verification inbox',
   'Review today sensitive changes',

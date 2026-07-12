@@ -231,6 +231,7 @@ const criticalActionRequirements = [
   ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'await save()', 'closeModal()', 'Maintenance()']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
+assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
 
 const functionNames = new Set(unique(app.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g), match => match[1]));
 const renderSlice = functionSlice('render');
