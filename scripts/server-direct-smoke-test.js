@@ -116,6 +116,7 @@ async function main() {
   process.env.WOA_AUTOPAY_MS = '3600000';
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
+  process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
   delete require.cache[require.resolve('../server.js')];
   const { server } = require('../server.js');
 
@@ -166,7 +167,18 @@ async function main() {
     assert(candidateDispute && candidateDispute.customerMatchStatus === 'Needs payment/customer match', 'Amount-only Clover dispute should still require manual match.');
     assert((candidateDispute.matchCandidates || []).some(candidate => candidate.customer === 'Direct Dispute Customer'), 'Amount-only Clover dispute should surface possible customer/payment matches.');
 
+    const blockedWebhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
+      json: {
+        type: 'chargeback.created',
+        payment: { id: 'pay-direct-webhook-dispute' },
+        dispute: { id: 'disp-direct-webhook-blocked' },
+        amount: 8800
+      }
+    });
+    assert(blockedWebhookDispute.status === 401, 'Clover dispute webhook should require the configured secret.');
+
     const webhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
+      headers: { 'x-clover-webhook-secret': 'direct-clover-secret' },
       json: {
         type: 'chargeback.created',
         payment: { id: 'pay-direct-webhook-dispute' },
