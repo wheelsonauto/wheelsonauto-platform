@@ -1102,6 +1102,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
   const closeoutNote = String(ownerNote || savedNote && savedNote.note || '').trim();
+  const signedAt = String(savedNote && savedNote.signedAt || '').trim();
+  const signedBy = String(savedNote && savedNote.signedBy || '').trim();
+  const signoffSnapshot = savedNote && savedNote.snapshot && typeof savedNote.snapshot === 'object' ? savedNote.snapshot : null;
   const lines = [
     'WheelsonAuto daily closeout for ' + dateKeyValue,
     '',
@@ -1120,6 +1123,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
+    'Owner signoff: ' + (signedAt ? 'Signed off by ' + (signedBy || 'Owner') + ' at ' + signedAt : 'Not signed'),
+    ...(signoffSnapshot ? ['Signed snapshot: expected ' + moneyText(signoffSnapshot.expected || 0) + ' | collected ' + moneyText(signoffSnapshot.collected || 0) + ' | still open ' + moneyText(signoffSnapshot.stillOpen || 0) + ' | failed twice ' + Number(signoffSnapshot.failedTwice || 0) + ' | conflicts ' + Number(signoffSnapshot.vehicleAssignmentConflicts || 0)] : []),
     ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
     'Customers to review:',
@@ -1166,6 +1171,10 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       verificationItems: verificationItems.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
       auditEvents: auditEvents.length,
+      signedOff: !!signedAt,
+      signedAt,
+      signedBy,
+      signoffSnapshot,
       ownerNote: closeoutNote
     }
   };

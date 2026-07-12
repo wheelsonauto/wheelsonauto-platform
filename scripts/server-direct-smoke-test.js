@@ -966,6 +966,16 @@ async function main() {
       { id: 'payment-closeout-paid-outside', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Paid outside app', source: 'WheelsonAuto', amount: 45, status: 'Paid outside app', notes: 'Cash verified' },
       { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' }
     );
+    closeoutDedupData.dailyCloseouts = Array.isArray(closeoutDedupData.dailyCloseouts) ? closeoutDedupData.dailyCloseouts : [];
+    closeoutDedupData.dailyCloseouts.unshift({
+      id: 'closeout-2099-12-31',
+      dateKey: '2099-12-31',
+      note: 'Signed smoke closeout note',
+      status: 'Signed off',
+      signedAt: '2099-12-31T23:59:00.000Z',
+      signedBy: 'Owner Smoke',
+      snapshot: { expected: 1689, collected: 1401, stillOpen: 288, failedTwice: 0, vehicleAssignmentConflicts: 1 }
+    });
     const closeoutDedupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: closeoutDedupData });
     assert(closeoutDedupWrite.status === 200 && closeoutDedupWrite.json.ok, 'Owner could not seed closeout duplicate payment records.');
     const closeoutCandidateReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
@@ -982,6 +992,9 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.pendingToday >= 1 && closeoutDedupNotification.json.summary.stillOpenAmount === Math.max(0, closeoutDedupNotification.json.summary.expected - closeoutDedupNotification.json.summary.collected), 'Daily closeout should expose due customer counts and still-open amount.');
     assert(closeoutDedupNotification.json.summary.peopleToContact === 0 && closeoutDedupNotification.json.summary.paidTransactions === 4, 'Daily closeout should expose contact and paid transaction counts.');
     assert(closeoutDedupNotification.json.summary.vehicleAssignmentConflicts >= 1, 'Daily closeout should expose vehicle assignment conflicts before owner signoff.');
+    assert(closeoutDedupNotification.json.summary.signedOff === true && closeoutDedupNotification.json.summary.signedBy === 'Owner Smoke', 'Daily closeout should expose saved owner signoff metadata.');
+    assert(closeoutDedupNotification.json.summary.signoffSnapshot && closeoutDedupNotification.json.summary.signoffSnapshot.collected === 1401, 'Daily closeout should carry the frozen signoff snapshot.');
+    assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689'), 'Daily closeout message should include signoff status and snapshot numbers.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Paid outside app: 1 / $45'), 'Daily closeout body should show paid-outside-app totals.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Vehicle assignment conflicts:') && String(closeoutDedupNotification.json.message.body || '').includes('DIRECTCONFLICTVIN'), 'Daily closeout body should list vehicle assignment conflicts with VIN/tag evidence.');
