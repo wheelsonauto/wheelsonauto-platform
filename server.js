@@ -782,6 +782,95 @@ function closeoutPaymentPaid(payment = {}) {
   const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.message, payment.error].filter(Boolean).join(' ')).toLowerCase();
   return status === 'paid' && !/(refund|void|chargeback|dispute|failed|not found)/.test(meta) && Number(payment.amount || 0) > 0;
 }
+function weakCloseoutCustomerName(value) {
+  const raw = String(value || '').trim();
+  return !raw || /^(clover payment|unmatched clover payment|unknown customer|customer match needed|debit card|credit card|customer)$/i.test(raw);
+}
+function closeoutDescriptionCustomer(payment = {}) {
+  const text = String(payment.description || payment.notes || payment.memo || '').trim();
+  const match = text.match(/WheelsonAuto\s+.*?payment\s+-\s+(.+)$/i);
+  return match && !weakCloseoutCustomerName(match[1]) ? match[1].trim() : '';
+}
+function closeoutPaymentIds(payment = {}) {
+  return [
+    payment.cloverPaymentId,
+    payment.cloverChargeId,
+    payment.paymentId,
+    payment.externalPaymentId,
+    payment.chargeId,
+    payment.id
+  ].map(value => String(value || '').trim().replace(/^clover-payment-/i, '').replace(/^clover-manual-charge-/i, '')).filter(Boolean);
+}
+function closeoutPaymentKey(payment = {}) {
+  const external = String(payment.externalReferenceId || payment.external_reference_id || payment.external_reference || payment.paymentRequestId || '').trim();
+  if (external) return external;
+  const ids = closeoutPaymentIds(payment);
+  if (ids.length) return ids[0];
+  return [
+    recordDateKey(payment.date || payment.createdAt),
+    normKey(payment.customer),
+    Number(payment.amount || 0),
+    String(payment.method || payment.type || ''),
+    String(payment.source || ''),
+    String(payment.status || '')
+  ].join('|');
+}
+function closeoutUsefulCustomerName(payment = {}) {
+  const raw = String(payment.customer || '').trim();
+  if (!weakCloseoutCustomerName(raw)) return raw;
+  const described = closeoutDescriptionCustomer(payment);
+  if (described) return described;
+  const external = String(payment.externalCustomerReference || '').trim();
+  if (external && !/^[A-Z0-9]{8,}$/i.test(external) && !weakCloseoutCustomerName(external)) return external;
+  return '';
+}
+function uniqueCloseoutPayments(rows = []) {
+  const byKey = new Map();
+  const order = [];
+  rows.forEach(payment => {
+    const key = closeoutPaymentKey(payment);
+    if (!key) return;
+    if (!byKey.has(key)) {
+      byKey.set(key, payment);
+      order.push(key);
+      return;
+    }
+    const old = byKey.get(key);
+    const oldName = closeoutUsefulCustomerName(old);
+    const newName = closeoutUsefulCustomerName(payment);
+    const merged = { ...old, ...payment };
+    if (oldName && !newName) merged.customer = oldName;
+    if (newName) merged.customer = newName;
+    ['phone', 'email', 'vehicle', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId', 'externalReferenceId', 'externalCustomerReference'].forEach(field => {
+      if (!merged[field] && old[field]) merged[field] = old[field];
+    });
+    byKey.set(key, merged);
+  });
+  return order.map(key => byKey.get(key));
+}
+function closeoutPaymentCustomerName(data, payment = {}, recurringRows = allRecurringRows(data)) {
+  const useful = closeoutUsefulCustomerName(payment);
+  if (useful) return useful;
+  const ids = [payment.recurringPaymentId, payment.recurringId, payment.cloverSubscriptionId, payment.subscriptionId].filter(Boolean).map(String);
+  let recurring = recurringRows.find(row => ids.includes(String(row.id || '')) || ids.includes(String(row.cloverSubscriptionId || '')));
+  if (!recurring) {
+    const cloverCustomerId = String(payment.cloverCustomerId || payment.customerId || '').trim();
+    if (cloverCustomerId) recurring = recurringRows.find(row => String(row.cloverCustomerId || '') === cloverCustomerId);
+  }
+  if (!recurring && payment.paymentRequestId) {
+    const request = (data.paymentRequests || []).find(row => row.id === payment.paymentRequestId);
+    if (request && request.customer) return request.customer;
+    if (request && request.recurringPaymentId) recurring = recurringRows.find(row => row.id === request.recurringPaymentId);
+  }
+  if (!recurring && payment.email) recurring = recurringRows.find(row => emailKey(row.email) === emailKey(payment.email));
+  if (!recurring && payment.phone) recurring = recurringRows.find(row => phoneKey(row.phone) === phoneKey(payment.phone));
+  if (!recurring && payment.vehicle) recurring = recurringRows.find(row => normKey(row.vehicle) === normKey(payment.vehicle));
+  if (!recurring && Number(payment.amount)) {
+    const sameAmount = recurringRows.filter(row => Number(row.amount || row.weeklyAmount || 0) === Number(payment.amount || 0));
+    if (sameAmount.length === 1) recurring = sameAmount[0];
+  }
+  return recurring && recurring.customer ? recurring.customer : 'Unmatched payment';
+}
 function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   const text = String([row.status, row.tone, row.lastAutoChargeResult, row.lastAutoChargeError].filter(Boolean).join(' ')).toLowerCase();
   const failedAttempts = Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0));
@@ -797,7 +886,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
     if (!row) return false;
     return recurringDateKey(row) === dateKeyValue || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === dateKeyValue || /fail|not found|retry|contact/i.test(String(row.status || ''));
   });
-  const payments = (data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue);
+  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
   const paidPayments = payments.filter(closeoutPaymentPaid);
   const expected = recurring.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
@@ -816,7 +905,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
     ...(recurring.length ? recurring.slice(0, 20).map(row => '- ' + (row.customer || 'Unknown customer') + ' | ' + moneyText(row.amount || row.weeklyAmount || 0) + ' | ' + closeoutRecurringState(row, dateKeyValue) + ' | ' + (row.vehicle || row.vin || 'No vehicle linked')) : ['- No due/failed customers in closeout.']),
     '',
     'Recent transactions:',
-    ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + (payment.customer || 'Unmatched payment') + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.'])
+    ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.'])
   ];
   return {
     customer: 'WheelsonAuto',
