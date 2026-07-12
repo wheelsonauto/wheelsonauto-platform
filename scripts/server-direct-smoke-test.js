@@ -542,6 +542,13 @@ async function main() {
     const paidOutsidePayment = paidOutsideCandidates.find(item => item.status === 'Paid outside app - needs verification' && item.date === '2026-08-02' && String(item.notes || '').includes('smoke test'));
     assert(paidOutsidePayment && paidOutsidePayment.amount === 229 && paidOutsidePayment.vehicleId === 'veh-003' && paidOutsidePayment.vin === '3LN6L2G91FR123456' && paidOutsidePayment.requiresVerification === true && paidOutsidePayment.proofUrl === 'https://proof.example/cash-receipt', 'Customer paid-outside report should create a review-only linked payment record with proof: ' + JSON.stringify(paidOutsideCandidates));
     assert((customerPaidOutsideState.json.messages || []).some(message => message.paymentId === paidOutsidePayment.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification' && String(message.body || '').includes('Proof link/note: https://proof.example/cash-receipt')), 'Customer paid-outside report should be logged in Messages for staff review with proof context.');
+    const managerPaidOutsideReview = await request(server, 'POST', '/api/verification/paid-outside', { cookie: managerCookie, json: { paymentId: paidOutsidePayment.id, action: 'verify' } });
+    assert(managerPaidOutsideReview.status === 403, 'Manager should not be allowed to verify paid-outside money reports.');
+    const paidOutsideReview = await request(server, 'POST', '/api/verification/paid-outside', { cookie: ownerCookie, json: { paymentId: paidOutsidePayment.id, action: 'verify', note: 'Verified against cash receipt in smoke test.' } });
+    assert(paidOutsideReview.status === 200 && paidOutsideReview.json.ok && paidOutsideReview.json.payment.status === 'Paid outside app', 'Owner should be able to verify paid-outside proof.');
+    const paidOutsideReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((paidOutsideReviewRead.json.payments || []).some(item => item.id === paidOutsidePayment.id && item.requiresVerification === false && item.status === 'Paid outside app' && String(item.notes || '').includes('Verified by')), 'Verified paid-outside report should leave review mode and keep proof notes.');
+    assert((paidOutsideReviewRead.json.auditLogs || []).some(item => item.action === 'Paid-outside payment verified' && String(item.details || '').includes('Alicia Brown')), 'Paid-outside verification should be audit logged.');
 
     const customerServiceNoAuth = await request(server, 'POST', '/customer/service-request');
     assert(customerServiceNoAuth.status === 302 && customerServiceNoAuth.location === '/customer/login', 'Customer service request should require customer login.');
@@ -599,6 +606,13 @@ async function main() {
     const customerDocument = (customerDocumentState.json.documents || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.reference === 'POLICY-PORTAL-SMOKE');
     assert(customerDocument && customerDocument.vehicleId === 'veh-003' && customerDocument.vin === '3LN6L2G91FR123456' && customerDocument.status === 'Needs verification' && customerDocument.requiresVerification === true && customerDocument.url === 'https://proof.example/insurance-photo', 'Customer document update should create a vehicle-linked verification document with proof URL: ' + JSON.stringify(customerDocument || null));
     assert((customerDocumentState.json.messages || []).some(message => message.documentId === customerDocument.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification' && String(message.body || '').includes('Proof link/note: https://proof.example/insurance-photo')), 'Customer document update should be logged in Messages for staff verification.');
+    const mechanicDocumentReview = await request(server, 'POST', '/api/verification/document', { cookie: mechanicCookie, json: { documentId: customerDocument.id, action: 'verify' } });
+    assert(mechanicDocumentReview.status === 403, 'Mechanic should not be allowed to verify customer proof documents.');
+    const managerDocumentReview = await request(server, 'POST', '/api/verification/document', { cookie: managerCookie, json: { documentId: customerDocument.id, action: 'verify', provider: 'Smoke Test Insurance', reference: 'POLICY-PORTAL-SMOKE' } });
+    assert(managerDocumentReview.status === 200 && managerDocumentReview.json.ok && managerDocumentReview.json.document.status === 'Verified', 'Manager should be able to verify customer proof documents.');
+    const managerDocumentReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((managerDocumentReviewRead.json.documents || []).some(item => item.id === customerDocument.id && item.status === 'Verified' && item.requiresVerification === false && item.portalVisible === true), 'Verified document proof should clear review mode and remain visible to the customer portal.');
+    assert((managerDocumentReviewRead.json.auditLogs || []).some(item => item.action === 'Document proof verified' && String(item.details || '').includes('Alicia Brown')), 'Document verification should be audit logged.');
 
     const customerCardChangeNoAuth = await request(server, 'POST', '/customer/card-change');
     assert(customerCardChangeNoAuth.status === 302 && customerCardChangeNoAuth.location === '/customer/login', 'Customer card-change request should require customer login.');
@@ -635,7 +649,7 @@ async function main() {
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');
     assert(customerPortalState.json.portal.recurring.customer === 'Alicia Brown', 'Customer portal should link the assigned recurring payment.');
     assert((customerPortalState.json.portal.documents || []).some(doc => doc.reference === 'VISIBLE-DOC-PORTAL'), 'Customer portal state should include customer-visible documents.');
-    assert((customerPortalState.json.portal.documents || []).some(doc => doc.reference === 'POLICY-PORTAL-SMOKE' && doc.status === 'Needs verification'), 'Customer portal state should show customer-submitted document updates with verification status.');
+    assert((customerPortalState.json.portal.documents || []).some(doc => doc.reference === 'POLICY-PORTAL-SMOKE' && doc.status === 'Verified'), 'Customer portal state should show customer-submitted document updates after staff verification.');
     assert((customerPortalState.json.portal.documents || []).some(doc => doc.kind === 'Receipt' && Number(doc.amount) === 229), 'Customer portal state should include generated customer payment receipts.');
     assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('PRIVATE-DOC-SHOULD-HIDE'), 'Customer portal state should not expose staff-only document references.');
     assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('needs staff verification before the account is marked complete'), 'Customer portal state should not expose staff-only verification notes.');

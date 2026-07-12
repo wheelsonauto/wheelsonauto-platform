@@ -927,6 +927,128 @@ function closeoutVerificationItems(data = {}) {
   });
   return items.slice(0, 30);
 }
+function verificationText(value, max = 500) {
+  return String(value || '').trim().slice(0, max);
+}
+function documentVerificationPatch(payload = {}, existing = {}) {
+  const patch = {};
+  [
+    'type', 'customer', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker',
+    'provider', 'agency', 'policyNumber', 'reference', 'expires', 'due', 'url', 'proofUrl',
+    'visibility', 'notes', 'internalNotes'
+  ].forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(payload, field)) patch[field] = verificationText(payload[field], field === 'notes' || field === 'internalNotes' ? 1200 : 500);
+  });
+  if (patch.proofUrl && !patch.url) patch.url = patch.proofUrl;
+  if (patch.url && !patch.proofUrl && !existing.proofUrl) patch.proofUrl = patch.url;
+  return patch;
+}
+function addVerificationMessage(data, row = {}) {
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  data.messages.unshift({
+    id: 'msg-proof-review-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'),
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    organizationId: row.organizationId || MAIN_ORG_ID,
+    customer: row.customer || 'Unassigned',
+    phone: row.phone || '',
+    email: row.email || '',
+    direction: 'Internal log',
+    channel: 'Verification',
+    template: row.template || 'Proof review',
+    subject: row.subject || 'Proof review',
+    status: row.status || 'Reviewed',
+    tone: row.tone || (String(row.status || '').toLowerCase().includes('reject') ? 'bad' : 'good'),
+    body: row.body || '',
+    source: 'WheelsonAuto verification',
+    paymentId: row.paymentId || '',
+    documentId: row.documentId || '',
+    vehicleId: row.vehicleId || ''
+  });
+}
+function reviewDocumentProof(data, user, payload = {}) {
+  const id = verificationText(payload.documentId || payload.id, 160);
+  data.documents = Array.isArray(data.documents) ? data.documents : [];
+  const document = data.documents.find(row => row.id === id);
+  if (!id || !document) {
+    const error = new Error('Document proof was not found.');
+    error.status = 404;
+    throw error;
+  }
+  if (document.system) {
+    const error = new Error('Generated documents must be reviewed from their source record.');
+    error.status = 409;
+    throw error;
+  }
+  Object.assign(document, documentVerificationPatch(payload, document));
+  const approved = verificationText(payload.action || payload.decision).toLowerCase() !== 'reject';
+  const reviewer = user && (user.name || user.username || user.role) || 'WheelsonAuto';
+  const reviewDate = localDateKey();
+  document.status = approved ? 'Verified' : 'Rejected';
+  document.requiresVerification = false;
+  document.tone = approved ? 'good' : 'bad';
+  document.verifiedBy = reviewer;
+  document.verifiedAt = reviewDate;
+  document.reviewedAt = new Date().toISOString();
+  document.reviewedBy = reviewer;
+  document.visibility = document.customer ? 'Customer visible' : (document.visibility || 'Staff only');
+  document.customerVisible = !!document.customer;
+  document.portalVisible = !!document.customer;
+  document.internalNotes = [
+    document.internalNotes || '',
+    approved ? 'Staff verified document proof.' : 'Staff rejected document proof; customer follow-up needed.'
+  ].filter(Boolean).join(' | ');
+  addVerificationMessage(data, {
+    organizationId: document.organizationId,
+    customer: document.customer,
+    documentId: document.id,
+    vehicleId: document.vehicleId,
+    template: approved ? 'Document verified' : 'Document rejected',
+    subject: approved ? 'Document proof verified' : 'Document proof rejected',
+    status: document.status,
+    tone: document.tone,
+    body: [document.type || 'Document', document.provider || document.reference || '', document.vehicle || '', document.vin ? 'VIN: ' + document.vin : '', document.plate || document.licensePlate ? 'Tag: ' + (document.plate || document.licensePlate) : '', document.proofUrl || document.url ? 'Proof: ' + (document.proofUrl || document.url) : ''].filter(Boolean).join('\n')
+  });
+  return document;
+}
+function reviewPaidOutsideProof(data, user, payload = {}) {
+  const id = verificationText(payload.paymentId || payload.id, 160);
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  const payment = data.payments.find(row => row.id === id);
+  if (!id || !payment) {
+    const error = new Error('Paid-outside report was not found.');
+    error.status = 404;
+    throw error;
+  }
+  const approved = verificationText(payload.action || payload.decision).toLowerCase() !== 'reject';
+  const reviewer = user && (user.name || user.username || user.role) || 'WheelsonAuto';
+  const reviewDate = localDateKey();
+  payment.requiresVerification = false;
+  payment.verifiedBy = reviewer;
+  payment.verifiedAt = reviewDate;
+  payment.reviewedAt = new Date().toISOString();
+  payment.status = approved ? 'Paid outside app' : 'Paid outside app rejected';
+  payment.tone = approved ? 'good' : 'bad';
+  payment.notes = [
+    payment.notes || '',
+    (approved ? 'Verified by ' : 'Rejected by ') + reviewer + ' on ' + reviewDate,
+    verificationText(payload.note, 500)
+  ].filter(Boolean).join(' | ');
+  addVerificationMessage(data, {
+    organizationId: payment.organizationId,
+    customer: payment.customer,
+    phone: payment.phone,
+    email: payment.email,
+    paymentId: payment.id,
+    vehicleId: payment.vehicleId,
+    template: approved ? 'Paid-outside verified' : 'Paid-outside rejected',
+    subject: approved ? 'Paid-outside payment verified' : 'Paid-outside payment rejected',
+    status: payment.status,
+    tone: payment.tone,
+    body: [moneyText(payment.amount || 0), payment.method || payment.type || 'Payment', payment.vehicle || '', payment.vin ? 'VIN: ' + payment.vin : '', payment.licensePlate || payment.plate ? 'Tag: ' + (payment.licensePlate || payment.plate) : '', payment.proofUrl || payment.url ? 'Proof: ' + (payment.proofUrl || payment.url) : ''].filter(Boolean).join('\n')
+  });
+  return payment;
+}
 function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), ownerNote = '') {
   const recurring = allRecurringRows(data).filter(row => {
     if (!row) return false;
@@ -2619,6 +2741,8 @@ function systemReadiness(data) {
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
+    route('POST', '/api/verification/document', 'Staff document proof verification'),
+    route('POST', '/api/verification/paid-outside', 'Owner paid-outside payment verification'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
@@ -5441,6 +5565,33 @@ const server = http.createServer(async (req, res) => {
       if (!result) return json(res, 409, { ok: false, error: 'Daily closeout notifications are turned off in notification settings.' });
       await writeData(data);
       return json(res, result.sent ? 200 : 202, { ok: true, sent: result.sent, message: result.message, summary: closeout.summary, warning: result.result.message || '' });
+    }
+    if (url.pathname === '/api/verification/document' && req.method === 'POST') {
+      const role = String(user && user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can verify customer proof.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      try {
+        const document = reviewDocumentProof(data, user, payload);
+        appendAuditLog(data, user, document.status === 'Verified' ? 'Document proof verified' : 'Document proof rejected', [document.customer || 'Unassigned', document.type || 'Document', document.vehicle || document.vin || 'No vehicle linked']);
+        await writeData(data);
+        return json(res, 200, { ok: true, document });
+      } catch (err) {
+        return json(res, err.status || 400, { ok: false, error: String(err && err.message || err) });
+      }
+    }
+    if (url.pathname === '/api/verification/paid-outside' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can verify paid-outside payment reports.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      try {
+        const payment = reviewPaidOutsideProof(data, user, payload);
+        appendAuditLog(data, user, payment.status === 'Paid outside app' ? 'Paid-outside payment verified' : 'Paid-outside payment rejected', [payment.customer || 'Unassigned', moneyText(payment.amount || 0), payment.vehicle || payment.vin || 'No vehicle linked']);
+        await writeData(data);
+        return json(res, 200, { ok: true, payment });
+      } catch (err) {
+        return json(res, err.status || 400, { ok: false, error: String(err && err.message || err) });
+      }
     }
     if (url.pathname === '/api/messages/send' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
