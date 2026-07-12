@@ -1599,6 +1599,9 @@ async function main() {
       json: { MessageSid: 'direct-sms-001', From: '+13135550199', To: '+13135550000', Body: 'Can I get my account balance?' }
     });
     assert(inboundSms.status === 200 && inboundSms.json.ok && inboundSms.json.received, 'Inbound SMS webhook with secret failed.');
+    assert(inboundSms.json.ai && inboundSms.json.ai.actionType === 'send_account_statement' && inboundSms.json.ai.status === 'Needs approval', 'Inbound SMS should create a Star account-statement approval draft instead of silently stopping.');
+    const inboundSmsState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((inboundSmsState.json.messages || []).some(message => message.aiSourceMessageId === 'direct-sms-001' && message.customer === 'Direct Customer' && message.phone === '+13135550199' && message.channel === 'Star AI'), 'Inbound SMS Star draft should stay linked to the customer and phone context.');
 
     const blockedInboundEmail = await request(server, 'POST', '/api/webhooks/email', {
       json: {
@@ -1621,6 +1624,9 @@ async function main() {
       }
     });
     assert(inboundEmail.status === 200 && inboundEmail.json.ok && inboundEmail.json.received, 'Inbound email webhook failed.');
+    assert(inboundEmail.json.ai && inboundEmail.json.ai.actionType === 'send_payment_link', 'Inbound email should create a Star payment-link draft from the customer email.');
+    const inboundEmailState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((inboundEmailState.json.messages || []).some(message => message.aiSourceMessageId === 'direct-email-001' && message.customer === 'Direct Customer' && message.email === 'direct-customer@example.com' && message.channel === 'Star AI' && message.deliveryChannel === 'Email'), 'Inbound email Star draft should stay linked to the customer, email, and Email delivery channel.');
 
     const starCardSetup = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,

@@ -50,11 +50,12 @@ const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus'
 const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotification');
 const queueOwnerEmailNotification = finalFunctionSlice(server, 'queueOwnerEmailNotification');
 const messageContextFields = finalFunctionSlice(server, 'messageContextFields');
+const messageContactCandidates = finalFunctionSlice(server, 'messageContactCandidates');
 const createAiMessageDraft = finalFunctionSlice(server, 'createAiMessageDraft');
 const notificationCommandBoard = finalFunctionSlice(app, 'notificationCommandBoard');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !createAiMessageDraft) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging notification status', messagingStatus, 'notificationEmail');
@@ -94,6 +95,8 @@ requireText('Customer portal statement document staff queue', server, "status: '
 requireText('Customer portal message notification event', server, 'customer_message');
 requireText('Staff password reset notification event', server + app, 'staff_password_reset');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
+requireText('Message-history contact fallback', messageContactCandidates, 'message history');
+requireText('Message-history contact phone', messageContactCandidates, 'row.phone || row.from || row.to');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
 requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');

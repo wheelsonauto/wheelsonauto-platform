@@ -50,6 +50,7 @@ const aiDraft = finalFunctionSlice(server, 'createAiMessageDraft');
 const aiFindContext = finalFunctionSlice(server, 'aiFindCustomerContext');
 const aiContext = finalFunctionSlice(server, 'aiContextSummary');
 const aiHealth = finalFunctionSlice(server, 'aiSystemHealthForContext');
+const messageContacts = finalFunctionSlice(server, 'messageContactCandidates');
 const approve = finalFunctionSlice(server, 'approveAiMessage');
 const apiAllowed = finalFunctionSlice(server, 'apiAllowedForUser');
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
@@ -114,8 +115,19 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'systemHealthSnapshot',
   'nextActions',
   'systemHealth: aiSystemHealthForContext',
-  'systemHealth: context.systemHealth'
+  'systemHealth: context.systemHealth',
+  'const namedRow',
+  'normKey(getName(row)) === name',
+  '!recurring && !name && phone',
+  '!customer && !name && phone',
+  '!contract && !name && phone'
 ].forEach(text => requireText('Star platform health context', aiHealth + aiFindContext + aiContext, text));
+
+[
+  'message history',
+  'row.phone || row.from || row.to',
+  'data.messages'
+].forEach(text => requireText('Star message-history contact safety', messageContacts, text));
 
 [
   'if (!plan || plan.needsHuman || plan.approvalRequired) return plan',
