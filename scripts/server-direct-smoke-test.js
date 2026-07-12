@@ -264,11 +264,12 @@ async function main() {
         plan: 'Pro',
         primaryAdmin: 'Direct Owner',
         fleetCount: 12,
-        dataScope: 'Shared owner account',
+        dataScope: 'Isolated tenant',
         billingOwner: 'WheelsonAuto'
       }
     });
     assert(franchise.status === 200 && franchise.json.ok && franchise.json.organization.id === 'direct-franchise', 'Owner could not create company/franchise account.');
+    assert(franchise.json.organization.dataScope === 'Shared owner account', 'Company/franchise should stay owner-managed until multi-tenant isolation is enabled.');
 
     const duplicateFranchise = await request(server, 'POST', '/api/organizations', {
       cookie: ownerCookie,

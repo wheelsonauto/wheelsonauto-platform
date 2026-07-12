@@ -44,6 +44,7 @@ const WOA_AI_REPLY_DRAFTS = process.env.WOA_AI_REPLY_DRAFTS !== '0';
 const WOA_EMAIL_ENABLED = process.env.WOA_EMAIL_ENABLED !== '0';
 const WOA_EMAIL_PROVIDER = String(process.env.WOA_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || 'not_configured').toLowerCase();
 const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '';
+const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
@@ -1868,6 +1869,8 @@ function cleanCustomerAccountPayload(payload, existing = null) {
 }
 function cleanOrganizationPayload(payload, existing = null) {
   const now = new Date().toISOString();
+  const requestedScope = String(payload.dataScope || existing && existing.dataScope || 'Shared owner account').trim();
+  const dataScope = WOA_MULTI_TENANT_ENABLED ? requestedScope : 'Shared owner account';
   return {
     id: String(payload.id || existing && existing.id || ('org-' + Date.now())).trim(),
     name: String(payload.name || existing && existing.name || 'New company').trim(),
@@ -1877,7 +1880,7 @@ function cleanOrganizationPayload(payload, existing = null) {
     primaryAdmin: String(payload.primaryAdmin || payload.admin || existing && existing.primaryAdmin || '').trim(),
     fleetCount: Number(payload.fleetCount || existing && existing.fleetCount || 0),
     parentOrganizationId: String(payload.parentOrganizationId || existing && existing.parentOrganizationId || '').trim(),
-    dataScope: String(payload.dataScope || existing && existing.dataScope || 'Shared owner account').trim(),
+    dataScope,
     billingOwner: String(payload.billingOwner || existing && existing.billingOwner || 'WheelsonAuto').trim(),
     notes: String(payload.notes || existing && existing.notes || '').trim(),
     createdAt: existing && existing.createdAt || payload.createdAt || now,
