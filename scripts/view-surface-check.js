@@ -190,6 +190,7 @@ assertIncludes('Documents surface', documents + app + server, [
   'portalVisible',
   'paymentReceiptDocuments',
   'Search documents, receipts',
+  'Proof link / photo note',
   'customerPortalDocuments',
   'Documents & receipts'
 ]);

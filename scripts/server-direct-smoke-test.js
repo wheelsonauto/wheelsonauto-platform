@@ -587,14 +587,15 @@ async function main() {
         provider: 'Smoke Test Insurance',
         reference: 'POLICY-PORTAL-SMOKE',
         expires: '2026-12-31',
+        proofUrl: 'https://proof.example/insurance-photo',
         notes: 'Customer portal proof update smoke test.'
       }
     });
     assert(customerDocumentUpdate.status === 302 && customerDocumentUpdate.location === '/customer', 'Customer document update should return to the customer portal.');
     const customerDocumentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerDocument = (customerDocumentState.json.documents || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.reference === 'POLICY-PORTAL-SMOKE');
-    assert(customerDocument && customerDocument.vehicleId === 'veh-003' && customerDocument.vin === '3LN6L2G91FR123456' && customerDocument.status === 'Needs verification' && customerDocument.requiresVerification === true, 'Customer document update should create a vehicle-linked verification document: ' + JSON.stringify(customerDocument || null));
-    assert((customerDocumentState.json.messages || []).some(message => message.documentId === customerDocument.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification'), 'Customer document update should be logged in Messages for staff verification.');
+    assert(customerDocument && customerDocument.vehicleId === 'veh-003' && customerDocument.vin === '3LN6L2G91FR123456' && customerDocument.status === 'Needs verification' && customerDocument.requiresVerification === true && customerDocument.url === 'https://proof.example/insurance-photo', 'Customer document update should create a vehicle-linked verification document with proof URL: ' + JSON.stringify(customerDocument || null));
+    assert((customerDocumentState.json.messages || []).some(message => message.documentId === customerDocument.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification' && String(message.body || '').includes('Proof link/note: https://proof.example/insurance-photo')), 'Customer document update should be logged in Messages for staff verification.');
 
     const customerCardChangeNoAuth = await request(server, 'POST', '/customer/card-change');
     assert(customerCardChangeNoAuth.status === 302 && customerCardChangeNoAuth.location === '/customer/login', 'Customer card-change request should require customer login.');
