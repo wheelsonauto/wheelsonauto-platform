@@ -4917,14 +4917,24 @@ function paymentResultHtml(title, message) {
 }
 function createPaymentRequest(data, payload) {
   const recurring = (data.recurringPayments || []).find(p => p.id === payload.recurringPaymentId) || {};
+  const customer = payload.customer || recurring.customer || '';
+  const vehicle = reportVehicleFor(data, customer, payload.vehicleId || recurring.vehicleId);
+  const vehicleName = vehicle.id ? vehicleNameFromParts(vehicle) : (payload.vehicle || recurring.vehicle || '');
+  const tag = vehicle.plate || vehicle.stock || payload.licensePlate || payload.plate || recurring.licensePlate || recurring.plate || '';
   const amount = Number(payload.amount || recurring.amount || 0);
   const request = {
     id: 'plink-' + crypto.randomBytes(12).toString('hex'),
     recurringPaymentId: payload.recurringPaymentId || recurring.id || '',
-    customer: payload.customer || recurring.customer || '',
+    organizationId: payload.organizationId || recurring.organizationId || MAIN_ORG_ID,
+    customer,
     phone: payload.phone || recurring.phone || '',
     email: payload.email || recurring.email || '',
-    vehicle: payload.vehicle || recurring.vehicle || '',
+    vehicleId: payload.vehicleId || recurring.vehicleId || vehicle.id || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || payload.vin || recurring.vin || '',
+    licensePlate: tag,
+    plate: tag,
+    tracker: vehicle.tracker || payload.tracker || recurring.tracker || '',
     amount,
     frequency: payload.frequency || recurring.frequency || 'Weekly',
     status: 'Open',

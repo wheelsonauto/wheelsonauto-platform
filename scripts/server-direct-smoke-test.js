@@ -1234,6 +1234,12 @@ async function main() {
     });
     const autopayWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: autopayState });
     assert(autopayWrite.status === 200 && autopayWrite.json.ok, 'Autopay smoke setup failed.');
+    const enrichedPaymentLink = await request(server, 'POST', '/api/payment-links', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: 'direct-autopay-fail-once' }
+    });
+    assert(enrichedPaymentLink.status === 201 && enrichedPaymentLink.json.ok, 'Owner payment-link creation failed.');
+    assert(enrichedPaymentLink.json.paymentLink.customer === 'Direct Failed Once' && enrichedPaymentLink.json.paymentLink.vehicle === '2017 Ford Fusion' && enrichedPaymentLink.json.paymentLink.vin === 'DIRECTFAILEDONCE' && enrichedPaymentLink.json.paymentLink.amount === 77, 'Payment links should inherit customer, vehicle, VIN, and amount from the recurring row.');
     const autopayRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie: ownerCookie, json: {} });
     assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 1, 'Autopay payment-not-found path did not run.');
     const autopayRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
