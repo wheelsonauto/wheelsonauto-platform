@@ -4147,6 +4147,22 @@ function paymentMatchesClaim(payment = {}, claim = {}) {
   if (!reference) return false;
   return paymentRecordIds(payment).some(id => id && reference.includes(normKey(id)));
 }
+function claimTextFingerprint(claim = {}) {
+  return normKey([
+    claim.reference,
+    claim.evidence,
+    claim.proofUrl,
+    claim.notes,
+    claim.externalId,
+    claim.caseId,
+    claim.disputeId,
+    claim.vehicle,
+    claim.vin,
+    claim.plate,
+    claim.licensePlate,
+    claim.tag
+  ].filter(Boolean).join(' '));
+}
 function deepFindWebhookValue(value, keyPattern, depth = 0) {
   if (!value || depth > 5) return '';
   if (Array.isArray(value)) {
@@ -4286,6 +4302,46 @@ function claimPossibleMatches(data, claim = {}) {
   allRecurringRows(data).forEach(row => add('Recurring', row));
   return candidates.slice(0, 5);
 }
+function findClaimTextEvidenceSource(data, claim = {}) {
+  const text = claimTextFingerprint(claim);
+  if (!text) return null;
+  const amount = Number(claim.amount || 0);
+  function amountClose(row = {}) {
+    const candidateAmount = Number(row.amount || row.weeklyAmount || row.total || row.weekly || 0);
+    return amount > 0 && candidateAmount > 0 && Math.abs(candidateAmount - amount) <= 0.01;
+  }
+  const rows = [
+    ...(data.payments || []),
+    ...allRecurringRows(data),
+    ...(data.customers || []),
+    ...(data.contracts || [])
+  ];
+  for (const row of rows) {
+    const customer = row.customer || row.name || row.currentCustomer || '';
+    const customerKey = normKey(customer);
+    const vin = normKey(row.vin);
+    const plate = normKey(row.plate || row.licensePlate || row.tag || row.tempTag || row.stock);
+    const rowIds = paymentRecordIds(row).map(normKey).filter(Boolean);
+    if (rowIds.some(id => id && text.includes(id))) return row;
+    if (customerKey && text.includes(customerKey) && (amountClose(row) || !amount)) return row;
+    if (((vin && vin.length >= 6 && text.includes(vin)) || (plate && plate.length >= 3 && text.includes(plate))) && (amountClose(row) || !amount || !Number(row.amount || row.weeklyAmount || row.total || row.weekly || 0))) return row;
+  }
+  for (const vehicle of data.vehicles || []) {
+    const vin = normKey(vehicle.vin);
+    const plate = normKey(vehicle.plate || vehicle.stock || vehicle.tempTag || vehicle.licensePlate);
+    if ((vin && vin.length >= 6 && text.includes(vin)) || (plate && plate.length >= 3 && text.includes(plate))) {
+      return {
+        ...vehicle,
+        customer: vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '',
+        vehicle: vehicleNameFromParts(vehicle),
+        vehicleId: vehicle.id,
+        licensePlate: vehicle.plate || vehicle.stock || vehicle.tempTag || '',
+        plate: vehicle.plate || vehicle.stock || vehicle.tempTag || ''
+      };
+    }
+  }
+  return null;
+}
 function findClaimVehicle(data, claim = {}) {
   const vehicles = data.vehicles || [];
   const vehicleId = String(claim.vehicleId || '').trim();
@@ -4340,6 +4396,10 @@ function resolveClaimCustomerLinks(data) {
     if (!claim.customerMatchStatus && claim.cloverCustomerId) {
       const recurring = allRecurringRows(data).find(row => String(row.cloverCustomerId || '') === String(claim.cloverCustomerId));
       if (recurring) applyClaimCustomerMatch(claim, recurring, 'Recurring customer');
+    }
+    if (!claim.customerMatchStatus) {
+      const textSource = findClaimTextEvidenceSource(data, claim);
+      if (textSource) applyClaimCustomerMatch(claim, textSource, 'Claim text evidence');
     }
     if (!claim.customerMatchStatus) {
       const vehicle = findClaimVehicle(data, claim);

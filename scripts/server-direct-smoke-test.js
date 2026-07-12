@@ -134,17 +134,21 @@ async function main() {
 
     const duplicateState = JSON.parse(JSON.stringify(ownerState.json));
     duplicateState.vehicles = duplicateState.vehicles || [];
+    duplicateState.vehicles = duplicateState.vehicles.filter(vehicle => vehicle.id !== 'veh-signal-text-car');
     duplicateState.vehicles.push(
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate One', vin: 'DIRECTVIN001', plate: 'DIR-001', status: 'Ready' },
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate Two', vin: 'DIRECTVIN002', plate: 'DIR-002', status: 'Ready' },
       { id: 'veh-direct-autopay-file', year: 2026, make: 'Direct', model: 'Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tempTag: 'TMP-AUTO', tracker: 'TRK-AUTO', status: 'Ready' },
-      { id: 'veh-direct-dispute-car', year: 2025, make: 'Direct', model: 'Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tempTag: 'TMP-DSP', tracker: 'TRK-DSP', currentCustomer: 'Direct Dispute Customer', status: 'Rented' }
+      { id: 'veh-direct-dispute-car', year: 2025, make: 'Direct', model: 'Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tempTag: 'TMP-DSP', tracker: 'TRK-DSP', currentCustomer: 'Direct Dispute Customer', status: 'Rented' },
+      { id: 'veh-signal-text-car', year: 2024, make: 'Signal', model: 'Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tempTag: 'TMP-SIG', tracker: 'TRK-SIG', currentCustomer: 'Signal Match Person', status: 'Rented' }
     );
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
     duplicateState.customerAccounts = duplicateState.customerAccounts || [];
     duplicateState.maintenance = duplicateState.maintenance || [];
+    duplicateState.payments = duplicateState.payments.filter(payment => payment.id !== 'pay-signal-alpha-983' && payment.cloverPaymentId !== 'charge-signal-alpha-983');
+    duplicateState.claims = duplicateState.claims.filter(claim => claim.id !== 'claim-signal-text-dispute');
     duplicateState.apiProviders = duplicateState.apiProviders || [];
     duplicateState.apiProviders.unshift({
       id: 'api-direct-provider-needed',
@@ -159,6 +163,7 @@ async function main() {
     });
     duplicateState.payments.unshift(
       { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-dispute-customer@example.com' },
+      { id: 'pay-signal-alpha-983', cloverPaymentId: 'charge-signal-alpha-983', customer: 'Signal Match Person', date: 'Today', method: 'Clover', amount: 144, status: 'Paid', source: 'Clover', vehicleId: 'veh-signal-text-car', vehicle: '2024 Signal Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tracker: 'TRK-SIG', phone: '3135550201', email: 'signal-match@example.com' },
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
@@ -169,6 +174,7 @@ async function main() {
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
+      { id: 'claim-signal-text-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', amount: 321, status: 'Open', notes: 'Clover dispute note: Signal Match Person / VIN SIGNALVIN123456789 / tag SIG-77.' },
       { id: 'claim-direct-candidate-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', amount: 199, status: 'Open' },
       { id: 'claim-direct-toll-review', type: 'Toll', source: 'Manual toll import', provider: 'E-ZPass', customer: 'Unassigned', plate: 'DIR-TOLL', reference: 'TOLL-DIRECT-001', amount: 12.75, status: 'Open', customerMatchStatus: 'Needs payment/customer match' },
       { id: 'claim-direct-unmatched-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'missing-payment-id', amount: 55, status: 'Open' }
@@ -185,6 +191,9 @@ async function main() {
     const recurringDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-recurring-dispute');
     assert(recurringDispute && recurringDispute.customer === 'Direct Recurring Dispute Customer', 'Clover dispute should match by Clover customer ID when payment ID is unavailable.');
     assert(recurringDispute.customerMatchSource === 'Recurring customer', 'Clover customer-id dispute should record recurring match source.');
+    const textDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-signal-text-dispute');
+    assert(textDispute && textDispute.customer === 'Signal Match Person' && textDispute.customerMatchSource === 'Claim text evidence', 'Clover dispute should match by customer/VIN/tag text evidence when IDs are missing: ' + JSON.stringify(textDispute || null));
+    assert(textDispute.vin === 'SIGNALVIN123456789' && textDispute.plate === 'SIG-77', 'Text-evidence dispute should carry VIN and tag evidence.');
     const unmatchedDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-unmatched-dispute');
     assert(unmatchedDispute && unmatchedDispute.customerMatchStatus === 'Needs payment/customer match', 'Unmatched Clover dispute should be clearly flagged for manual match.');
     const candidateDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-candidate-dispute');
