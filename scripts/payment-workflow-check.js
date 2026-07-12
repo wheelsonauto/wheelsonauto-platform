@@ -46,6 +46,7 @@ const customerFileVehicleOptions = finalFunctionSlice('customerFileVehicleOption
 const paymentTransactionCard = finalFunctionSlice('paymentTransactionCard');
 const transactionCustomerName = finalFunctionSlice('transactionCustomerName');
 const transactionPossibleMatches = finalFunctionSlice('transactionPossibleMatches');
+const transactionCandidateNote = finalFunctionSlice('transactionCandidateNote');
 const applyTransactionCandidate = finalFunctionSlice('applyTransactionCandidate');
 
 if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
@@ -169,6 +170,14 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
   'plate',
   'tracker'
 ].forEach(text => requireText('Transaction possible match helper', transactionPossibleMatches, text));
+[
+  'Possible match ',
+  'VIN ',
+  'Tag ',
+  'Tracker ',
+  'transactionPossibleMatches'
+].forEach(text => requireText('Transaction candidate report note helper', transactionCandidateNote, text));
+requireText('Fallback transaction report possible match note', app, "customer==='Customer match needed'?transactionCandidateNote(p,roster):''");
 [
   'customerMatchStatus',
   'Admin accepted possible transaction match',
