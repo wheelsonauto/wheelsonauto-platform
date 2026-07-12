@@ -544,6 +544,7 @@ assertIncludes('Star prompt panel', starPrompt, [
 
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
 const starReadiness = finalFunctionSlice(app, 'starReadinessPanel') + finalFunctionSlice(app, 'starCapabilityItems');
+const starAuditor = finalFunctionSlice(app, 'starSystemAuditorBoard') + finalFunctionSlice(app, 'starSystemAuditItems') + finalFunctionSlice(app, 'starAuditTaskPayload');
 assertIncludes('Star AI panel', starPanel, [
   'Built-in message manager',
   'email',
@@ -566,6 +567,18 @@ assertIncludes('Star readiness panel', starReadiness + app, [
   'Receipts and documents',
   'Safe auto-send',
   'Star is inside the app'
+]);
+assertIncludes('Star system auditor', starAuditor + app + css, [
+  'Star system auditor',
+  'bugs, weak links, API blockers',
+  'Create review tasks',
+  'create-star-audit-task',
+  'create-all-star-audit-tasks',
+  'Star audit:',
+  'star-audit-grid',
+  'star-audit-card',
+  'Dispatch work',
+  'admin approval'
 ]);
 
 const setupPanel = finalFunctionSlice(app, 'messageSetupPanel');

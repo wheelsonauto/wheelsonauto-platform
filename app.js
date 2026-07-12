@@ -732,6 +732,27 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function insertStarSystemAuditor(){
+  if(view!=='Messages'||tab!=='Star')return;
+  var main=document.querySelector('.main.view-messages'),anchor=main&&main.querySelector('.star-readiness-panel,.star-command-center,.star-qa-manager,.star-ai-panel');
+  if(main&&!main.querySelector('.star-system-auditor')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=starSystemAuditorBoard();
+    if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+}
+var __woaMessagesFastStarAuditorBase=MessagesFast;
+MessagesFast=function(){
+  __woaMessagesFastStarAuditorBase();
+  insertStarSystemAuditor();
+  if(view==='Messages'&&tab==='Star'&&root&&root.innerHTML&&root.innerHTML.indexOf('star-system-auditor')<0){
+    root.innerHTML=root.innerHTML.replace('<section class="card section star-ai-panel"',starSystemAuditorBoard()+'<section class="card section star-ai-panel"');
+    hydrateLocalSearches();
+  }
+}
+Messages=MessagesFast;
 function ifleetFunctionCoverageItems(){
   var roster=recurringRoster(),cars=db.vehicles||[],jobs=customerMaintenanceJobs(),claims=db.claims||[],docs=docRows(),apps=db.applications||[],messages=db.messages||[],tasks=db.tasks||[],providers=apiProviderReviewRows(),verify=verificationInboxItems(),tolls=tollClaims(),insurance=insuranceClaims(),staff=db.staffAccounts||[],portalMissing=missingCustomerPortalRecords(),readyCars=cars.filter(isInventoryVehicle).length,assignedCars=cars.filter(function(v){return String(v.status||'').toLowerCase()==='rented'||v.currentCustomer}).length,openJobs=jobs.filter(isOpenMaintenance).length,openClaims=claims.filter(function(c){var s=String(c.status||'Open').toLowerCase();return s.indexOf('closed')<0&&s.indexOf('paid')<0}).length,openTasks=tasks.filter(function(t){return String(t.status||'Open').toLowerCase()!=='done'}).length;
   return [
@@ -852,3 +873,58 @@ ApiRoadmap=function(){
   }
 }
 if(view==='API Roadmap')queueRender();
+function starSystemAuditItems(){
+  var proof=ifleetLaunchProofItems().filter(function(i){return i.tone!=='good'}).map(function(i,idx){return{source:'Launch proof',title:i.title,tone:i.tone,count:i.count,detail:i.proof,fix:i.manual,view:i.view,tab:i.tab,index:idx}});
+  var provider=apiOperationalItems().map(function(i){var p=apiProviders().find(function(x){return x.id===i.id})||{},tone=apiStatusTone(p.status||'API needed');return{source:'API bridge',title:i.title,tone:tone==='good'?'blue':tone,count:i.count,detail:i.needs,fix:i.live,view:i.view,tab:'',providerId:i.id}}).filter(function(i){return i.tone==='warn'||i.tone==='bad'});
+  var star=starQaPendingApprovalRows(),links=starQaOpenCardSetupLinks(),extra=[];
+  if(star.length)extra.push({source:'Star approvals',title:'Pending Star approvals',tone:'warn',count:star.length,detail:'Star has message/action drafts waiting for admin review before money, card, claim, receipt, or account work moves.',fix:'Open Messages / Star, approve safe replies, and handle sensitive actions in the matching workflow.',view:'Messages',tab:'Star'});
+  if(links.length)extra.push({source:'Card setup',title:'Open card setup links',tone:'warn',count:links.length,detail:'Card setup/change links are still open, so those customers may not be chargeable yet.',fix:'Open Messages / Queue or Payments / Today, follow up, and confirm the saved card becomes chargeable.',view:'Messages',tab:'Queue'});
+  return proof.concat(extra).concat(provider).sort(function(a,b){var w={bad:0,warn:1,blue:2,good:3};return(w[a.tone]||2)-(w[b.tone]||2)||String(a.title).localeCompare(String(b.title))}).slice(0,12)
+}
+function starAuditTaskTitle(item){return 'Star audit: '+(item&&item.title||'System review')}
+function starAuditTaskExists(item){var title=starAuditTaskTitle(item);return(db.tasks||[]).some(function(t){var s=String(t.status||'Open').toLowerCase();return String(t.title||'')===title&&s!=='done'&&s.indexOf('closed')<0})}
+function starAuditTaskPayload(item){
+  return{id:'task-star-audit-'+Date.now()+'-'+Math.random().toString(16).slice(2,6),title:starAuditTaskTitle(item),type:'Star audit',customer:item.title||'System review',vehicle:item.view||'WheelsonAuto',due:todayKey(),status:'Open',owner:'Owner',notes:['Source: '+(item.source||'Star system auditor'),'Issue: '+(item.detail||'Review needed'),'Fix: '+(item.fix||'Open the linked workflow and tighten this record.'),'Open workflow: '+(item.view||'Dashboard')+(item.tab?' / '+item.tab:'')].join('\n')}
+}
+function starSystemAuditorBoard(){
+  var items=starSystemAuditItems(),bad=items.filter(function(i){return i.tone==='bad'}).length,warn=items.filter(function(i){return i.tone==='warn'}).length;
+  return '<section class="card section star-system-auditor" data-limit="12"><div class="section-head"><div><h2>Star system auditor</h2><p>Star watches the operating system for bugs, weak links, API blockers, missing matches, and closeout risks, then turns them into real Dispatch work.</p></div><div class="actions"><button class="btn gold" data-action="create-all-star-audit-tasks">Create review tasks</button></div><div class="star-command-stats"><span class="bad">'+bad+' critical</span><span class="warn">'+warn+' review</span></div></div>'+localSearch('Search Star audit by payment, VIN, tracker, portal, toll, claim, API, message, role, report')+'<div class="star-audit-grid">'+(items.length?items.map(function(i,idx){return '<div class="star-audit-card '+esc(i.tone)+'"><div class="item-row"><strong>'+esc(i.title)+'</strong>'+badge(i.count,i.tone)+'</div><span>'+esc(i.source||'Star audit')+'</span><p>'+esc(i.detail||'Review this system area.')+'</p><small>'+esc(i.fix||'Open the workflow and finish the correction.')+'</small><div class="actions"><button class="btn primary" data-view="'+esc(i.view||'Dashboard')+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button><button class="btn" data-action="create-star-audit-task" data-index="'+idx+'">Task</button></div></div>'}).join(''):'<div class="item">Star does not see a major launch, data, payment, portal, API, or role-access gap right now.</div>')+'</div><div class="notice">Star can find and organize risks. It still cannot run charges, remove customers, change cards, approve disputes, or send sensitive receipts without admin approval.</div></section>'
+}
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(a==='create-star-audit-task'){
+  e.preventDefault();e.stopImmediatePropagation();
+  if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+  var item=starSystemAuditItems()[Number(b.dataset.index||0)];if(!item){notify('Star audit item was not found');return}
+  if(starAuditTaskExists(item)){view='Dispatch';tab='';Dispatch();notify('Star audit task already exists');return}
+  b.disabled=true;b.classList.add('is-loading');
+  var saved=await post('/api/tasks',starAuditTaskPayload(item));
+  b.disabled=false;b.classList.remove('is-loading');
+  if(saved.ok){await refreshData(true);view='Dispatch';tab='';Dispatch();notify('Star audit task added to Dispatch')}else notify(saved.error||'Star audit task did not save')
+  }
+  if(a==='create-all-star-audit-tasks'){
+  e.preventDefault();e.stopImmediatePropagation();
+  if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+  var items=starSystemAuditItems().filter(function(i){return !starAuditTaskExists(i)});
+  if(!items.length){view='Dispatch';tab='';Dispatch();notify('No new Star audit tasks needed');return}
+  b.disabled=true;b.classList.add('is-loading');
+  var made=0,failed=0;
+  for(var i=0;i<items.length;i++){var saved=await post('/api/tasks',starAuditTaskPayload(items[i]));if(saved.ok)made++;else failed++}
+  b.disabled=false;b.classList.remove('is-loading');
+  await refreshData(true);view='Dispatch';tab='';Dispatch();notify('Created '+made+' Star audit task'+(made===1?'':'s')+(failed?' / '+failed+' failed':''))
+  }
+},true);
+var __woaMessagesStarAuditorBase=Messages;
+Messages=function(){
+  __woaMessagesStarAuditorBase();
+  if(view==='Messages'&&tab==='Star'){
+    var main=document.querySelector('.main.view-messages'),anchor=main&&main.querySelector('.star-readiness-panel,.star-qa-manager,.star-ai-panel');
+    if(main&&!main.querySelector('.star-system-auditor')){
+      var wrap=document.createElement('div');
+      wrap.innerHTML=starSystemAuditorBoard();
+      if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);
+      else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+      hydrateLocalSearches();
+    }
+  }
+}
+if(view==='Messages'&&tab==='Star')queueRender();
