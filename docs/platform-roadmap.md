@@ -64,6 +64,12 @@ Completed in this build pass:
 - Missing SMS/email and Clover webhook secrets now surface as owner priority-queue and Star manager setup items, and the API provider defaults name the exact Render keys needed before live webhook automation.
 - Customer portal now has a dedicated receipt-request workflow that creates an admin-approved `send_receipt` message with customer, vehicle, VIN/tag, payment context, email notification, and audit log instead of auto-sending receipts.
 - Customer portal message privacy now allows customer-submitted receipt/card/payment actions to appear in the customer’s history while still stripping internal Star plans, draft IDs, audit fields, and approval metadata.
+- Customer portal now has an account statement / payoff / payment-history request workflow that creates an admin-approved `send_account_statement` item with customer, vehicle, VIN/tag, paid-total context, owner notification, and audit log.
+- Star now treats statement, payoff, balance-letter, and payment-history wording as approval-required financial document requests, so those cannot auto-send through normal AI replies.
+- Pending Star approval filters now count approval-required `aiPlan` rows even when the visible status says “Needs admin approval,” keeping customer portal receipt/statement requests visible in Star QA and daily closeout.
+- Daily closeout summaries now separately count receipt requests and statement/payoff requests waiting for approval, instead of burying those financial-document requests in a generic Star approval number.
+- Company/store records now preserve data-scope, API-key mode, billing status, and tenant-readiness fields so future franchise/subscriber accounts can be marked internal-only, locked, or externally ready after audit without changing live data scoping.
+- The Companies page now shows and edits those franchise/subscriber readiness fields in compact company cards and Add/Edit company modals, while keeping subscriber mode locked until per-company keys, billing, isolated storage, and audit checks are complete.
 
 Checks passed at this checkpoint:
 
