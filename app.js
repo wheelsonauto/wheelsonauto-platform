@@ -494,3 +494,55 @@ MessagesFast=function(){
   }
 };
 Messages=MessagesFast;
+
+function platformReadinessItems(){
+  var roster=recurringRoster(),cars=db.vehicles||[],jobs=customerMaintenanceJobs(),claims=db.claims||[],payments=db.payments||[],messages=db.messages||[],apps=db.applications||[],staff=db.staffAccounts||[],orgsList=orgs(),apiReview=apiProviderReviewRows(),todayRows=roster.filter(function(r){return dueOrTouchedToday(r)}),collected=collectedAmountForDate(todayKey()),expected=todayRows.reduce(function(s,r){return s+Number(r.amount||0)},0);
+  var paymentAttention=roster.filter(function(r){var k=paymentState(r).key;return ['retry','contact','setup','notfound'].indexOf(k)>=0}).length;
+  var missingTruth=roster.filter(function(r){return String(r.status||'').toLowerCase()==='active'&&(!(r.vehicleId||r.vehicle)||!(r.vin)||!(r.licensePlate||r.plate))}).length+cars.filter(function(v){return String(v.status||'').toLowerCase()!=='removed'&&(!v.vin||!(v.plate||v.stock)||!trackerName(v))}).length;
+  var closeoutOpen=Math.max(0,expected-collected),closeout=closeoutNoteForToday(),starApprovals=starQaPendingApprovalRows().length,portalMissing=missingCustomerPortalRecords().length,serviceDue=jobs.filter(function(m){var d=dateKeyFrom(m.due||m.nextDue);return d&&d<=todayKey()&&isOpenMaintenance(m)}).length,openClaims=claims.filter(function(c){var s=String(c.status||'Open').toLowerCase();return s.indexOf('paid')<0&&s.indexOf('closed')<0}).length,disputeReview=claims.filter(function(c){return String(c.customerMatchStatus||'')==='Needs payment/customer match'}).length,managerCount=staff.filter(function(s){return String(s.role||'').toLowerCase()==='manager'&&staffStatusActive(s)}).length,mechanicCount=staff.filter(function(s){return String(s.role||'').toLowerCase()==='mechanic'&&staffStatusActive(s)}).length,activeApps=apps.filter(function(a){var s=String(a.stage||a.status||'New');return !/denied|removed|contract/i.test(s)}).length,unmatchedPayments=payments.filter(function(p){return transactionCustomerName(p,roster)==='Customer match needed'}).length;
+  return [
+    {title:'Payment engine',count:activeRecurringCount()+' active',tone:paymentAttention?'warn':'good',detail:paymentAttention+' account(s) need setup, retry, failed-twice, or payment-not-found review.',view:'Payments',tab:'Today'},
+    {title:'Customer + fleet truth',count:missingTruth,tone:missingTruth?'warn':'good',detail:'Customer, car, VIN, tag/plate, tracker, schedule, and service links.',view:'Payments',tab:'Active'},
+    {title:'Daily closeout',count:money(closeoutOpen),tone:closeoutOpen?'warn':'good',detail:(closeout&&closeout.signedAt?'Signed today. ':'Not signed yet. ')+'Expected '+money(expected)+' / collected '+money(collected)+'.',view:'Payments',tab:'Today'},
+    {title:'Messages + Star',count:messages.length,tone:starApprovals?'warn':'blue',detail:starApprovals+' Star approval(s), provider setup and follow-up queue ready.',view:'Messages',tab:'Star'},
+    {title:'Customer portal',count:portalMissing,tone:portalMissing?'warn':'good',detail:'Customer logins for receipts, card changes, documents, service, and messages.',view:'Settings',tab:''},
+    {title:'Inspections + service',count:serviceDue,tone:serviceDue?'warn':'good',detail:'Monthly inspections, oil changes, jobs, mechanic updates, and history.',view:'Operations',tab:'Service'},
+    {title:'Tolls, claims, disputes',count:openClaims,tone:disputeReview?'bad':openClaims?'warn':'good',detail:disputeReview+' item(s) need payment/customer match before recovery.',view:'Claims & Issues',tab:''},
+    {title:'Applications',count:activeApps,tone:activeApps?'warn':'good',detail:'Applicants, approval flow, vehicle selection, contract/autopay handoff.',view:'Website',tab:''},
+    {title:'Role portals',count:managerCount+'/'+mechanicCount,tone:(managerCount&&mechanicCount)?'good':'blue',detail:'Manager and mechanic accounts with scoped access and no owner-only controls.',view:'Settings',tab:''},
+    {title:'Companies / franchise',count:orgsList.length,tone:orgsList.length>1?'good':'blue',detail:'Company/store records, scoped staff, fleet, payments, reports, and future SaaS foundation.',view:'Companies',tab:''},
+    {title:'API readiness',count:apiReview.length,tone:apiReview.length?'warn':'good',detail:'Clover, SMS/email, EZPass, insurance/background, trackers, accounting/disputes.',view:'API Roadmap',tab:''},
+    {title:'Reports + accounting',count:unmatchedPayments,tone:unmatchedPayments?'warn':'good',detail:'Collected vs expected, customer risk, car profitability, disputes, service costs.',view:'Reports',tab:'Accounting'}
+  ];
+}
+function platformReadinessBoard(compact){
+  var items=platformReadinessItems(),shown=items.slice(0,compact?8:12),bad=items.filter(function(i){return i.tone==='bad'}).length,warn=items.filter(function(i){return i.tone==='warn'}).length,good=items.filter(function(i){return i.tone==='good'}).length;
+  return '<section class="card section platform-readiness-board" data-limit="'+(compact?8:12)+'"><div class="section-head"><div><h2>Platform readiness map</h2><p>Everything from the iFleet-style plan, organized as real WheelsonAuto work areas with live counts and shortcuts.</p></div><div class="star-command-stats"><span class="bad">'+bad+' critical</span><span class="warn">'+warn+' review</span><span class="blue">'+good+' solid</span></div></div>'+localSearch('Search readiness by payment, fleet, Star, portal, toll, claim, API, report, or role')+'<div class="platform-readiness-grid">'+shown.map(function(i){return '<button class="platform-readiness-card '+esc(i.tone)+'" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div><span>'+esc(i.count)+'</span></button>'}).join('')+'</div><div class="notice">This is not a fake checklist: each tile opens the real module that already owns that work. APIs plug into these modules later.</div></section>';
+}
+var __woaDashboardReadinessBase=Dashboard;
+Dashboard=function(){
+  __woaDashboardReadinessBase();
+  var main=document.querySelector('.main.view-dashboard'),queue=main&&main.querySelector('.star-command-center');
+  if(main&&!main.querySelector('.platform-readiness-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=platformReadinessBoard(true);
+    if(queue)queue.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+};
+var __woaReportsReadinessBase=ReportsFast;
+ReportsFast=function(){
+  __woaReportsReadinessBase();
+  if(view==='Reports'&&(tab==='Summary'||!tab)){
+    var main=document.querySelector('.main.view-reports'),first=main&&main.querySelector('.executive-report-board,.closeout-board');
+    if(main&&!main.querySelector('.platform-readiness-board')){
+      var wrap=document.createElement('div');
+      wrap.innerHTML=platformReadinessBoard(false);
+      if(first)first.insertAdjacentElement('beforebegin',wrap.firstElementChild);
+      else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+      hydrateLocalSearches();
+    }
+  }
+};
+Reports=ReportsFast;

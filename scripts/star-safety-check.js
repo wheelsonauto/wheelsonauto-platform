@@ -210,6 +210,23 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star command queue safety', app, text));
 
 [
+  'function platformReadinessItems',
+  'Platform readiness map',
+  'Payment engine',
+  'Customer + fleet truth',
+  'Daily closeout',
+  'Messages + Star',
+  'Customer portal',
+  'Inspections + service',
+  'Tolls, claims, disputes',
+  'Role portals',
+  'Companies / franchise',
+  'API readiness',
+  'Reports + accounting',
+  'APIs plug into these modules later'
+].forEach(text => requireText('WheelsonAuto iFleet readiness map', app, text));
+
+[
   'Star QA manager',
   'Contact failed-twice customers',
   'Match transactions',

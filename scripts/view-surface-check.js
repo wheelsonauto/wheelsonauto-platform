@@ -90,6 +90,8 @@ function renderViews() {
   'starQaManagerPanel',
   'starCommandItems',
   'starCommandCenter',
+  'platformReadinessItems',
+  'platformReadinessBoard',
   'staffServiceCard',
   'staffClaimCard',
   'proofLine',
