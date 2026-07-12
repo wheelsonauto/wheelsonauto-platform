@@ -625,6 +625,8 @@ async function main() {
     const managerDocumentReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((managerDocumentReviewRead.json.documents || []).some(item => item.id === customerDocument.id && item.status === 'Verified' && item.requiresVerification === false && item.portalVisible === true), 'Verified document proof should clear review mode and remain visible to the customer portal.');
     assert((managerDocumentReviewRead.json.auditLogs || []).some(item => item.action === 'Document proof verified' && String(item.details || '').includes('Alicia Brown')), 'Document verification should be audit logged.');
+    const documentReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
+    assert(documentReport.status === 200 && documentReport.text.includes('Documents / verification') && documentReport.text.includes('POLICY-PORTAL-SMOKE') && documentReport.text.includes('Insurance proof') && documentReport.text.includes('Background checks'), 'Deep report should include verified customer documents and Star proof QA rows.');
 
     const customerCardChangeNoAuth = await request(server, 'POST', '/customer/card-change');
     assert(customerCardChangeNoAuth.status === 302 && customerCardChangeNoAuth.location === '/customer/login', 'Customer card-change request should require customer login.');

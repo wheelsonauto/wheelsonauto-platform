@@ -1123,6 +1123,17 @@ function reportVehicleFor(data = {}, customerName = '', vehicleId = '') {
   const profileVehicle = normKey(profile.vehicle);
   return profileVehicle ? ((data.vehicles || []).find(row => normKey(vehicleNameFromParts(row)) === profileVehicle || normKey(row.name) === profileVehicle) || {}) : {};
 }
+function reportDocumentClearedForCustomer(data = {}, name = '', kind = '') {
+  const key = normKey(name);
+  const docKind = String(kind || '').toLowerCase();
+  if (!key || !docKind) return false;
+  return (data.documents || []).some(row => {
+    const customerKey = normKey(row.customer || row.name);
+    const text = String([row.type, row.kind, row.title, row.provider, row.reference, row.notes].filter(Boolean).join(' ')).toLowerCase();
+    const status = String(row.status || '').toLowerCase();
+    return customerKey === key && text.includes(docKind) && (status.includes('verified') || status.includes('active') || row.requiresVerification === false);
+  });
+}
 function reportCustomerRisk(data = {}, name = '', recurring = {}, vehicle = {}) {
   const key = normKey(name);
   const customer = (data.customers || []).find(row => normKey(row.name || row.customer) === key) || {};
@@ -1133,6 +1144,8 @@ function reportCustomerRisk(data = {}, name = '', recurring = {}, vehicle = {}) 
   if (!vehicle.id && !recurring.vehicle && !customer.vehicle && !contract.vehicle) issues.push('No vehicle linked');
   if ((vehicle.id || recurring.vehicle || customer.vehicle || contract.vehicle) && !String(vehicle.vin || recurring.vin || customer.vin || contract.vin || '').trim()) issues.push('Missing VIN');
   if ((vehicle.id || recurring.vehicle || customer.vehicle || contract.vehicle) && !String(vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || customer.licensePlate || contract.licensePlate || '').trim()) issues.push('Missing tag/plate');
+  if (name && !reportDocumentClearedForCustomer(data, name, 'insurance')) issues.push('Insurance proof not verified');
+  if (name && !reportDocumentClearedForCustomer(data, name, 'background')) issues.push('Background check not verified');
   const status = closeoutRecurringState(recurring || {});
   if (['Failed once', 'Failed twice', 'Payment not found', 'Setup needed'].includes(status)) issues.push(status);
   return issues.join(' | ') || 'Clean';
@@ -1163,6 +1176,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     addReportRow(rows, 'Autopay roster', recurringDateKey(row) || row.nextRun || row.nextPaymentDate || '', row.customer || 'Unknown customer', vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || ''), vehicle.vin || row.vin || '', tag, vehicle.tracker || row.tracker || '', row.frequency || 'Weekly', row.amount || row.weeklyAmount || 0, closeoutRecurringState(row), row.sourceType || row.provider || 'WheelsonAuto/Clover', reportCsvNote([row.phone, row.email, row.cloverCustomerId ? 'Clover customer ' + row.cloverCustomerId : '', row.cloverSubscriptionId ? 'Subscription ' + row.cloverSubscriptionId : '', row.notes]));
   });
   const customerNames = [...new Set([...(scoped.customers || []).map(row => row.name || row.customer), ...(scoped.contracts || []).map(row => row.customer || row.name), ...recurring.map(row => row.customer)].map(value => String(value || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const activeCustomerNames = [];
   customerNames.forEach(name => {
     const recurringRow = recurring.find(row => normKey(row.customer) === normKey(name)) || {};
     const customer = (scoped.customers || []).find(row => normKey(row.name || row.customer) === normKey(name)) || {};
@@ -1170,6 +1184,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const vehicle = reportVehicleFor(scoped, name, recurringRow.vehicleId || customer.vehicleId || contract.vehicleId);
     const tag = vehicle.plate || vehicle.stock || customer.licensePlate || contract.licensePlate || recurringRow.licensePlate || '';
     const active = !/removed|returned|history|archived/i.test(String(contract.status || customer.status || recurringRow.status || 'Active'));
+    if (active) activeCustomerNames.push(name);
     addReportRow(rows, 'Customer files', '', name, vehicle.id ? vehicleNameFromParts(vehicle) : (customer.vehicle || contract.vehicle || recurringRow.vehicle || ''), vehicle.vin || customer.vin || contract.vin || recurringRow.vin || '', tag, vehicle.tracker || customer.tracker || contract.tracker || recurringRow.tracker || '', 'Customer truth', customer.weeklyAmount || recurringRow.amount || contract.weekly || 0, active ? 'Active' : 'History', active ? 'Customer active' : 'Customer history', reportCsvNote([customer.phone || contract.phone || recurringRow.phone, customer.email || contract.email || recurringRow.email, 'Risk: ' + reportCustomerRisk(scoped, name, recurringRow, vehicle), contract.id ? 'File ' + contract.id : 'No file yet']));
   });
   (scoped.vehicles || []).forEach(vehicle => {
@@ -1190,11 +1205,20 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     addReportRow(rows, 'Claims / tolls / disputes', claim.createdAt || claim.incidentDate || claim.nextFollowUp || '', claim.customer || 'Unmatched', vehicle.id ? vehicleNameFromParts(vehicle) : (claim.vehicle || ''), vehicle.vin || claim.vin || '', vehicle.plate || vehicle.stock || claim.plate || claim.reference || '', vehicle.tracker || claim.tracker || '', claim.type || 'Issue', claim.amount || 0, claim.status || 'Open', claim.source || claim.provider || claim.agency || 'Manual', reportCsvNote([claim.notes, claim.customerMatchStatus, claim.externalId || claim.caseId || claim.disputeId, claim.deadline ? 'Deadline ' + claim.deadline : '', claim.evidence || claim.proofUrl || '']));
   });
   (scoped.applications || []).forEach(app => addReportRow(rows, 'Applications', app.submittedAt || app.createdAt || '', app.name || app.customer || '', app.vehicle || '', app.vin || '', app.plate || '', app.tracker || '', 'Application', app.down || 0, app.stage || app.status || 'New', 'Website/apply', reportCsvNote([app.phone, app.email, app.license, app.employer, app.notes])));
+  (scoped.documents || []).filter(doc => !doc.system).forEach(doc => {
+    const vehicle = reportVehicleFor(scoped, doc.customer, doc.vehicleId);
+    const tag = vehicle.plate || vehicle.stock || doc.plate || doc.licensePlate || '';
+    addReportRow(rows, 'Documents / verification', doc.verifiedAt || doc.expires || doc.due || doc.createdAt || '', doc.customer || '', vehicle.id ? vehicleNameFromParts(vehicle) : (doc.vehicle || ''), vehicle.vin || doc.vin || '', tag, vehicle.tracker || doc.tracker || '', doc.type || doc.kind || 'Document', 0, doc.status || 'Active', doc.provider || doc.agency || doc.visibility || 'Document vault', reportCsvNote([doc.policyNumber || doc.reference, doc.verifiedBy ? 'Verified by ' + doc.verifiedBy : '', doc.customerVisible ? 'Customer visible' : 'Staff only', doc.requiresVerification ? 'Needs verification' : '', doc.notes, doc.url || doc.proofUrl || '']));
+  });
   closeoutVerificationItems(scoped).forEach(item => addReportRow(rows, 'Verification inbox', today, item.customer || 'Unassigned', '', '', '', '', item.type || 'Review', 0, 'Review', 'WheelsonAuto verification', item.detail || ''));
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
+  const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Background checks', missingBackground.length, missingBackground.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing background verification');
   if (isOwnerUser(user)) (scoped.auditLogs || []).forEach(audit => addReportRow(rows, 'Audit trail', audit.at || '', audit.user || '', audit.companyName || '', '', '', '', audit.action || 'Audit', 0, audit.role || '', 'WheelsonAuto', audit.details || ''));
   return rows;
 }
