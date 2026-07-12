@@ -1585,6 +1585,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Background checks', missingBackground.length, missingBackground.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing background verification');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'Review' : 'Clean', 'Star QA', 'Active customers without a login-ready customer portal account');
+  if (isOwnerUser(user)) addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Session signing secret', SESSION_SIGNING_SECRET_CONFIGURED ? 0 : 1, SESSION_SIGNING_SECRET_CONFIGURED ? 'Clean' : 'Review', 'Star QA', 'Set WOA_SESSION_SECRET or WOA_COOKIE_SECRET in Render so signed staff/customer sessions stay stable across deploys');
   if (isOwnerUser(user)) (scoped.auditLogs || []).forEach(audit => addReportRow(rows, 'Audit trail', audit.at || '', audit.user || '', audit.companyName || '', '', '', '', audit.action || 'Audit', 0, audit.role || '', 'WheelsonAuto', audit.details || ''));
   return rows;
 }
