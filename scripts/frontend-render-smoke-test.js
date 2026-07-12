@@ -436,6 +436,7 @@ function ownerSmoke() {
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
     ['Operations service', 'Operations', 'Service', ['Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
+    ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Documents', 'Documents', undefined, ['Documents', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
@@ -467,6 +468,7 @@ function managerSmoke() {
   [
     ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
     ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
+    ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Executive snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'table-wrap'], false]
