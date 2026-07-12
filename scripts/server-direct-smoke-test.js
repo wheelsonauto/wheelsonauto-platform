@@ -459,6 +459,9 @@ async function main() {
     const ownerHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(ownerHealth.status === 200 && ownerHealth.json.summary && ownerHealth.json.star && Array.isArray(ownerHealth.json.issues), 'Owner system health should return summary, Star, and issue rows.');
     assert(ownerHealth.json.issues.some(row => row.key === 'unmatched_payments') && ownerHealth.json.issues.some(row => row.key === 'missing_vin') && ownerHealth.json.issues.some(row => row.key === 'dispute_match_review'), 'Owner system health should include payment, dispute, and fleet truth checks.');
+    const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
+    assert(ownerReadiness.status === 200 && Array.isArray(ownerReadiness.json.truthChecks) && Object.prototype.hasOwnProperty.call(ownerReadiness.json, 'dataOk'), 'System readiness should return customer/payment/fleet truth checks.');
+    assert(ownerReadiness.json.truthChecks.some(row => row.key === 'unmatched_payments') && ownerReadiness.json.truthChecks.some(row => row.key === 'autopay_vehicle_link'), 'System readiness should include unmatched payment and autopay vehicle-link checks.');
     const managerHealth = await request(server, 'GET', '/api/system/health', { cookie: managerCookie });
     assert(managerHealth.status === 200 && managerHealth.json.organizationId === 'org-wheelsonauto' && managerHealth.json.star.canAssist === true, 'Manager system health should be available and scoped.');
     const mechanicReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: mechanicCookie });

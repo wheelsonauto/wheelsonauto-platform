@@ -3187,8 +3187,44 @@ function systemReadiness(data) {
     tasks: (data.tasks || []).length,
     documents: (data.documents || []).length
   };
+  const recurring = allRecurringRows(data);
+  const payments = uniqueCloseoutPayments(data.payments || []);
+  const today = localDateKey();
+  const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
+  const paymentNotFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
+  const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
+  const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(data, payment, recurring) === 'Unmatched payment');
+  const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
+  const missingVin = (data.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
+  const verificationItems = closeoutVerificationItems(data);
+  const truthCheck = (key, label, count, severity, detail, view, tab = '') => ({
+    key,
+    label,
+    count,
+    severity,
+    status: count ? (severity === 'critical' ? 'Needs review' : 'Warning') : 'Clean',
+    detail,
+    view,
+    tab
+  });
+  const truthChecks = [
+    truthCheck('failed_twice', 'Failed twice', failedTwice.length, 'critical', 'Customers that failed twice should be contacted before closeout.', 'Payments', 'Today'),
+    truthCheck('payment_not_found', 'Payment not found', paymentNotFound.length, 'critical', 'Saved-card/payment records need Clover review before they can be trusted.', 'Payments', 'Today'),
+    truthCheck('unmatched_payments', 'Unmatched payments', unmatchedPayments.length, 'critical', 'Transactions must have a customer name before receipts, disputes, and reports are reliable.', 'Payments', 'Transactions'),
+    truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
+    truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
+    truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),
+    truthCheck('missing_contact', 'Missing contact', missingContact.length, 'warning', 'Customers need phone or email before Star can follow up.', 'Payments', 'Active'),
+    truthCheck('verification_inbox', 'Verification inbox', verificationItems.length, 'warning', 'Customer proof, paid-outside, service, toll, claim, and document items need staff review.', 'Documents')
+  ];
+  const dataCriticalIssues = truthChecks.filter(item => item.severity === 'critical' && item.count > 0);
+  const dataWarningIssues = truthChecks.filter(item => item.severity === 'warning' && item.count > 0);
   return {
     ok: missing.length === 0,
+    dataOk: dataCriticalIssues.length === 0,
+    dataIssueCount: dataCriticalIssues.length + dataWarningIssues.length,
     checkedAt: new Date().toISOString(),
     environment: CLOVER_ENV,
     publicBaseUrl: PUBLIC_BASE_URL,
@@ -3196,6 +3232,7 @@ function systemReadiness(data) {
     envChecks: envChecks.map(item => ({ key: item[0], status: item[1], purpose: item[2] })),
     routes,
     records,
+    truthChecks,
     autoSync: autoSyncStatus,
     autopay: woaAutopayStatus
   };

@@ -220,6 +220,15 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 ].forEach(text => requireText('API-ready roadmap UI', apiRoadmap + app, text));
 
 [
+  'truthChecks',
+  'dataOk',
+  'dataIssueCount',
+  'autopay_vehicle_link',
+  'Customer/payment/fleet truth',
+  'Data truth'
+].forEach(text => requireText('System readiness truth checks', server + app, text));
+
+[
   'Manager Portal',
   'fleetCommandPanel',
   'Search manager queue',
