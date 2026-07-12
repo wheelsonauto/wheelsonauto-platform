@@ -552,7 +552,10 @@ assertIncludes('Settings staff password help', settings + server, ['Staff accoun
 assertIncludes('Company account staff actions', organizations + companyFoundationPanel + companyReadinessCards + app, ['Company accounts', 'Franchise readiness', 'Staff scoping', 'isolated database storage', 'per-company', 'Data scope', 'API key mode', 'Tenant readiness', 'Subscriber locked', 'Add staff', 'new-staff', 'Staff list', 'company-scoped workspace', 'Subscriber mode needs final API separation']);
 const coreSystemItems = finalFunctionSlice(app, 'coreSystemItems');
 const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
+const apiOperationalItems = finalFunctionSlice(app, 'apiOperationalItems');
+const apiOperationalBoard = finalFunctionSlice(app, 'apiOperationalBoard');
 assertIncludes('Core system board', coreSystemBoard + coreSystemItems, ['Core system board', 'iFleet-style operating system', 'Payment/autopay engine', 'Customer + fleet truth', 'Messages + Star', 'Customer portal', 'Tolls/violations/recovery', 'Claims + disputes', 'Franchise/company base', 'API-ready layer', 'Manual-live', 'Draft-live']);
+assertIncludes('API operating bridge', apiOperationalItems + apiOperationalBoard + app + css, ['API operating bridge', 'All iFleet-style provider functions', 'APIs plug in last', 'Clover disputes + refunds', 'Saved-card charges', 'EZPass/tolls + violations', 'SMS/email messaging', 'Insurance/background checks', 'Tracker/location', 'Accounting + closeout exports', 'Franchise / multi-company', 'Works now:', 'API unlocks:', 'Must match:', 'api-operational-board', 'api-operational-grid', 'api-operational-card']);
 assertIncludes('Customer portal account form', customerLoginForm, ['customerLoginName', 'customerLoginPassword', 'customerLoginRecurringId', 'customerLoginVehicleId']);
 assertIncludes('Customer portal action helper', customerPortalButton, ['open-customer-login', 'new-customer-login', 'data-name']);
 assertIncludes('Payment customer portal card actions', paymentCustomerPortalCard, ['customerPortalButton', 'Portal']);

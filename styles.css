@@ -3815,6 +3815,63 @@ body.fast-tab-switch .admin-shell .section{
   color:#c8d2dc;
   overflow-wrap:anywhere;
 }
+.api-operational-board{
+  background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(24,27,31,.93));
+  border-color:rgba(240,211,148,.20);
+}
+.api-operational-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+}
+.api-operational-card{
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  box-shadow:0 14px 28px rgba(0,0,0,.16);
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+.api-operational-card:hover{
+  transform:translateY(-1px);
+  border-color:rgba(240,211,148,.30);
+  background:rgba(240,211,148,.08);
+}
+.api-operational-card.good{border-left:3px solid #7ee787}
+.api-operational-card.blue{border-left:3px solid #58a6ff}
+.api-operational-card.warn{border-left:3px solid #f0d394}
+.api-operational-card.bad{border-left:3px solid #ff705c}
+.api-operational-card strong{
+  color:#f7df9b;
+}
+.api-operational-card p{
+  margin:8px 0;
+  color:#d9e3eb;
+  font-size:13px;
+  line-height:1.35;
+}
+.api-operational-count{
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  margin:10px 0;
+  padding:8px 10px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:10px;
+  background:rgba(0,0,0,.18);
+}
+.api-operational-count b{
+  color:#fff;
+  font-size:22px;
+  line-height:1;
+}
+.api-operational-count span{
+  color:#c8d2dc;
+  font-size:12px;
+  font-weight:800;
+}
 .star-provider-strip{
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
@@ -3892,13 +3949,15 @@ body.fast-tab-switch .admin-shell .section{
 }
 @media(max-width:1180px){
   .dispute-recovery-stats,
-  .dispute-recovery-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dispute-recovery-grid,
+  .api-operational-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:700px){
   .dispute-recovery-stats,
-  .dispute-recovery-grid{grid-template-columns:1fr}
+  .dispute-recovery-grid,
+  .api-operational-grid{grid-template-columns:1fr}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:1fr}
   .star-provider-strip .actions{flex-direction:row;flex-wrap:wrap}

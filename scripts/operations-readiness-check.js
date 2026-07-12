@@ -348,7 +348,24 @@ const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
   'admin-approved',
   'apiProviders',
   'save-api-provider',
-  'apiLiveTest'
+  'apiLiveTest',
+  'apiOperationalItems',
+  'apiOperationalBoard',
+  'API operating bridge',
+  'All iFleet-style provider functions',
+  'APIs plug in last',
+  'Clover disputes + refunds',
+  'Saved-card charges',
+  'EZPass/tolls + violations',
+  'SMS/email messaging',
+  'Insurance/background checks',
+  'Tracker/location',
+  'Accounting + closeout exports',
+  'Franchise / multi-company',
+  'Works now:',
+  'API unlocks:',
+  'Must match:',
+  'api-operational-board'
 ].forEach(text => requireText('API-ready roadmap UI', apiRoadmap + app, text));
 
 [
