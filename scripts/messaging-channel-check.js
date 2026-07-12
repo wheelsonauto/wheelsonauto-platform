@@ -84,6 +84,8 @@ requireText('Customer portal receipt request route', server, "/customer/receipt-
 requireText('Customer portal receipt approval guard', server, "actionType: 'send_receipt'");
 requireText('Customer portal statement request route', server, "/customer/statement-request");
 requireText('Customer portal statement approval guard', server, "actionType: 'send_account_statement'");
+requireText('Customer portal statement document request', server, "kind: 'Account document request'");
+requireText('Customer portal statement document staff queue', server, "status: 'Needs staff preparation'");
 requireText('Customer portal message notification event', server, 'customer_message');
 requireText('Staff password reset notification event', server + app, 'staff_password_reset');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');

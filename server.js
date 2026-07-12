@@ -6795,6 +6795,44 @@ const server = http.createServer(async (req, res) => {
 	      const vehicle = portal.vehicle || {};
 	      const paidTotal = (portal.payments || []).filter(closeoutPaymentPaid).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
 	      const customerName = summary.customer || account.customer || account.name || 'Customer';
+	      data.documents = Array.isArray(data.documents) ? data.documents : [];
+	      const documentId = 'doc-customer-statement-request-' + Date.now();
+	      const documentRequest = {
+	        id: documentId,
+	        createdAt: new Date().toISOString(),
+	        date: localDateKey(),
+	        organizationId: account.organizationId || MAIN_ORG_ID,
+	        customer: customerName,
+	        phone: account.phone || '',
+	        email: account.email || '',
+	        type: requestType,
+	        kind: 'Account document request',
+	        status: 'Needs staff preparation',
+	        tone: 'warn',
+	        source: 'Customer portal',
+	        requiresVerification: true,
+	        visibility: 'Staff only',
+	        customerVisible: false,
+	        portalVisible: false,
+	        customerAccountId: account.id,
+	        recurringPaymentId: recurring.id || account.recurringPaymentId || '',
+	        vehicleId: vehicle.id || account.vehicleId || recurring.vehicleId || '',
+	        vehicle: summary.vehicle || vehicleNameFromParts(vehicle) || recurring.vehicle || '',
+	        vin: summary.vin || vehicle.vin || recurring.vin || '',
+	        licensePlate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
+	        plate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
+	        tracker: summary.tracker || trackerName(vehicle) || trackerName(recurring),
+	        reference: requestType,
+	        notes: [
+	          'Customer requested ' + requestType + ' from the portal.',
+	          note ? 'Customer note: ' + note : '',
+	          'Staff must verify balance, payment history, active vehicle, and open toll/claim items before sending.'
+	        ].filter(Boolean).join(' | '),
+	        internalNotes: 'Prepared document should be attached or referenced here before marking customer-visible.',
+	        amount: recurring.amount || recurring.weeklyAmount || 0,
+	        paidTotal
+	      };
+	      data.documents.unshift(documentRequest);
 	      data.messages = Array.isArray(data.messages) ? data.messages : [];
 	      const message = {
 	        id: 'msg-customer-statement-request-' + Date.now(),
@@ -6819,6 +6857,7 @@ const server = http.createServer(async (req, res) => {
 	        source: 'Customer portal',
 	        event: 'customer_statement_request',
 	        customerAccountId: account.id,
+	        documentId,
 	        recurringPaymentId: recurring.id || account.recurringPaymentId || '',
 	        vehicleId: vehicle.id || account.vehicleId || recurring.vehicleId || '',
 	        vehicle: summary.vehicle || vehicleNameFromParts(vehicle) || recurring.vehicle || '',
@@ -6832,7 +6871,7 @@ const server = http.createServer(async (req, res) => {
 	          approvalRequired: true,
 	          needsHuman: false,
 	          reason: 'Customer requested an account statement/payoff-style document. Staff must verify the account before sending.',
-	          related: { requestType, paidTotal, balanceContext: summary.paymentStatus || recurring.status || '' }
+	          related: { requestType, paidTotal, documentId, balanceContext: summary.paymentStatus || recurring.status || '' }
 	        }
 	      };
 	      data.messages.unshift(message);

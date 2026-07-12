@@ -240,6 +240,8 @@ assertIncludes('Documents surface', documents + app + server, [
   'Paid-outside payment verified',
   'Document proof verified',
   'Customer-submitted proof is waiting for staff verification',
+  'Account document request',
+  'Needs staff preparation',
   'Search documents, receipts',
   'Proof link / photo note',
   'customerPortalDocuments',
