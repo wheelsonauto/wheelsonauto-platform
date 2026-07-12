@@ -101,6 +101,12 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'nextDue',
   'Completed',
   'Mark done',
+  'mDoneMileage',
+  'mDoneCondition',
+  'mDoneDamage',
+  'mDoneSignoff',
+  'inspectionCondition',
+  'mechanicSignoff',
   'await save()',
   'Maintenance()'
 ].forEach(text => requireText('Monthly inspection completion flow', app + actionSlice('confirm-complete-maintenance'), text));
