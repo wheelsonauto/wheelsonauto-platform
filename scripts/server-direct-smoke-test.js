@@ -158,6 +158,7 @@ async function main() {
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
       { id: 'claim-direct-candidate-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', amount: 199, status: 'Open' },
+      { id: 'claim-direct-toll-review', type: 'Toll', source: 'Manual toll import', provider: 'E-ZPass', customer: 'Unassigned', plate: 'DIR-TOLL', reference: 'TOLL-DIRECT-001', amount: 12.75, status: 'Open', customerMatchStatus: 'Needs payment/customer match' },
       { id: 'claim-direct-unmatched-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'missing-payment-id', amount: 55, status: 'Open' }
     );
     const duplicateWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateState });
@@ -539,6 +540,7 @@ async function main() {
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Messages / communications') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, communication, Star QA, and audit sections.');
     assert(ownerReport.text.includes('Failed twice') && ownerReport.text.includes('Payment not found') && ownerReport.text.includes('Unmatched payments') && ownerReport.text.includes('Missing contact') && ownerReport.text.includes('Customer portal access'), 'Owner deep report should include operational Star QA truth rows.');
+    assert(ownerReport.text.includes('Toll/violation recovery') && ownerReport.text.includes('need customer/vehicle/plate review before charge or message'), 'Owner deep report should include toll/violation recovery review rows.');
     assert(ownerReport.text.includes('login-ready customer portal account'), 'Owner deep report should treat draft customer portal records without passwords as unfinished access.');
     assert(ownerReport.text.includes('Possible match Direct Dispute Customer') && ownerReport.text.includes('DIRECTDISPUTEVIN') && ownerReport.text.includes('Tag DIR-DSP') && ownerReport.text.includes('Phone 3135550199') && ownerReport.text.includes('Email direct-dispute-customer@example.com'), 'Owner deep report should include possible dispute customer, vehicle, and contact evidence.');
     assert(ownerReport.text.includes('staff_password_reset') && ownerReport.text.includes('Staff login direct-manager'), 'Owner deep report should include safe staff reset/help communication rows.');
@@ -548,11 +550,14 @@ async function main() {
     const ownerHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(ownerHealth.status === 200 && ownerHealth.json.summary && ownerHealth.json.star && Array.isArray(ownerHealth.json.issues), 'Owner system health should return summary, Star, and issue rows.');
     assert(ownerHealth.json.issues.some(row => row.key === 'unmatched_payments') && ownerHealth.json.issues.some(row => row.key === 'missing_vin') && ownerHealth.json.issues.some(row => row.key === 'dispute_match_review') && ownerHealth.json.issues.some(row => row.key === 'customer_portal_access'), 'Owner system health should include payment, dispute, portal, and fleet truth checks.');
+    const tollHealth = ownerHealth.json.issues.find(row => row.key === 'toll_violation_recovery');
+    assert(tollHealth && Number(tollHealth.count) > 0 && /Open tolls\/violations/.test(tollHealth.detail || ''), 'Owner system health should include toll/violation recovery with amount and review context.');
     const portalHealth = ownerHealth.json.issues.find(row => row.key === 'customer_portal_access');
     assert(portalHealth && Number(portalHealth.count) > 0 && /login-ready/i.test(portalHealth.detail || ''), 'Owner system health should flag active customers whose portal record is not login ready.');
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
     assert(ownerReadiness.status === 200 && Array.isArray(ownerReadiness.json.truthChecks) && Object.prototype.hasOwnProperty.call(ownerReadiness.json, 'dataOk'), 'System readiness should return customer/payment/fleet truth checks.');
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'unmatched_payments') && ownerReadiness.json.truthChecks.some(row => row.key === 'autopay_vehicle_link') && ownerReadiness.json.truthChecks.some(row => row.key === 'payment_request_truth') && ownerReadiness.json.truthChecks.some(row => row.key === 'open_payment_requests'), 'System readiness should include unmatched payment, payment-link, and autopay vehicle-link checks.');
+    assert(ownerReadiness.json.truthChecks.some(row => row.key === 'toll_violation_recovery' && row.severity === 'critical'), 'System readiness should mark unmatched toll/violation recovery as critical before charge/message follow-up.');
 
     const draftPortalLogins = await request(server, 'POST', '/api/customer-accounts/create-missing-drafts', { cookie: ownerCookie, json: {} });
     assert(draftPortalLogins.status === 200 && draftPortalLogins.json.ok, 'Owner could not create draft customer portal logins.');

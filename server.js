@@ -1494,6 +1494,9 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row, today) === 'Setup needed');
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const assignmentConflicts = assignmentConflictRows(scoped);
+  const tollRecovery = tollViolationRecoveryRows(scoped);
+  const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
+  const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const verificationItems = closeoutVerificationItems(scoped);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
@@ -1506,6 +1509,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'Review' : 'Clean', 'Star QA', 'Customers need card setup or card-on-file repair');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Toll/violation recovery', tollRecoveryAmount, tollRecovery.length ? (tollMatchReview.length ? 'Review' : 'Open') : 'Clean', 'Star QA', tollRecovery.length + ' open toll/violation item(s), ' + tollMatchReview.length + ' need customer/vehicle/plate review before charge or message');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing contact', missingContact.length, missingContact.length ? 'Review' : 'Clean', 'Star QA', 'Customers without phone or email cannot receive Star follow-up');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Verification inbox', verificationItems.length, verificationItems.length ? 'Review' : 'Clean', 'Star QA', 'Customer proof, paid-outside, service, toll, claim, and document reviews waiting');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
@@ -1562,6 +1566,9 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
     return due && due <= today;
   });
   const openClaims = (scoped.claims || []).filter(claim => !/paid|closed/i.test(String(claim.status || 'Open')));
+  const tollRecovery = tollViolationRecoveryRows(scoped);
+  const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
+  const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
@@ -1585,11 +1592,12 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(11, 'missing_contact', 'Missing contact', missingContact.length, missingContact.length ? 'warn' : 'good', 'Payments', 'Active', 'Customers need phone or email before Star can follow up.');
   issue(12, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
   issue(13, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
-  issue(14, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
-  issue(15, 'stale_payment_requests', 'Stale payment links', stalePaymentRequests.length, stalePaymentRequests.length ? 'warn' : 'good', 'Messages', 'Queue', 'Hosted checkout links open more than 24 hours need follow-up.');
-  issue(16, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
-  issue(17, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
-  if (isOwnerUser(user)) issue(18, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(14, 'toll_violation_recovery', 'Toll/violation recovery', tollRecovery.length, tollRecovery.length ? (tollMatchReview.length ? 'bad' : 'warn') : 'good', 'Claims & Issues', '', 'Open tolls/violations total ' + moneyText(tollRecoveryAmount) + '; unmatched plate/customer rows must be reviewed before charging.');
+  issue(15, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
+  issue(16, 'stale_payment_requests', 'Stale payment links', stalePaymentRequests.length, stalePaymentRequests.length ? 'warn' : 'good', 'Messages', 'Queue', 'Hosted checkout links open more than 24 hours need follow-up.');
+  issue(17, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
+  issue(18, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
+  if (isOwnerUser(user)) issue(19, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -3697,6 +3705,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const assignmentConflicts = assignmentConflictRows(scoped);
   const verificationItems = closeoutVerificationItems(scoped);
+  const tollRecovery = tollViolationRecoveryRows(scoped);
+  const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
+  const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const truthCheck = (key, label, count, severity, detail, view, tab = '') => ({
     key,
     label,
@@ -3718,6 +3729,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('open_payment_requests', 'Open payment requests', openPaymentRequests.length, 'warning', 'Hosted checkout links are still open and should be followed up, closed, or collected before final closeout.', 'Payments', 'Today'),
     truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),
     truthCheck('missing_contact', 'Missing contact', missingContact.length, 'warning', 'Customers need phone or email before Star can follow up.', 'Payments', 'Active'),
+    truthCheck('toll_violation_recovery', 'Toll/violation recovery', tollRecovery.length, tollMatchReview.length ? 'critical' : 'warning', 'Open tolls/violations total ' + moneyText(tollRecoveryAmount) + '; each row needs customer, vehicle, plate/VIN, proof, and payment-link follow-up before charging.', 'Claims & Issues'),
     truthCheck('verification_inbox', 'Verification inbox', verificationItems.length, 'warning', 'Customer proof, paid-outside, service, toll, claim, and document items need staff review.', 'Documents')
   ];
   const dataCriticalIssues = truthChecks.filter(item => item.severity === 'critical' && item.count > 0);
@@ -4084,6 +4096,12 @@ function mergePaymentRecord(existing, incoming) {
 function weakClaimCustomer(value) {
   const raw = String(value || '').trim();
   return !raw || /^(unknown|unassigned|customer|unmatched clover payment|clover dispute|clover customer|n\/a|na)$/i.test(raw);
+}
+function isTollViolationClaim(claim = {}) {
+  return /toll|ezpass|e-zpass|ticket|violation/i.test(String([claim.type, claim.source, claim.provider, claim.agency, claim.notes].filter(Boolean).join(' ')));
+}
+function tollViolationRecoveryRows(data = {}) {
+  return (data.claims || []).filter(claim => isTollViolationClaim(claim) && !/paid|closed/i.test(String(claim.status || 'Open')));
 }
 function claimIdentityTokens(claim = {}) {
   return [
