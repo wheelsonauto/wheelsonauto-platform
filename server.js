@@ -27,6 +27,7 @@ const CLOVER_TOKEN_BASE = process.env.CLOVER_TOKEN_BASE || (CLOVER_ENV === 'sand
 const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || '';
 const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || process.env.CLOVER_API_ACCESS_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
+const CLOVER_WEBHOOK_SECRET = process.env.CLOVER_WEBHOOK_SECRET || process.env.WOA_CLOVER_WEBHOOK_SECRET || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
@@ -45,6 +46,7 @@ const WOA_EMAIL_ENABLED = process.env.WOA_EMAIL_ENABLED !== '0';
 const WOA_EMAIL_PROVIDER = String(process.env.WOA_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || 'not_configured').toLowerCase();
 const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '';
 const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
+const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
@@ -317,10 +319,10 @@ function repairVehicleSheetLinkConflicts(data) {
 function ensureBaseOrganization(data) {
   if (!data) return data;
   data.organizations = Array.isArray(data.organizations) ? data.organizations : [];
-  let main = data.organizations.find(org => org.id === 'org-wheelsonauto');
+  let main = data.organizations.find(org => org.id === MAIN_ORG_ID);
   if (!main) {
     main = {
-      id: 'org-wheelsonauto',
+      id: MAIN_ORG_ID,
       name: 'WheelsonAuto',
       type: 'Main company',
       status: 'Active',
@@ -336,7 +338,7 @@ function ensureBaseOrganization(data) {
   data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
   data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
   [...data.staffAccounts, ...data.customerAccounts].forEach(account => {
-    if (!account.organizationId) account.organizationId = 'org-wheelsonauto';
+    if (!account.organizationId) account.organizationId = MAIN_ORG_ID;
   });
   return data;
 }
@@ -415,7 +417,7 @@ async function readData() {
 async function writeData(data) {
   repairDataIds(data);
   await fs.mkdir(DATA_DIR, { recursive: true });
-  const tmpFile = DATA_FILE + '.tmp';
+  const tmpFile = DATA_FILE + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
   await fs.rename(tmpFile, DATA_FILE);
 }
@@ -1748,7 +1750,27 @@ function organizationExists(data, organizationId) {
   return (data.organizations || []).some(item => item.id === clean);
 }
 function staffLoginUser(staff) {
-  return { id: staff.id || ('staff-' + Date.now()), username: staff.username || staff.email || '', name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || 'org-wheelsonauto', companyName: staff.companyName || 'WheelsonAuto' };
+  return { id: staff.id || ('staff-' + Date.now()), username: staff.username || staff.email || '', name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || MAIN_ORG_ID, companyName: staff.companyName || 'WheelsonAuto' };
+}
+function userOrganizationId(user = {}) {
+  return String(user.organizationId || MAIN_ORG_ID).trim() || MAIN_ORG_ID;
+}
+function rowOrganizationId(row = {}) {
+  return String(row.organizationId || row.orgId || row.companyId || MAIN_ORG_ID).trim() || MAIN_ORG_ID;
+}
+function rowVisibleToUserOrganization(row, user) {
+  if (isOwnerUser(user)) return true;
+  return rowOrganizationId(row) === userOrganizationId(user);
+}
+function filterRowsForUserOrganization(rows, user) {
+  if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
+  return rows.filter(row => rowVisibleToUserOrganization(row, user));
+}
+function mergeScopedCollection(currentRows, incomingRows, user) {
+  if (!Array.isArray(incomingRows) || isOwnerUser(user)) return incomingRows;
+  const keep = (Array.isArray(currentRows) ? currentRows : []).filter(row => !rowVisibleToUserOrganization(row, user));
+  const owned = incomingRows.map(row => ({ ...row, organizationId: rowOrganizationId(row) === MAIN_ORG_ID && userOrganizationId(user) !== MAIN_ORG_ID ? userOrganizationId(user) : rowOrganizationId(row) }));
+  return keep.concat(owned);
 }
 function findStaffByPin(data, pin) {
   const clean = String(pin || '').trim();
@@ -1770,7 +1792,7 @@ function cleanStaffAccountPayload(payload, existing = null) {
     name: String(payload.name || '').trim(),
     username: normalizeLogin(payload.username || payload.email || existing && existing.username || ''),
     role: String(payload.role || existing && existing.role || 'Mechanic').trim(),
-    organizationId: String(payload.organizationId || existing && existing.organizationId || 'org-wheelsonauto').trim(),
+    organizationId: String(payload.organizationId || existing && existing.organizationId || MAIN_ORG_ID).trim(),
     companyName: String(payload.companyName || existing && existing.companyName || 'WheelsonAuto').trim(),
     phone: String(payload.phone || '').trim(),
     email: String(payload.email || '').trim(),
@@ -1810,7 +1832,7 @@ function customerLoginUser(account) {
     customer: account.customer || account.name || '',
     role: 'Customer',
     access: 'Customer portal',
-    organizationId: account.organizationId || 'org-wheelsonauto',
+    organizationId: account.organizationId || MAIN_ORG_ID,
     customerId: account.customerId || '',
     contractId: account.contractId || '',
     recurringPaymentId: account.recurringPaymentId || '',
@@ -1846,7 +1868,7 @@ function cleanCustomerAccountPayload(payload, existing = null) {
     phone: String(payload.phone || existing && existing.phone || '').trim(),
     email: String(payload.email || existing && existing.email || '').trim(),
     status: String(payload.status || existing && existing.status || 'Active').trim(),
-    organizationId: String(payload.organizationId || existing && existing.organizationId || 'org-wheelsonauto').trim(),
+    organizationId: String(payload.organizationId || existing && existing.organizationId || MAIN_ORG_ID).trim(),
     customerId: String(payload.customerId || existing && existing.customerId || matchedCustomer && matchedCustomer.id || '').trim(),
     contractId: String(payload.contractId || existing && existing.contractId || matchedContract && matchedContract.id || '').trim(),
     recurringPaymentId: String(payload.recurringPaymentId || existing && existing.recurringPaymentId || matchedRecurring && matchedRecurring.id || '').trim(),
@@ -1909,7 +1931,8 @@ function stateForUserWrite(current, incoming, user) {
       : ['messages'];
   const next = { ...current };
   allowed.forEach(key => {
-    if (Object.prototype.hasOwnProperty.call(incoming, key)) next[key] = incoming[key];
+    if (!Object.prototype.hasOwnProperty.call(incoming, key)) return;
+    next[key] = Array.isArray(incoming[key]) ? mergeScopedCollection(current[key], incoming[key], user) : incoming[key];
   });
   next.lastStaffSaveAt = new Date().toISOString();
   next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
@@ -1979,6 +2002,12 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
+  Object.keys(safe).forEach(key => {
+    if (!Array.isArray(safe[key])) return;
+    safe[key] = key === 'organizations'
+      ? safe[key].filter(row => String(row.id || '') === userOrganizationId(user))
+      : filterRowsForUserOrganization(safe[key], user);
+  });
   if (role === 'mechanic') {
     const mechanic = {};
     ['business', 'vehicles', 'maintenance', 'claims', 'customers', 'contracts', 'tasks', 'documents', 'organizations'].forEach(key => {
@@ -2701,6 +2730,54 @@ function paymentMatchesClaim(payment = {}, claim = {}) {
   if (!reference) return false;
   return paymentRecordIds(payment).some(id => id && reference.includes(normKey(id)));
 }
+function deepFindWebhookValue(value, keyPattern, depth = 0) {
+  if (!value || depth > 5) return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = deepFindWebhookValue(item, keyPattern, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value !== 'object') return '';
+  for (const [key, item] of Object.entries(value)) {
+    if (keyPattern.test(key) && item !== null && typeof item !== 'object') return String(item).trim();
+    if (keyPattern.test(key) && item && typeof item === 'object' && item.id) return String(item.id).trim();
+    const found = deepFindWebhookValue(item, keyPattern, depth + 1);
+    if (found) return found;
+  }
+  return '';
+}
+function cloverWebhookDisputeClaim(event = {}) {
+  const text = JSON.stringify(event || {}).slice(0, 10000);
+  if (!/dispute|chargeback/i.test(text)) return null;
+  const paymentId = deepFindWebhookValue(event, /^(paymentId|payment_id|cloverPaymentId|payment)$/i)
+    || (/payment[s]?\/([A-Za-z0-9_-]+)/i.exec(text) || [])[1]
+    || '';
+  const objectId = String(event.objectId || event.id || deepFindWebhookValue(event, /^(objectId|object_id|eventId|event_id)$/i) || '').trim();
+  const disputeId = String(event.disputeId || event.chargebackId || deepFindWebhookValue(event, /^(dispute|disputeId|dispute_id|chargeback|chargebackId|chargeback_id|case|caseId|case_id)$/i) || '').trim();
+  const amountRaw = deepFindWebhookValue(event, /^(amount|disputedAmount|chargebackAmount|amount_disputed)$/i);
+  const amountNumber = Number(amountRaw || 0);
+  const amount = amountNumber > 999 ? amountNumber / 100 : amountNumber;
+  const externalId = disputeId || paymentId || objectId || ('clover-dispute-' + Date.now());
+  return {
+    id: 'claim-clover-dispute-' + normKey(externalId || Date.now()).slice(0, 60),
+    type: 'Clover dispute',
+    source: 'Clover webhook',
+    provider: 'Clover',
+    customer: 'Unassigned',
+    amount: Number.isFinite(amount) && amount > 0 ? amount : 0,
+    status: 'Open',
+    tone: 'bad',
+    externalId,
+    disputeId,
+    paymentId,
+    cloverPaymentId: paymentId,
+    reference: paymentId || objectId || disputeId,
+    notes: 'Created automatically from Clover dispute/chargeback webhook. Review and match before contacting the customer.',
+    createdAt: new Date().toISOString()
+  };
+}
 function findClaimPaymentRequest(data, claim = {}) {
   const requests = data.paymentRequests || [];
   const ids = [claim.paymentRequestId, claim.paymentLinkId, claim.requestId].map(String).filter(Boolean);
@@ -2810,6 +2887,30 @@ function resolveClaimCustomerLinks(data) {
     if (before !== after) matched += 1;
   });
   return matched;
+}
+async function recordCloverWebhookEvent(event = {}) {
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
+  data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), event });
+  const previous = JSON.parse(JSON.stringify(data));
+  const disputeClaim = cloverWebhookDisputeClaim(event);
+  let createdClaimId = '';
+  if (disputeClaim) {
+    data.claims = Array.isArray(data.claims) ? data.claims : [];
+    const disputeTokens = claimIdentityTokens(disputeClaim);
+    const duplicate = data.claims.find(claim => claim.id === disputeClaim.id || claimIdentityTokens(claim).some(id => disputeTokens.includes(id)));
+    if (!duplicate) {
+      data.claims.unshift(disputeClaim);
+      createdClaimId = disputeClaim.id;
+    }
+    resolveClaimCustomerLinks(data);
+    await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
+  }
+  await writeData(data);
+  setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), 0);
+  return { ok: true, disputeClaimId: createdClaimId };
 }
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
@@ -4263,6 +4364,13 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
+    if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
+      if (CLOVER_WEBHOOK_SECRET && url.searchParams.get('secret') !== CLOVER_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== CLOVER_WEBHOOK_SECRET && req.headers['x-clover-webhook-secret'] !== CLOVER_WEBHOOK_SECRET) {
+        return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      }
+      const event = JSON.parse(await readBody(req) || '{}');
+      return json(res, 200, await recordCloverWebhookEvent(event));
+    }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));
@@ -4933,17 +5041,6 @@ const server = http.createServer(async (req, res) => {
         await writeData(data);
       }
       return json(res, 201, { ok: true, paymentLink: request });
-    }
-    if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
-      const event = JSON.parse(await readBody(req) || '{}');
-      const data = await readData();
-      data.integrations = data.integrations || {};
-      data.integrations.clover = data.integrations.clover || {};
-      data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
-      data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), event });
-      await writeData(data);
-      setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), 0);
-      return json(res, 200, { ok: true });
     }
     return send(res, 200, await appHtml({ publicMode: false, user }), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
   } catch (err) {

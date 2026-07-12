@@ -137,7 +137,10 @@ async function main() {
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
-    duplicateState.payments.unshift({ id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover' });
+    duplicateState.payments.unshift(
+      { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover' },
+      { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
+    );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
@@ -162,6 +165,21 @@ async function main() {
     const candidateDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-candidate-dispute');
     assert(candidateDispute && candidateDispute.customerMatchStatus === 'Needs payment/customer match', 'Amount-only Clover dispute should still require manual match.');
     assert((candidateDispute.matchCandidates || []).some(candidate => candidate.customer === 'Direct Dispute Customer'), 'Amount-only Clover dispute should surface possible customer/payment matches.');
+
+    const webhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
+      json: {
+        type: 'chargeback.created',
+        payment: { id: 'pay-direct-webhook-dispute' },
+        dispute: { id: 'disp-direct-webhook' },
+        amount: 8800,
+        reason: 'Customer dispute opened in Clover'
+      }
+    });
+    assert(webhookDispute.status === 200 && webhookDispute.json.ok, 'Clover dispute webhook should be accepted.');
+    const webhookDisputeRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const webhookClaim = (webhookDisputeRead.json.claims || []).find(claim => claim.disputeId === 'disp-direct-webhook');
+    assert(webhookClaim && webhookClaim.customer === 'Direct Webhook Dispute Customer', 'Clover dispute webhook should match the customer by payment ID: ' + JSON.stringify(webhookClaim || null));
+    assert(webhookClaim.customerMatchSource === 'Payment record', 'Clover dispute webhook should record the payment-match source.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {
@@ -190,7 +208,7 @@ async function main() {
         pinHint: '7811'
       }
     });
-    assert(mechanic.status === 200 && mechanic.json.ok, 'Owner could not create mechanic.');
+    assert(mechanic.status === 200 && mechanic.json && mechanic.json.ok, 'Owner could not create mechanic: ' + mechanic.status + ' ' + mechanic.text.slice(0, 240));
 
     const manager = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
@@ -304,6 +322,32 @@ async function main() {
       }
     });
     assert(franchiseStaff.status === 200 && franchiseStaff.json.ok && franchiseStaff.json.staff.companyName === 'Direct Franchise Test', 'Staff account should attach only to saved company/franchise records.');
+
+    const franchiseManagerCookie = await login(server, { username: 'direct-franchise-manager', password: 'DirectFranchiseManager123!' });
+    const franchiseState = await request(server, 'GET', '/api/state', { cookie: franchiseManagerCookie });
+    assert(franchiseState.status === 200 && franchiseState.json && Array.isArray(franchiseState.json.organizations), 'Franchise manager state did not load.');
+    assert((franchiseState.json.organizations || []).length === 1 && franchiseState.json.organizations[0].id === 'direct-franchise', 'Franchise manager should only see their company account.');
+    assert(!(franchiseState.json.vehicles || []).some(vehicle => vehicle.id === 'veh-001'), 'Franchise manager should not see main WheelsonAuto fleet records.');
+    assert(!JSON.stringify(franchiseState.json).includes('Direct Dispute Customer'), 'Franchise manager should not see main customer/payment/dispute records.');
+
+    const franchiseWriteState = JSON.parse(JSON.stringify(franchiseState.json));
+    franchiseWriteState.vehicles = [{
+      id: 'direct-franchise-car',
+      organizationId: 'direct-franchise',
+      year: 2026,
+      make: 'Franchise',
+      model: 'Fleet Car',
+      vin: 'DIRECTFRANCHISEVIN',
+      plate: 'FRANCHISE-1',
+      status: 'Ready'
+    }];
+    const franchiseWrite = await request(server, 'PUT', '/api/state', { cookie: franchiseManagerCookie, json: franchiseWriteState });
+    assert(franchiseWrite.status === 200 && franchiseWrite.json.ok, 'Franchise manager could not save their scoped fleet record.');
+    const ownerAfterFranchiseWrite = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((ownerAfterFranchiseWrite.json.vehicles || []).some(vehicle => vehicle.id === 'veh-001'), 'Franchise manager save should not remove main WheelsonAuto fleet records.');
+    assert((ownerAfterFranchiseWrite.json.vehicles || []).some(vehicle => vehicle.id === 'direct-franchise-car' && vehicle.organizationId === 'direct-franchise'), 'Franchise manager save should keep the scoped franchise fleet record.');
+    assert((ownerAfterFranchiseWrite.json.staffAccounts || []).some(staff => staff.id === 'direct-mechanic'), 'Franchise manager save should not remove main staff accounts.');
+    assert((ownerAfterFranchiseWrite.json.staffAccounts || []).some(staff => staff.id === 'direct-manager'), 'Franchise manager save should not remove main manager accounts.');
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
