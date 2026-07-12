@@ -260,6 +260,7 @@ const customerPortalHtml = finalFunctionSlice(server, 'customerPortalHtml');
 const customerPortalState = finalFunctionSlice(server, 'customerPortalState');
 const customerPortalVisibleMessage = finalFunctionSlice(server, 'customerPortalVisibleMessage');
 const stripCustomerPortalMessage = finalFunctionSlice(server, 'stripCustomerPortalMessage');
+const stripCustomerPortalPayment = finalFunctionSlice(server, 'stripCustomerPortalPayment');
 assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   '/customer/service-request',
   '/customer/issue-report',
@@ -299,6 +300,15 @@ assertIncludes('Customer portal message privacy', customerPortalState + customer
   'customer portal',
   'sent',
   'delivered'
+]);
+assertIncludes('Customer portal payment privacy', customerPortalState + stripCustomerPortalPayment, [
+  'stripCustomerPortalPayment',
+  'payments: payments.map(stripCustomerPortalPayment)',
+  'lastAutoChargeError',
+  'cloverPaymentId',
+  'externalReferenceId',
+  'paymentSourceId',
+  'Please contact WheelsonAuto'
 ]);
 
 const insurance = finalFunctionSlice(app, 'Insurance');

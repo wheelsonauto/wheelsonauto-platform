@@ -44,6 +44,7 @@ Completed in this build pass:
 - Failed saved-card charges now create named failed transaction records with customer, vehicle, VIN/tag, amount, attempt count, notes, and status, so Transactions, Closeout, Reports, and Star can track 1x/2x failures without guessing.
 - Manager/mechanic reads now scope records to the assigned company before profile enrichment, preventing same-name customers across future franchise/subscription accounts from borrowing another company’s vehicle/contact/payment context.
 - Customer portal payment history now strips internal Clover IDs, charge references, and raw error details while still showing a clear customer-safe failed/not-found status note.
+- View-surface checks now lock that customer-portal payment privacy rule so future UI/backend edits cannot accidentally expose raw Clover IDs or decline errors to customer logins.
 
 Checks passed at this checkpoint:
 
