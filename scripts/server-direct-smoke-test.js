@@ -233,6 +233,20 @@ async function main() {
     assert(directContract && directContract.vehicleId === 'veh-direct-autopay-file' && directContract.vin === 'DIRECTAUTOPAYFILEVIN' && directContract.weekly === 123, 'New autopay should create a rich customer file.');
     assert(directVehicle && directVehicle.currentCustomer === 'Direct Autopay File Customer' && directVehicle.status === 'Rented', 'Selected vehicle should move from Ready to assigned/rented for the new autopay customer.');
     assert(directOpenMaintenance && directOpenMaintenance.customer === 'Direct Autopay File Customer' && directOpenMaintenance.previousCustomer === 'Previous Direct Service Customer' && directOpenMaintenance.vin === 'DIRECTAUTOPAYFILEVIN' && directOpenMaintenance.plate === 'DIR-AUTO' && directOpenMaintenance.tracker === 'TRK-AUTO', 'Open service work should follow the reassigned vehicle with customer/VIN/tag/tracker context.');
+    const driftRepairState = JSON.parse(JSON.stringify(directAutopayFileRead.json));
+    driftRepairState.vehicles.unshift({ id: 'veh-direct-drift-repair', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Drift Repair', vin: 'DIRECTDRIFTVIN', plate: 'DIR-DRIFT', tempTag: 'TMP-DRIFT', tracker: 'TRK-DRIFT', currentCustomer: 'Old Drift Customer', status: 'Rented' });
+    driftRepairState.recurringPayments.unshift({ id: 'rec-direct-drift-repair', organizationId: 'org-wheelsonauto', customer: 'New Drift Customer', vehicleId: 'veh-direct-drift-repair', amount: 144, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-22' });
+    driftRepairState.customers.unshift({ id: 'cus-direct-drift-repair', organizationId: 'org-wheelsonauto', name: 'New Drift Customer', vehicleId: 'veh-direct-drift-repair', status: 'Active' });
+    driftRepairState.maintenance.unshift({ id: 'mnt-direct-drift-repair', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-drift-repair', vehicle: '2025 Direct Drift Repair', customer: 'Old Drift Customer', status: 'Scheduled', type: 'Inspection', issue: 'Should follow active assignment' });
+    const driftRepairWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: driftRepairState });
+    assert(driftRepairWrite.status === 200 && driftRepairWrite.json.ok, 'Owner could not save drift repair scenario.');
+    const driftRepairRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const driftVehicle = (driftRepairRead.json.vehicles || []).find(row => row.id === 'veh-direct-drift-repair');
+    const driftRecurring = (driftRepairRead.json.recurringPayments || []).find(row => row.id === 'rec-direct-drift-repair');
+    const driftService = (driftRepairRead.json.maintenance || []).find(row => row.id === 'mnt-direct-drift-repair');
+    assert(driftVehicle && driftVehicle.currentCustomer === 'New Drift Customer', 'Active autopay should repair stale vehicle current customer.');
+    assert(driftRecurring && driftRecurring.vin === 'DIRECTDRIFTVIN' && driftRecurring.plate === 'DIR-DRIFT' && driftRecurring.tracker === 'TRK-DRIFT', 'Active autopay should inherit vehicle VIN/tag/tracker during truth repair.');
+    assert(driftService && driftService.customer === 'New Drift Customer' && driftService.previousCustomer === 'Old Drift Customer' && driftService.vin === 'DIRECTDRIFTVIN', 'Open service should follow repaired active vehicle assignment.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {

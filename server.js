@@ -2141,6 +2141,96 @@ function sameProfileVehicle(a = {}, b = {}) {
   const vehicleB = normKey(b.vehicle);
   return !!(vehicleA && vehicleB && vehicleA === vehicleB);
 }
+function activeAssignmentRecord(row = {}) {
+  const customer = String(row.customer || row.name || '').trim();
+  const vehicleId = String(row.vehicleId || '').trim();
+  if (!customer || !vehicleId) return null;
+  const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' ')).toLowerCase();
+  if (/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped)/.test(status)) return null;
+  return { customer, vehicleId };
+}
+function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '') {
+  let changed = 0;
+  const vehicleName = vehicleNameFromParts(vehicle);
+  const tag = vehicle.plate || vehicle.stock || vehicle.licensePlate || row.licensePlate || row.plate || '';
+  const patch = {
+    customer: customer || row.customer || row.name || '',
+    vehicleId: vehicle.id || row.vehicleId || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || row.vin || '',
+    licensePlate: tag,
+    plate: tag,
+    tempTag: vehicle.tempTag || row.tempTag || '',
+    tracker: vehicle.tracker || row.tracker || ''
+  };
+  Object.entries(patch).forEach(([field, value]) => {
+    if (value === undefined || value === null || String(value).trim() === '') return;
+    if (String(row[field] || '') !== String(value)) {
+      row[field] = value;
+      changed += 1;
+    }
+  });
+  return changed;
+}
+function syncVehicleAssignmentsFromActiveRecords(data) {
+  data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const byVehicle = new Map();
+  const addCandidate = (row, source) => {
+    const candidate = activeAssignmentRecord(row);
+    if (!candidate) return;
+    const list = byVehicle.get(candidate.vehicleId) || [];
+    list.push({ ...candidate, row, source });
+    byVehicle.set(candidate.vehicleId, list);
+  };
+  data.recurringPayments.forEach(row => addCandidate(row, 'recurringPayments'));
+  data.integrations.clover.recurringPlanMembers.forEach(row => addCandidate(row, 'cloverRecurring'));
+  data.contracts.forEach(row => addCandidate(row, 'contracts'));
+  data.customers.forEach(row => addCandidate(row, 'customers'));
+  let vehicleAssignmentsSynced = 0, linkedRowsSynced = 0, serviceRowsSynced = 0, conflicts = 0;
+  data.vehicles.forEach(vehicle => {
+    const list = byVehicle.get(String(vehicle.id || '')) || [];
+    if (!list.length) return;
+    const names = [...new Set(list.map(item => normKey(item.customer)).filter(Boolean))];
+    if (names.length !== 1) {
+      vehicle.assignmentConflict = [...new Set(list.map(item => item.customer).filter(Boolean))].join(' / ');
+      conflicts += 1;
+      return;
+    }
+    const customer = list[0].customer;
+    if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
+    if (String(vehicle.currentCustomer || '') !== customer) {
+      vehicle.previousCustomer = vehicle.currentCustomer || vehicle.previousCustomer || '';
+      vehicle.currentCustomer = customer;
+      if (!/(ready|prep|in lot|available)/i.test(String(vehicle.status || ''))) vehicle.status = vehicle.status || 'Rented';
+      else vehicle.status = 'Rented';
+      vehicle.customerSyncedAt = new Date().toISOString();
+      vehicleAssignmentsSynced += 1;
+    }
+    list.forEach(item => {
+      linkedRowsSynced += syncRowVehicleIdentity(item.row, vehicle, customer);
+    });
+    data.maintenance.forEach(job => {
+      const status = String(job.status || '').toLowerCase();
+      if (/(complete|fixed|closed|done)/.test(status)) return;
+      const matches = String(job.vehicleId || '') === String(vehicle.id || '') ||
+        (job.vin && vehicle.vin && normKey(job.vin) === normKey(vehicle.vin)) ||
+        (job.plate && (vehicle.plate || vehicle.stock) && normKey(job.plate) === normKey(vehicle.plate || vehicle.stock));
+      if (!matches) return;
+      const beforeCustomer = String(job.customer || '').trim();
+      serviceRowsSynced += syncRowVehicleIdentity(job, vehicle, customer);
+      if (beforeCustomer && normKey(beforeCustomer) !== normKey(customer)) job.previousCustomer = beforeCustomer;
+      if (beforeCustomer && normKey(beforeCustomer) !== normKey(customer)) job.customerSyncedAt = new Date().toISOString();
+    });
+  });
+  return { vehicleAssignmentsSynced, linkedRowsSynced, serviceRowsSynced, assignmentConflicts: conflicts };
+}
 function enrichLinkedProfiles(data) {
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
@@ -2149,6 +2239,7 @@ function enrichLinkedProfiles(data) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data);
   const profiles = [];
   data.customers.forEach(row => profiles.push(rowProfile(row)));
   data.contracts.forEach(row => profiles.push(rowProfile(row)));
@@ -2195,12 +2286,13 @@ function enrichLinkedProfiles(data) {
     const match = bestMatch(row);
     if (match) contractFilled += fillBlank(row, match, ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
   });
-  if (recurringFilled || customerFilled || contractFilled || !data.integrations.profileEnrichment) {
+  if (recurringFilled || customerFilled || contractFilled || assignmentSync.vehicleAssignmentsSynced || assignmentSync.linkedRowsSynced || assignmentSync.serviceRowsSynced || assignmentSync.assignmentConflicts || !data.integrations.profileEnrichment) {
     data.integrations.profileEnrichment = {
       updatedAt: new Date().toISOString(),
       recurringFieldsFilled: recurringFilled,
       customerFieldsFilled: customerFilled,
-      contractFieldsFilled: contractFilled
+      contractFieldsFilled: contractFilled,
+      ...assignmentSync
     };
   }
   return data.integrations.profileEnrichment;

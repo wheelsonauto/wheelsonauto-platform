@@ -48,6 +48,7 @@ const tollMatcher = finalFunctionSlice(app, 'matchTollImportRow');
 const tollClaim = finalFunctionSlice(app, 'tollImportClaim');
 const tollSave = finalFunctionSlice(app, 'saveTollImport');
 const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
+const syncVehicleAssignmentsFromActiveRecords = finalFunctionSlice(server, 'syncVehicleAssignmentsFromActiveRecords');
 const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/update'", server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')")));
 
 [
@@ -164,5 +165,17 @@ const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/ap
   'Customer file created from WheelsonAuto autopay setup.',
   'source: \'WheelsonAuto autopay\''
 ].forEach(text => requireText('Autopay creates full customer file', addRecurringRoute, text));
+
+[
+  'activeAssignmentRecord',
+  'syncRowVehicleIdentity',
+  'vehicle.currentCustomer = customer',
+  'job.previousCustomer',
+  'assignmentConflict',
+  'data.integrations.clover.recurringPlanMembers',
+  'serviceRowsSynced'
+].forEach(text => requireText('Server active assignment truth repair', syncVehicleAssignmentsFromActiveRecords, text));
+
+requireText('Profile enrichment should run assignment truth repair', server, 'const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data)');
 
 console.log('Customer/fleet workflow check passed: searchable vehicle pickers, reassignment, return/end customer, and backend autopay assignment truth layer are wired.');
