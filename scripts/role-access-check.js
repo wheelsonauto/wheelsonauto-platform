@@ -153,6 +153,7 @@ if (!mechanicReadMatch) fail('Could not find mechanic read filter.');
 assertIncludes('Mechanic read data', strings(mechanicReadMatch[1]), ['vehicles', 'maintenance', 'claims']);
 assertExcludes('Mechanic read data', strings(mechanicReadMatch[1]), ['payments', 'recurringPayments', 'apiProviders']);
 if (!/configured:\s*false/.test(mechanicReadMatch[1])) fail('Mechanic messaging read state should be disabled.');
+if (!/scrubMechanicMoneyFields/.test(stateForUserRead)) fail('Mechanic read state should scrub money fields.');
 assertIncludes('Staff read redaction', stateForUserRead, ['delete safe.auditLogs']);
 
 const mechanicWriteMatch = stateForUserWrite.match(/role === 'mechanic'\s*\?\s*\[((?:.|\n)*?)\]/m);
@@ -160,6 +161,7 @@ const managerWriteMatch = stateForUserWrite.match(/role === 'manager'\s*\?\s*\[(
 if (!mechanicWriteMatch || !managerWriteMatch) fail('Could not find staff write filters.');
 assertIncludes('Mechanic write data', strings(mechanicWriteMatch[1]), ['maintenance', 'vehicles']);
 assertExcludes('Mechanic write data', strings(mechanicWriteMatch[1]), ['messages', 'payments', 'recurringPayments', 'integrations']);
+if (!/sanitizeMechanicCollectionWrite/.test(stateForUserWrite)) fail('Mechanic write state should sanitize money and customer assignment fields.');
 assertIncludes('Manager write data', strings(managerWriteMatch[1]), ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'tasks']);
 assertExcludes('Manager write data', strings(managerWriteMatch[1]), ['payments', 'recurringPayments', 'integrations', 'apiProviders', 'staffAccounts', 'customerAccounts']);
 

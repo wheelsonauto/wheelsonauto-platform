@@ -1181,6 +1181,20 @@ async function main() {
     assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'messages'), 'Mechanic state should not include messages.');
     assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'payments'), 'Mechanic state should not include payments.');
     assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'recurringPayments'), 'Mechanic state should not include recurring payments.');
+    assert(!JSON.stringify(mechanicState.json.vehicles || []).includes('"price"') && !JSON.stringify(mechanicState.json.maintenance || []).includes('"cost"') && !JSON.stringify(mechanicState.json.claims || []).includes('"amount"'), 'Mechanic state should not expose vehicle, maintenance, or claim money fields.');
+    const mechanicWriteState = JSON.parse(JSON.stringify(mechanicState.json));
+    const mechanicVehicle = (mechanicWriteState.vehicles || []).find(vehicle => vehicle.currentCustomer);
+    if (mechanicVehicle) {
+      const oldCustomer = mechanicVehicle.currentCustomer;
+      mechanicVehicle.currentCustomer = 'Mechanic Should Not Reassign';
+      mechanicVehicle.price = 99999;
+      mechanicVehicle.trackerStatus = 'Mechanic smoke checked';
+      const mechanicSave = await request(server, 'PUT', '/api/state', { cookie: mechanicCookie, json: mechanicWriteState });
+      assert(mechanicSave.status === 200 && mechanicSave.json.ok, 'Mechanic should be able to save service-safe state updates.');
+      const ownerAfterMechanicSave = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+      const savedMechanicVehicle = (ownerAfterMechanicSave.json.vehicles || []).find(vehicle => vehicle.id === mechanicVehicle.id);
+      assert(savedMechanicVehicle && savedMechanicVehicle.currentCustomer === oldCustomer && savedMechanicVehicle.price !== 99999 && savedMechanicVehicle.trackerStatus === 'Mechanic smoke checked', 'Mechanic vehicle save should preserve customer assignment and money fields while allowing service-safe fields.');
+    }
 
     const status = await request(server, 'GET', '/api/messages/status', { cookie: managerCookie });
     assert(status.status === 200 && status.json.messaging.emailWebhookUrl, 'Messaging status should expose email webhook.');

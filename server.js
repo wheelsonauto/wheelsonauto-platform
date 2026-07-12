@@ -2475,6 +2475,39 @@ function mergeScopedCollection(currentRows, incomingRows, user) {
   const owned = incomingRows.map(row => ({ ...row, organizationId: rowOrganizationId(row) === MAIN_ORG_ID && userOrganizationId(user) !== MAIN_ORG_ID ? userOrganizationId(user) : rowOrganizationId(row) }));
   return keep.concat(owned);
 }
+const MECHANIC_MONEY_FIELDS = ['amount', 'cost', 'price', 'rate', 'weekly', 'weeklyAmount', 'balance', 'down', 'deposit', 'payment', 'paymentAmount', 'profit', 'income', 'recovery', 'recoveryAmount', 'deductible'];
+const MECHANIC_MONEY_FIELD_PATTERN = /(amount|cost|price|rate|weekly|balance|deposit|payment|profit|income|recovery|deductible)/i;
+function scrubMechanicMoneyValue(value) {
+  if (Array.isArray(value)) return value.map(scrubMechanicMoneyValue);
+  if (!value || typeof value !== 'object') return value;
+  const safe = {};
+  Object.entries(value).forEach(([field, fieldValue]) => {
+    if (MECHANIC_MONEY_FIELDS.includes(field) || MECHANIC_MONEY_FIELD_PATTERN.test(field)) return;
+    safe[field] = scrubMechanicMoneyValue(fieldValue);
+  });
+  return safe;
+}
+function scrubMechanicMoneyFields(row = {}) {
+  return scrubMechanicMoneyValue(row || {});
+}
+function sanitizeMechanicCollectionWrite(key, currentRows = [], incomingRows = [], user = {}) {
+  const scoped = mergeScopedCollection(currentRows, incomingRows, user);
+  if (!Array.isArray(scoped)) return scoped;
+  const currentById = new Map((Array.isArray(currentRows) ? currentRows : []).map(row => [String(row && row.id || ''), row || {}]));
+  if (key === 'vehicles') {
+    return scoped.map(row => {
+      const old = currentById.get(String(row && row.id || '')) || {};
+      const safe = scrubMechanicMoneyFields(row);
+      ['currentCustomer', 'customer', 'customerId', 'contractId', 'recurringPaymentId', 'paymentId', 'paymentSourceId', 'organizationId'].forEach(field => {
+        if (Object.prototype.hasOwnProperty.call(old, field)) safe[field] = old[field];
+        else delete safe[field];
+      });
+      return safe;
+    });
+  }
+  if (key === 'maintenance') return scoped.map(scrubMechanicMoneyFields);
+  return scoped;
+}
 function findStaffByPin(data, pin) {
   const clean = String(pin || '').trim();
   if (!clean) return null;
@@ -2646,7 +2679,9 @@ function stateForUserWrite(current, incoming, user) {
   const next = { ...current };
   allowed.forEach(key => {
     if (!Object.prototype.hasOwnProperty.call(incoming, key)) return;
-    next[key] = Array.isArray(incoming[key]) ? mergeScopedCollection(current[key], incoming[key], user) : incoming[key];
+    next[key] = Array.isArray(incoming[key])
+      ? (role === 'mechanic' ? sanitizeMechanicCollectionWrite(key, current[key], incoming[key], user) : mergeScopedCollection(current[key], incoming[key], user))
+      : incoming[key];
   });
   next.lastStaffSaveAt = new Date().toISOString();
   next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
@@ -2788,6 +2823,9 @@ function stateForUserRead(data, user) {
     const mechanic = {};
     ['business', 'vehicles', 'maintenance', 'claims', 'customers', 'contracts', 'tasks', 'documents', 'organizations'].forEach(key => {
       if (Object.prototype.hasOwnProperty.call(safe, key)) mechanic[key] = safe[key];
+    });
+    ['vehicles', 'maintenance', 'claims'].forEach(key => {
+      if (Array.isArray(mechanic[key])) mechanic[key] = mechanic[key].map(scrubMechanicMoneyFields);
     });
     mechanic.integrations = {
       messaging: {
