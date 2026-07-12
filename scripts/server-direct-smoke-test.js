@@ -454,10 +454,49 @@ async function main() {
     }
     Object.assign(portalPrivacyRecurring, {
       customer: 'Alicia Brown',
+      vehicle: '2015 Lincoln MKZ',
+      vehicleId: 'veh-003',
+      vin: '3LN6L2G91FR123456',
+      licensePlate: 'A03-LMK',
+      plate: 'A03-LMK',
+      tracker: 'Tracker-Alicia',
       cloverPaymentSource: 'secret-source-token',
       paymentToken: 'secret-payment-token',
       raw: { private: 'secret-raw-value' }
     });
+    portalPrivacyState.documents = portalPrivacyState.documents || [];
+    portalPrivacyState.documents.unshift(
+      {
+        id: 'direct-customer-visible-doc',
+        organizationId: 'org-wheelsonauto',
+        type: 'Insurance',
+        title: 'Visible insurance proof',
+        customer: 'Alicia Brown',
+        vehicleId: 'veh-003',
+        vehicle: '2015 Lincoln MKZ',
+        status: 'Active',
+        visibility: 'Customer visible',
+        customerVisible: true,
+        portalVisible: true,
+        reference: 'VISIBLE-DOC-PORTAL',
+        notes: 'Visible customer document smoke test.'
+      },
+      {
+        id: 'direct-customer-private-doc',
+        organizationId: 'org-wheelsonauto',
+        type: 'Claim evidence',
+        title: 'Private claim evidence',
+        customer: 'Alicia Brown',
+        vehicleId: 'veh-003',
+        status: 'Active',
+        visibility: 'Staff only',
+        customerVisible: false,
+        portalVisible: false,
+        reference: 'PRIVATE-DOC-SHOULD-HIDE',
+        internalNotes: 'secret-internal-doc-note',
+        notes: 'Private staff document smoke test.'
+      }
+    );
     const portalPrivacyWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: portalPrivacyState });
     assert(portalPrivacyWrite.status === 200 && portalPrivacyWrite.json.ok, 'Owner could not seed customer portal privacy fields.');
 
@@ -478,6 +517,8 @@ async function main() {
     assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Report issue'), 'Customer portal should include toll/claim/issue reporting.');
     assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
+    assert(customerPortal.text.includes('Documents & receipts') && customerPortal.text.includes('VISIBLE-DOC-PORTAL'), 'Customer portal should render customer-visible documents.');
+    assert(!customerPortal.text.includes('PRIVATE-DOC-SHOULD-HIDE') && !customerPortal.text.includes('secret-internal-doc-note'), 'Customer portal should not render staff-only documents.');
 
     const customerPaidOutsideNoAuth = await request(server, 'POST', '/customer/paid-outside');
     assert(customerPaidOutsideNoAuth.status === 302 && customerPaidOutsideNoAuth.location === '/customer/login', 'Customer paid-outside report should require customer login.');
@@ -567,6 +608,10 @@ async function main() {
     const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');
     assert(customerPortalState.json.portal.recurring.customer === 'Alicia Brown', 'Customer portal should link the assigned recurring payment.');
+    assert((customerPortalState.json.portal.documents || []).some(doc => doc.reference === 'VISIBLE-DOC-PORTAL'), 'Customer portal state should include customer-visible documents.');
+    assert((customerPortalState.json.portal.documents || []).some(doc => doc.kind === 'Receipt' && Number(doc.amount) === 229), 'Customer portal state should include generated customer payment receipts.');
+    assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('PRIVATE-DOC-SHOULD-HIDE'), 'Customer portal state should not expose staff-only document references.');
+    assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('secret-internal-doc-note'), 'Customer portal state should not expose internal document notes.');
     assert(!JSON.stringify(customerPortalState.json).includes('Direct Dispute Customer'), 'Customer portal state should not expose another customer payment/dispute record.');
     assert(!customerPortal.text.includes('Direct Dispute Customer'), 'Customer portal page should not render another customer record.');
     assert(!JSON.stringify(customerPortalState.json).includes('passwordHash'), 'Customer portal state should not expose password secrets.');

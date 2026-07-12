@@ -92,7 +92,8 @@ function renderViews() {
   'staffClaimCard',
   'paymentRecurringCard',
   'paymentCustomerCard',
-  'paymentCardSection'
+  'paymentCardSection',
+  'Documents'
 ].forEach(name => {
   if (!finalFunctionSlice(app, name)) fail('Missing final frontend function: ' + name);
 });
@@ -147,6 +148,18 @@ assertIncludes('Payments surface', payments, [
 
 const paymentCardSection = finalFunctionSlice(app, 'paymentCardSection');
 assertIncludes('Payment card section helper', paymentCardSection, ['localSearch', 'customer-pay-list', 'data-limit']);
+
+const documents = finalFunctionSlice(app, 'Documents');
+assertIncludes('Documents surface', documents + app + server, [
+  'Portal visibility',
+  'Customer visible',
+  'Staff only',
+  'docVisibility',
+  'customerVisible',
+  'portalVisible',
+  'customerPortalDocuments',
+  'Documents & receipts'
+]);
 
 const paymentRecurringCard = finalFunctionSlice(app, 'paymentRecurringCard');
 assertIncludes('Recurring payment cards', paymentRecurringCard, [
