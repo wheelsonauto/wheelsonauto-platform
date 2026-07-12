@@ -5840,6 +5840,61 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
   });
   return payment;
 }
+function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
+  const stamp = new Date().toISOString();
+  const message = String(err && err.message || err || 'Payment failed.');
+  const amount = Number(payload.amount || row.amount || 0);
+  const attempts = Math.min(2, Number(options.attempts || row.retryCount || row.failedAttempts || 0));
+  const status = attempts >= 2 ? '2x failed - contact customer' : '1x failed - retrying';
+  const identity = recurringPaymentIdentity(data, row, payload);
+  const payment = {
+    id: 'payment-failed-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
+    date: new Date().toLocaleString('en-US'),
+    customer: row.customer || payload.customer || 'Unknown customer',
+    method: options.method || 'Clover saved card',
+    amount,
+    status,
+    tone: attempts >= 2 ? 'bad' : 'warn',
+    source: options.source || 'WheelsonAuto failed charge',
+    notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
+    recurringPaymentId: row.id || '',
+    cloverCustomerId: row.cloverCustomerId || '',
+    cloverSubscriptionId: row.cloverSubscriptionId || '',
+    ...identity
+  };
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  data.payments.unshift(payment);
+  const paymentAttempts = Array.isArray(row.paymentAttempts) ? row.paymentAttempts.slice() : [];
+  paymentAttempts.unshift({
+    id: 'attempt-failed-' + Date.now(),
+    date: payment.date,
+    customer: payment.customer,
+    amount,
+    result: status,
+    method: payment.method,
+    notes: payment.notes,
+    vehicle: payment.vehicle,
+    vehicleId: payment.vehicleId,
+    vin: payment.vin,
+    plate: payment.plate,
+    tracker: payment.tracker,
+    recurringPaymentId: payment.recurringPaymentId
+  });
+  updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
+    status,
+    tone: payment.tone,
+    retryCount: attempts,
+    failedAttempts: attempts,
+    lastAutoChargeResult: status,
+    lastAutoChargeError: message,
+    lastAutoChargeAttemptDate: options.dateKey || localDateKey(),
+    lastAutoChargeAttemptAt: stamp,
+    lastPaymentResult: status,
+    lastPaymentNote: payment.notes,
+    paymentAttempts
+  });
+  return payment;
+}
 async function chargeSavedRecurringCard(data, payload, req) {
   const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
   if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
@@ -6032,6 +6087,10 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeError = String(err && err.message || err);
         row.lastAutoChargeAttemptDate = dateKey;
         row.lastAutoChargeAttemptAt = new Date().toISOString();
+        saveFailedChargeResult(data, row, {
+          amount: row.amount,
+          note: 'WheelsonAuto autopay failed for due date ' + dateKey
+        }, err, { dateKey, attempts, source: 'WheelsonAuto autopay failed charge' });
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
         await queueOwnerEmailNotification(data, 'payment_failed', {
           customer: row.customer || 'Unknown customer',
@@ -6047,6 +6106,7 @@ async function runWheelsonAutoAutopay(options = {}) {
             'Error: ' + row.lastAutoChargeError
           ].join('\n')
         });
+        result.failed = (result.failed || 0) + 1;
         result.errors.push((row.customer || row.id) + ': ' + row.lastAutoChargeError);
       }
     }
@@ -7712,8 +7772,12 @@ const server = http.createServer(async (req, res) => {
           return json(res, 409, { ok: false, error: payment.status + ': ' + String(err && err.message || err), payment });
         }
         if (recurring) {
-          appendAuditLog(data, user, 'Manual saved-card charge failed', [recurring.customer || 'Unknown customer', moneyText(payload.amount || recurring.amount || 0), String(err && err.message || err)]);
+          const attempts = Math.min(2, Number(recurring.retryCount || recurring.failedAttempts || 0) + 1);
+          const payment = saveFailedChargeResult(data, recurring, payload, err, { attempts, source: 'Manual saved-card charge failed' });
+          appendAuditLog(data, user, 'Manual saved-card charge failed', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || recurring.amount || 0), payment.status, String(err && err.message || err)]);
+          await protectConcurrentLocalWrites(data);
           await writeData(data);
+          return json(res, 400, { ok: false, error: payment.status + ': ' + String(err && err.message || err), payment });
         }
         return json(res, 400, { ok: false, error: String(err && err.message || err) });
       }

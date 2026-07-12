@@ -226,6 +226,8 @@ requireText('Fallback transaction report possible match note', app, "customer===
   'licensePlate',
   'tracker',
   'paymentAttempts',
+  'saveFailedChargeResult',
+  'payment-failed-',
   'reconcilePaidPaymentRequests',
   'Payment not found',
   'closeoutRecurringChargeable',

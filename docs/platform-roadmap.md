@@ -41,6 +41,7 @@ Completed in this build pass:
 - System health/readiness now flags missing `WOA_SESSION_SECRET`/`WOA_COOKIE_SECRET` so Render can be configured with a stable private signing secret for staff and customer sessions.
 - Owner deep reports now include the same signed-session secret setup warning, keeping Star QA exports aligned with system health and readiness before production deploy.
 - Autopay schedule updates and removals now re-run the linked profile truth layer before saving, so customer, vehicle, service, and payment context stays connected after admin changes.
+- Failed saved-card charges now create named failed transaction records with customer, vehicle, VIN/tag, amount, attempt count, notes, and status, so Transactions, Closeout, Reports, and Star can track 1x/2x failures without guessing.
 
 Checks passed at this checkpoint:
 

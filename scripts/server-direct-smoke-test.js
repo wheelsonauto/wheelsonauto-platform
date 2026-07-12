@@ -1421,6 +1421,8 @@ async function main() {
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Once' && /1x failed/i.test(message.subject || '')), '1x failed payment notification should be saved in Messages.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Twice' && /2x failed/i.test(message.subject || '')), '2x failed payment notification should be saved in Messages.');
     assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Missing Token' && String(payment.status || '').includes('Payment not found')), 'Payment-not-found transaction should be saved.');
+    assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Failed Once' && String(payment.status || '').includes('1x failed') && payment.vin === 'DIRECTFAILEDONCE'), '1x failed autopay should save a named failed transaction with vehicle evidence.');
+    assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Failed Twice' && String(payment.status || '').includes('2x failed') && payment.vin === 'DIRECTFAILEDTWICE'), '2x failed autopay should save a named failed transaction with vehicle evidence.');
     const failedTwiceRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-fail-twice');
     assert(failedTwiceRow && String(failedTwiceRow.status || '').includes('2x failed'), 'Second failed autopay should mark the customer as 2x failed.');
 
