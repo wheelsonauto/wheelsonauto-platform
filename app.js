@@ -749,23 +749,44 @@ function ifleetLaunchProofItems(){
 }
 function ifleetLaunchProofBoard(compact){
   var items=ifleetLaunchProofItems(),shown=items.slice(0,compact?8:items.length),warn=items.filter(function(i){return i.tone==='warn'}).length,bad=items.filter(function(i){return i.tone==='bad'}).length,good=items.filter(function(i){return i.tone==='good'}).length;
-  return '<section class="card section ifleet-launch-proof-board" data-limit="'+(compact?8:items.length)+'"><div class="section-head"><div><h2>Launch proof board</h2><p>Final iFleet-style tightening checklist: each function proves what works now, what data must connect, and what API can be added later.</p></div><div class="star-command-stats"><span class="bad">'+bad+' blocked</span><span class="warn">'+warn+' review</span><span class="blue">'+good+' clean</span></div></div>'+localSearch('Search proof by payment, customer, VIN, tracker, Star, portal, inspection, toll, claim, report, company, or API')+'<div class="ifleet-launch-proof-grid">'+shown.map(function(i,idx){return '<div class="ifleet-launch-proof-card '+esc(i.tone)+'"><div class="item-row"><strong>'+esc(i.title)+'</strong>'+badge(i.count,i.tone)+'</div><p><b>Proof:</b> '+esc(i.proof)+'</p><p><b>Works now:</b> '+esc(i.manual)+'</p><p><b>API later:</b> '+esc(i.api)+'</p><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open workflow</button><button class="btn" data-action="create-launch-proof-task" data-index="'+idx+'">Task</button></div></div>'}).join('')+'</div><div class="notice">This board is the stop condition: when these cards are clean, the app is solid enough for provider/API work without losing customer, car, payment, or closeout truth.</div></section>'
+  return '<section class="card section ifleet-launch-proof-board" data-limit="'+(compact?8:items.length)+'"><div class="section-head"><div><h2>Launch proof board</h2><p>Final iFleet-style tightening checklist: each function proves what works now, what data must connect, and what API can be added later.</p></div><div class="actions"><button class="btn gold" data-action="create-all-launch-proof-tasks">Create all tasks</button></div><div class="star-command-stats"><span class="bad">'+bad+' blocked</span><span class="warn">'+warn+' review</span><span class="blue">'+good+' clean</span></div></div>'+localSearch('Search proof by payment, customer, VIN, tracker, Star, portal, inspection, toll, claim, report, company, or API')+'<div class="ifleet-launch-proof-grid">'+shown.map(function(i,idx){return '<div class="ifleet-launch-proof-card '+esc(i.tone)+'"><div class="item-row"><strong>'+esc(i.title)+'</strong>'+badge(i.count,i.tone)+'</div><p><b>Proof:</b> '+esc(i.proof)+'</p><p><b>Works now:</b> '+esc(i.manual)+'</p><p><b>API later:</b> '+esc(i.api)+'</p><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open workflow</button><button class="btn" data-action="create-launch-proof-task" data-index="'+idx+'">Task</button></div></div>'}).join('')+'</div><div class="notice">This board is the stop condition: when these cards are clean, the app is solid enough for provider/API work without losing customer, car, payment, or closeout truth.</div></section>'
+}
+function launchProofTaskPayload(item){
+  return {id:'task-proof-'+Date.now()+'-'+Math.random().toString(16).slice(2,6),title:'Launch proof: '+item.title,type:'Launch proof',customer:item.title,vehicle:'System readiness',due:todayKey(),status:'Open',owner:'Owner',notes:['Proof: '+item.proof,'Works now: '+item.manual,'API later: '+item.api,'Open workflow: '+item.view+(item.tab?' / '+item.tab:'')].join('\n')}
+}
+function launchProofTaskExists(item){
+  var title='Launch proof: '+item.title;
+  return (db.tasks||[]).some(function(t){var s=String(t.status||'Open').toLowerCase();return String(t.title||'')===title&&s!=='done'&&s.indexOf('closed')<0})
 }
 document.addEventListener('click',async function(e){
   var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(a==='create-launch-proof-task'){
   e.preventDefault();e.stopImmediatePropagation();
   if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
   var item=ifleetLaunchProofItems()[Number(b.dataset.index||0)];if(!item){notify('Proof item was not found');return}
+  if(launchProofTaskExists(item)){view='Dispatch';tab='';Dispatch();notify('Launch proof task already exists');return}
   b.disabled=true;b.classList.add('is-loading');
-  var saved=await post('/api/tasks',{id:'task-proof-'+Date.now(),title:'Launch proof: '+item.title,type:'Launch proof',customer:item.title,vehicle:'System readiness',due:todayKey(),status:'Open',owner:'Owner',notes:['Proof: '+item.proof,'Works now: '+item.manual,'API later: '+item.api,'Open workflow: '+item.view+(item.tab?' / '+item.tab:'')].join('\n')});
+  var saved=await post('/api/tasks',launchProofTaskPayload(item));
   b.disabled=false;b.classList.remove('is-loading');
   if(saved.ok){await refreshData(true);view='Dispatch';tab='';Dispatch();notify('Launch proof task added to Dispatch')}else notify(saved.error||'Launch proof task did not save')
+  }
+},true);
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(a==='create-all-launch-proof-tasks'){
+  e.preventDefault();e.stopImmediatePropagation();
+  if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+  var items=ifleetLaunchProofItems().filter(function(i){return i.tone!=='good'&&!launchProofTaskExists(i)});
+  if(!items.length){view='Dispatch';tab='';Dispatch();notify('No new launch proof tasks needed');return}
+  b.disabled=true;b.classList.add('is-loading');
+  var made=0,failed=0;
+  for(var i=0;i<items.length;i++){var saved=await post('/api/tasks',launchProofTaskPayload(items[i]));if(saved.ok)made++;else failed++}
+  b.disabled=false;b.classList.remove('is-loading');
+  await refreshData(true);view='Dispatch';tab='';Dispatch();notify('Created '+made+' launch proof task'+(made===1?'':'s')+(failed?' / '+failed+' failed':''))
   }
 },true);
 function launchProofDispatchBoard(){
   var items=ifleetLaunchProofItems().map(function(i,idx){return Object.assign({sourceIndex:idx},i)}).filter(function(i){return i.tone!=='good'}).slice(0,8);
   if(!items.length)return '<section class="card section launch-proof-dispatch-board"><div class="section-head"><div><h2>Launch work queue</h2><p>iFleet-style proof gaps that become staff work orders.</p></div>'+badge('Clean','good')+'</div><div class="item">No launch-proof gaps need Dispatch tasks right now.</div></section>';
-  return '<section class="card section launch-proof-dispatch-board" data-limit="8"><div class="section-head"><div><h2>Launch work queue</h2><p>iFleet-style proof gaps that can be turned into Dispatch work orders.</p></div>'+badge(items.length+' review',items.some(function(i){return i.tone==='bad'})?'bad':'warn')+'</div>'+localSearch('Search launch work by payment, customer, fleet, portal, Star, claim, report, or API')+'<div class="role-command-grid">'+items.map(function(i){return '<div class="role-command-card '+esc(i.tone)+'"><div class="role-command-top"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.proof)+'</small></div>'+badge(i.count,i.tone)+'</div><div class="muted">'+esc(i.manual)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button><button class="btn" data-action="create-launch-proof-task" data-index="'+esc(i.sourceIndex)+'">Task</button></div></div>'}).join('')+'</div></section>'
+  return '<section class="card section launch-proof-dispatch-board" data-limit="8"><div class="section-head"><div><h2>Launch work queue</h2><p>iFleet-style proof gaps that can be turned into Dispatch work orders.</p></div><div class="actions"><button class="btn gold" data-action="create-all-launch-proof-tasks">Create all tasks</button></div>'+badge(items.length+' review',items.some(function(i){return i.tone==='bad'})?'bad':'warn')+'</div>'+localSearch('Search launch work by payment, customer, fleet, portal, Star, claim, report, or API')+'<div class="role-command-grid">'+items.map(function(i){return '<div class="role-command-card '+esc(i.tone)+'"><div class="role-command-top"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.proof)+'</small></div>'+badge(i.count,i.tone)+'</div><div class="muted">'+esc(i.manual)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button><button class="btn" data-action="create-launch-proof-task" data-index="'+esc(i.sourceIndex)+'">Task</button></div></div>'}).join('')+'</div></section>'
 }
 var __woaDispatchLaunchProofBase=Dispatch;
 Dispatch=function(){
