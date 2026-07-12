@@ -705,3 +705,42 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function ifleetFunctionCoverageItems(){
+  var roster=recurringRoster(),cars=db.vehicles||[],jobs=customerMaintenanceJobs(),claims=db.claims||[],docs=docRows(),apps=db.applications||[],messages=db.messages||[],tasks=db.tasks||[],providers=apiProviderReviewRows(),verify=verificationInboxItems(),tolls=tollClaims(),insurance=insuranceClaims(),staff=db.staffAccounts||[],portalMissing=missingCustomerPortalRecords(),readyCars=cars.filter(isInventoryVehicle).length,assignedCars=cars.filter(function(v){return String(v.status||'').toLowerCase()==='rented'||v.currentCustomer}).length,openJobs=jobs.filter(isOpenMaintenance).length,openClaims=claims.filter(function(c){var s=String(c.status||'Open').toLowerCase();return s.indexOf('closed')<0&&s.indexOf('paid')<0}).length,openTasks=tasks.filter(function(t){return String(t.status||'Open').toLowerCase()!=='done'}).length;
+  return [
+    {title:'Applications + approvals',state:'Live',tone:'good',count:apps.length,detail:'Website application, vehicle selection, approve/deny/remove, approval message, contract/autopay handoff.',view:'Applications',tab:'Pipeline'},
+    {title:'Customer operating file',state:'Live',tone:'good',count:paymentCustomerRecords(roster).length,detail:'One customer file connects contact, car, VIN/tag, tracker, payments, maintenance, claims, documents, and messages.',view:'Payments',tab:'Active'},
+    {title:'Autopay + closeout',state:'Live',tone:'good',count:activeRecurringCount(),detail:'Due today, pending, paid, failed once/twice, payment not found, paid outside app, card setup/change, and daily closeout.',view:'Payments',tab:'Today'},
+    {title:'Fleet assignment',state:'Live',tone:'good',count:readyCars+'/'+assignedCars,detail:'Ready/in-lot cars, assigned cars, searchable picker, return/end workflow, VIN/tag/tracker truth layer.',view:'Operations',tab:'Fleet'},
+    {title:'Inspections + shop work',state:'Live',tone:openJobs?'warn':'good',count:openJobs,detail:'Monthly inspection, oil-change cycle, repair jobs, mechanic notes, signoff, mileage, and completed history.',view:'Operations',tab:'Service'},
+    {title:'Tolls + violations',state:'Manual-live',tone:tolls.length?'warn':'blue',count:tolls.length,detail:'Manual toll/violation entry, plate/VIN/customer match, recovery claim, payment link/message workflow; EZPass API later.',view:'Tolls',tab:''},
+    {title:'Claims + disputes',state:'Manual-live',tone:openClaims?'warn':'good',count:openClaims,detail:'Damage, reimbursements, Clover disputes, proof, deadline, customer/payment match, recovery link, and reports.',view:'Claims & Issues',tab:'Open'},
+    {title:'Documents + proof',state:'Live',tone:verify.length?'warn':'good',count:docs.length,detail:'Contracts, receipts, license, insurance, background proof, temp tags, evidence, uploads, and verification inbox.',view:'Documents',tab:''},
+    {title:'Insurance/background',state:'Manual-live',tone:insurance.length?'warn':'blue',count:insurance.length,detail:'Track insurance/background proof, expirations, customer uploads, staff verification, and provider/API setup.',view:'Insurance',tab:''},
+    {title:'Messaging + Star',state:messagingStatus().configured||messagingStatus().emailConfigured?'Provider-live':'Draft-live',tone:'blue',count:messages.length,detail:'SMS/email inbox, templates, follow-up queue, Star drafts, admin approval, receipts, reminders, and provider fallback.',view:'Messages',tab:'Star'},
+    {title:'Dispatch/work orders',state:'Live',tone:openTasks?'warn':'good',count:openTasks,detail:'Internal tasks, staff assignments, customer/car context, API readiness tasks, and follow-up work queues.',view:'Dispatch',tab:''},
+    {title:'Reports/accounting',state:'Live',tone:'good',count:'CSV',detail:'Daily closeout, collected vs expected, car profitability, failed payments, paid outside app, maintenance cost, claims recovery.',view:'Reports',tab:'Accounting'},
+    {title:'Role portals',state:'Live',tone:staff.length?'good':'warn',count:staff.length,detail:'Admin, manager, mechanic, and customer access with scoped tools and hidden money/API controls where needed.',view:'Settings',tab:''},
+    {title:'Customer portal',state:portalMissing.length?'Needs logins':'Live',tone:portalMissing.length?'warn':'good',count:portalMissing.length,detail:'Customer login, card change, messages, receipts, paid-outside proof, service requests, documents, and issues.',view:'Settings',tab:''},
+    {title:'Marketing/leads',state:'Foundation',tone:'blue',count:(db.websiteLeads||[]).length,detail:'Website leads, applications pipeline, customer follow-up, and future marketing automation/API hooks.',view:'Marketing',tab:''},
+    {title:'Franchise/company',state:'Foundation',tone:'blue',count:orgs().length,detail:'Companies/stores, assigned staff, owner overview, scoped records, subscription guardrails, and future per-company API keys.',view:'Companies',tab:''},
+    {title:'API provider layer',state:providers.length?'Setup left':'Mapped',tone:providers.length?'warn':'good',count:providers.length,detail:'Clover, SMS/email, EZPass, insurance/background, tracker/location, accounting, billing, and webhooks plug in after core data is clean.',view:'API Roadmap',tab:''}
+  ]
+}
+function ifleetFunctionCoverageBoard(){
+  var items=ifleetFunctionCoverageItems(),apiLeft=items.filter(function(i){return /setup|foundation|draft|manual/i.test(i.state)}).length,live=items.filter(function(i){return /live/i.test(i.state)}).length;
+  return '<section class="card section ifleet-coverage-board" data-limit="17"><div class="section-head"><div><h2>iFleet function coverage</h2><p>Every operations function we talked about: what works now, what is manual-live, and what only needs provider APIs later.</p></div><div class="star-command-stats"><span class="blue">'+live+' live</span><span class="warn">'+apiLeft+' API/manual</span></div></div>'+localSearch('Search iFleet functions, payments, fleet, inspections, tolls, disputes, insurance, Star, reports, franchise, APIs')+'<div class="ifleet-coverage-grid">'+items.map(function(i){return '<button class="ifleet-coverage-card '+esc(i.tone)+'" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'><div><span>'+esc(i.state)+'</span><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div><b>'+esc(i.count)+'</b></button>'}).join('')+'</div><div class="notice">This is the tighten-before-API map: no provider is marked complete until credentials, webhook/endpoint, live test, matching rules, role access, and reports are verified.</div></section>'
+}
+var __woaApiRoadmapIfleetCoverageBase=ApiRoadmap;
+ApiRoadmap=function(){
+  __woaApiRoadmapIfleetCoverageBase();
+  var main=document.querySelector('.main.view-api-roadmap'),core=main&&main.querySelector('.core-system-board');
+  if(main&&!main.querySelector('.ifleet-coverage-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=ifleetFunctionCoverageBoard();
+    if(core)core.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+}
+if(view==='API Roadmap')queueRender();

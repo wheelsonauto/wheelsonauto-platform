@@ -4462,6 +4462,89 @@ body.fast-tab-switch .admin-shell .section{
   }
 }
 
+.ifleet-coverage-board{
+  background:linear-gradient(145deg,rgba(11,14,18,.98),rgba(25,30,29,.94));
+  border-color:rgba(240,211,148,.22);
+}
+.ifleet-coverage-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.ifleet-coverage-card{
+  width:100%;
+  min-width:0;
+  min-height:118px;
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+  padding:13px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  text-align:left;
+  box-shadow:0 16px 30px rgba(0,0,0,.18);
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+.ifleet-coverage-card:hover{
+  transform:translateY(-1px);
+  border-color:rgba(240,211,148,.34);
+  background:rgba(255,255,255,.08);
+}
+.ifleet-coverage-card.good{border-left:3px solid #7ee787}
+.ifleet-coverage-card.warn{border-left:3px solid #f0d394}
+.ifleet-coverage-card.blue{border-left:3px solid #58a6ff}
+.ifleet-coverage-card.bad{border-left:3px solid #ff705c}
+.ifleet-coverage-card>div{
+  min-width:0;
+}
+.ifleet-coverage-card span{
+  display:block;
+  margin-bottom:5px;
+  color:#f0d394;
+  font-size:11px;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+}
+.ifleet-coverage-card strong{
+  display:block;
+  color:#fff;
+  font-size:15px;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+.ifleet-coverage-card small{
+  display:block;
+  margin-top:6px;
+  color:#c8d2dc;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+.ifleet-coverage-card b{
+  flex:0 0 auto;
+  color:#fff;
+  font-size:20px;
+  font-weight:950;
+  line-height:1;
+  text-align:right;
+}
+@media(max-width:1100px){
+  .ifleet-coverage-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+@media(max-width:720px){
+  .ifleet-coverage-grid{
+    grid-template-columns:1fr;
+  }
+  .ifleet-coverage-card{
+    min-height:0;
+  }
+}
+
 @media print{
   body.print-closeout-mode *{
     visibility:hidden!important;

@@ -66,6 +66,8 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 const coreSystemItems = finalFunctionSlice(app, 'coreSystemItems');
 const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
+const ifleetFunctionCoverageItems = finalFunctionSlice(app, 'ifleetFunctionCoverageItems');
+const ifleetFunctionCoverageBoard = finalFunctionSlice(app, 'ifleetFunctionCoverageBoard');
 
 [
   maintenance,
@@ -85,7 +87,9 @@ const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
   claimMatchNote,
   operationsQueue,
   coreSystemItems,
-  coreSystemBoard
+  coreSystemBoard,
+  ifleetFunctionCoverageItems,
+  ifleetFunctionCoverageBoard
 ].forEach((source, index) => {
   if (!source) fail('Missing operations function #' + index);
 });
@@ -363,6 +367,31 @@ const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
   'Manual-live',
   'Draft-live'
 ].forEach(text => requireText('Core before APIs board', coreSystemItems + coreSystemBoard + app, text));
+
+[
+  'iFleet function coverage',
+  'Every operations function we talked about',
+  'Applications + approvals',
+  'Customer operating file',
+  'Autopay + closeout',
+  'Fleet assignment',
+  'Inspections + shop work',
+  'Tolls + violations',
+  'Claims + disputes',
+  'Documents + proof',
+  'Insurance/background',
+  'Messaging + Star',
+  'Dispatch/work orders',
+  'Reports/accounting',
+  'Role portals',
+  'Customer portal',
+  'Marketing/leads',
+  'Franchise/company',
+  'API provider layer',
+  'manual-live',
+  'provider APIs later',
+  'ifleet-coverage-board'
+].forEach(text => requireText('iFleet coverage command map', ifleetFunctionCoverageItems + ifleetFunctionCoverageBoard + app, text));
 
 [
   'Clover',
