@@ -661,3 +661,34 @@ ApiRoadmap=function(){
   }
 }
 if(view==='Dashboard'||view==='Operations'||view==='API Roadmap')queueRender();
+function starCapabilityItems(status){
+  return [
+    {title:'Human-like replies',tone:status.aiEnabled?'good':'bad',detail:status.aiConfigured?'OpenAI provider writes natural replies with WheelsonAuto context.':'Rules fallback drafts simple replies until OPENAI_API_KEY or WOA_OPENAI_API_KEY is added.',action:'Prepare reply'},
+    {title:'Payment follow-up',tone:'warn',detail:'Star can draft due, failed once, failed twice, payment-not-found, setup-card, and pay-link messages. Admin confirms money actions.',action:'Queue'},
+    {title:'Card/setup actions',tone:'warn',detail:'Star can prepare card setup/change links and explain why a card is not chargeable. Admin/customer completes the actual card step.',action:'Card setup'},
+    {title:'Tolls, claims, disputes',tone:'warn',detail:'Star can draft toll/violation/reimbursement/dispute messages with vehicle, VIN/tag, proof, and amount context. Admin approves charges.',action:'Review'},
+    {title:'Maintenance reminders',tone:'good',detail:'Star can draft service, monthly inspection, oil change, and customer scheduling messages from linked vehicle records.',action:'Service'},
+    {title:'Receipts and documents',tone:'warn',detail:'Star can draft receipt/account-document replies after staff verifies the payment or document request.',action:'Approval'},
+    {title:'Email ready path',tone:status.emailConfigured?'good':(status.emailEnabled?'warn':'bad'),detail:status.emailConfigured?'Email provider is connected for live sends.':'Email drafts save until Resend/SendGrid keys are configured.',action:'Email'},
+    {title:'Safe auto-send',tone:status.aiAutoSend?'warn':'blue',detail:status.aiAutoSend?'Only safe normal replies can auto-send; money/account changes still require approval.':'Review mode keeps drafts waiting until staff sends them.',action:status.aiAutoSend?'On':'Review'}
+  ]
+}
+function starReadinessPanel(status){
+  var health=status.aiLastHealthStatus||status.aiProviderMode||'',provider=status.aiConfigured?'OpenAI connected':(status.aiEnabled?'Rules fallback':'Star off'),last=[status.aiLastProvider||status.aiProvider,status.aiModel,status.aiLastProviderAt||status.aiLastHealthAt].filter(Boolean).join(' | '),items=starCapabilityItems(status);
+  return '<section class="card section star-readiness-panel" data-limit="8"><div class="section-head"><div><h2>Star readiness</h2><p>Built-in AI manager status, real provider connection, safe-mode limits, and what Star can already do inside WheelsonAuto.</p></div>'+badge(provider,status.aiConfigured?'good':(status.aiEnabled?'warn':'bad'))+'</div><div class="star-provider-strip"><div><span>Provider</span><strong>'+esc(provider)+'</strong><small>'+esc(last||'No provider health test recorded yet')+'</small></div><div><span>Mode</span><strong>'+esc(status.aiAutoSend?'Safe auto-send':'Review first')+'</strong><small>'+esc(status.aiGuardrails||'Money/account actions require admin approval.')+'</small></div><div><span>Health</span><strong>'+esc(health||'Not tested')+'</strong><small>'+esc(status.aiLastProviderError||status.lastError||'Use Test Star provider after adding the OpenAI key in Render.')+'</small></div><div class="actions"><button class="btn gold" data-action="test-star-provider">Test Star provider</button><button class="btn" data-tab="Setup">Setup</button></div></div>'+localSearch('Search Star capability, payment, toll, receipt, email, maintenance, setup, or approval')+'<div class="star-capability-grid">'+items.map(function(i){return '<div class="star-capability-card '+esc(i.tone)+'"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div>'+badge(i.action,i.tone)+'</div>'}).join('')+'</div><div class="notice">Star is inside the app: it reads the same customer, payment, vehicle, VIN/tag, tracker, service, claim, document, portal, and message context that staff sees. Provider setup only controls how smart the drafted wording is.</div></section>'
+}
+var __woaMessagesStarReadinessBase=Messages;
+Messages=function(){
+  __woaMessagesStarReadinessBase();
+  if(view==='Messages'&&tab==='Star'){
+    var main=document.querySelector('.main.view-messages'),prompt=main&&main.querySelector('.star-prompt-panel');
+    if(main&&!main.querySelector('.star-readiness-panel')){
+      var wrap=document.createElement('div');
+      wrap.innerHTML=starReadinessPanel(messagingStatus());
+      if(prompt)prompt.insertAdjacentElement('afterend',wrap.firstElementChild);
+      else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+      hydrateLocalSearches();
+    }
+  }
+}
+if(view==='Messages'&&tab==='Star')queueRender();

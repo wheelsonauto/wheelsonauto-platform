@@ -53,11 +53,12 @@ const aiHealth = finalFunctionSlice(server, 'aiSystemHealthForContext');
 const approve = finalFunctionSlice(server, 'approveAiMessage');
 const apiAllowed = finalFunctionSlice(server, 'apiAllowedForUser');
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
+const starReadiness = finalFunctionSlice(app, 'starReadinessPanel') + finalFunctionSlice(app, 'starCapabilityItems');
 const starHealth = finalFunctionSlice(app, 'starSystemHealthPanelFresh') || finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = (finalFunctionSlice(app, 'starQaManagerPanel') || '') + (finalFunctionSlice(app, 'starQaManagerPanelFresh') || '');
 const starActions = finalFunctionSlice(app, 'starAiActions');
 
-if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindContext || !aiContext || !aiHealth || !approve || !apiAllowed || !starPanel || !starHealth || !starQaManager || !starActions) {
+if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindContext || !aiContext || !aiHealth || !approve || !apiAllowed || !starPanel || !starReadiness || !starHealth || !starQaManager || !starActions) {
   fail('Missing Star AI frontend/backend safety functions.');
 }
 
@@ -164,10 +165,17 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 
 [
   'star-provider-strip',
+  'Star readiness',
+  'Test Star provider',
   'OpenAI connected',
   'Rules fallback',
+  'Payment follow-up',
+  'Tolls, claims, disputes',
+  'Receipts and documents',
+  'Safe auto-send',
+  'Star is inside the app',
   'aiLastProviderError'
-].forEach(text => requireText('Star provider UI safety', app, text));
+].forEach(text => requireText('Star provider UI safety', app + starReadiness, text));
 
 [
   'Missing VIN',

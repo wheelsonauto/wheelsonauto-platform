@@ -98,6 +98,8 @@ function renderViews() {
   'mechanicCommandBoard',
   'coreSystemItems',
   'coreSystemBoard',
+  'starCapabilityItems',
+  'starReadinessPanel',
   'staffServiceCard',
   'staffClaimCard',
   'proofLine',
@@ -501,6 +503,7 @@ assertIncludes('Star prompt panel', starPrompt, [
 ]);
 
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
+const starReadiness = finalFunctionSlice(app, 'starReadinessPanel') + finalFunctionSlice(app, 'starCapabilityItems');
 assertIncludes('Star AI panel', starPanel, [
   'Built-in message manager',
   'email',
@@ -511,6 +514,18 @@ assertIncludes('Star AI panel', starPanel, [
   'toggle-star-autosend',
   'Need approval',
   'Human needed'
+]);
+assertIncludes('Star readiness panel', starReadiness + app, [
+  'Star readiness',
+  'Built-in AI manager status',
+  'Test Star provider',
+  'OpenAI connected',
+  'Rules fallback',
+  'Payment follow-up',
+  'Tolls, claims, disputes',
+  'Receipts and documents',
+  'Safe auto-send',
+  'Star is inside the app'
 ]);
 
 const setupPanel = finalFunctionSlice(app, 'messageSetupPanel');
