@@ -111,6 +111,8 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   'openPaymentLinkAmount',
   'stalePaymentLinks',
   'stalePaymentLinkAmount',
+  'staleAutopaySchedules',
+  'staleAutopayAmount',
   'openCardSetupLinks',
   'pendingStarApprovals',
   'Card setup',

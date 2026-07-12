@@ -1131,6 +1131,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const openCardSetupRequests = (data.cardSetupRequests || []).filter(isOpenCardSetupRequest);
   const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
   const pendingStarApprovals = pendingStarApprovalRows(data);
+  const staleAutopaySchedules = staleAutopayScheduleRows(data, dateKeyValue);
+  const staleAutopayAmount = staleAutopaySchedules.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const recurringWithState = recurring.map(row => ({ row, state: closeoutRecurringState(row, dateKeyValue) }));
   const failedOnce = recurringWithState.filter(item => item.state === 'Failed once').map(item => item.row);
   const failedTwice = recurringWithState.filter(item => item.state === 'Failed twice').map(item => item.row);
@@ -1161,6 +1163,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     .concat(paymentNotFound.map(row => closeoutContactItem(row, 'Payment not found - verify Clover/card')))
     .concat(failedOnce.map(row => closeoutContactItem(row, 'Failed once - retry watch')))
     .concat(setupNeeded.map(row => closeoutContactItem(row, 'Setup needed - send card link')));
+  const staleAutopayRows = staleAutopaySchedules.map(row => closeoutContactItem(row, 'Stale autopay schedule - review next run'));
   const paymentRequestRows = openPaymentRequests.map(request => {
     const recurringRow = request.recurringPaymentId ? allRecurringRows(data).find(row => row.id === request.recurringPaymentId) : null;
     const customer = request.customer || (recurringRow && recurringRow.customer) || 'Unassigned payment link';
@@ -1252,6 +1255,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Stale payment links: ' + stalePaymentRequests.length + ' / ' + moneyText(stalePaymentRequestAmount),
     'Open card setup links: ' + openCardSetupRequests.length,
     'Stale card setup links: ' + staleCardSetupRequests.length,
+    'Stale autopay schedules: ' + staleAutopaySchedules.length + ' / ' + moneyText(staleAutopayAmount),
     'Pending Star approvals: ' + pendingStarApprovals.length,
     'Receipt requests waiting: ' + receiptRequestRows.length,
     'Statement/payoff requests waiting: ' + statementRequestRows.length,
@@ -1259,7 +1263,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
     'Owner signoff: ' + (signedAt ? 'Signed off by ' + (signedBy || 'Owner') + ' at ' + signedAt : 'Not signed'),
-    ...(signoffSnapshot ? ['Signed snapshot: expected ' + moneyText(signoffSnapshot.expected || 0) + ' | collected ' + moneyText(signoffSnapshot.collected || 0) + ' | still open ' + moneyText(signoffSnapshot.stillOpen || 0) + ' | failed twice ' + Number(signoffSnapshot.failedTwice || 0) + ' | open links ' + Number(signoffSnapshot.openPaymentLinks || 0) + ' / ' + moneyText(signoffSnapshot.openPaymentLinkAmount || 0) + ' | stale links ' + Number(signoffSnapshot.stalePaymentLinks || 0) + ' / ' + moneyText(signoffSnapshot.stalePaymentLinkAmount || 0) + ' | card setup links ' + Number(signoffSnapshot.openCardSetupLinks || 0) + ' | Star approvals ' + Number(signoffSnapshot.pendingStarApprovals || 0) + ' | conflicts ' + Number(signoffSnapshot.vehicleAssignmentConflicts || 0)] : []),
+    ...(signoffSnapshot ? ['Signed snapshot: expected ' + moneyText(signoffSnapshot.expected || 0) + ' | collected ' + moneyText(signoffSnapshot.collected || 0) + ' | still open ' + moneyText(signoffSnapshot.stillOpen || 0) + ' | failed twice ' + Number(signoffSnapshot.failedTwice || 0) + ' | open links ' + Number(signoffSnapshot.openPaymentLinks || 0) + ' / ' + moneyText(signoffSnapshot.openPaymentLinkAmount || 0) + ' | stale links ' + Number(signoffSnapshot.stalePaymentLinks || 0) + ' / ' + moneyText(signoffSnapshot.stalePaymentLinkAmount || 0) + ' | stale autopay ' + Number(signoffSnapshot.staleAutopaySchedules || 0) + ' / ' + moneyText(signoffSnapshot.staleAutopayAmount || 0) + ' | card setup links ' + Number(signoffSnapshot.openCardSetupLinks || 0) + ' | Star approvals ' + Number(signoffSnapshot.pendingStarApprovals || 0) + ' | conflicts ' + Number(signoffSnapshot.vehicleAssignmentConflicts || 0)] : []),
     ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
     'Customers to review:',
@@ -1267,6 +1271,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Contact list:',
     ...(contactRows.length ? contactRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + (item.phone || item.email || 'No contact saved') + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.tracker ? ' | Tracker ' + item.tracker : '')) : ['- No failed-twice, payment-not-found, retry-watch, or setup-needed customers need follow-up.']),
+    '',
+    'Stale autopay schedules:',
+    ...(staleAutopayRows.length ? staleAutopayRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + (item.phone || item.email || 'No contact saved') + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.tracker ? ' | Tracker ' + item.tracker : '')) : ['- No stale autopay schedules waiting.']),
     '',
     'Recent transactions:',
     ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.']),
@@ -1323,6 +1330,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       paymentRequestRows: paymentRequestRows.slice(0, 50),
       openCardSetupRequests: openCardSetupRequests.length,
       staleCardSetupRequests: staleCardSetupRequests.length,
+      staleAutopaySchedules: staleAutopaySchedules.length,
+      staleAutopayAmount,
+      staleAutopayRows: staleAutopayRows.slice(0, 50),
       cardSetupRows: cardSetupRows.slice(0, 50),
       pendingStarApprovals: pendingStarApprovals.length,
       receiptRequests: receiptRequestRows.length,

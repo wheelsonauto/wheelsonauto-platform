@@ -1313,6 +1313,17 @@ async function main() {
       nextRun: '2099-12-31',
       status: 'Payment not found'
     }, {
+      id: 'rec-direct-closeout-stale-autopay',
+      customer: 'Direct Closeout Stale Autopay',
+      phone: '3135554444',
+      email: 'direct-closeout-stale@example.com',
+      vehicleId: 'veh-direct-closeout-stale-autopay',
+      vehicle: '2024 Direct Stale Autopay Car',
+      amount: 70,
+      frequency: 'Weekly',
+      nextRun: '2099-12-30',
+      status: 'Active'
+    }, {
       id: 'rec-direct-report-candidate',
       customer: 'Direct Report Candidate',
       phone: '3135550456',
@@ -1338,6 +1349,7 @@ async function main() {
     closeoutDedupData.vehicles.unshift(
       { id: 'veh-direct-closeout-failed-twice', year: 2024, make: 'Direct', model: 'Failed Twice Car', vin: 'DIRECTFAILED2VIN', plate: 'DIR-F2X', tracker: 'TRK-F2X', status: 'Rented', currentCustomer: 'Direct Closeout Failed Twice' },
       { id: 'veh-direct-closeout-payment-not-found', year: 2024, make: 'Direct', model: 'Missing Payment Car', vin: 'DIRECTPAYMISSINGVIN', plate: 'DIR-PNF', tracker: 'TRK-PNF', status: 'Rented', currentCustomer: 'Direct Closeout Payment Missing' },
+      { id: 'veh-direct-closeout-stale-autopay', year: 2024, make: 'Direct', model: 'Stale Autopay Car', vin: 'DIRECTSTALEVIN', plate: 'DIR-STL', tracker: 'TRK-STL', status: 'Rented', currentCustomer: 'Direct Closeout Stale Autopay' },
       { id: 'veh-direct-report-candidate', year: 2024, make: 'Direct', model: 'Report Candidate Car', vin: 'DIRECTREPORTVIN', plate: 'DIR-RPT', tracker: 'TRK-RPT', status: 'Rented', currentCustomer: 'Direct Report Candidate' },
       { id: 'veh-direct-report-candidate-backup', year: 2024, make: 'Direct', model: 'Report Candidate Backup', vin: 'DIRECTREPORTBACKUPVIN', plate: 'DIR-RP2', tracker: 'TRK-RP2', status: 'Rented', currentCustomer: 'Direct Report Candidate Backup' }
     );
@@ -1386,7 +1398,7 @@ async function main() {
       status: 'Signed off',
       signedAt: '2099-12-31T23:59:00.000Z',
       signedBy: 'Owner Smoke',
-      snapshot: { expected: 1689, collected: 1401, stillOpen: 288, failedTwice: 0, openPaymentLinks: 1, openPaymentLinkAmount: 88, stalePaymentLinks: 1, stalePaymentLinkAmount: 44, openCardSetupLinks: 2, pendingStarApprovals: 3, vehicleAssignmentConflicts: 1 }
+      snapshot: { expected: 1689, collected: 1401, stillOpen: 288, failedTwice: 0, openPaymentLinks: 1, openPaymentLinkAmount: 88, stalePaymentLinks: 1, stalePaymentLinkAmount: 44, staleAutopaySchedules: 1, staleAutopayAmount: 70, openCardSetupLinks: 2, pendingStarApprovals: 3, vehicleAssignmentConflicts: 1 }
     });
     const closeoutDedupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: closeoutDedupData });
     assert(closeoutDedupWrite.status === 200 && closeoutDedupWrite.json.ok, 'Owner could not seed closeout duplicate payment records.');
@@ -1406,6 +1418,7 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.cloverCollected === 1356 && closeoutDedupNotification.json.summary.cloverTransactions === 3, 'Daily closeout should keep Clover collected totals separate from paid-outside-app records.');
     assert(closeoutDedupNotification.json.summary.openPaymentRequests >= 1 && closeoutDedupNotification.json.summary.openPaymentRequestAmount >= 88 && Object.prototype.hasOwnProperty.call(closeoutDedupNotification.json.summary, 'stalePaymentRequests') && closeoutDedupNotification.json.summary.paymentRequestRows.some(row => row.customer === 'Direct Closeout Payment Link' && row.vin === 'DIRECTREPORTVIN' && row.tag === 'DIR-RPT' && row.ageLabel), 'Daily closeout should expose open hosted checkout links with customer, VIN, tag, amount, and age.');
     assert(closeoutDedupNotification.json.summary.openCardSetupRequests >= 1 && Array.isArray(closeoutDedupNotification.json.summary.cardSetupRows) && closeoutDedupNotification.json.summary.cardSetupRows.some(row => row.customer === 'Alicia Brown'), 'Daily closeout should expose open card setup/change links with customer context.');
+    assert(closeoutDedupNotification.json.summary.staleAutopaySchedules >= 1 && closeoutDedupNotification.json.summary.staleAutopayAmount >= 70 && Array.isArray(closeoutDedupNotification.json.summary.staleAutopayRows) && closeoutDedupNotification.json.summary.staleAutopayRows.some(row => row.customer === 'Direct Closeout Stale Autopay' && row.vin === 'DIRECTSTALEVIN' && row.tag === 'DIR-STL'), 'Daily closeout should expose stale autopay schedules with customer, VIN, tag, amount, and review status.');
     assert(closeoutDedupNotification.json.summary.pendingStarApprovals >= 1 && Array.isArray(closeoutDedupNotification.json.summary.starApprovalRows) && closeoutDedupNotification.json.summary.starApprovalRows.some(row => row.customer === 'Alicia Brown'), 'Daily closeout should expose pending Star approval rows with customer context.');
     assert(closeoutDedupNotification.json.summary.receiptRequests >= 1 && closeoutDedupNotification.json.summary.statementRequests >= 1, 'Daily closeout should separately count receipt and statement/payoff requests waiting for approval.');
     assert(closeoutDedupNotification.json.summary.pendingToday >= 1 && closeoutDedupNotification.json.summary.stillOpenAmount === Math.max(0, closeoutDedupNotification.json.summary.expected - closeoutDedupNotification.json.summary.collected), 'Daily closeout should expose due customer counts and still-open amount.');
@@ -1414,11 +1427,12 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.vehicleAssignmentConflicts >= 1, 'Daily closeout should expose vehicle assignment conflicts before owner signoff.');
     assert(closeoutDedupNotification.json.summary.signedOff === true && closeoutDedupNotification.json.summary.signedBy === 'Owner Smoke', 'Daily closeout should expose saved owner signoff metadata.');
     assert(closeoutDedupNotification.json.summary.signoffSnapshot && closeoutDedupNotification.json.summary.signoffSnapshot.collected === 1401, 'Daily closeout should carry the frozen signoff snapshot.');
-    assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689') && String(closeoutDedupNotification.json.message.body || '').includes('open links 1 / $88') && String(closeoutDedupNotification.json.message.body || '').includes('stale links 1 / $44') && String(closeoutDedupNotification.json.message.body || '').includes('card setup links 2') && String(closeoutDedupNotification.json.message.body || '').includes('Star approvals 3'), 'Daily closeout message should include signoff status, snapshot numbers, payment links, card setup links, and Star approval counts.');
+    assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689') && String(closeoutDedupNotification.json.message.body || '').includes('open links 1 / $88') && String(closeoutDedupNotification.json.message.body || '').includes('stale links 1 / $44') && String(closeoutDedupNotification.json.message.body || '').includes('stale autopay 1 / $70') && String(closeoutDedupNotification.json.message.body || '').includes('card setup links 2') && String(closeoutDedupNotification.json.message.body || '').includes('Star approvals 3'), 'Daily closeout message should include signoff status, snapshot numbers, payment links, stale autopay, card setup links, and Star approval counts.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Paid outside app: 1 / $45'), 'Daily closeout body should show paid-outside-app totals.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Open payment requests:') && String(closeoutDedupNotification.json.message.body || '').includes('Stale payment links:') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Payment Link | $88 | Open | New link') && !String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Paid Link'), 'Daily closeout body should list open hosted checkout link age and exclude paid links.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Open card setup/change links:') && String(closeoutDedupNotification.json.message.body || '').includes('Pending Star approvals:') && String(closeoutDedupNotification.json.message.body || '').includes('Receipt requests waiting:') && String(closeoutDedupNotification.json.message.body || '').includes('Statement/payoff requests waiting:'), 'Daily closeout body should list open card setup links, pending Star approvals, and customer document request counts.');
+    assert(String(closeoutDedupNotification.json.message.body || '').includes('Stale autopay schedules:') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Stale Autopay | $70 | Stale autopay schedule - review next run') && String(closeoutDedupNotification.json.message.body || '').includes('DIRECTSTALEVIN'), 'Daily closeout body should list stale autopay schedules with customer, VIN/tag, and review status.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Contact list:') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Failed Twice | $50 | Failed twice - contact now') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Payment Missing | $60 | Payment not found - verify Clover/card'), 'Daily closeout body should list exact customers needing follow-up.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Vehicle assignment conflicts:') && String(closeoutDedupNotification.json.message.body || '').includes('DIRECTCONFLICTVIN'), 'Daily closeout body should list vehicle assignment conflicts with VIN/tag evidence.');
 

@@ -216,7 +216,8 @@ const fakeUiPatterns = [
 
 const handledActions = new Set([
   ...unique(app.matchAll(/(?:^|[^\w.])a\s*===\s*['"]([^'"]+)['"]/g), match => match[1]),
-  ...unique(app.matchAll(/b\.dataset\.action\s*===\s*['"]([^'"]+)['"]/g), match => match[1])
+  ...unique(app.matchAll(/b\.dataset\.action\s*===\s*['"]([^'"]+)['"]/g), match => match[1]),
+  ...unique(app.matchAll(/closest\(['"]button\[data-action=\\?["']([^"'\\]+)\\?["']\]/g), match => match[1])
 ]);
 for (const block of app.matchAll(/\[((?:\s*['"][^'"]+['"]\s*,?)+)\]\.indexOf\((?:a|b\.dataset\.action)\)/g)) {
   for (const action of block[1].matchAll(/['"]([^'"]+)['"]/g)) handledActions.add(action[1]);
