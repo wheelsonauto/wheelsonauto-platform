@@ -291,6 +291,14 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 ].forEach(text => requireText('Backend dispute/claim matching', server, text));
 
 [
+  'Phone ',
+  'Email ',
+  'Ref ',
+  'Autopay ',
+  'Clover customer '
+].forEach(text => requireText('Dispute possible-match evidence', claimMatchNote + server, text));
+
+[
   'cleanOrganizationPayload',
   'dataScopedToOrganization',
   'stateForUserRead',

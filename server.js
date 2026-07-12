@@ -1270,6 +1270,11 @@ function reportClaimCandidateNote(claim = {}) {
       candidate.vin ? 'VIN ' + candidate.vin : '',
       candidate.plate ? 'Tag ' + candidate.plate : '',
       candidate.tracker ? 'Tracker ' + candidate.tracker : '',
+      candidate.phone ? 'Phone ' + candidate.phone : '',
+      candidate.email ? 'Email ' + candidate.email : '',
+      candidate.reference ? 'Reference ' + candidate.reference : '',
+      candidate.recurringPaymentId ? 'Autopay ' + candidate.recurringPaymentId : '',
+      candidate.cloverCustomerId ? 'Clover customer ' + candidate.cloverCustomerId : '',
       candidate.matchReason || ''
     ].filter(Boolean).join(' / ');
   }).join(' || ');
