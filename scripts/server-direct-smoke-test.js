@@ -890,6 +890,7 @@ async function main() {
     assert(!JSON.stringify(customerPortalState.json).includes('secret-source-token'), 'Customer portal state should not expose saved-card payment sources.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-payment-token'), 'Customer portal state should not expose payment tokens.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-raw-value'), 'Customer portal state should not expose raw provider payloads.');
+    assert(!JSON.stringify(customerPortalState.json.portal.messages || []).includes('approvalRequired') && !JSON.stringify(customerPortalState.json.portal.messages || []).includes('customerAccountId'), 'Customer portal message history should not expose staff triage fields or internal account ids.');
 
     const customerBlockedState = await request(server, 'GET', '/api/state', { cookie: customerCookie });
     assert(customerBlockedState.status === 200 && customerBlockedState.text.includes('WheelsonAuto Portal'), 'Customer session should not access staff/admin API state.');

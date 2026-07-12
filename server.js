@@ -2706,7 +2706,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
