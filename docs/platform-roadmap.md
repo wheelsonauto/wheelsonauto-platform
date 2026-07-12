@@ -16,6 +16,9 @@ Completed in this build pass:
 - Star queue drafts preserve customer phone/email context and still require admin approval for money/account actions.
 - Clover dispute and claim possible matches now show phone, email, reference, autopay, Clover customer, VIN, tag, tracker, and match reason in both UI evidence and deep reports.
 - API Roadmap provider records are owner-only, task-backed, and cannot be marked Connected without env-key names, endpoint, live-test plan, and last-test result.
+- Star QA and the deep report now surface API provider readiness so outside systems stay visible until credentials, endpoint, live test, and last result are recorded.
+- Clover disputes can now recover customer/vehicle evidence from claim text containing a customer name, VIN, tag, or saved reference when Clover does not provide a useful payment/customer ID.
+- Star direct smoke checks now prove the owner off-switch works and saved-card charge requests cannot be approved/sent as normal AI replies without the proper money-action workflow.
 
 Checks passed at this checkpoint:
 
@@ -24,6 +27,8 @@ Checks passed at this checkpoint:
 - `node scripts/frontend-render-smoke-test.js`
 - `node scripts/responsive-style-check.js`
 - `node scripts/static-ui-check.js`
+- `node scripts/server-direct-smoke-test.js`
+- `node scripts/star-safety-check.js`
 
 Live data status:
 
