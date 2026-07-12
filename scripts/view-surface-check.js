@@ -93,6 +93,8 @@ function renderViews() {
   'paymentRecurringCard',
   'paymentCustomerCard',
   'paymentCardSection',
+  'vehicleTrackingStatus',
+  'vehicleTrackingLine',
   'Documents'
 ].forEach(name => {
   if (!finalFunctionSlice(app, name)) fail('Missing final frontend function: ' + name);
@@ -361,9 +363,13 @@ const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
 const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 const starHealth = finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
+const trackerStatus = finalFunctionSlice(app, 'vehicleTrackingStatus');
+const staffFleetCard = finalFunctionSlice(app, 'staffFleetCard');
 assertIncludes('Staff service cards', staffServiceCard, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance']);
 assertIncludes('Staff claim cards', staffClaimCard, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link', 'claimMatchNote']);
-assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Active autopay rows need car, VIN, tag, and tracker']);
+assertIncludes('Tracker health layer', trackerStatus + app, ['Tracker offline', 'Tracker stale', 'Tracker setup', 'trackerLastPing', 'trackerLocation']);
+assertIncludes('Staff fleet tracker cards', staffFleetCard, ['vehicleTrackingBadge', 'vehicleTrackingLine']);
+assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review']);
 assertIncludes('Star QA manager suggestions', starQaManager, ['Star QA manager', 'Fix first', 'Contact failed-twice customers', 'Link autopay to vehicles']);
 assertIncludes('Clover dispute match note', claimMatchNote, ['Needs payment/customer match', 'Matched: ', 'customerMatchSource', 'apply-claim-match']);
 assertIncludes('Star QA health panel', starHealth, ['Star QA', 'Missing VIN', 'Unmatched payments', 'Setup / not found', 'Provider setup needed before live SMS sends']);
