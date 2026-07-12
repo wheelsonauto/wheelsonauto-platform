@@ -640,6 +640,7 @@ async function main() {
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
+    assert(customerPortal.text.includes('Open payment requests') && customerPortal.text.includes('No open payment links are attached'), 'Customer portal should show payment request status even when no link is open.');
     assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Report payment'), 'Customer portal should include paid-outside-app reporting.');
     assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Report issue'), 'Customer portal should include toll/claim/issue reporting.');
