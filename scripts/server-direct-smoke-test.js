@@ -134,7 +134,8 @@ async function main() {
     duplicateState.vehicles = duplicateState.vehicles || [];
     duplicateState.vehicles.push(
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate One', vin: 'DIRECTVIN001', plate: 'DIR-001', status: 'Ready' },
-      { id: 'veh-direct-duplicate', name: 'Direct Duplicate Two', vin: 'DIRECTVIN002', plate: 'DIR-002', status: 'Ready' }
+      { id: 'veh-direct-duplicate', name: 'Direct Duplicate Two', vin: 'DIRECTVIN002', plate: 'DIR-002', status: 'Ready' },
+      { id: 'veh-direct-autopay-file', year: 2026, make: 'Direct', model: 'Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tempTag: 'TMP-AUTO', tracker: 'TRK-AUTO', status: 'Ready' }
     );
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
@@ -193,6 +194,33 @@ async function main() {
     const webhookClaim = (webhookDisputeRead.json.claims || []).find(claim => claim.disputeId === 'disp-direct-webhook');
     assert(webhookClaim && webhookClaim.customer === 'Direct Webhook Dispute Customer', 'Clover dispute webhook should match the customer by payment ID: ' + JSON.stringify(webhookClaim || null));
     assert(webhookClaim.customerMatchSource === 'Payment record', 'Clover dispute webhook should record the payment-match source.');
+
+    const directAutopayFile = await request(server, 'POST', '/api/recurring-payments', {
+      cookie: ownerCookie,
+      json: {
+        customer: 'Direct Autopay File Customer',
+        phone: '3135550666',
+        email: 'direct-autopay-file@example.com',
+        vehicleId: 'veh-direct-autopay-file',
+        amount: 123,
+        frequency: 'Weekly',
+        firstRun: '2026-07-20',
+        nextRun: '2026-07-20',
+        chargeTime: '18:00',
+        status: 'Active',
+        paymentSetup: 'After card setup'
+      }
+    });
+    assert(directAutopayFile.status === 201 && directAutopayFile.json.ok, 'Creating autopay with selected vehicle should succeed.');
+    const directAutopayFileRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const directRecurring = (directAutopayFileRead.json.recurringPayments || []).find(row => row.customer === 'Direct Autopay File Customer');
+    const directCustomer = (directAutopayFileRead.json.customers || []).find(row => row.name === 'Direct Autopay File Customer');
+    const directContract = (directAutopayFileRead.json.contracts || []).find(row => row.customer === 'Direct Autopay File Customer');
+    const directVehicle = (directAutopayFileRead.json.vehicles || []).find(row => row.id === 'veh-direct-autopay-file');
+    assert(directRecurring && directRecurring.vehicleId === 'veh-direct-autopay-file' && directRecurring.vin === 'DIRECTAUTOPAYFILEVIN', 'New autopay should keep selected vehicle VIN/tag/tracker on the recurring row.');
+    assert(directCustomer && directCustomer.vehicleId === 'veh-direct-autopay-file' && directCustomer.vin === 'DIRECTAUTOPAYFILEVIN' && directCustomer.weeklyAmount === 123, 'New autopay should create a connected customer record.');
+    assert(directContract && directContract.vehicleId === 'veh-direct-autopay-file' && directContract.vin === 'DIRECTAUTOPAYFILEVIN' && directContract.weekly === 123, 'New autopay should create a rich customer file.');
+    assert(directVehicle && directVehicle.currentCustomer === 'Direct Autopay File Customer' && directVehicle.status === 'Rented', 'Selected vehicle should move from Ready to assigned/rented for the new autopay customer.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {
