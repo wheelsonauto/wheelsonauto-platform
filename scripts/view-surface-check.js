@@ -571,6 +571,22 @@ assertIncludes('Customer portal request board', customerPortalRequestItems + cus
   'customer-portal-request-card'
 ]);
 
+const portalVerificationCommandItems = finalFunctionSlice(app, 'portalVerificationCommandItems');
+const portalVerificationCommandBoard = finalFunctionSlice(app, 'portalVerificationCommandBoard');
+assertIncludes('Portal verification command board', portalVerificationCommandItems + portalVerificationCommandBoard + app + css, [
+  'Portal intake & verification',
+  'verificationInboxItems',
+  'customerPortalRequestItems',
+  'paid outside',
+  'card setup',
+  'Search portal intake by customer',
+  'data-view="Messages"',
+  'data-view="Documents"',
+  'portal-verification-command',
+  'portal-verification-grid',
+  'portal-verification-card'
+]);
+
 const conversationPanel = finalFunctionSlice(app, 'messageConversationPanel');
 assertIncludes('Message conversation panel', conversationPanel, [
   'message-conversation-panel',
