@@ -117,6 +117,7 @@ async function main() {
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
   process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
+  process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
   delete require.cache[require.resolve('../server.js')];
   const { server } = require('../server.js');
 
@@ -702,8 +703,28 @@ async function main() {
     assert([200, 202].includes(managerEmail.status) && managerEmail.json.ok, 'Manager email draft/send failed.');
     assert(managerEmail.json.message.channel === 'Email', 'Email message should be saved as Email channel.');
 
+    const blockedInboundSms = await request(server, 'POST', '/api/webhooks/messages', {
+      json: { MessageSid: 'direct-sms-blocked', From: '+13135550199', To: '+13135550000', Body: 'Unsigned inbound text.' }
+    });
+    assert(blockedInboundSms.status === 401, 'Inbound SMS webhook should require the configured secret.');
+    const inboundSms = await request(server, 'POST', '/api/webhooks/messages', {
+      headers: { 'x-woa-webhook-secret': 'direct-message-secret' },
+      json: { MessageSid: 'direct-sms-001', From: '+13135550199', To: '+13135550000', Body: 'Can I get my account balance?' }
+    });
+    assert(inboundSms.status === 200 && inboundSms.json.ok && inboundSms.json.received, 'Inbound SMS webhook with secret failed.');
+
+    const blockedInboundEmail = await request(server, 'POST', '/api/webhooks/email', {
+      json: {
+        id: 'direct-email-blocked',
+        from: 'Direct Customer <direct-customer@example.com>',
+        to: 'office@wheelsonauto.com',
+        subject: 'Blocked payment question',
+        text: 'This should not save without the webhook secret.'
+      }
+    });
+    assert(blockedInboundEmail.status === 401, 'Inbound email webhook should require the configured secret.');
     const inboundEmail = await request(server, 'POST', '/api/webhooks/email', {
-      headers: { 'x-woa-webhook-secret': '' },
+      headers: { 'x-woa-webhook-secret': 'direct-message-secret' },
       json: {
         id: 'direct-email-001',
         from: 'Direct Customer <direct-customer@example.com>',
