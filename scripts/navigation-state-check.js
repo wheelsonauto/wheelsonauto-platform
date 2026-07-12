@@ -115,7 +115,7 @@ const allowedTabsByView = {
   Dashboard: [],
   Today: ['Due Today', 'Paid', 'Failed', 'Follow Up'],
   Applications: ['Pipeline', 'Active', 'Approved', 'Contract', 'Denied', 'Removed'],
-  Payments: ['Active', 'Today', 'History', 'Transactions', 'Attention'],
+  Payments: ['Active', 'Today', 'History', 'Transactions'],
   Operations: ['Fleet', 'Assigned', 'Service', 'Claims'],
   Fleet: ['Available', 'Prep', 'Assigned'],
   Maintenance: ['Open', 'Overdue', 'Monthly', 'Completed'],
@@ -136,7 +136,7 @@ for (const [view, allowed] of Object.entries(allowedTabsByView)) {
 
   if (allowed.length) {
     const guards = guardTabs(source);
-    assertSetIncludes(view + ' selected-tab guard', guards, allowed.filter(tab => tab !== 'Attention'));
+    assertSetIncludes(view + ' selected-tab guard', guards, allowed);
   }
 
   const localTabs = literalButtonTargets(source)
@@ -175,6 +175,9 @@ assertSetIncludes('Messages literal tabs', literalButtonTargets(messages).filter
 
 const payments = finalFunctionSlice('Payments');
 assertSetIncludes('Payments literal tabs', literalButtonTargets(payments).filter(item => item.tab && !item.view).map(item => item.tab), ['Active', 'Today', 'History', 'Transactions']);
+if (app.includes("data-tab=\"Attention\"") || app.includes("data-tab='Attention'") || app.includes(",'Attention'") || app.includes(',"Attention"')) {
+  fail('Stale Payments Attention tab target found. Use Payments/Today for retry, not-found, setup, and failed-twice work.');
+}
 
 const operations = finalFunctionSlice('Operations');
 assertSetIncludes('Operations literal tabs', literalButtonTargets(operations).filter(item => item.tab && !item.view).map(item => item.tab), ['Fleet', 'Assigned', 'Service', 'Claims']);

@@ -3102,11 +3102,60 @@ function assignAutopayVehicle(data, autopay) {
   data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
   const customerKey = normKey(autopay.customer);
   const vehicle = data.vehicles.find(row => (autopay.vehicleId && row.id === autopay.vehicleId) || (autopay.vehicle && normKey(vehicleNameFromParts(row)) === normKey(autopay.vehicle)));
   if (!vehicle) return;
+  const previousCustomer = String(vehicle.currentCustomer || '').trim();
   const vehicleName = vehicleNameFromParts(vehicle);
   const tag = vehicle.plate || vehicle.stock || autopay.licensePlate || autopay.plate || '';
+  const previousKey = normKey(previousCustomer);
+  if (previousCustomer && previousKey !== customerKey) {
+    const releaseNote = 'Vehicle reassigned to ' + autopay.customer + ' through WheelsonAuto autopay.';
+    data.customers.forEach(row => {
+      if (normKey(row.name || row.customer) !== previousKey) return;
+      if (row.vehicleId && row.vehicleId !== vehicle.id && normKey(row.vehicle) !== normKey(vehicleName)) return;
+      row.vehicleId = '';
+      row.vehicle = '';
+      row.status = 'Returned';
+      row.stage = 'History';
+      row.returnedAt = new Date().toISOString();
+      row.returnedVehicle = vehicleName;
+      row.returnedVin = vehicle.vin || '';
+      row.returnedPlate = tag;
+      row.notes = [row.notes, releaseNote].filter(Boolean).join('\n');
+    });
+    data.contracts.forEach(row => {
+      if (normKey(row.customer || row.name) !== previousKey) return;
+      if (row.vehicleId && row.vehicleId !== vehicle.id && normKey(row.vehicle) !== normKey(vehicleName)) return;
+      row.status = 'Removed';
+      row.endStatus = row.endStatus || 'Ended';
+      row.returnedAt = new Date().toISOString();
+      row.returnedVehicleId = vehicle.id || '';
+      row.returnedVehicle = vehicleName;
+      row.returnedVin = vehicle.vin || '';
+      row.returnedPlate = tag;
+      row.notes = [row.notes, releaseNote].filter(Boolean).join('\n');
+    });
+    data.recurringPayments.forEach(row => {
+      if (normKey(row.customer) !== previousKey) return;
+      if (row.vehicleId && row.vehicleId !== vehicle.id && normKey(row.vehicle) !== normKey(vehicleName)) return;
+      row.vehicleId = '';
+      row.vehicle = '';
+      row.vin = '';
+      row.licensePlate = '';
+      row.plate = '';
+      row.tempTag = '';
+      row.tracker = '';
+      row.status = 'Removed';
+      row.tone = 'bad';
+      row.nextRun = 'Returned';
+      row.autoChargeEnabled = false;
+      row.autopayManagedBy = 'Stopped - vehicle reassigned';
+      row.removedAt = new Date().toISOString();
+      row.notes = [row.notes, releaseNote].filter(Boolean).join('\n');
+    });
+  }
   vehicle.currentCustomer = autopay.customer;
   vehicle.status = String(autopay.status || '').toLowerCase() === 'active' ? 'Rented' : 'Pending application';
   vehicle.rate = autopay.amount || vehicle.rate || vehicle.price || 0;
@@ -3125,13 +3174,22 @@ function assignAutopayVehicle(data, autopay) {
     customer.vehicleId = autopay.vehicleId;
     customer.weeklyAmount = autopay.amount || customer.weeklyAmount || 0;
     customer.licensePlate = tag;
+    customer.plate = tag;
     customer.vin = autopay.vin;
     customer.tempTag = autopay.tempTag;
     customer.tracker = autopay.tracker;
+    customer.status = String(autopay.status || '').toLowerCase() === 'active' ? 'Active' : (customer.status || 'Pending pickup');
+    customer.stage = String(autopay.status || '').toLowerCase() === 'active' ? 'Active contract' : (customer.stage || 'Pending pickup');
   }
   const contract = data.contracts.find(row => normKey(row.customer) === customerKey);
   if (contract) {
     contract.vehicle = vehicleName;
+    contract.vehicleId = autopay.vehicleId;
+    contract.vin = autopay.vin;
+    contract.licensePlate = tag;
+    contract.plate = tag;
+    contract.tempTag = autopay.tempTag;
+    contract.tracker = autopay.tracker;
     contract.weekly = autopay.amount || contract.weekly || 0;
     contract.status = String(autopay.status || '').toLowerCase() === 'active' ? 'Active' : (contract.status || 'Pending pickup');
     contract.updatedAt = new Date().toISOString();

@@ -1,0 +1,222 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.resolve(__dirname, '..');
+const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function requireText(label, source, text) {
+  if (!source.includes(text)) fail(label + ' is missing: ' + text);
+}
+
+function finalFunctionSlice(source, name) {
+  let start = -1;
+  let cursor = 0;
+  while (true) {
+    const normalNext = source.indexOf('function ' + name + '(', cursor);
+    const asyncNext = source.indexOf('async function ' + name + '(', cursor);
+    const candidates = [normalNext, asyncNext].filter(index => index >= 0);
+    const next = candidates.length ? Math.min(...candidates) : -1;
+    if (next < 0) break;
+    start = next;
+    cursor = next + 1;
+  }
+  if (start < 0) return '';
+  const argsClose = source.indexOf(')', start);
+  const open = source.indexOf('{', argsClose > -1 ? argsClose : start);
+  if (open < 0) return '';
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  return '';
+}
+
+function actionSlice(action) {
+  const marker = "a==='" + action + "'";
+  const start = app.indexOf(marker);
+  return start < 0 ? '' : app.slice(start, start + 3200);
+}
+
+const maintenance = finalFunctionSlice(app, 'Maintenance');
+const fleet = finalFunctionSlice(app, 'Fleet');
+const claims = finalFunctionSlice(app, 'ClaimsIssues');
+const reports = finalFunctionSlice(app, 'Reports');
+const organizations = finalFunctionSlice(app, 'Organizations');
+const apiRoadmap = finalFunctionSlice(app, 'ApiRoadmap');
+const managerPortal = finalFunctionSlice(app, 'ManagerPortal');
+const mechanicPortal = finalFunctionSlice(app, 'MechanicPortal');
+const navForRole = finalFunctionSlice(app, 'navForRole');
+const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
+const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
+const staffFleetCard = finalFunctionSlice(app, 'staffFleetCard');
+const vehicleIdentityLine = finalFunctionSlice(app, 'vehicleIdentityLine');
+const executiveReport = finalFunctionSlice(app, 'executiveReportBoard');
+const dailyCloseout = finalFunctionSlice(app, 'dailyCloseout');
+const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
+
+[
+  maintenance,
+  fleet,
+  claims,
+  reports,
+  organizations,
+  apiRoadmap,
+  managerPortal,
+  mechanicPortal,
+  staffServiceCard,
+  staffClaimCard,
+  staffFleetCard,
+  vehicleIdentityLine,
+  executiveReport,
+  dailyCloseout,
+  claimMatchNote
+].forEach((source, index) => {
+  if (!source) fail('Missing operations function #' + index);
+});
+
+[
+  'Search service by customer, VIN, tag, tracker, issue',
+  'Service work',
+  'Maintenance',
+  'complete-maintenance',
+  'open-maintenance',
+  'vehicleIdentityLine',
+  'VIN:',
+  'Tracker:'
+].forEach(text => requireText('Maintenance/service surface', maintenance + staffServiceCard + vehicleIdentityLine, text));
+
+[
+  'isMonthlyMaintenance',
+  'addMonthsKey',
+  'nextDue',
+  'Completed',
+  'Mark done',
+  'await save()',
+  'Maintenance()'
+].forEach(text => requireText('Monthly inspection completion flow', app + actionSlice('confirm-complete-maintenance'), text));
+
+[
+  'Search available fleet by VIN, tag, tracker',
+  'Search assigned cars by customer, VIN, tag, tracker',
+  'Available fleet',
+  'Rented / assigned cars',
+  'open-vehicle',
+  'vehicleIdentityLine'
+].forEach(text => requireText('Fleet operations surface', fleet + staffFleetCard, text));
+
+[
+  'claims, tolls & issues',
+  'Search claims by customer, vehicle, plate, ref, type',
+  'Needs payment/customer match',
+  'apply-claim-match',
+  'send-claim-link',
+  'Provider / agency',
+  'Next follow-up'
+].forEach(text => requireText('Claims/tolls/disputes surface', claims + claimMatchNote + staffClaimCard + app, text));
+
+[
+  'downloadReportCsv',
+  'Executive snapshot',
+  'Collected today',
+  'Expected today',
+  'Failed / retry',
+  'Ready fleet',
+  'Open service',
+  'Applications',
+  'Paid records'
+].forEach(text => requireText('Reports/accounting surface', app + reports + executiveReport, text));
+
+[
+  'Expected today',
+  'Collected today',
+  'Paid outside app',
+  'Still open',
+  'Failed once',
+  'Contact now',
+  'Today Clover transactions',
+  'send-daily-closeout-email',
+  'Star closeout summary'
+].forEach(text => requireText('Daily closeout operations board', dailyCloseout + app, text));
+
+[
+  'Company accounts',
+  'Add staff',
+  'Staff list',
+  'company-scoped workspace',
+  'Subscriber mode needs final API separation',
+  'new-org',
+  'save-org'
+].forEach(text => requireText('Company/franchise foundation UI', organizations + app, text));
+
+[
+  'Clover',
+  'SMS',
+  'Email',
+  'EZPass',
+  'Insurance',
+  'Tracker',
+  'Accounting',
+  'apiProviders',
+  'save-api-provider',
+  'apiLiveTest'
+].forEach(text => requireText('API-ready roadmap UI', apiRoadmap + app, text));
+
+[
+  'Manager Portal',
+  'fleetCommandPanel',
+  'Search manager queue',
+  'manager-overview-grid',
+  'Messages',
+  'Reports'
+].forEach(text => requireText('Manager operations role surface', managerPortal + navForRole, text));
+
+[
+  'Mechanic Portal',
+  'no payment or settings controls',
+  'mechanicJobCards',
+  'mechanic-workspace',
+  'complete-maintenance',
+  'open-maintenance'
+].forEach(text => requireText('Mechanic operations role surface', mechanicPortal + staffServiceCard, text));
+
+[
+  'cloverWebhookDisputeClaim',
+  'Clover dispute',
+  'resolveClaimCustomerLinks',
+  'claimPossibleMatches',
+  'customerMatchStatus',
+  'Needs payment/customer match',
+  'Payment record',
+  'Recurring customer',
+  'Fleet vehicle'
+].forEach(text => requireText('Backend dispute/claim matching', server, text));
+
+[
+  'cleanOrganizationPayload',
+  'dataScopedToOrganization',
+  'stateForUserRead',
+  'stateForUserWrite',
+  'organizationId',
+  'Choose a saved company/store for this staff account.',
+  'Duplicate company/franchise names should be blocked'
+].forEach(text => requireText('Backend company/franchise foundation', server + fs.readFileSync(path.join(root, 'scripts/server-direct-smoke-test.js'), 'utf8'), text));
+
+[
+  'cleanApiProviderPayload',
+  '/api/api-providers',
+  'lastTestResult',
+  'envKeys',
+  'endpoint'
+].forEach(text => requireText('Backend API provider readiness', server, text));
+
+console.log('Operations readiness check passed: inspections/service, fleet, claims/tolls/disputes, reports, company scoping, and API roadmap are wired.');
