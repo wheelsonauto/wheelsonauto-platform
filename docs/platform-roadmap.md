@@ -46,6 +46,7 @@ Completed in this build pass:
 - Customer portal payment history now strips internal Clover IDs, charge references, and raw error details while still showing a clear customer-safe failed/not-found status note.
 - View-surface checks now lock that customer-portal payment privacy rule so future UI/backend edits cannot accidentally expose raw Clover IDs or decline errors to customer logins.
 - Manual outbound messages and Star draft/approval rows now carry company, customer-file, recurring, vehicle, VIN/tag, tracker, amount, and frequency context, and same-name customers prefer the signed-in company before future franchise/subscription records.
+- Tracker evidence now normalizes `tracker`, `gps`, and related device fields across closeout, reports, Star context, customer portal submissions, payment/card links, service, claims, and messages so imported sheet tracker names do not disappear.
 
 Checks passed at this checkpoint:
 

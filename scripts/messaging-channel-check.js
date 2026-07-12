@@ -116,6 +116,7 @@ requireText('Message context helper company scope', messageContextFields, 'organ
 requireText('Message context helper VIN', messageContextFields, 'vin');
 requireText('Message context helper tag', messageContextFields, 'licensePlate');
 requireText('Message context helper tracker', messageContextFields, 'tracker');
+requireText('Message context helper GPS fallback', messageContextFields, 'trackerName(vehicle)');
 requireText('Message send context helper', server, 'const messageFields = messageContextFields(context, payload)');
 requireText('Message send linked customer file', server, 'customerId: messageFields.customerId');
 requireText('Message send linked company', server, 'organizationId: messageFields.organizationId || userOrganizationId(user)');

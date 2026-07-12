@@ -158,6 +158,9 @@ function findVehicleForImportRow(data, row) {
   const bySourceRow = String(row && row.rowNumber || '');
   return vehicles.find(vehicle => String(vehicle && vehicle.sourceRow || '') === bySourceRow) || null;
 }
+function trackerName(row = {}) {
+  return String(row.tracker || row.gps || row.trackingDevice || row.gpsDevice || row.device || '').trim();
+}
 function importRowVehiclePatch(row, vehicle) {
   const weekly = moneyNumber(row && (row.weeklyAmount || row.weeklyAmountRaw));
   const plate = (vehicle && (vehicle.plate || vehicle.stock)) || row.licensePlate || row.tempTag || '';
@@ -168,7 +171,7 @@ function importRowVehiclePatch(row, vehicle) {
     licensePlate: plate,
     plate,
     tempTag: vehicle && vehicle.tempTag || row.tempTag || '',
-    tracker: vehicle && vehicle.tracker || row.tracker || '',
+    tracker: vehicle && trackerName(vehicle) || trackerName(row),
     amount: weekly || (vehicle && vehicle.rate) || 0,
     weeklyAmount: weekly || (vehicle && vehicle.rate) || 0
   };
@@ -1128,7 +1131,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || ''),
       vin: vehicle.vin || row.vin || '',
       tag: vehicle.plate || vehicle.stock || row.licensePlate || row.plate || '',
-      tracker: vehicle.tracker || row.tracker || ''
+      tracker: trackerName(vehicle) || trackerName(row)
     };
   };
   const contactRows = failedTwice.map(row => closeoutContactItem(row, 'Failed twice - contact now'))
@@ -1151,7 +1154,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (request.vehicle || (recurringRow && recurringRow.vehicle) || ''),
       vin: vehicle.vin || request.vin || (recurringRow && recurringRow.vin) || '',
       tag: vehicle.plate || vehicle.stock || request.licensePlate || request.plate || (recurringRow && (recurringRow.licensePlate || recurringRow.plate)) || '',
-      tracker: vehicle.tracker || request.tracker || (recurringRow && recurringRow.tracker) || ''
+      tracker: trackerName(vehicle) || trackerName(request) || (recurringRow && trackerName(recurringRow)) || ''
     };
   });
   const cardSetupRows = openCardSetupRequests.map(request => {
@@ -1170,7 +1173,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (request.vehicle || (recurringRow && recurringRow.vehicle) || ''),
       vin: vehicle.vin || request.vin || (recurringRow && recurringRow.vin) || '',
       tag: vehicle.plate || vehicle.stock || request.licensePlate || request.plate || (recurringRow && (recurringRow.licensePlate || recurringRow.plate)) || '',
-      tracker: vehicle.tracker || request.tracker || (recurringRow && recurringRow.tracker) || ''
+      tracker: trackerName(vehicle) || trackerName(request) || (recurringRow && trackerName(recurringRow)) || ''
     };
   });
   const starApprovalRows = pendingStarApprovals.map(message => {
@@ -1185,6 +1188,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (message.vehicle || ''),
       vin: vehicle.vin || message.vin || '',
       tag: vehicle.plate || vehicle.stock || message.plate || message.licensePlate || '',
+      tracker: trackerName(vehicle) || trackerName(message),
       body: message.subject || message.body || ''
     };
   });
@@ -1397,7 +1401,7 @@ function closeoutPaymentPossibleMatches(data = {}, payment = {}, recurringRows =
       vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || row.plan || ''),
       vin: vehicle.vin || row.vin || '',
       plate: tag,
-      tracker: vehicle.tracker || row.tracker || '',
+      tracker: trackerName(vehicle) || trackerName(row),
       phone: row.phone || '',
       email: row.email || '',
       recurringPaymentId: row.id || '',
@@ -1489,7 +1493,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const vehicle = reportVehicleFor(scoped, customer, payment.vehicleId);
     const tag = vehicle.plate || vehicle.stock || payment.licensePlate || payment.plate || '';
     const matchNote = customer === 'Unmatched payment' ? reportPaymentCandidateNote(scoped, payment, recurring) : '';
-    addReportRow(rows, 'Transactions', payment.date || payment.createdAt || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (payment.vehicle || ''), vehicle.vin || payment.vin || '', tag, vehicle.tracker || payment.tracker || '', payment.method || payment.type || 'Payment', payment.amount || 0, payment.status || 'Recorded', payment.source || payment.provider || 'Payment', reportCsvNote([payment.notes, payment.error, matchNote, payment.externalReferenceId, payment.cloverPaymentId, payment.paymentRequestId]));
+    addReportRow(rows, 'Transactions', payment.date || payment.createdAt || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (payment.vehicle || ''), vehicle.vin || payment.vin || '', tag, trackerName(vehicle) || trackerName(payment), payment.method || payment.type || 'Payment', payment.amount || 0, payment.status || 'Recorded', payment.source || payment.provider || 'Payment', reportCsvNote([payment.notes, payment.error, matchNote, payment.externalReferenceId, payment.cloverPaymentId, payment.paymentRequestId]));
   });
   (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest).forEach(request => {
     const recurringRow = request.recurringPaymentId ? recurring.find(row => row.id === request.recurringPaymentId) : null;
@@ -1500,12 +1504,12 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const requestVehicle = request.vehicle || (recurringRow && recurringRow.vehicle) || '';
     const requestVin = request.vin || (recurringRow && recurringRow.vin) || '';
     const requestTracker = request.tracker || (recurringRow && recurringRow.tracker) || '';
-    addReportRow(rows, 'Open payment requests', request.createdAt || request.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : requestVehicle, vehicle.vin || requestVin, tag, vehicle.tracker || requestTracker, request.frequency || 'Payment link', request.amount || 0, request.status || 'Open', request.source || 'WheelsonAuto hosted checkout', reportCsvNote([paymentRequestAgeLabel(request), paymentRequestAgeHours(request) >= 24 ? 'Stale - follow up now' : '', request.url, request.reason, request.notes, request.recurringPaymentId ? 'Autopay ' + request.recurringPaymentId : '', request.phone, request.email]));
+    addReportRow(rows, 'Open payment requests', request.createdAt || request.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : requestVehicle, vehicle.vin || requestVin, tag, trackerName(vehicle) || requestTracker, request.frequency || 'Payment link', request.amount || 0, request.status || 'Open', request.source || 'WheelsonAuto hosted checkout', reportCsvNote([paymentRequestAgeLabel(request), paymentRequestAgeHours(request) >= 24 ? 'Stale - follow up now' : '', request.url, request.reason, request.notes, request.recurringPaymentId ? 'Autopay ' + request.recurringPaymentId : '', request.phone, request.email]));
   });
   recurring.forEach(row => {
     const vehicle = reportVehicleFor(scoped, row.customer, row.vehicleId);
     const tag = vehicle.plate || vehicle.stock || row.licensePlate || row.plate || '';
-    addReportRow(rows, 'Autopay roster', recurringDateKey(row) || row.nextRun || row.nextPaymentDate || '', row.customer || 'Unknown customer', vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || ''), vehicle.vin || row.vin || '', tag, vehicle.tracker || row.tracker || '', row.frequency || 'Weekly', row.amount || row.weeklyAmount || 0, closeoutRecurringState(row), row.sourceType || row.provider || 'WheelsonAuto/Clover', reportCsvNote([row.phone, row.email, row.cloverCustomerId ? 'Clover customer ' + row.cloverCustomerId : '', row.cloverSubscriptionId ? 'Subscription ' + row.cloverSubscriptionId : '', row.notes]));
+    addReportRow(rows, 'Autopay roster', recurringDateKey(row) || row.nextRun || row.nextPaymentDate || '', row.customer || 'Unknown customer', vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || ''), vehicle.vin || row.vin || '', tag, trackerName(vehicle) || trackerName(row), row.frequency || 'Weekly', row.amount || row.weeklyAmount || 0, closeoutRecurringState(row), row.sourceType || row.provider || 'WheelsonAuto/Clover', reportCsvNote([row.phone, row.email, row.cloverCustomerId ? 'Clover customer ' + row.cloverCustomerId : '', row.cloverSubscriptionId ? 'Subscription ' + row.cloverSubscriptionId : '', row.notes]));
   });
   const customerNames = [...new Set([...(scoped.customers || []).map(row => row.name || row.customer), ...(scoped.contracts || []).map(row => row.customer || row.name), ...recurring.map(row => row.customer)].map(value => String(value || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const activeCustomerNames = [];
@@ -1517,7 +1521,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const tag = vehicle.plate || vehicle.stock || customer.licensePlate || contract.licensePlate || recurringRow.licensePlate || '';
     const active = !/removed|returned|history|archived/i.test(String(contract.status || customer.status || recurringRow.status || 'Active'));
     if (active) activeCustomerNames.push(name);
-    addReportRow(rows, 'Customer files', '', name, vehicle.id ? vehicleNameFromParts(vehicle) : (customer.vehicle || contract.vehicle || recurringRow.vehicle || ''), vehicle.vin || customer.vin || contract.vin || recurringRow.vin || '', tag, vehicle.tracker || customer.tracker || contract.tracker || recurringRow.tracker || '', 'Customer truth', customer.weeklyAmount || recurringRow.amount || contract.weekly || 0, active ? 'Active' : 'History', active ? 'Customer active' : 'Customer history', reportCsvNote([customer.phone || contract.phone || recurringRow.phone, customer.email || contract.email || recurringRow.email, 'Risk: ' + reportCustomerRisk(scoped, name, recurringRow, vehicle), contract.id ? 'File ' + contract.id : 'No file yet']));
+    addReportRow(rows, 'Customer files', '', name, vehicle.id ? vehicleNameFromParts(vehicle) : (customer.vehicle || contract.vehicle || recurringRow.vehicle || ''), vehicle.vin || customer.vin || contract.vin || recurringRow.vin || '', tag, trackerName(vehicle) || trackerName(customer) || trackerName(contract) || trackerName(recurringRow), 'Customer truth', customer.weeklyAmount || recurringRow.amount || contract.weekly || 0, active ? 'Active' : 'History', active ? 'Customer active' : 'Customer history', reportCsvNote([customer.phone || contract.phone || recurringRow.phone, customer.email || contract.email || recurringRow.email, 'Risk: ' + reportCustomerRisk(scoped, name, recurringRow, vehicle), contract.id ? 'File ' + contract.id : 'No file yet']));
   });
   (scoped.vehicles || []).forEach(vehicle => {
     const customer = vehicle.currentCustomer || vehicle.customer || 'In lot';
@@ -1526,28 +1530,28 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const income = payments.filter(payment => normKey(closeoutPaymentCustomerName(scoped, payment, recurring)) === normKey(customer) && closeoutPaymentPaid(payment)).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
     const serviceCost = maintenance.reduce((sum, item) => sum + Number(item.cost || 0), 0);
     const openRecovery = claims.filter(item => !/paid|closed/i.test(String(item.status || 'Open'))).reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    addReportRow(rows, 'Fleet profitability', '', customer, vehicleNameFromParts(vehicle), vehicle.vin || '', vehicle.plate || vehicle.stock || '', vehicle.tracker || '', 'Car profitability', income - serviceCost + openRecovery, vehicle.status || 'Ready', 'Fleet', reportCsvNote(['Income ' + moneyText(income), 'Service cost ' + moneyText(serviceCost), 'Open recovery ' + moneyText(openRecovery), maintenance.filter(item => !/complete|fixed|closed/i.test(String(item.status || ''))).length + ' open service']));
+    addReportRow(rows, 'Fleet profitability', '', customer, vehicleNameFromParts(vehicle), vehicle.vin || '', vehicle.plate || vehicle.stock || '', trackerName(vehicle), 'Car profitability', income - serviceCost + openRecovery, vehicle.status || 'Ready', 'Fleet', reportCsvNote(['Income ' + moneyText(income), 'Service cost ' + moneyText(serviceCost), 'Open recovery ' + moneyText(openRecovery), maintenance.filter(item => !/complete|fixed|closed/i.test(String(item.status || ''))).length + ' open service']));
   });
   (scoped.maintenance || []).forEach(item => {
     const vehicle = reportVehicleFor(scoped, item.customer, item.vehicleId);
     const checklist = Array.isArray(item.inspectionChecklist) ? item.inspectionChecklist.join(', ') : (item.inspectionChecklist || '');
-    addReportRow(rows, 'Service / inspections', item.completedAt || item.fixedAt || item.due || item.nextDue || '', item.customer || vehicle.currentCustomer || '', item.vehicle || (vehicle.id ? vehicleNameFromParts(vehicle) : ''), vehicle.vin || item.vin || '', vehicle.plate || vehicle.stock || item.plate || '', vehicle.tracker || item.tracker || '', item.type || item.issue || 'Maintenance', item.cost || 0, item.status || 'Scheduled', item.source || 'Maintenance', reportCsvNote([item.issue, item.notes, item.odometer || item.mileageAtService ? 'Mileage ' + (item.odometer || item.mileageAtService) : '', item.inspectionCondition ? 'Condition ' + item.inspectionCondition : '', checklist ? 'Checklist ' + checklist : '', item.damageNotes ? 'Damage ' + item.damageNotes : '', item.mechanicSignoff ? 'Signed ' + item.mechanicSignoff : '']));
+    addReportRow(rows, 'Service / inspections', item.completedAt || item.fixedAt || item.due || item.nextDue || '', item.customer || vehicle.currentCustomer || '', item.vehicle || (vehicle.id ? vehicleNameFromParts(vehicle) : ''), vehicle.vin || item.vin || '', vehicle.plate || vehicle.stock || item.plate || '', trackerName(vehicle) || trackerName(item), item.type || item.issue || 'Maintenance', item.cost || 0, item.status || 'Scheduled', item.source || 'Maintenance', reportCsvNote([item.issue, item.notes, item.odometer || item.mileageAtService ? 'Mileage ' + (item.odometer || item.mileageAtService) : '', item.inspectionCondition ? 'Condition ' + item.inspectionCondition : '', checklist ? 'Checklist ' + checklist : '', item.damageNotes ? 'Damage ' + item.damageNotes : '', item.mechanicSignoff ? 'Signed ' + item.mechanicSignoff : '']));
   });
   (scoped.claims || []).forEach(claim => {
     const vehicle = reportVehicleFor(scoped, claim.customer, claim.vehicleId);
-    addReportRow(rows, 'Claims / tolls / disputes', claim.createdAt || claim.incidentDate || claim.nextFollowUp || '', claim.customer || 'Unmatched', vehicle.id ? vehicleNameFromParts(vehicle) : (claim.vehicle || ''), vehicle.vin || claim.vin || '', vehicle.plate || vehicle.stock || claim.plate || claim.reference || '', vehicle.tracker || claim.tracker || '', claim.type || 'Issue', claim.amount || 0, claim.status || 'Open', claim.source || claim.provider || claim.agency || 'Manual', reportCsvNote([claim.notes, claim.customerMatchStatus, reportClaimCandidateNote(claim), claim.externalId || claim.caseId || claim.disputeId, claim.deadline ? 'Deadline ' + claim.deadline : '', claim.evidence || claim.proofUrl || '']));
+    addReportRow(rows, 'Claims / tolls / disputes', claim.createdAt || claim.incidentDate || claim.nextFollowUp || '', claim.customer || 'Unmatched', vehicle.id ? vehicleNameFromParts(vehicle) : (claim.vehicle || ''), vehicle.vin || claim.vin || '', vehicle.plate || vehicle.stock || claim.plate || claim.reference || '', trackerName(vehicle) || trackerName(claim), claim.type || 'Issue', claim.amount || 0, claim.status || 'Open', claim.source || claim.provider || claim.agency || 'Manual', reportCsvNote([claim.notes, claim.customerMatchStatus, reportClaimCandidateNote(claim), claim.externalId || claim.caseId || claim.disputeId, claim.deadline ? 'Deadline ' + claim.deadline : '', claim.evidence || claim.proofUrl || '']));
   });
   (scoped.messages || []).forEach(message => {
     const customer = message.customer || message.name || message.toName || message.fromName || 'Unassigned';
     const vehicle = reportVehicleFor(scoped, customer, message.vehicleId);
     const tag = vehicle.plate || vehicle.stock || message.plate || message.licensePlate || '';
-    addReportRow(rows, 'Messages / communications', message.createdAt || message.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (message.vehicle || ''), vehicle.vin || message.vin || '', tag, vehicle.tracker || message.tracker || '', message.event || message.template || message.subject || message.direction || 'Message', message.amount || 0, message.status || message.direction || 'Logged', message.channel || message.source || 'WheelsonAuto', reportCsvNote([safeReportText(message.subject), safeReportText(message.body), message.aiPlan ? 'Star AI draft/action' : '', message.paymentId ? 'Payment ' + message.paymentId : '', message.claimId ? 'Claim ' + message.claimId : '', message.customerAccountId ? 'Customer login ' + message.customerAccountId : '', message.staffAccountId ? 'Staff login ' + message.staffAccountId : '']));
+    addReportRow(rows, 'Messages / communications', message.createdAt || message.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (message.vehicle || ''), vehicle.vin || message.vin || '', tag, trackerName(vehicle) || trackerName(message), message.event || message.template || message.subject || message.direction || 'Message', message.amount || 0, message.status || message.direction || 'Logged', message.channel || message.source || 'WheelsonAuto', reportCsvNote([safeReportText(message.subject), safeReportText(message.body), message.aiPlan ? 'Star AI draft/action' : '', message.paymentId ? 'Payment ' + message.paymentId : '', message.claimId ? 'Claim ' + message.claimId : '', message.customerAccountId ? 'Customer login ' + message.customerAccountId : '', message.staffAccountId ? 'Staff login ' + message.staffAccountId : '']));
   });
   (scoped.applications || []).forEach(app => addReportRow(rows, 'Applications', app.submittedAt || app.createdAt || '', app.name || app.customer || '', app.vehicle || '', app.vin || '', app.plate || '', app.tracker || '', 'Application', app.down || 0, app.stage || app.status || 'New', 'Website/apply', reportCsvNote([app.phone, app.email, app.license, app.employer, app.notes])));
   (scoped.documents || []).filter(doc => !doc.system).forEach(doc => {
     const vehicle = reportVehicleFor(scoped, doc.customer, doc.vehicleId);
     const tag = vehicle.plate || vehicle.stock || doc.plate || doc.licensePlate || '';
-    addReportRow(rows, 'Documents / verification', doc.verifiedAt || doc.expires || doc.due || doc.createdAt || '', doc.customer || '', vehicle.id ? vehicleNameFromParts(vehicle) : (doc.vehicle || ''), vehicle.vin || doc.vin || '', tag, vehicle.tracker || doc.tracker || '', doc.type || doc.kind || 'Document', 0, doc.status || 'Active', doc.provider || doc.agency || doc.visibility || 'Document vault', reportCsvNote([doc.policyNumber || doc.reference, doc.verifiedBy ? 'Verified by ' + doc.verifiedBy : '', doc.customerVisible ? 'Customer visible' : 'Staff only', doc.requiresVerification ? 'Needs verification' : '', doc.notes, doc.url || doc.proofUrl || '']));
+    addReportRow(rows, 'Documents / verification', doc.verifiedAt || doc.expires || doc.due || doc.createdAt || '', doc.customer || '', vehicle.id ? vehicleNameFromParts(vehicle) : (doc.vehicle || ''), vehicle.vin || doc.vin || '', tag, trackerName(vehicle) || trackerName(doc), doc.type || doc.kind || 'Document', 0, doc.status || 'Active', doc.provider || doc.agency || doc.visibility || 'Document vault', reportCsvNote([doc.policyNumber || doc.reference, doc.verifiedBy ? 'Verified by ' + doc.verifiedBy : '', doc.customerVisible ? 'Customer visible' : 'Staff only', doc.requiresVerification ? 'Needs verification' : '', doc.notes, doc.url || doc.proofUrl || '']));
   });
   closeoutVerificationItems(scoped).forEach(item => addReportRow(rows, 'Verification inbox', today, item.customer || 'Unassigned', '', '', '', '', item.type || 'Review', 0, 'Review', 'WheelsonAuto verification', item.detail || ''));
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
@@ -1942,7 +1946,7 @@ function aiContextSummary(context) {
     vehicle: context.vehicleName || '',
     vin: v.vin || r.vin || context.customer && context.customer.vin || context.contract && context.contract.vin || '',
     tag: v.plate || v.stock || r.plate || r.licensePlate || '',
-    tracker: v.tracker || r.tracker || '',
+    tracker: trackerName(v) || trackerName(r),
     amount,
     frequency: r.frequency || '',
     nextRun: r.nextRun || '',
@@ -1976,7 +1980,7 @@ function messageContextFields(context = {}, payload = {}) {
     vin: payload.vin || vehicle.vin || recurring.vin || customer.vin || contract.vin || '',
     licensePlate,
     plate: licensePlate,
-    tracker: payload.tracker || vehicle.tracker || vehicle.gps || recurring.tracker || customer.tracker || contract.tracker || '',
+    tracker: trackerName(payload) || trackerName(vehicle) || trackerName(recurring) || trackerName(customer) || trackerName(contract),
     amount: Number.isFinite(amount) && amount > 0 ? amount : '',
     frequency: payload.frequency || recurring.frequency || ''
   };
@@ -2210,7 +2214,7 @@ function prepareAiSafeLink(data, plan, context) {
       vin: context.vehicle && context.vehicle.vin || '',
       licensePlate: context.vehicle && (context.vehicle.plate || context.vehicle.licensePlate) || '',
       tempTag: context.vehicle && context.vehicle.tempTag || '',
-      tracker: context.vehicle && context.vehicle.tracker || '',
+      tracker: context.vehicle && trackerName(context.vehicle) || '',
       amount,
       frequency: recurring.frequency || 'Weekly',
       nextRun: recurring.nextRun || localDateKey(),
@@ -2426,7 +2430,7 @@ function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '') {
     licensePlate: tag,
     plate: tag,
     tempTag: vehicle.tempTag || row.tempTag || '',
-    tracker: vehicle.tracker || row.tracker || ''
+    tracker: trackerName(vehicle) || trackerName(row)
   };
   Object.entries(patch).forEach(([field, value]) => {
     if (value === undefined || value === null || String(value).trim() === '') return;
@@ -3759,7 +3763,7 @@ function customerPortalChecklistText(row = {}) {
 }
 function customerPortalServiceRow(row = {}, vehicleTitle = 'Vehicle', vehicle = {}, summary = {}) {
   const tag = row.plate || row.licensePlate || summary.tag || vehicle.plate || vehicle.stock || '';
-  const tracker = row.tracker || summary.tracker || vehicle.tracker || '';
+  const tracker = trackerName(row) || summary.tracker || trackerName(vehicle);
   const vin = row.vin || summary.vin || vehicle.vin || '';
   const detail = [row.vehicle || vehicleTitle, vin ? 'VIN ' + vin : '', tag ? 'Tag ' + tag : '', tracker ? 'Tracker ' + tracker : '', row.due || row.nextDue ? 'Due ' + (row.due || row.nextDue) : '', row.status || 'Open'].filter(Boolean).join(' | ');
   const inspection = [row.inspectionCondition ? 'Condition ' + row.inspectionCondition : '', customerPortalChecklistText(row)].filter(Boolean).join(' | ');
@@ -3807,7 +3811,7 @@ function customerPortalHtml(account, state) {
   const portalIssueForm = '<form method="POST" action="/customer/issue-report" class="customer-message-form customer-issue-form"><label>Report toll, ticket, damage, or issue<select name="type"><option>Toll / E-ZPass notice</option><option>Ticket / violation</option><option>Damage</option><option>Insurance / claim</option><option>Tracker issue</option><option>Reimbursement question</option><option>Other issue</option></select></label><label>Notice / incident date<input name="incidentDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Amount, if shown<input name="amount" type="number" step="0.01" min="0" value="0"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Notice photo/link, receipt, damage photo note, or where proof was sent"></label><label>Note / proof placeholder<textarea name="notes" maxlength="1200" placeholder="Notice number, location, photo note, receipt, or what happened..."></textarea></label><button class="btn primary" type="submit">Report issue</button><small>This creates a review item connected to your vehicle and customer file.</small></form>';
   const portalDocumentForm = '<form method="POST" action="/customer/document-update" class="customer-message-form customer-document-form"><label>Send document / proof update<select name="type"><option>Insurance proof</option><option>Driver license</option><option>Registration</option><option>Background check info</option><option>Proof of income</option><option>Other document</option></select></label><label>Provider / agency<input name="provider" maxlength="120" placeholder="Insurance company, DMV, background provider..."></label><label>Policy / reference<input name="reference" maxlength="160" placeholder="Policy, notice, confirmation, or reference number"></label><label>Expiration / due date<input name="expires" type="date"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Paste a photo/document link or write where proof was sent"></label><label>Note / proof placeholder<textarea name="notes" maxlength="1200" placeholder="Tell us what changed. Real file upload/email attachment can connect here later."></textarea></label><button class="btn primary" type="submit">Send update</button><small>This saves to your customer file and alerts WheelsonAuto to verify it.</small></form>';
   const cardChangeForm = customerPortalActionForm('/customer/card-change', 'Change card on file', 'Opens a secure Clover card setup link. WheelsonAuto never sees the full card number.', 'customer-card-form');
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => '<div class="customer-row"><div><strong>' + escapeHtml(d.title || d.type || d.kind || 'Document') + '</strong><small>' + escapeHtml([d.kind || d.type || 'Document', d.date || d.createdAt || '', d.method || d.status || '', d.vehicle || vehicleTitle].filter(Boolean).join(' - ')) + '</small>' + (d.url || d.reference ? '<p>' + escapeHtml(d.url || d.reference) + '</p>' : '') + '</div>' + (d.amount ? '<b>' + moneyText(d.amount || 0) + '</b>' : '<span>' + escapeHtml(d.status || '') + '</span>') + '</div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => '<div class="customer-row"><div><strong>' + escapeHtml(d.title || d.type || d.kind || 'Document') + '</strong><small>' + escapeHtml([d.kind || d.type || 'Document', d.date || d.createdAt || '', d.method || d.status || '', d.vehicle || vehicleTitle].filter(Boolean).join(' - ')) + '</small>' + (d.url || d.reference ? '<p>' + escapeHtml(d.url || d.reference) + '</p>' : '') + '</div>' + (d.amount ? '<b>' + moneyText(d.amount || 0) + '</b>' : '<span>' + escapeHtml(d.status || '') + '</span>') + '</div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -4620,7 +4624,7 @@ function claimPossibleMatches(data, claim = {}) {
       vehicle: vehicleLabel,
       vin: merged.vin || vehicle.vin || '',
       plate,
-      tracker: merged.tracker || vehicle.tracker || '',
+      tracker: trackerName(merged) || trackerName(vehicle),
       phone: merged.phone || '',
       email: merged.email || '',
       cloverCustomerId: merged.cloverCustomerId || '',
@@ -5019,7 +5023,7 @@ function assignAutopayVehicle(data, autopay) {
   autopay.licensePlate = tag;
   autopay.plate = tag;
   autopay.tempTag = vehicle.tempTag || autopay.tempTag || '';
-  autopay.tracker = vehicle.tracker || autopay.tracker || '';
+  autopay.tracker = trackerName(vehicle) || trackerName(autopay);
   (data.maintenance || []).forEach(job => {
     const status = String(job.status || '').toLowerCase();
     if (status.includes('complete') || status.includes('fixed') || status.includes('closed')) return;
@@ -5037,7 +5041,7 @@ function assignAutopayVehicle(data, autopay) {
     job.licensePlate = tag || job.licensePlate || '';
     job.plate = tag || job.plate || '';
     job.tempTag = vehicle.tempTag || job.tempTag || '';
-    job.tracker = vehicle.tracker || job.tracker || '';
+    job.tracker = trackerName(vehicle) || trackerName(job);
     job.customerSyncedAt = new Date().toISOString();
     if (oldJobCustomer && normKey(oldJobCustomer) !== customerKey) {
       job.previousCustomer = oldJobCustomer;
@@ -5562,7 +5566,7 @@ function createPaymentRequest(data, payload) {
     vin: vehicle.vin || payload.vin || recurring.vin || '',
     licensePlate: tag,
     plate: tag,
-    tracker: vehicle.tracker || payload.tracker || recurring.tracker || '',
+    tracker: trackerName(vehicle) || trackerName(payload) || trackerName(recurring),
     amount,
     frequency: payload.frequency || recurring.frequency || 'Weekly',
     status: 'Open',
@@ -5851,7 +5855,7 @@ function recurringPaymentIdentity(data, row = {}, payload = {}) {
     licensePlate: tag,
     plate: tag,
     tempTag: vehicle.tempTag || row.tempTag || payload.tempTag || '',
-    tracker: vehicle.tracker || row.tracker || payload.tracker || ''
+    tracker: trackerName(vehicle) || trackerName(row) || trackerName(payload)
   };
 }
 function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
@@ -6577,7 +6581,7 @@ const server = http.createServer(async (req, res) => {
         vin: summary.vin || vehicle.vin || recurring.vin || '',
         licensePlate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
         plate: summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '',
-        tracker: summary.tracker || vehicle.tracker || recurring.tracker || '',
+        tracker: summary.tracker || trackerName(vehicle) || trackerName(recurring),
         amount: recurring.amount || recurring.weeklyAmount || 0,
         nextRun: recurring.nextRun || summary.nextRun || '',
         chargeTime: recurring.chargeTime || summary.chargeTime || ''
@@ -6653,7 +6657,7 @@ const server = http.createServer(async (req, res) => {
         licensePlate: tag,
         plate: tag,
         tempTag: vehicle.tempTag || recurring.tempTag || '',
-        tracker: summary.tracker || vehicle.tracker || recurring.tracker || '',
+        tracker: summary.tracker || trackerName(vehicle) || trackerName(recurring),
         recurringPaymentId: recurring.id || account.recurringPaymentId || '',
         cloverCustomerId: recurring.cloverCustomerId || '',
         method: method + ' outside app',
@@ -6749,7 +6753,7 @@ const server = http.createServer(async (req, res) => {
         licensePlate: tag,
         plate: tag,
         tempTag: vehicle.tempTag || recurring.tempTag || '',
-        tracker: vehicle.tracker || recurring.tracker || '',
+        tracker: trackerName(vehicle) || trackerName(recurring),
         type,
         issue: type,
         due,
@@ -6842,7 +6846,7 @@ const server = http.createServer(async (req, res) => {
         plate: tag,
         reference: tag,
         tempTag: vehicle.tempTag || recurring.tempTag || '',
-        tracker: vehicle.tracker || recurring.tracker || '',
+        tracker: trackerName(vehicle) || trackerName(recurring),
         type,
         source: 'Customer portal',
         provider: /toll|ez/i.test(type) ? 'E-ZPass / toll notice' : 'Customer report',
@@ -6941,7 +6945,7 @@ const server = http.createServer(async (req, res) => {
         licensePlate: tag,
         plate: tag,
         tempTag: vehicle.tempTag || recurring.tempTag || '',
-        tracker: vehicle.tracker || recurring.tracker || '',
+        tracker: trackerName(vehicle) || trackerName(recurring),
         type,
         title: type + ' update',
         kind: 'Document',
@@ -7071,7 +7075,7 @@ const server = http.createServer(async (req, res) => {
         vin: context.vehicle && context.vehicle.vin || recurring.vin || '',
         licensePlate: context.vehicle && (context.vehicle.plate || context.vehicle.licensePlate) || recurring.licensePlate || recurring.plate || '',
         tempTag: context.vehicle && context.vehicle.tempTag || recurring.tempTag || '',
-        tracker: context.vehicle && context.vehicle.tracker || recurring.tracker || '',
+        tracker: context.vehicle && trackerName(context.vehicle) || trackerName(recurring),
         amount: Number(recurring.amount || recurring.weeklyAmount || context.customer && context.customer.weeklyAmount || 0),
         frequency: recurring.frequency || 'Weekly',
         nextRun: recurring.nextRun || localDateKey(),
