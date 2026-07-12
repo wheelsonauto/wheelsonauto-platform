@@ -81,6 +81,8 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   'Failed once',
   'Contact now',
   'Today Clover transactions',
+  'Verification inbox',
+  'verifyRows',
   'paymentState(r).key'
 ].forEach(text => requireText('Daily closeout board', dailyCloseout, text));
 

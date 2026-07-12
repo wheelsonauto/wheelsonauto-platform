@@ -141,6 +141,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve |
   'Contact failed-twice customers',
   'Match transactions',
   'Link autopay to vehicles',
+  'Clear verification inbox',
   'Review today sensitive changes',
   'admin approval is still required for charges, removals, card changes, claims, refunds, and receipts'
 ].forEach(text => requireText('Star QA manager suggestions', starQaManager, text));

@@ -178,6 +178,8 @@ assertIncludes('Daily closeout notes surface', app + server, [
   'ownerNote',
   'dailyCloseouts',
   'Sensitive changes',
+  'Verification inbox',
+  'No customer-submitted proof or paid-outside reports are waiting for verification',
   'auditEvents'
 ]);
 
@@ -432,8 +434,8 @@ assertIncludes('Staff service cards', staffServiceCard + app + css, ['roleName()
 assertIncludes('Staff claim cards', staffClaimCard + app + css, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link', 'claimMatchNote', 'proofLine', 'Open proof', 'proof-line']);
 assertIncludes('Tracker health layer', trackerStatus + app, ['Tracker offline', 'Tracker stale', 'Tracker setup', 'trackerLastPing', 'trackerLocation']);
 assertIncludes('Staff fleet tracker cards', staffFleetCard, ['vehicleTrackingBadge', 'vehicleTrackingLine']);
-assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review', 'Sensitive changes', 'customer uploads stay pending until staff approves']);
-assertIncludes('Star QA manager suggestions', starQaManager, ['Star QA manager', 'Fix first', 'Contact failed-twice customers', 'Link autopay to vehicles', 'Verify customer uploads', 'Review today sensitive changes']);
+assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review', 'Sensitive changes', 'Verification inbox', 'Customer proof, paid-outside, service, toll, claim, and document reviews should be cleared before closeout', 'customer uploads stay pending until staff approves']);
+assertIncludes('Star QA manager suggestions', starQaManager, ['Star QA manager', 'Fix first', 'Contact failed-twice customers', 'Link autopay to vehicles', 'Clear verification inbox', 'Verify customer uploads', 'Review today sensitive changes']);
 assertIncludes('Clover dispute match note', claimMatchNote, ['Needs payment/customer match', 'Matched: ', 'customerMatchSource', 'apply-claim-match']);
 assertIncludes('Star QA health panel', starHealth, ['Star QA', 'Missing VIN', 'Unmatched payments', 'Setup / not found', 'Provider setup needed before live SMS sends']);
 
