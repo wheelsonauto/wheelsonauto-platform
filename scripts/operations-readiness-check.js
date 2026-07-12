@@ -244,6 +244,10 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'signoff-daily-closeout',
   'Daily closeout signed off',
   'closeoutSnapshot',
+  'openCardSetupLinks',
+  'pendingStarApprovals',
+  'Card setup',
+  'Star approvals',
   'print-daily-closeout',
   'Star closeout summary',
   'auditEvents'
