@@ -4455,33 +4455,43 @@ function defaultApiProviderRows(data = {}) {
       endpoint: '/api/integrations/clover/sync-all',
       liveTest: 'Sync customers, payments, recurring roster, then compare Today closeout.'
     },
-    {
-      id: 'clover-ecommerce',
-      name: 'Clover Ecommerce',
-      group: 'Money',
-      status: CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Testing' : 'Ready for credentials',
-      owner: 'Owner',
-      envKeys: 'CLOVER_ECOMMERCE_PUBLIC_KEY, CLOVER_ECOMMERCE_PRIVATE_KEY, CLOVER_MERCHANT_ID',
-      endpoint: '/api/card-setup-requests, /api/integrations/clover/manual-charge',
-      liveTest: 'Create card setup link, save card, charge controlled live test, verify Paid screen.'
-    },
-    {
-      id: 'sms-phone',
-      name: 'SMS / Business Phone',
-      group: 'Comms',
-      status: messageStatus.configured ? 'Testing' : 'Provider needed',
-      owner: 'Owner',
-      envKeys: 'SMS_PROVIDER_KEY, SMS_FROM_NUMBER',
-      endpoint: '/api/messages/send, /api/webhooks/messages',
-      liveTest: 'Send and receive a customer SMS while keeping T-Mobile voice calls.'
-    },
+	    {
+	      id: 'clover-ecommerce',
+	      name: 'Clover Ecommerce',
+	      group: 'Money',
+	      status: CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Testing' : 'Ready for credentials',
+	      owner: 'Owner',
+	      envKeys: 'CLOVER_ECOMMERCE_PUBLIC_KEY, CLOVER_ECOMMERCE_PRIVATE_KEY, CLOVER_MERCHANT_ID',
+	      endpoint: '/api/card-setup-requests, /api/integrations/clover/manual-charge',
+	      liveTest: 'Create card setup link, save card, charge controlled live test, verify Paid screen.'
+	    },
+	    {
+	      id: 'clover-webhooks',
+	      name: 'Clover Webhooks',
+	      group: 'Money',
+	      status: CLOVER_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
+	      owner: 'Owner',
+	      envKeys: 'CLOVER_WEBHOOK_SECRET or WOA_CLOVER_WEBHOOK_SECRET, Clover app webhook URL',
+	      endpoint: '/api/webhooks/clover',
+	      liveTest: 'Trigger Clover payment webhook and confirm payment history / dashboard auto-sync updates.'
+	    },
+	    {
+	      id: 'sms-phone',
+	      name: 'SMS / Business Phone',
+	      group: 'Comms',
+	      status: messageStatus.configured ? 'Testing' : 'Provider needed',
+	      owner: 'Owner',
+	      envKeys: 'SMS_PROVIDER_KEY, SMS_FROM_NUMBER, WOA_MESSAGING_WEBHOOK_SECRET',
+	      endpoint: '/api/messages/send, /api/webhooks/messages',
+	      liveTest: 'Send and receive a customer SMS while keeping T-Mobile voice calls.'
+	    },
     {
       id: 'email',
       name: 'Email Notifications',
       group: 'Comms',
-      status: messageStatus.emailConfigured ? 'Testing' : 'Provider needed',
-      owner: 'Owner',
-      envKeys: 'WOA_EMAIL_FROM, RESEND_API_KEY or SENDGRID_API_KEY',
+	      status: messageStatus.emailConfigured ? 'Testing' : 'Provider needed',
+	      owner: 'Owner',
+	      envKeys: 'WOA_EMAIL_FROM, RESEND_API_KEY or SENDGRID_API_KEY, WOA_MESSAGING_WEBHOOK_SECRET',
       endpoint: '/api/messages/send, /api/webhooks/email, /api/notifications/email/settings',
       liveTest: 'Send customer reply, receive inbound email webhook, and send owner notification test.'
     },

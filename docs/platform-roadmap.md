@@ -61,6 +61,7 @@ Completed in this build pass:
 - System health/readiness now includes `CLOVER_WEBHOOK_SECRET` / `WOA_CLOVER_WEBHOOK_SECRET` coverage so Clover webhook auto-sync is not treated as production-ready without a shared secret.
 - Star QA now surfaces SMS/email and Clover webhook-secret readiness cards in the app using safe booleans, so provider setup gaps are visible without exposing secrets.
 - Owner deep reports and fallback CSV exports now include SMS/email and Clover webhook-secret readiness rows, keeping closeout/export reviews aligned with Star QA without exposing secret values.
+- Missing SMS/email and Clover webhook secrets now surface as owner priority-queue and Star manager setup items, and the API provider defaults name the exact Render keys needed before live webhook automation.
 
 Checks passed at this checkpoint:
 
