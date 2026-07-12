@@ -440,7 +440,7 @@ function ownerSmoke() {
     ['Documents', 'Documents', undefined, ['Documents', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
-    ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout'], false]
+    ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout', 'Car profitability & recovery'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
