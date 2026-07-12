@@ -224,6 +224,7 @@ const criticalActionRequirements = [
   ['Thread reply send flow', 'send-thread-message', ['/api/messages/send', 'threadMessageBody', 'messageThreadKey', "tab='Inbox'", "view='Messages'"]],
   ['Customer portal login save flow', 'save-customer-login', ['/api/customer-accounts', 'customerLoginName', 'await refreshData(true)', 'Settings()']],
   ['Company account save flow', 'save-org', ['/api/organizations', 'await refreshData(true)', 'Organizations()']],
+  ['Company staff prefill flow', 'new-staff', ['staffOrgPrefill', 'orgOptions(staffOrgPrefill)', 'staffOrg']],
   ['Email notification test flow', 'send-email-notification-test', ['/api/notifications/email/test', 'notificationEmailTo', 'notification-event:checked', "tab='Setup'", 'Messages()']],
   ['Dispute match accept flow', 'apply-claim-match', ['applyClaimCandidate', 'Dispute match accepted', 'await save()', 'ClaimsIssues()']],
   ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
