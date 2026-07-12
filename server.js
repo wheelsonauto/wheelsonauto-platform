@@ -350,6 +350,7 @@ function repairDataIds(data) {
   ensureBaseOrganization(data);
   repairVehicleSheetLinkConflicts(data);
   resolveClaimCustomerLinks(data);
+  reconcilePaidPaymentRequests(data);
   return data;
 }
 function nextUniqueVehicleId(data, base, vehicle) {
@@ -3305,6 +3306,35 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
 function isOpenCustomerPaymentRequest(row = {}) {
   const status = String(row.status || 'Open').toLowerCase();
   return status.indexOf('paid') < 0 && status.indexOf('closed') < 0 && status.indexOf('cancel') < 0 && status.indexOf('expired') < 0;
+}
+function reconcilePaidPaymentRequests(data = {}) {
+  data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  const paidByRequestId = new Map();
+  data.payments.filter(closeoutPaymentPaid).forEach(payment => {
+    const requestId = String(payment.paymentRequestId || '').trim();
+    if (requestId && !paidByRequestId.has(requestId)) paidByRequestId.set(requestId, payment);
+  });
+  let reconciled = 0;
+  data.paymentRequests.forEach(request => {
+    const payment = paidByRequestId.get(String(request.id || '').trim());
+    if (!payment || !isOpenCustomerPaymentRequest(request)) return;
+    const paidAt = payment.createdAt || payment.date || new Date().toISOString();
+    request.status = 'Paid through WheelsonAuto payment record';
+    request.paidAt = request.paidAt || paidAt;
+    request.closedAt = request.closedAt || paidAt;
+    request.closeReason = request.closeReason || 'Closed automatically after matching paid payment record.';
+    request.matchedPaymentId = payment.id || payment.cloverPaymentId || payment.externalReferenceId || '';
+    reconciled += 1;
+    const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
+    if (recurring) {
+      recurring.status = recurring.status && /removed|history/i.test(String(recurring.status)) ? recurring.status : 'Active';
+      recurring.tone = 'good';
+      recurring.lastPaymentAt = recurring.lastPaymentAt || paidAt;
+      recurring.lastPaymentResult = recurring.lastPaymentResult || 'Paid';
+    }
+  });
+  return reconciled;
 }
 function paymentRequestAgeHours(row = {}, now = new Date()) {
   const raw = row.createdAt || row.date || row.updatedAt || '';

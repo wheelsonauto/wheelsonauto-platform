@@ -1054,6 +1054,7 @@ async function main() {
       { id: 'clover-payment-closeout-dedup-two', cloverPaymentId: 'pay-closeout-dedup', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'Paid', notes: 'WheelsonAuto weekly payment - Direct Closeout Customer' },
       { id: 'clover-payment-closeout-external-customer', cloverPaymentId: 'pay-closeout-external-customer', customer: 'Unmatched Clover payment', externalCustomerReference: 'direct-closeout-clover-customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 123, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
       { id: 'clover-payment-report-candidate', cloverPaymentId: 'pay-report-candidate', customer: 'Unmatched Clover payment', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 456, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
+      { id: 'payment-direct-reconciled-link', paymentRequestId: 'plink-direct-closeout-already-paid', customer: 'Direct Reconciled Link', date: '2099-12-30', method: 'Clover Hosted Checkout', source: 'Clover Hosted Checkout', amount: 77, status: 'Paid' },
       { id: 'payment-closeout-paid-outside', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Paid outside app', source: 'WheelsonAuto', amount: 45, status: 'Paid outside app', notes: 'Cash verified' },
       { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' }
     );
@@ -1068,6 +1069,14 @@ async function main() {
       source: 'WheelsonAuto hosted checkout',
       createdAt: '2099-12-31T18:00:00.000Z',
       url: 'https://wheelsonauto-platform.onrender.com/pay/plink-direct-closeout-open'
+    }, {
+      id: 'plink-direct-closeout-already-paid',
+      customer: 'Direct Reconciled Link',
+      amount: 77,
+      status: 'Open',
+      source: 'WheelsonAuto hosted checkout',
+      createdAt: '2099-12-30T18:00:00.000Z',
+      url: 'https://wheelsonauto-platform.onrender.com/pay/plink-direct-closeout-already-paid'
     }, {
       id: 'plink-direct-closeout-paid',
       customer: 'Direct Closeout Paid Link',
@@ -1089,6 +1098,9 @@ async function main() {
     });
     const closeoutDedupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: closeoutDedupData });
     assert(closeoutDedupWrite.status === 200 && closeoutDedupWrite.json.ok, 'Owner could not seed closeout duplicate payment records.');
+    const closeoutReconciledState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const reconciledPaymentLink = (closeoutReconciledState.json.paymentRequests || []).find(row => row.id === 'plink-direct-closeout-already-paid');
+    assert(reconciledPaymentLink && /paid/i.test(reconciledPaymentLink.status || '') && reconciledPaymentLink.matchedPaymentId === 'payment-direct-reconciled-link', 'Open hosted payment links should auto-close when a matching paid payment record exists.');
     const closeoutCandidateReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(closeoutCandidateReport.status === 200 && closeoutCandidateReport.text.includes('Possible match Direct Report Candidate') && closeoutCandidateReport.text.includes('DIRECTREPORTVIN') && closeoutCandidateReport.text.includes('Tag DIR-RPT'), 'Deep report should show possible customer/vehicle evidence for unmatched transaction rows.');
     const closeoutDedupNotification = await request(server, 'POST', '/api/notifications/daily-closeout', {
