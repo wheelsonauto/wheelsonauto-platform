@@ -50,9 +50,10 @@ const approve = finalFunctionSlice(server, 'approveAiMessage');
 const apiAllowed = finalFunctionSlice(server, 'apiAllowedForUser');
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
 const starHealth = finalFunctionSlice(app, 'starSystemHealthPanel');
+const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
 const starActions = finalFunctionSlice(app, 'starAiActions');
 
-if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve || !apiAllowed || !starPanel || !starHealth || !starActions) {
+if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve || !apiAllowed || !starPanel || !starHealth || !starQaManager || !starActions) {
   fail('Missing Star AI frontend/backend safety functions.');
 }
 
@@ -133,6 +134,14 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve |
   'Star can flag issues and draft fixes',
   'money moves, card changes, removals, disputes, and receipts still require admin approval'
 ].forEach(text => requireText('Star QA system health safety', starHealth, text));
+
+[
+  'Star QA manager',
+  'Contact failed-twice customers',
+  'Match transactions',
+  'Link autopay to vehicles',
+  'admin approval is still required for charges, removals, card changes, claims, refunds, and receipts'
+].forEach(text => requireText('Star QA manager suggestions', starQaManager, text));
 
 [
   "p.actionType==='charge_saved_card'",
