@@ -272,6 +272,34 @@ async function main() {
     });
     assert(duplicateFranchise.status === 409, 'Duplicate company/franchise names should be blocked.');
 
+    const badStaffCompany = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-bad-company-staff',
+        name: 'Bad Company Staff',
+        username: 'direct-bad-company-staff',
+        password: 'DirectBadCompany123!',
+        role: 'Manager',
+        organizationId: 'missing-company',
+        status: 'Active'
+      }
+    });
+    assert(badStaffCompany.status === 400, 'Staff account with missing company/store should be rejected.');
+
+    const franchiseStaff = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-franchise-manager',
+        name: 'Direct Franchise Manager',
+        username: 'direct-franchise-manager',
+        password: 'DirectFranchiseManager123!',
+        role: 'Manager',
+        organizationId: 'direct-franchise',
+        status: 'Active'
+      }
+    });
+    assert(franchiseStaff.status === 200 && franchiseStaff.json.ok && franchiseStaff.json.staff.companyName === 'Direct Franchise Test', 'Staff account should attach only to saved company/franchise records.');
+
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
     const staffLogout = await request(server, 'GET', '/logout', { cookie: managerCookie });

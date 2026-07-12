@@ -1705,6 +1705,12 @@ function companyNameById(data, organizationId) {
   const org = (data.organizations || []).find(item => item.id === organizationId);
   return org && org.name || 'WheelsonAuto';
 }
+function organizationExists(data, organizationId) {
+  const clean = String(organizationId || '').trim();
+  if (!clean) return false;
+  ensureBaseOrganization(data);
+  return (data.organizations || []).some(item => item.id === clean);
+}
 function staffLoginUser(staff) {
   return { id: staff.id || ('staff-' + Date.now()), username: staff.username || staff.email || '', name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || 'org-wheelsonauto', companyName: staff.companyName || 'WheelsonAuto' };
 }
@@ -4602,6 +4608,8 @@ const server = http.createServer(async (req, res) => {
       const staff = cleanStaffAccountPayload(payload, existing);
       if (!staff.username) return json(res, 400, { ok: false, error: 'Enter a username for this staff account.' });
       if (!existing && !staff.passwordHash && !staff.pinHint) return json(res, 400, { ok: false, error: 'Enter a password or temporary PIN for the new staff account.' });
+      if (!organizationExists(data, staff.organizationId)) return json(res, 400, { ok: false, error: 'Choose a saved company/store for this staff account.' });
+      staff.companyName = companyNameById(data, staff.organizationId);
       const duplicate = data.staffAccounts.find(item => item.id !== staff.id && normalizeLogin(item.username || item.email) === staff.username);
       if (duplicate) return json(res, 409, { ok: false, error: 'That username is already used by another staff account.' });
       if (existing) Object.assign(existing, staff);
