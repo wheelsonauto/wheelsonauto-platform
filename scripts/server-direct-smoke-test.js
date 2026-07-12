@@ -645,6 +645,10 @@ async function main() {
     );
     const portalPrivacyWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: portalPrivacyState });
     assert(portalPrivacyWrite.status === 200 && portalPrivacyWrite.json.ok, 'Owner could not seed customer portal privacy fields.');
+    const ownerPaymentLinkReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
+    assert(ownerPaymentLinkReport.text.includes('Open payment requests') && ownerPaymentLinkReport.text.includes('direct-customer-open-payment-link') && ownerPaymentLinkReport.text.includes('WheelsonAuto hosted checkout') && !ownerPaymentLinkReport.text.includes('direct-customer-paid-payment-link'), 'Owner deep report should include open hosted checkout links and exclude paid payment links.');
+    const ownerPaymentLinkHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    assert(ownerPaymentLinkHealth.json.issues.some(row => row.key === 'open_payment_requests') && ownerPaymentLinkHealth.json.summary.openPaymentRequests >= 1 && ownerPaymentLinkHealth.json.summary.openPaymentRequestAmount >= 229, 'Owner system health should count open hosted checkout follow-ups.');
     const managerPrivacyRead = await request(server, 'GET', '/api/state', { cookie: managerCookie });
     assert(managerPrivacyRead.status === 200 && !JSON.stringify(managerPrivacyRead.json).includes('secret-source-token') && !JSON.stringify(managerPrivacyRead.json).includes('secret-payment-token') && !JSON.stringify(managerPrivacyRead.json).includes('secret-raw-value') && !JSON.stringify(managerPrivacyRead.json).includes('customer-secret-source-token'), 'Manager state should not expose raw saved-card/source secrets.');
     const managerPrivacySave = await request(server, 'PUT', '/api/state', { cookie: managerCookie, json: managerPrivacyRead.json });

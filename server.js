@@ -1394,6 +1394,17 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const matchNote = customer === 'Unmatched payment' ? reportPaymentCandidateNote(scoped, payment, recurring) : '';
     addReportRow(rows, 'Transactions', payment.date || payment.createdAt || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (payment.vehicle || ''), vehicle.vin || payment.vin || '', tag, vehicle.tracker || payment.tracker || '', payment.method || payment.type || 'Payment', payment.amount || 0, payment.status || 'Recorded', payment.source || payment.provider || 'Payment', reportCsvNote([payment.notes, payment.error, matchNote, payment.externalReferenceId, payment.cloverPaymentId, payment.paymentRequestId]));
   });
+  (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest).forEach(request => {
+    const recurringRow = request.recurringPaymentId ? recurring.find(row => row.id === request.recurringPaymentId) : null;
+    const customer = request.customer || (recurringRow && recurringRow.customer) || 'Unassigned payment link';
+    const recurringVehicleId = recurringRow && recurringRow.vehicleId;
+    const vehicle = reportVehicleFor(scoped, customer, request.vehicleId || recurringVehicleId);
+    const tag = vehicle.plate || vehicle.stock || request.licensePlate || request.plate || (recurringRow && (recurringRow.licensePlate || recurringRow.plate)) || '';
+    const requestVehicle = request.vehicle || (recurringRow && recurringRow.vehicle) || '';
+    const requestVin = request.vin || (recurringRow && recurringRow.vin) || '';
+    const requestTracker = request.tracker || (recurringRow && recurringRow.tracker) || '';
+    addReportRow(rows, 'Open payment requests', request.createdAt || request.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : requestVehicle, vehicle.vin || requestVin, tag, vehicle.tracker || requestTracker, request.frequency || 'Payment link', request.amount || 0, request.status || 'Open', request.source || 'WheelsonAuto hosted checkout', reportCsvNote([request.url, request.reason, request.notes, request.recurringPaymentId ? 'Autopay ' + request.recurringPaymentId : '', request.phone, request.email]));
+  });
   recurring.forEach(row => {
     const vehicle = reportVehicleFor(scoped, row.customer, row.vehicleId);
     const tag = vehicle.plate || vehicle.stock || row.licensePlate || row.plate || '';
@@ -1514,6 +1525,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
     return due && due <= today;
   });
   const openClaims = (scoped.claims || []).filter(claim => !/paid|closed/i.test(String(claim.status || 'Open')));
+  const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
+  const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const disputeMatchReview = openClaims.filter(claim => String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || (/dispute|chargeback|clover/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' '))) && weakClaimCustomer(claim.customer)));
   const auditToday = isOwnerUser(user) ? (scoped.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === today) : [];
   const issues = [];
@@ -1534,7 +1547,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(12, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
   issue(13, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
   issue(14, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
-  if (isOwnerUser(user)) issue(15, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(15, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
+  if (isOwnerUser(user)) issue(16, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -1562,6 +1576,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
       verificationInbox: verificationInbox.length,
       openService: openService.length,
       openClaims: openClaims.length,
+      openPaymentRequests: openPaymentRequests.length,
+      openPaymentRequestAmount,
       badCount,
       warnCount
     },
