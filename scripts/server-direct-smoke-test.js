@@ -340,6 +340,20 @@ async function main() {
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
 
+    const weakStaffPassword = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-weak-staff',
+        name: 'Direct Weak Staff',
+        username: 'direct-weak-staff',
+        password: 'weakpass',
+        role: 'Mechanic',
+        organizationId: 'org-wheelsonauto',
+        status: 'Active'
+      }
+    });
+    assert(weakStaffPassword.status === 400 && /letter and one number/i.test(weakStaffPassword.json.error || ''), 'Weak staff passwords should be rejected before account creation.');
+
     const mechanic = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
       json: {
@@ -411,6 +425,19 @@ async function main() {
     assert(!resetManagerPassword.json.staff.passwordHash && !resetManagerPassword.json.staff.passwordSalt, 'Staff reset response should not expose password secrets.');
     const oldStaffPasswordAttempt = await request(server, 'POST', '/login', { form: { username: 'direct-manager', password: 'DirectManager123!' } });
     assert(oldStaffPasswordAttempt.status === 401, 'Old staff password should stop working after owner reset.');
+
+    const weakCustomerPassword = await request(server, 'POST', '/api/customer-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-weak-customer-login',
+        name: 'Weak Customer',
+        customer: 'Weak Customer',
+        username: 'direct-weak-customer',
+        password: '12345678',
+        status: 'Active'
+      }
+    });
+    assert(weakCustomerPassword.status === 400 && /letter and one number/i.test(weakCustomerPassword.json.error || ''), 'Weak customer portal passwords should be rejected before login creation.');
 
     const customerLogin = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,

@@ -3388,6 +3388,12 @@ function createPasswordRecord(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   return { passwordSalt: salt, passwordHash: passwordHashStrong(password, salt), passwordUpdatedAt: new Date().toISOString() };
 }
+function passwordPolicyError(password, label = 'Password') {
+  const text = String(password || '');
+  if (text.length < 8) return label + ' must be at least 8 characters.';
+  if (!/[A-Za-z]/.test(text) || !/[0-9]/.test(text)) return label + ' must include at least one letter and one number.';
+  return '';
+}
 function secureCompare(a, b) {
   const left = Buffer.from(String(a || ''), 'utf8');
   const right = Buffer.from(String(b || ''), 'utf8');
@@ -7614,7 +7620,8 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse(await readBody(req) || '{}');
       const currentPassword = String(payload.currentPassword || '').trim();
       const newPassword = String(payload.newPassword || '').trim();
-      if (newPassword.length < 8) return json(res, 400, { ok: false, error: 'Use at least 8 characters for the new password.' });
+      const accountPolicyError = passwordPolicyError(newPassword, 'New password');
+      if (accountPolicyError) return json(res, 400, { ok: false, error: accountPolicyError });
       const data = await readData();
       if (!passwordMatchesCurrentUser(data, user, currentPassword)) return json(res, 403, { ok: false, error: 'Current password or PIN did not match.' });
       const record = createPasswordRecord(newPassword);
@@ -7638,6 +7645,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });
       const payload = JSON.parse(await readBody(req) || '{}');
+      if (String(payload.password || '').trim()) {
+        const staffPolicyError = passwordPolicyError(String(payload.password || '').trim(), 'Staff password');
+        if (staffPolicyError) return json(res, 400, { ok: false, error: staffPolicyError });
+      }
       const data = await readData();
       data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
       const existing = data.staffAccounts.find(item => item.id === payload.id);
@@ -7661,6 +7672,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/customer-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage customer logins.' });
       const payload = JSON.parse(await readBody(req) || '{}');
+      if (String(payload.password || '').trim()) {
+        const customerPolicyError = passwordPolicyError(String(payload.password || '').trim(), 'Customer password');
+        if (customerPolicyError) return json(res, 400, { ok: false, error: customerPolicyError });
+      }
       const data = await readData();
       data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
       const existing = data.customerAccounts.find(item => item.id === payload.id);
