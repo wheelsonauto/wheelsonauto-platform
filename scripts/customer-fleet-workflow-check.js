@@ -40,6 +40,9 @@ function finalFunctionSlice(source, name) {
 
 const recurringReadyOptions = finalFunctionSlice(app, 'recurringReadyVehicleOptions');
 const customerFileOptions = finalFunctionSlice(app, 'customerFileVehicleOptions');
+const openContract = finalFunctionSlice(app, 'openContract');
+const customerTimeline = finalFunctionSlice(app, 'customerTimeline');
+const maintenanceFileDetail = finalFunctionSlice(app, 'maintenanceFileDetail');
 const saveContractHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='save-contract-file')"), app.indexOf("function reactivateCustomerModal", app.indexOf("if(!b||b.dataset.action!=='save-contract-file')")));
 const saveVehicleHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='save-vehicle')"), app.indexOf("function openMaintenanceModal", app.indexOf("if(!b||b.dataset.action!=='save-vehicle')")));
 const endCustomer = finalFunctionSlice(app, 'confirmEndCustomerFile');
@@ -87,6 +90,15 @@ const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/ap
   "tab=removed?'History':'Active'",
   'Customer file, car, payments, and service synced'
 ].forEach(text => requireText('Customer file save sync', saveContractHandler, text));
+
+[
+  'maintenanceFileDetail',
+  'vehicleIdentityLine',
+  'inspectionChecklistSummary',
+  'mechanicSignoff',
+  'VIN / tag / inspection',
+  'Recent file activity'
+].forEach(text => requireText('Customer file service truth', openContract + customerTimeline + maintenanceFileDetail, text));
 
 [
   'returningCustomer',
