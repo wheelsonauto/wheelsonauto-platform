@@ -219,6 +219,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Open payment links',
   'Stale payment links',
   'stalePaymentRequests',
+  'close-payment-link',
+  'Hosted payment link closed',
   'No open hosted checkout links are waiting for closeout follow-up',
   'Sensitive changes',
   'Verification inbox',

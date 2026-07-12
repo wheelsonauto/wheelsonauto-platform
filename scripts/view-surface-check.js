@@ -180,6 +180,7 @@ assertIncludes('Daily closeout notes surface', app + server, [
   'openPaymentLinkAmount',
   'stalePaymentLinks',
   'stalePaymentLinkAmount',
+  'close-payment-link',
   'signedAt',
   'signedBy',
   'Daily closeout signed off',
