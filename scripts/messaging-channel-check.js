@@ -92,6 +92,8 @@ requireText('Daily closeout contact list body', server, 'Contact list:');
 requireText('Daily closeout Clover summary', server, 'cloverCollected');
 requireText('Daily closeout open payment request count', server, 'openPaymentRequests');
 requireText('Daily closeout open payment request amount', server, 'openPaymentRequestAmount');
+requireText('Daily closeout stale payment request count', server, 'stalePaymentRequests');
+requireText('Daily closeout stale payment request body', server, 'Stale payment links:');
 requireText('Daily closeout payment request body', server, 'Open payment requests:');
 requireText('Daily closeout verification payload', server, 'closeoutVerificationItems');
 requireText('Daily closeout verification body', server, 'Verification inbox:');

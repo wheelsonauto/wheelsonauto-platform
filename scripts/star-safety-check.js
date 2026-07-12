@@ -144,6 +144,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Missing contact',
   'Setup / not found',
   'Open payment links',
+  'Stale payment links',
   'Vehicle assignment conflicts',
   'Sensitive changes',
   'Star can flag issues and draft fixes',
@@ -167,6 +168,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Resolve vehicle assignment conflicts',
   'Link autopay to vehicles',
   'Clear verification inbox',
+  'Follow up stale payment links',
   'Follow up open payment links',
   'Review today sensitive changes',
   'admin approval is still required for charges, removals, card changes, claims, refunds, and receipts'

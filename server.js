@@ -1087,6 +1087,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const openPaymentRequests = (data.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
+  const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
+  const stalePaymentRequestAmount = stalePaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const recurringWithState = recurring.map(row => ({ row, state: closeoutRecurringState(row, dateKeyValue) }));
   const failedOnce = recurringWithState.filter(item => item.state === 'Failed once').map(item => item.row);
   const failedTwice = recurringWithState.filter(item => item.state === 'Failed twice').map(item => item.row);
@@ -1126,6 +1128,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       amount: Number(request.amount || 0),
       status: request.status || 'Open',
       createdAt: request.createdAt || request.date || '',
+      ageHours: paymentRequestAgeHours(request),
+      ageLabel: paymentRequestAgeLabel(request),
+      stale: paymentRequestAgeHours(request) >= 24,
       url: request.url || '',
       vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (request.vehicle || (recurringRow && recurringRow.vehicle) || ''),
       vin: vehicle.vin || request.vin || (recurringRow && recurringRow.vin) || '',
@@ -1157,6 +1162,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Clover collected: ' + moneyText(cloverCollected),
     'Today transactions recorded: ' + payments.length,
     'Open payment requests: ' + openPaymentRequests.length + ' / ' + moneyText(openPaymentRequestAmount),
+    'Stale payment links: ' + stalePaymentRequests.length + ' / ' + moneyText(stalePaymentRequestAmount),
     'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
@@ -1174,7 +1180,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.']),
     '',
     'Open payment requests:',
-    ...(paymentRequestRows.length ? paymentRequestRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.url ? ' | ' + item.url : '')) : ['- No open hosted checkout links waiting.']),
+    ...(paymentRequestRows.length ? paymentRequestRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + item.ageLabel + (item.stale ? ' | Follow up now' : '') + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.url ? ' | ' + item.url : '')) : ['- No open hosted checkout links waiting.']),
     '',
     'Verification inbox:',
     ...(verificationItems.length ? verificationItems.slice(0, 20).map(item => '- ' + item.type + ' | ' + item.customer + ' | ' + item.detail) : ['- No customer proof, paid-outside, service, toll, claim, or document review items waiting.']),
@@ -1214,6 +1220,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       transactions: payments.length,
       openPaymentRequests: openPaymentRequests.length,
       openPaymentRequestAmount,
+      stalePaymentRequests: stalePaymentRequests.length,
+      stalePaymentRequestAmount,
       paymentRequestRows: paymentRequestRows.slice(0, 50),
       verificationItems: verificationItems.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
@@ -1428,7 +1436,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const requestVehicle = request.vehicle || (recurringRow && recurringRow.vehicle) || '';
     const requestVin = request.vin || (recurringRow && recurringRow.vin) || '';
     const requestTracker = request.tracker || (recurringRow && recurringRow.tracker) || '';
-    addReportRow(rows, 'Open payment requests', request.createdAt || request.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : requestVehicle, vehicle.vin || requestVin, tag, vehicle.tracker || requestTracker, request.frequency || 'Payment link', request.amount || 0, request.status || 'Open', request.source || 'WheelsonAuto hosted checkout', reportCsvNote([request.url, request.reason, request.notes, request.recurringPaymentId ? 'Autopay ' + request.recurringPaymentId : '', request.phone, request.email]));
+    addReportRow(rows, 'Open payment requests', request.createdAt || request.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : requestVehicle, vehicle.vin || requestVin, tag, vehicle.tracker || requestTracker, request.frequency || 'Payment link', request.amount || 0, request.status || 'Open', request.source || 'WheelsonAuto hosted checkout', reportCsvNote([paymentRequestAgeLabel(request), paymentRequestAgeHours(request) >= 24 ? 'Stale - follow up now' : '', request.url, request.reason, request.notes, request.recurringPaymentId ? 'Autopay ' + request.recurringPaymentId : '', request.phone, request.email]));
   });
   recurring.forEach(row => {
     const vehicle = reportVehicleFor(scoped, row.customer, row.vehicleId);
@@ -1552,6 +1560,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const openClaims = (scoped.claims || []).filter(claim => !/paid|closed/i.test(String(claim.status || 'Open')));
   const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
+  const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
+  const stalePaymentRequestAmount = stalePaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const disputeMatchReview = openClaims.filter(claim => String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || (/dispute|chargeback|clover/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' '))) && weakClaimCustomer(claim.customer)));
   const auditToday = isOwnerUser(user) ? (scoped.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === today) : [];
   const issues = [];
@@ -1572,8 +1582,9 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(12, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
   issue(13, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
   issue(14, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
-  issue(15, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
-  if (isOwnerUser(user)) issue(16, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(15, 'stale_payment_requests', 'Stale payment links', stalePaymentRequests.length, stalePaymentRequests.length ? 'warn' : 'good', 'Messages', 'Queue', 'Hosted checkout links open more than 24 hours need follow-up.');
+  issue(16, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
+  if (isOwnerUser(user)) issue(17, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -1603,6 +1614,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
       openClaims: openClaims.length,
       openPaymentRequests: openPaymentRequests.length,
       openPaymentRequestAmount,
+      stalePaymentRequests: stalePaymentRequests.length,
+      stalePaymentRequestAmount,
       badCount,
       warnCount
     },
@@ -3292,6 +3305,22 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
 function isOpenCustomerPaymentRequest(row = {}) {
   const status = String(row.status || 'Open').toLowerCase();
   return status.indexOf('paid') < 0 && status.indexOf('closed') < 0 && status.indexOf('cancel') < 0 && status.indexOf('expired') < 0;
+}
+function paymentRequestAgeHours(row = {}, now = new Date()) {
+  const raw = row.createdAt || row.date || row.updatedAt || '';
+  const created = raw ? new Date(raw) : null;
+  if (!created || Number.isNaN(created.getTime())) return 0;
+  return Math.max(0, Math.floor((now.getTime() - created.getTime()) / 3600000));
+}
+function paymentRequestAgeLabel(row = {}, now = new Date()) {
+  const hours = paymentRequestAgeHours(row, now);
+  if (hours >= 48) return Math.floor(hours / 24) + ' days open';
+  if (hours >= 24) return '1 day open';
+  if (hours >= 1) return hours + ' hour' + (hours === 1 ? '' : 's') + ' open';
+  return 'New link';
+}
+function staleOpenPaymentRequests(rows = [], now = new Date()) {
+  return rows.filter(row => isOpenCustomerPaymentRequest(row) && paymentRequestAgeHours(row, now) >= 24);
 }
 function customerPortalState(data, account) {
   const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
