@@ -40,7 +40,9 @@ const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.WOA_OPENAI_API_KEY || '';
-const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || '';
+const OPENAI_BASE_URL = (process.env.WOA_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-4o-mini' : '');
+const WOA_AI_TIMEOUT_MS = Math.max(3000, Number(process.env.WOA_AI_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS || 15000));
 const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
 const WOA_STAR_AI_ENABLED = process.env.WOA_STAR_AI_ENABLED !== '0';
 const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND !== '0';
@@ -53,7 +55,7 @@ const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260712-deep-tighten-6">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260712-star-provider-1">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -548,6 +550,7 @@ function emailProviderConfigured(provider) {
 }
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
+  const saved = (((data.integrations || {}).messaging) || {});
   const provider = MESSAGING_PROVIDER || 'not_configured';
   const emailIntegration = (((data.integrations || {}).email) || {});
   const emailProvider = String(emailIntegration.provider || WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
@@ -572,6 +575,11 @@ function publicMessagingStatus(data = {}) {
     aiEnabled: settings.aiEnabled,
     aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
     aiModel: WOA_AI_MODEL ? 'stored in Render' : '',
+    aiProviderMode: OPENAI_API_KEY && WOA_AI_MODEL ? 'OpenAI provider connected' : 'Rules fallback until OPENAI_API_KEY or WOA_OPENAI_API_KEY is added in Render',
+    aiLastProvider: saved.lastAiProvider || '',
+    aiLastProviderAt: saved.lastAiProviderAt || '',
+    aiLastProviderError: saved.lastAiProviderError || '',
+    aiTimeoutMs: WOA_AI_TIMEOUT_MS,
     aiName: 'Star AI',
     aiShortName: 'Star',
     aiAutoSend: settings.aiAutoSend,
@@ -2148,11 +2156,12 @@ function aiPlanRules(data, payload = {}, context = null) {
 }
 function sanitizeAiPlan(plan, fallback) {
   const safe = { ...(fallback || {}), ...(plan || {}) };
+  const sensitiveActions = ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement', 'remove_customer', 'remove_card', 'delete_card', 'refund', 'dispute', 'toll_charge', 'claim_charge', 'edit_autopay', 'cancel_autopay'];
   safe.ok = true;
   safe.reply = String(safe.reply || (fallback && fallback.reply) || '').trim().slice(0, 900);
   safe.intent = String(safe.intent || 'general_reply').slice(0, 80);
   safe.actionType = String(safe.actionType || 'reply').slice(0, 80);
-  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement'].includes(safe.actionType);
+  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement'].includes(safe.actionType) || sensitiveActions.includes(safe.actionType);
   safe.needsHuman = !!safe.needsHuman || safe.actionType === 'human_review';
   safe.canAutoSend = !!safe.canAutoSend && !safe.approvalRequired && !safe.needsHuman;
   safe.confidence = Math.max(0, Math.min(1, Number(safe.confidence || 0.7)));
@@ -2160,10 +2169,26 @@ function sanitizeAiPlan(plan, fallback) {
   safe.reasons = Array.isArray(safe.reasons) ? safe.reasons.slice(0, 6).map(String) : [];
   safe.related = { ...((fallback && fallback.related) || {}), ...(safe.related || {}) };
   safe.context = (fallback && fallback.context) || safe.context || {};
+  safe.mode = String(safe.mode || (fallback && fallback.mode) || 'rules').slice(0, 40);
+  safe.provider = String(safe.provider || (safe.mode === 'openai' ? 'openai' : 'rules')).slice(0, 40);
+  safe.model = safe.provider === 'openai' ? String(safe.model || WOA_AI_MODEL || '').slice(0, 80) : '';
+  if (safe.aiError || safe.providerError) safe.providerError = String(safe.aiError || safe.providerError || '').slice(0, 240);
   return safe;
 }
+function parseStarAiJson(text) {
+  let clean = String(text || '').trim();
+  clean = clean.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  try {
+    return JSON.parse(clean || '{}');
+  } catch (firstErr) {
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(clean.slice(start, end + 1));
+    throw firstErr;
+  }
+}
 async function openAiReplyPlan(data, payload, context, fallback) {
-  if (!OPENAI_API_KEY || !WOA_AI_MODEL) return fallback;
+  if (!OPENAI_API_KEY || !WOA_AI_MODEL) return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: OPENAI_API_KEY ? 'Star AI model is not set.' : 'OpenAI API key is not configured.' }, fallback);
   const input = [
     {
       role: 'developer',
@@ -2180,19 +2205,31 @@ async function openAiReplyPlan(data, payload, context, fallback) {
       })
     }
   ];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WOA_AI_TIMEOUT_MS);
   try {
-    const response = await fetch('https://api.openai.com/v1/responses', {
+    const response = await fetch(OPENAI_BASE_URL + '/responses', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + OPENAI_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: WOA_AI_MODEL, input, reasoning: { effort: 'low' } })
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: WOA_AI_MODEL,
+        input,
+        temperature: 0.2,
+        reasoning: { effort: 'low' },
+        max_output_tokens: 700
+      })
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error && body.error.message || 'OpenAI response failed.');
     const text = body.output_text || (body.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('\n');
-    const parsed = JSON.parse(String(text || '{}').replace(/^```json|```$/g, '').trim());
-    return sanitizeAiPlan({ ...parsed, mode: 'openai' }, fallback);
+    const parsed = parseStarAiJson(text);
+    return sanitizeAiPlan({ ...parsed, mode: 'openai', provider: 'openai', model: WOA_AI_MODEL }, fallback);
   } catch (err) {
-    return sanitizeAiPlan({ ...fallback, mode: 'rules', aiError: String(err && err.message || err) }, fallback);
+    const message = err && err.name === 'AbortError' ? 'OpenAI provider timed out.' : String(err && err.message || err);
+    return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: message }, fallback);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 function appendLinkToReply(reply, label, url) {
@@ -2306,7 +2343,10 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
     amount: messageFields.amount,
     frequency: messageFields.frequency,
     claimId: plan.related && plan.related.claimId || '',
-    source: 'WheelsonAuto Star AI'
+    source: 'WheelsonAuto Star AI',
+    aiProvider: plan.provider || plan.mode || 'rules',
+    aiModel: plan.model || '',
+    aiProviderError: plan.providerError || ''
   };
   data.messages.unshift(draft);
   return { plan, draft, existing: false };
@@ -7737,7 +7777,15 @@ const server = http.createServer(async (req, res) => {
         ]);
       }
       data.integrations = data.integrations || {};
-      data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiDraftAt: new Date().toISOString(), lastError: '' };
+      data.integrations.messaging = {
+        ...(data.integrations.messaging || {}),
+        ...publicMessagingStatus(data),
+        lastAiDraftAt: new Date().toISOString(),
+        lastAiProviderAt: new Date().toISOString(),
+        lastAiProvider: aiResult.plan && (aiResult.plan.provider || aiResult.plan.mode) || 'rules',
+        lastAiProviderError: aiResult.plan && aiResult.plan.providerError || '',
+        lastError: ''
+      };
       await writeData(data);
       return json(res, 201, { ok: true, plan: aiResult.plan, draft: aiResult.draft, existing: aiResult.existing });
     }

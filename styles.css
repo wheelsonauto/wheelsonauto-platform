@@ -3507,6 +3507,25 @@ body.fast-tab-switch .admin-shell .section{
   color:#d9e3eb;
   font-size:12px;
 }
+.star-provider-strip{
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:8px 12px;
+  margin:12px 0;
+  padding:10px 12px;
+  border:1px solid rgba(240,211,148,.18);
+  border-radius:12px;
+  background:rgba(255,255,255,.04);
+}
+.star-provider-strip small{
+  color:#d9e3eb;
+  font-size:12px;
+}
+.star-provider-strip .notice{
+  width:100%;
+  margin:4px 0 0;
+}
 .star-toggle-note{
   display:flex;
   align-items:center;

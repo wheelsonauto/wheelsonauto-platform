@@ -83,6 +83,12 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star sanitizer guardrails', sanitize, text));
 
 [
+  'OPENAI_BASE_URL',
+  'WOA_AI_TIMEOUT_MS',
+  'parseStarAiJson',
+  'provider: \'openai\'',
+  'provider: \'rules\'',
+  'providerError',
   'Never promise a charge, refund, autopay change, cancellation, removal, toll charge, or saved-card action has happened unless an admin approved it.',
   'requiresAdminApproval',
   'saved-card charge',
@@ -140,6 +146,13 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'toggle-star-ai',
   'toggle-star-autosend'
 ].forEach(text => requireText('Star settings UI safety', starPanel, text));
+
+[
+  'star-provider-strip',
+  'OpenAI connected',
+  'Rules fallback',
+  'aiLastProviderError'
+].forEach(text => requireText('Star provider UI safety', app, text));
 
 [
   'Missing VIN',
