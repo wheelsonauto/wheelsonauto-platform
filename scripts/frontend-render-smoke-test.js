@@ -436,7 +436,7 @@ function ownerSmoke() {
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
     ['Operations service', 'Operations', 'Service', ['Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
-    ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
+    ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star system auditor', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Documents', 'Documents', undefined, ['Documents', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
@@ -447,7 +447,7 @@ function ownerSmoke() {
     ['Website', 'Website', undefined, ['Website'], false],
     ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Daily closeout', 'Executive snapshot'], false],
     ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Accounting control', 'Car profitability & recovery'], false],
-    ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Customer risk report', 'Failed / retry payments'], false]
+    ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Dispute identity resolver', 'Customer risk report', 'Failed / retry payments'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
