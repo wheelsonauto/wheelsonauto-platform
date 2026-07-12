@@ -156,6 +156,8 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
   '1x failed - retrying',
   '2x failed - contact customer',
   'Paid outside app',
+  'Stale autopay schedules',
+  'staleAutopayRows',
   'lastPaymentResult',
   'paymentAttempts'
 ].forEach(text => requireText('Manual payment result tracking', app, text));
@@ -232,6 +234,8 @@ requireText('Fallback transaction report possible match note', app, "customer===
   'Payment not found',
   'closeoutRecurringChargeable',
   'closeoutRecurringCardLinked',
+  'staleAutopayScheduleRows',
+  'stale_autopay_schedule',
   'Chargeable',
   'Card linked',
   'Pending today'

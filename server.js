@@ -924,6 +924,17 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   if (closeoutRecurringCardLinked(row)) return 'Card linked';
   return 'Pending today';
 }
+function isStaleAutopaySchedule(row = {}, dateKeyValue = localDateKey()) {
+  const due = recurringDateKey(row) || recordDateKey(row.nextPaymentDate || row.nextRunDate || row.adminNextRun || '');
+  if (!due || due >= dateKeyValue) return false;
+  const state = closeoutRecurringState(row, dateKeyValue);
+  if (['History / removed', 'Payment not found', 'Failed twice', 'Failed once', 'Setup needed'].includes(state)) return false;
+  if (String(row.lastAutoChargeDate || '') === dateKeyValue || String(row.lastAutoChargeAttemptDate || '') === dateKeyValue) return false;
+  return !/removed|history|returned|setup|waiting|not found|fail|retry|contact/i.test(String([row.status, row.lastPaymentResult, row.lastAutoChargeResult].filter(Boolean).join(' ')));
+}
+function staleAutopayScheduleRows(data = {}, dateKeyValue = localDateKey()) {
+  return allRecurringRows(data).filter(row => isStaleAutopaySchedule(row, dateKeyValue));
+}
 function closeoutRecurringCardLinked(row = {}) {
   const text = String([row.paymentSetup, row.cardLabel, row.cardLast4, row.cardSavedAt, row.cloverPaymentSource].filter(Boolean).join(' ')).toLowerCase();
   return !!recurringPaymentSource(row) || !!String(row.cardLast4 || '').trim() || text.includes('card linked') || text.includes('saved card') || text.includes('card saved');
@@ -1586,6 +1597,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const failedTwice = dueRows.filter(row => closeoutRecurringState(row, today) === 'Failed twice');
   const paymentNotFound = dueRows.filter(row => closeoutRecurringState(row, today) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row, today) === 'Setup needed');
+  const staleAutopay = staleAutopayScheduleRows(scoped, today);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const assignmentConflicts = assignmentConflictRows(scoped);
   const tollRecovery = tollViolationRecoveryRows(scoped);
@@ -1603,6 +1615,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Failed twice', failedTwice.length, failedTwice.length ? 'Review' : 'Clean', 'Star QA', 'Customers failed twice and should be contacted before closeout');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Payment not found', paymentNotFound.length, paymentNotFound.length ? 'Review' : 'Clean', 'Star QA', 'Saved-card/payment records need Clover review');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'Review' : 'Clean', 'Star QA', 'Transactions without customer names need matching before receipts, disputes, and reports');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Stale autopay schedules', staleAutopay.length, staleAutopay.length ? 'Review' : 'Clean', 'Star QA', 'Active autopay rows with past next-run dates and no paid/failed/setup status must be reviewed before closeout');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'Review' : 'Clean', 'Star QA', 'Vehicles with more than one active customer/autopay claim must be resolved before closeout, service, messages, or reports are trusted');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'Review' : 'Clean', 'Star QA', 'Customers need card setup or card-on-file repair');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
@@ -1645,6 +1658,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const paidOutsideAmountToday = paidOutsideToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const cloverCollectedToday = cloverPaymentsToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const expectedToday = dueToday.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
+  const staleAutopay = staleAutopayScheduleRows(scoped, today);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const assignmentConflicts = assignmentConflictRows(scoped);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
@@ -1690,10 +1704,11 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(1, 'failed_twice', 'Failed twice', failedTwice.length, failedTwice.length ? 'bad' : 'good', 'Payments', 'Today', 'Customers need contact before closeout.');
   issue(2, 'payment_not_found', 'Payment not found', notFound.length, notFound.length ? 'warn' : 'good', 'Payments', 'Today', 'Saved-card/payment records need Clover review.');
   issue(3, 'unmatched_payments', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'bad' : 'good', 'Payments', 'Transactions', 'Transactions need customer names for receipts, disputes, and reports.');
-  issue(4, 'vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'bad' : 'good', 'Operations', 'Assigned', 'Resolve cars claimed by more than one active customer/autopay before closeout, service, messages, or reports.');
-  issue(5, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
-  issue(6, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
-  issue(7, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
+  issue(4, 'stale_autopay_schedule', 'Stale autopay schedules', staleAutopay.length, staleAutopay.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows have past next-run dates without a paid, failed, setup, or removed state.');
+  issue(5, 'vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'bad' : 'good', 'Operations', 'Assigned', 'Resolve cars claimed by more than one active customer/autopay before closeout, service, messages, or reports.');
+  issue(6, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
+  issue(7, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
+  issue(8, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
   issue(8, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
   issue(9, 'insurance_proof', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing verified insurance proof.');
   issue(10, 'background_checks', 'Background checks', missingBackground.length, missingBackground.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing background verification.');
@@ -1728,6 +1743,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
       failedOnce: failedOnce.length,
       failedTwice: failedTwice.length,
       paymentNotFound: notFound.length,
+      staleAutopaySchedules: staleAutopay.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
       peopleToContact: failedTwice.length + notFound.length,
       setupNeeded: setupNeeded.length,
@@ -4120,6 +4136,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
   const paymentNotFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
+  const staleAutopay = staleAutopayScheduleRows(scoped, today);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
@@ -4156,6 +4173,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('payment_not_found', 'Payment not found', paymentNotFound.length, 'critical', 'Saved-card/payment records need Clover review before they can be trusted.', 'Payments', 'Today'),
     truthCheck('unmatched_payments', 'Unmatched payments', unmatchedPayments.length, 'critical', 'Transactions must have a customer name before receipts, disputes, and reports are reliable.', 'Payments', 'Transactions'),
     truthCheck('payment_request_truth', 'Payment request truth', brokenPaymentRequests.length, 'critical', 'Open payment links need customer, amount, vehicle, VIN/tag context before closeout or Star follow-up.', 'Payments', 'Today'),
+    truthCheck('stale_autopay_schedule', 'Stale autopay schedules', staleAutopay.length, 'warning', 'Active autopay rows have past next-run dates with no paid, failed, setup, or removed state. Review before closeout so no customer silently misses a charge.', 'Payments', 'Active'),
     truthCheck('vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, 'critical', 'Vehicles claimed by more than one active customer/autopay must be resolved before closeout, service, messages, or reports are trusted.', 'Operations', 'Assigned'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
