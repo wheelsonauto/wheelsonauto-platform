@@ -68,6 +68,8 @@ const coreSystemItems = finalFunctionSlice(app, 'coreSystemItems');
 const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
 const ifleetFunctionCoverageItems = finalFunctionSlice(app, 'ifleetFunctionCoverageItems');
 const ifleetFunctionCoverageBoard = finalFunctionSlice(app, 'ifleetFunctionCoverageBoard');
+const ifleetLaunchProofItems = finalFunctionSlice(app, 'ifleetLaunchProofItems');
+const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard');
 
 [
   maintenance,
@@ -89,7 +91,9 @@ const ifleetFunctionCoverageBoard = finalFunctionSlice(app, 'ifleetFunctionCover
   coreSystemItems,
   coreSystemBoard,
   ifleetFunctionCoverageItems,
-  ifleetFunctionCoverageBoard
+  ifleetFunctionCoverageBoard,
+  ifleetLaunchProofItems,
+  ifleetLaunchProofBoard
 ].forEach((source, index) => {
   if (!source) fail('Missing operations function #' + index);
 });
@@ -392,6 +396,29 @@ const ifleetFunctionCoverageBoard = finalFunctionSlice(app, 'ifleetFunctionCover
   'provider APIs later',
   'ifleet-coverage-board'
 ].forEach(text => requireText('iFleet coverage command map', ifleetFunctionCoverageItems + ifleetFunctionCoverageBoard + app, text));
+
+[
+  'Launch proof board',
+  'Final iFleet-style tightening checklist',
+  'Payment/autopay lock',
+  'Customer/fleet truth',
+  'Daily closeout',
+  'Messages + Star',
+  'Customer portal',
+  'Applications + approvals',
+  'Inspections + mechanic work',
+  'Tolls, claims, disputes',
+  'Documents + verification',
+  'Role portals',
+  'Reports/accounting',
+  'Fleet availability',
+  'Franchise/company base',
+  'API provider layer',
+  'Works now:',
+  'API later:',
+  'Open workflow',
+  'ifleet-launch-proof-board'
+].forEach(text => requireText('iFleet launch proof board', ifleetLaunchProofItems + ifleetLaunchProofBoard + app, text));
 
 [
   'Clover',

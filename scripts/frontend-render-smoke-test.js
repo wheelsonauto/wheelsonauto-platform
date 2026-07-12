@@ -439,6 +439,7 @@ function ownerSmoke() {
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Documents', 'Documents', undefined, ['Documents', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Marketing', 'Marketing', undefined, ['Marketing command', 'Lead board', 'Search leads by customer'], true],
+    ['API roadmap launch proof', 'API Roadmap', undefined, ['API Roadmap', 'Launch proof board', 'Payment/autopay lock', 'API operating bridge'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
     ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Daily closeout', 'Executive snapshot'], false],
