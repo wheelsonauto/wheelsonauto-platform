@@ -883,6 +883,11 @@ async function main() {
     const customerCardSetupPage = await request(server, 'GET', customerCardChange.location);
     assert(customerCardSetupPage.status === 200 && customerCardSetupPage.text.includes('Set up automatic payments') && customerCardSetupPage.text.includes('Alicia Brown'), 'Customer-created card setup page should render.');
     assert(!customerCardSetupPage.text.includes('secret-source-token') && !customerCardSetupPage.text.includes('secret-payment-token') && !customerCardSetupPage.text.includes('secret-raw-value'), 'Customer-created card setup page should not expose private payment tokens.');
+    const customerPortalWithCardSetup = await request(server, 'GET', '/customer', { cookie: customerCookie });
+    assert(customerPortalWithCardSetup.status === 200 && customerPortalWithCardSetup.text.includes(customerCardSetupId) && customerPortalWithCardSetup.text.includes('Set up card'), 'Customer portal should show open card setup/change links after a customer requests card change.');
+    const customerPortalCardSetupState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
+    assert((customerPortalCardSetupState.json.portal.cardSetupRequests || []).some(request => request.id === customerCardSetupId && request.customer === 'Alicia Brown'), 'Customer portal API should expose the logged-in customer open card setup request.');
+    assert(!JSON.stringify(customerPortalCardSetupState.json.portal.cardSetupRequests || []).includes('secret-source-token') && !JSON.stringify(customerPortalCardSetupState.json.portal.cardSetupRequests || []).includes('paymentToken'), 'Customer portal card setup links should not expose private payment tokens.');
 
     const portalMessageNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
       cookie: ownerCookie,

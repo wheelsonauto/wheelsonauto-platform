@@ -3582,6 +3582,7 @@ function customerPortalState(data, account) {
   const claims = (scopedData.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
   const messages = (scopedData.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message') && customerPortalVisibleMessage(row)).slice(0, 20);
   const paymentRequests = (scopedData.paymentRequests || []).filter(row => isOpenCustomerPaymentRequest(row) && customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
+  const cardSetupRequests = (scopedData.cardSetupRequests || []).filter(row => isOpenCardSetupRequest(row) && customerPortalRecordMatches(row, identity, 'cardSetup')).slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
   const primaryRecurring = recurringPayments[0] || context.recurring || {};
   const namedVehicle = (scopedData.vehicles || []).find(row => [primaryRecurring.vehicle, customers[0] && customers[0].vehicle, contracts[0] && contracts[0].vehicle, context.vehicleName].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || {};
@@ -3600,9 +3601,17 @@ function customerPortalState(data, account) {
     messages: messages.map(stripCustomerPortalMessage),
     documents: documents.map(stripPrivateCustomerFields),
     paymentRequests: paymentRequests.map(stripPrivateCustomerFields),
+    cardSetupRequests: cardSetupRequests.map(stripPrivateCustomerFields),
     generatedAt: new Date().toISOString()
   };
 }
+const __woaCustomerPortalHtmlBase = customerPortalHtml;
+customerPortalHtml = function customerPortalHtmlWithCardSetup(account, state) {
+  const html = __woaCustomerPortalHtmlBase(account, state);
+  const marker = '<span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section>';
+  const cardSetupList = '<span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div><div class="customer-list">' + customerPortalList(state.cardSetupRequests, 'No open card setup or card-change links are waiting right now.', row => customerPortalCardSetupRequestRow(row)) + '</div></article></section>';
+  return html.includes(marker) ? html.replace(marker, cardSetupList) : html;
+};
 function customerPortalMessageTriage(body = '') {
   const text = String(body || '').toLowerCase();
   if (/(charge|charged|payment|pay|paid|autopay|card|refund|dispute|toll|ticket|violation|balance|receipt|remove|cancel|end|return)/i.test(text)) {
@@ -3648,6 +3657,13 @@ function customerPortalPaymentRequestRow(row = {}) {
   const status = row.status || 'Open';
   const action = payUrl ? '<a class="btn primary" href="' + escapeHtml(payUrl) + '">Pay securely</a>' : '<span>' + escapeHtml(status) + '</span>';
   return '<div class="customer-row customer-pay-request"><div><strong>' + escapeHtml(status) + '</strong><small>' + escapeHtml(detail) + '</small></div><div class="customer-request-action"><b>' + moneyText(row.amount || 0) + '</b>' + action + '</div></div>';
+}
+function customerPortalCardSetupRequestRow(row = {}) {
+  const setupUrl = row.url || (row.id ? '/setup-card/' + encodeURIComponent(row.id) : '');
+  const detail = [row.createdAt || row.date || '', cardSetupRequestAgeLabel(row), row.frequency || 'Card setup/change', row.vehicle || 'WheelsonAuto account'].filter(Boolean).join(' - ');
+  const status = row.status || 'Open';
+  const action = setupUrl ? '<a class="btn primary" href="' + escapeHtml(setupUrl) + '">Set up card</a>' : '<span>' + escapeHtml(status) + '</span>';
+  return '<div class="customer-row customer-card-setup-request"><div><strong>' + escapeHtml(status) + '</strong><small>' + escapeHtml(detail) + '</small></div><div class="customer-request-action"><b>' + moneyText(row.amount || 0) + '</b>' + action + '</div></div>';
 }
 function customerPortalPaymentRow(payment = {}, vehicleTitle = 'Vehicle', vehicle = {}, summary = {}) {
   const vin = payment.vin || summary.vin || vehicle.vin || '';
