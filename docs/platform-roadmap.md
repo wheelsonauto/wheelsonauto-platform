@@ -24,7 +24,7 @@ Completed in this build pass:
 - Customer portal messages now triage money/card/autopay/toll/account requests as admin-review items with customer, vehicle, VIN/tag, payment amount, next charge, and approval context.
 - Customer portal message history now hides internal Star drafts, AI plans, notifications, and internal logs so customer logins only show customer-submitted messages and actual staff replies.
 - Mechanic Claims & Issues now filters out toll, Clover dispute, payment, reimbursement, and recovery records so mechanics only see vehicle issue work with VIN/tag/proof context.
-- Main app and server-rendered pages now use a fresh asset version (`platform-20260712-deep-tighten-1`) so new UI/role fixes do not get stuck behind stale browser cache after deploy.
+- Main app and server-rendered pages now use a fresh asset version (`platform-20260712-deep-tighten-2`) so new UI/role fixes do not get stuck behind stale browser cache after deploy.
 - Static UI regression checks now require account, company, API provider, and Dispatch task save flows to close their modals after successful saves.
 - Backend Star QA, reports, and system health now include default API provider readiness rows even before any provider records are manually created, so Clover, SMS, email, EZPass, insurance, tracker, accounting, marketing, and billing gaps stay visible.
 - Live-data protection now clearly reports when `data.json` has local business-data edits that are safely unstaged, instead of silently passing.
