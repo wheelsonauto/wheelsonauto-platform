@@ -50,6 +50,7 @@ Completed in this build pass:
 - Staff direct saves now force every incoming manager/mechanic row onto the signed-in staff company, blocking spoofed `organizationId` payloads from writing into another company while preserving owner-wide data.
 - Staff, customer, and account password changes now share one password policy requiring at least 8 characters plus a letter and number before any password hash is created.
 - Staff PIN-only login is now disabled by default; manager/mechanic accounts require username/password while owner PIN remains the separate backup path.
+- Manual customer SMS/email sends, drafts, and provider failures now create owner audit-log rows with customer, channel, status, and vehicle/VIN context so communication actions are traceable.
 
 Checks passed at this checkpoint:
 

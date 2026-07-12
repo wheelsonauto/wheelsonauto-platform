@@ -7382,6 +7382,7 @@ const server = http.createServer(async (req, res) => {
         };
         data.messages.unshift(record);
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: '' };
+        appendAuditLog(data, user, result.sent ? 'Customer message sent' : 'Customer message drafted', [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
         await writeData(data);
         return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, warning: result.message || '' });
       } catch (err) {
@@ -7419,6 +7420,7 @@ const server = http.createServer(async (req, res) => {
         };
         data.messages.unshift(record);
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastError: record.error, lastFailedAt: new Date().toISOString() };
+        appendAuditLog(data, user, 'Customer message failed', [customer, channel, record.vehicle || record.vin || 'No vehicle linked', record.error]);
         await writeData(data);
         return json(res, 502, { ok: false, error: record.error, message: record });
       }

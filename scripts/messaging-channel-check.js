@@ -121,6 +121,9 @@ requireText('Message send context helper', server, 'const messageFields = messag
 requireText('Message send linked customer file', server, 'customerId: messageFields.customerId');
 requireText('Message send linked company', server, 'organizationId: messageFields.organizationId || userOrganizationId(user)');
 requireText('Message send linked vehicle', server, 'vehicleId: payload.vehicleId || messageFields.vehicleId');
+requireText('Message send audit trail', server, 'Customer message sent');
+requireText('Message draft audit trail', server, 'Customer message drafted');
+requireText('Message failure audit trail', server, 'Customer message failed');
 requireText('Star draft linked vehicle', createAiMessageDraft, 'vehicleId: messageFields.vehicleId');
 requireText('Star draft linked company', createAiMessageDraft, 'organizationId: messageFields.organizationId || MAIN_ORG_ID');
 requireText('Star approval keeps linked VIN', approveAiMessage, 'vin: draft.vin ||');

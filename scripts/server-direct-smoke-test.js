@@ -1230,6 +1230,8 @@ async function main() {
     });
     assert([200, 202].includes(linkedOutboundMessage.status) && linkedOutboundMessage.json.ok, 'Linked outbound customer message failed.');
     assert(linkedOutboundMessage.json.message.customer === 'Alicia Brown' && linkedOutboundMessage.json.message.vehicleId === 'veh-003' && linkedOutboundMessage.json.message.vin === '3LN6L2G91FR123456' && linkedOutboundMessage.json.message.plate === 'LNZ-229' && linkedOutboundMessage.json.message.tracker === 'Bouncie' && linkedOutboundMessage.json.message.recurringPaymentId === 'rec-001' && Number(linkedOutboundMessage.json.message.amount) === 229, 'Outbound messages should carry customer, recurring, vehicle, VIN/tag, tracker, and amount context: ' + JSON.stringify(linkedOutboundMessage.json.message));
+    const linkedOutboundAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((linkedOutboundAuditState.json.auditLogs || []).some(item => /Customer message (sent|drafted)/.test(item.action || '') && String(item.details || '').includes('Alicia Brown') && String(item.details || '').includes('2015 Lincoln MKZ')), 'Manual outbound messages should be tracked in the owner audit trail with customer and vehicle context.');
     const closeoutDedupState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const closeoutDedupData = JSON.parse(JSON.stringify(closeoutDedupState.json));
     closeoutDedupData.recurringPayments = closeoutDedupData.recurringPayments || [];
