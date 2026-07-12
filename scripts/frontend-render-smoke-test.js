@@ -415,6 +415,17 @@ async function mechanicInteractionSmoke() {
 
 function ownerSmoke() {
   const context = makeContext({ name: 'Owner Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  context.db.payments = context.db.payments || [];
+  context.db.payments.unshift({
+    id: 'smoke-paid-receipt',
+    customer: 'Alicia Brown',
+    date: 'Today',
+    method: 'Clover saved card',
+    amount: 229,
+    status: 'Paid',
+    vehicleId: 'veh-003',
+    cloverPaymentId: 'smoke-clover-receipt'
+  });
   assertCompactBoard('Owner dashboard', html(context), ['Dashboard', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
 
   [
@@ -426,6 +437,7 @@ function ownerSmoke() {
     ['Operations service', 'Operations', 'Service', ['Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
+    ['Documents', 'Documents', undefined, ['Documents', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
     ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout'], false]

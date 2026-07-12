@@ -156,8 +156,10 @@ assertIncludes('Payment card section helper', paymentCardSection, ['localSearch'
 
 assertIncludes('Payment receipt surface', app, [
   'paymentReceiptBody',
+  'paymentReceiptDocuments',
   'send-payment-receipt',
   'Payment receipt',
+  'Paid payment proof',
   '/api/messages/send',
   'paymentId:p.id'
 ]);
@@ -186,6 +188,8 @@ assertIncludes('Documents surface', documents + app + server, [
   'docPolicy',
   'customerVisible',
   'portalVisible',
+  'paymentReceiptDocuments',
+  'Search documents, receipts',
   'customerPortalDocuments',
   'Documents & receipts'
 ]);
