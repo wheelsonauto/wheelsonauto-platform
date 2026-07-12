@@ -60,6 +60,7 @@ Completed in this build pass:
 - System health/readiness now includes `WOA_MESSAGING_WEBHOOK_SECRET` coverage so live SMS/email inbound webhooks are flagged before provider setup goes production.
 - System health/readiness now includes `CLOVER_WEBHOOK_SECRET` / `WOA_CLOVER_WEBHOOK_SECRET` coverage so Clover webhook auto-sync is not treated as production-ready without a shared secret.
 - Star QA now surfaces SMS/email and Clover webhook-secret readiness cards in the app using safe booleans, so provider setup gaps are visible without exposing secrets.
+- Owner deep reports and fallback CSV exports now include SMS/email and Clover webhook-secret readiness rows, keeping closeout/export reviews aligned with Star QA without exposing secret values.
 
 Checks passed at this checkpoint:
 
