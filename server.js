@@ -1196,6 +1196,14 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const verificationItems = closeoutVerificationItems(data);
   const assignmentConflicts = assignmentConflictRows(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
+  const auditRows = auditEvents.map(row => ({
+    at: row.at || row.date || row.createdAt || '',
+    action: row.action || 'Audit',
+    user: row.user || 'Unknown',
+    role: row.role || '',
+    companyName: row.companyName || '',
+    details: row.details || 'No detail'
+  }));
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
   const closeoutNote = String(ownerNote || savedNote && savedNote.note || '').trim();
   const signedAt = String(savedNote && savedNote.signedAt || '').trim();
@@ -1295,6 +1303,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       verificationItems: verificationItems.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
       auditEvents: auditEvents.length,
+      auditRows: auditRows.slice(0, 50),
       signedOff: !!signedAt,
       signedAt,
       signedBy,

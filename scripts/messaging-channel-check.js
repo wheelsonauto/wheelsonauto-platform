@@ -109,6 +109,7 @@ requireText('Daily closeout signoff body', server, 'Owner signoff:');
 requireText('Daily closeout signoff summary', server, 'signedOff');
 requireText('Daily closeout signoff snapshot', server, 'signoffSnapshot');
 requireText('Daily closeout assignment conflict body', server, 'Vehicle assignment conflicts:');
+requireText('Daily closeout audit row summary', server, 'auditRows');
 requireText('Card setup completion notification', server, 'card_setup_completed');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
 requireText('Message context helper vehicle id', messageContextFields, 'vehicleId');

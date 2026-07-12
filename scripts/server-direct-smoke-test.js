@@ -1411,6 +1411,7 @@ async function main() {
     assert(String(closeoutNotification.json.message.body || '').includes('Verification inbox:'), 'Daily closeout should include the verification inbox section.');
     assert(closeoutNotification.json.summary && Object.prototype.hasOwnProperty.call(closeoutNotification.json.summary, 'verificationItems'), 'Daily closeout summary should return the verification inbox count.');
     assert(closeoutNotification.json.summary && Object.prototype.hasOwnProperty.call(closeoutNotification.json.summary, 'vehicleAssignmentConflicts'), 'Daily closeout summary should return the vehicle assignment conflict count.');
+    assert(Array.isArray(closeoutNotification.json.summary.auditRows) && closeoutNotification.json.summary.auditRows.some(row => /password help|Customer portal|Star AI|message/i.test(String(row.action || ''))), 'Daily closeout summary should return structured sensitive-change audit rows.');
     assert(closeoutNotification.json.summary.ownerNote === 'Owner smoke note: count cash drawer and call failed-twice customers.', 'Daily closeout summary should return the owner note.');
     const notificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(notificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Notified Applicant'), 'Application notification should be saved in Messages.');

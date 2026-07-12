@@ -55,6 +55,7 @@ Completed in this build pass:
 - Customer portal messages, paid-outside reports, service requests, issue/toll reports, document updates, and card-change link openings now write owner audit-log rows with customer and vehicle/VIN/tag context.
 - Static UI checks now block placeholder `href="#"`, `javascript:void`, and not-implemented controls so visible buttons must be wired, save a draft, or route honestly to setup.
 - Staff and customer password-help requests now write owner audit-log rows showing matched/not-matched status, keeping login recovery visible without storing password material.
+- Daily closeout summaries now return structured sensitive-change audit rows, not just a text section, so Star/UI/report checks can review exactly what changed today.
 
 Checks passed at this checkpoint:
 
