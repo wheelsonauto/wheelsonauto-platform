@@ -1059,6 +1059,15 @@ async function main() {
     });
     assert(managerNotification.status === 403, 'Manager notification API should be blocked.');
 
+    const ownerAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const auditLogs = ownerAuditState.json.auditLogs || [];
+    const auditActions = auditLogs.map(row => row.action);
+    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Star AI reply approved'].forEach(action => {
+      assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
+    });
+    assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');
+    assert(!JSON.stringify(auditLogs).includes('DirectCustomer123!') && !JSON.stringify(auditLogs).includes('DirectManager123!'), 'Owner audit trail must not store raw passwords.');
+
     const managerState = await request(server, 'GET', '/api/state', { cookie: managerCookie });
     assert(managerState.status === 200 && Array.isArray(managerState.json.messages), 'Manager should see message state.');
     assert(managerState.json.messages.some(message => message.channel === 'Email'), 'Manager state should include email history.');
