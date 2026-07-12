@@ -337,6 +337,12 @@ async function main() {
     const portalPrivacyWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: portalPrivacyState });
     assert(portalPrivacyWrite.status === 200 && portalPrivacyWrite.json.ok, 'Owner could not seed customer portal privacy fields.');
 
+    const publicApplyPage = await request(server, 'GET', '/apply');
+    assert(publicApplyPage.status === 200 && publicApplyPage.text.includes('window.__PUBLIC_MODE__=true'), 'Public application page should render in public mode.');
+    assert(publicApplyPage.text.includes('veh-001'), 'Public application page should include public ready fleet choices.');
+    assert(!publicApplyPage.text.includes('secret-source-token') && !publicApplyPage.text.includes('secret-payment-token') && !publicApplyPage.text.includes('secret-raw-value'), 'Public application page should not expose private payment tokens.');
+    assert(!publicApplyPage.text.includes('Direct Dispute Customer') && !publicApplyPage.text.includes('direct-customer'), 'Public application page should not expose customer, dispute, or portal login records.');
+
     const customerLoginRes = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer123!' } });
     assert(customerLoginRes.status === 302 && String(customerLoginRes.cookie).includes('woa_customer_session='), 'Customer login did not set a customer session.');
     assertSecureCookie(customerLoginRes.cookie, 'Customer login');
