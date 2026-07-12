@@ -579,6 +579,8 @@ function publicMessagingStatus(data = {}) {
     aiLastProvider: saved.lastAiProvider || '',
     aiLastProviderAt: saved.lastAiProviderAt || '',
     aiLastProviderError: saved.lastAiProviderError || '',
+    aiLastHealthAt: saved.lastAiHealthAt || '',
+    aiLastHealthStatus: saved.lastAiHealthStatus || '',
     aiTimeoutMs: WOA_AI_TIMEOUT_MS,
     aiName: 'Star AI',
     aiShortName: 'Star',
@@ -2351,6 +2353,40 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
   data.messages.unshift(draft);
   return { plan, draft, existing: false };
 }
+async function starAiProviderHealthCheck(data, payload = {}) {
+  const startedAt = new Date();
+  const sample = {
+    customer: payload.customer || 'Star test customer',
+    phone: payload.phone || '',
+    email: payload.email || '',
+    channel: payload.channel || 'SMS',
+    amount: payload.amount || 1,
+    body: payload.body || payload.message || 'Customer asks for a secure payment link and wants to know if their account is okay.'
+  };
+  const context = aiFindCustomerContext(data, sample, { role: 'Owner', name: 'Star health check' });
+  const fallback = aiPlanRules(data, sample, context);
+  const plan = await openAiReplyPlan(data, sample, context, fallback);
+  const provider = plan.provider || plan.mode || 'rules';
+  const checkedAt = new Date().toISOString();
+  return {
+    ok: true,
+    checkedAt,
+    durationMs: Date.now() - startedAt.getTime(),
+    aiEnabled: messageSettings(data).aiEnabled,
+    aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
+    provider,
+    mode: plan.mode || provider,
+    model: provider === 'openai' ? 'stored in Render' : '',
+    status: provider === 'openai' ? 'OpenAI answered and Star sanitized the plan.' : 'Rules fallback answered. Add OPENAI_API_KEY or WOA_OPENAI_API_KEY in Render for model-backed replies.',
+    providerError: plan.providerError || '',
+    actionType: plan.actionType || '',
+    approvalRequired: !!plan.approvalRequired,
+    needsHuman: !!plan.needsHuman,
+    canAutoSend: !!plan.canAutoSend,
+    replyPreview: String(plan.reply || '').slice(0, 240),
+    guardrails: 'This health test does not send messages, charge cards, change autopay, remove cards, or edit customers.'
+  };
+}
 async function approveAiMessage(data, payload = {}) {
   const id = String(payload.draftId || payload.id || '').trim();
   data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -4050,6 +4086,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/messages/send', 'Send or save customer SMS/email messages'),
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
+    route('POST', '/api/messages/ai-health', 'Owner Star AI provider health test'),
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
@@ -7804,6 +7841,27 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         return json(res, 409, { ok: false, error: String(err && err.message || err) });
       }
+    }
+    if (url.pathname === '/api/messages/ai-health' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can run the Star AI provider health test.' });
+      if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
+      const health = await starAiProviderHealthCheck(data, payload);
+      data.integrations = data.integrations || {};
+      data.integrations.messaging = {
+        ...(data.integrations.messaging || {}),
+        ...publicMessagingStatus(data),
+        lastAiHealthAt: health.checkedAt,
+        lastAiHealthStatus: health.status,
+        lastAiProviderAt: health.checkedAt,
+        lastAiProvider: health.provider,
+        lastAiProviderError: health.providerError || ''
+      };
+      appendAuditLog(data, user, 'Star AI provider health tested', [health.provider, health.status, health.providerError || 'No provider error']);
+      await writeData(data);
+      return json(res, 200, { ok: true, health, messaging: data.integrations.messaging });
     }
     if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {
       const data = await readData();
