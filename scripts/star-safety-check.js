@@ -154,7 +154,9 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'star-ai-queue',
   'payload={customer:q.customer,phone:q.phone,email:q.email',
   'messageQueueVehicleContext',
-  'Payment not found'
+  'Payment not found',
+  'Open payment link',
+  'hosted checkout link still open'
 ].forEach(text => requireText('Star queue context safety', app, text));
 
 [

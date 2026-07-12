@@ -99,7 +99,9 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
 [
   'signoff-daily-closeout',
   'closeoutSnapshot',
-  'Daily closeout signed off'
+  'Daily closeout signed off',
+  'openPaymentLinks',
+  'openPaymentLinkAmount'
 ].forEach(text => requireText('Daily closeout signoff flow', app, text));
 
 [
