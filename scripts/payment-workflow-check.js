@@ -197,7 +197,12 @@ requireText('Fallback transaction report possible match note', app, "customer===
   'licensePlate',
   'tracker',
   'paymentAttempts',
-  'Payment not found'
+  'Payment not found',
+  'closeoutRecurringChargeable',
+  'closeoutRecurringCardLinked',
+  'Chargeable',
+  'Card linked',
+  'Pending today'
 ].forEach(text => requireText('Saved-card/manual charge backend', server, text));
 
 console.log('Payment workflow check passed: statuses, closeout, card actions, transaction matching, reassignment, and backend charge tracking are wired.');

@@ -887,11 +887,23 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   const text = String([row.status, row.tone, row.lastAutoChargeResult, row.lastAutoChargeError].filter(Boolean).join(' ')).toLowerCase();
   const failedAttempts = Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0));
   if (String(row.lastAutoChargeDate || '') === dateKeyValue) return 'Paid';
+  if (text.includes('removed') || text.includes('history') || text.includes('returned')) return 'History / removed';
   if (text.includes('not found')) return 'Payment not found';
   if (failedAttempts >= 2 || text.includes('2x') || text.includes('contact')) return 'Failed twice';
   if (failedAttempts === 1 || text.includes('1x') || text.includes('retry')) return 'Failed once';
   if (text.includes('setup') || text.includes('waiting') || text.includes('pending')) return 'Setup needed';
-  return 'Pending';
+  if (closeoutRecurringChargeable(row)) return 'Chargeable';
+  if (closeoutRecurringCardLinked(row)) return 'Card linked';
+  return 'Pending today';
+}
+function closeoutRecurringCardLinked(row = {}) {
+  const text = String([row.paymentSetup, row.cardLabel, row.cardLast4, row.cardSavedAt, row.cloverPaymentSource].filter(Boolean).join(' ')).toLowerCase();
+  return !!recurringPaymentSource(row) || !!String(row.cardLast4 || '').trim() || text.includes('card linked') || text.includes('saved card') || text.includes('card saved');
+}
+function closeoutRecurringChargeable(row = {}) {
+  const text = String([row.status, row.paymentSetup, row.lastAutoChargeError, row.notes].filter(Boolean).join(' ')).toLowerCase();
+  if (text.includes('removed') || text.includes('history') || text.includes('returned') || text.includes('setup') || text.includes('not found') || text.includes('waiting')) return false;
+  return !!recurringPaymentSource(row);
 }
 function closeoutVerificationItems(data = {}) {
   const items = [];
@@ -1063,7 +1075,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const expected = recurring.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const failed = recurring.filter(row => /Failed|not found/i.test(closeoutRecurringState(row, dateKeyValue)));
-  const pending = recurring.filter(row => ['Pending', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
+  const pending = recurring.filter(row => ['Pending today', 'Chargeable', 'Card linked', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
   const verificationItems = closeoutVerificationItems(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
