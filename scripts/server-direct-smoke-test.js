@@ -881,6 +881,7 @@ async function main() {
 	    assert(!customerPortal.text.includes('direct-customer-paid-payment-link') && !customerPortal.text.includes('Old paid link'), 'Customer portal should not show paid/closed payment requests in the open payment request panel.');
 	    assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Report payment'), 'Customer portal should include paid-outside-app reporting.');
 	    assert(customerPortal.text.includes('/customer/receipt-request') && customerPortal.text.includes('Request receipt'), 'Customer portal should include receipt request workflow.');
+	    assert(customerPortal.text.includes('/customer/statement-request') && customerPortal.text.includes('Request account document'), 'Customer portal should include account statement/payoff request workflow.');
 	    assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Report issue'), 'Customer portal should include toll/claim/issue reporting.');
     assert(customerPortal.text.includes('/customer/document-update') && customerPortal.text.includes('Send document / proof update'), 'Customer portal should include document/proof update intake.');
@@ -924,6 +925,16 @@ async function main() {
 	    assert(receiptMessage && receiptMessage.status === 'Needs admin approval' && receiptMessage.aiPlan && receiptMessage.aiPlan.actionType === 'send_receipt' && receiptMessage.aiPlan.approvalRequired === true, 'Customer receipt request should create an admin-approved send_receipt message.');
 	    assert(receiptMessage.vin === '3LN6L2G91FR123456' && receiptMessage.plate === 'LNZ-229' && Number(receiptMessage.amount || 0) > 0, 'Customer receipt request should keep vehicle, VIN/tag, and payment amount context.');
 	    assert((customerReceiptState.json.auditLogs || []).some(row => row.action === 'Customer portal receipt requested' && String(row.details || '').includes('Alicia Brown')), 'Customer receipt request should be audit logged.');
+
+	    const customerStatementNoAuth = await request(server, 'POST', '/customer/statement-request');
+	    assert(customerStatementNoAuth.status === 302 && customerStatementNoAuth.location === '/customer/login', 'Customer account statement request should require customer login.');
+	    const customerStatementRequest = await request(server, 'POST', '/customer/statement-request', { cookie: customerCookie, form: { requestType: 'Payoff balance', note: 'Need payoff amount before Friday.' } });
+	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer', 'Customer statement request should return to the customer portal.');
+	    const customerStatementState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+	    const statementMessage = (customerStatementState.json.messages || []).find(item => item.event === 'customer_statement_request' && item.customer === 'Alicia Brown');
+	    assert(statementMessage && statementMessage.status === 'Needs admin approval' && statementMessage.aiPlan && statementMessage.aiPlan.actionType === 'send_account_statement' && statementMessage.aiPlan.approvalRequired === true, 'Customer statement request should create an admin-approved send_account_statement message.');
+	    assert(statementMessage.vin === '3LN6L2G91FR123456' && statementMessage.plate === 'LNZ-229' && String(statementMessage.body || '').includes('Payoff balance'), 'Customer statement request should keep vehicle, VIN/tag, and request type context.');
+	    assert((customerStatementState.json.auditLogs || []).some(row => row.action === 'Customer portal statement requested' && String(row.details || '').includes('Alicia Brown') && String(row.details || '').includes('Payoff balance')), 'Customer statement request should be audit logged.');
 
 	    const customerServiceNoAuth = await request(server, 'POST', '/customer/service-request');
     assert(customerServiceNoAuth.status === 302 && customerServiceNoAuth.location === '/customer/login', 'Customer service request should require customer login.');
@@ -1041,6 +1052,7 @@ async function main() {
     assert((customerPortalState.json.portal.documents || []).some(doc => doc.kind === 'Receipt' && Number(doc.amount) === 229), 'Customer portal state should include generated customer payment receipts.');
 	    assert((customerPortalState.json.portal.messages || []).some(message => message.channel === 'Customer portal' && /update my card/i.test(message.body || '')), 'Customer portal should show the customer-submitted portal message.');
 	    assert((customerPortalState.json.portal.messages || []).some(message => message.channel === 'Customer portal' && /requested a payment receipt/i.test(message.body || '') && message.status === 'Needs admin approval'), 'Customer portal should show customer-submitted receipt requests while hiding internal approval metadata.');
+	    assert((customerPortalState.json.portal.messages || []).some(message => message.channel === 'Customer portal' && /requested an account document/i.test(message.body || '') && message.status === 'Needs admin approval'), 'Customer portal should show customer-submitted statement/payoff requests while hiding internal approval metadata.');
 	    assert((customerPortalState.json.portal.messages || []).some(message => /Approved Star reply visible/.test(message.body || '') && message.direction === 'Outbound'), 'Customer portal should show approved Star-assisted replies after they are sent.');
     assert(!(customerPortalState.json.portal.messages || []).some(message => /Star AI|AI draft|AI action/i.test(String([message.source, message.channel, message.direction].filter(Boolean).join(' '))) || message.aiPlan), 'Customer portal must not expose internal Star drafts or AI plans.');
     assert(!JSON.stringify(customerPortalState.json.portal.messages || []).includes('INTERNAL_STAR_DRAFT_SHOULD_HIDE') && !JSON.stringify(customerPortalState.json.portal.messages || []).includes('direct-hidden-draft-id'), 'Customer portal should hide internal Star draft bodies and approval identifiers.');

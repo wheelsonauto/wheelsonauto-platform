@@ -70,6 +70,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Paid-outside-app claims need admin verification',
   'send_receipt',
   'Receipts are tied to payment history and require admin confirmation before sending.',
+  'send_account_statement',
   'sensitive_or_dispute',
   'human_review',
   'stop autopay',
@@ -77,7 +78,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star rule guardrails', aiRules, text));
 
 [
-  "['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt'].includes(safe.actionType)",
+  "['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement'].includes(safe.actionType)",
   'safe.canAutoSend = !!safe.canAutoSend && !safe.approvalRequired && !safe.needsHuman'
 ].forEach(text => requireText('Star sanitizer guardrails', sanitize, text));
 
@@ -89,7 +90,8 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'card removal',
   'refund/dispute',
   'paid outside app verification',
-  'receipt after charge confirmation'
+  'receipt after charge confirmation',
+  'account statement or payoff letter'
 ].forEach(text => requireText('OpenAI Star prompt guardrails', openAiPlan, text));
 
 [
