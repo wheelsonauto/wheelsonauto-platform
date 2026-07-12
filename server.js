@@ -889,6 +889,44 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   if (text.includes('setup') || text.includes('waiting') || text.includes('pending')) return 'Setup needed';
   return 'Pending';
 }
+function closeoutVerificationItems(data = {}) {
+  const items = [];
+  (data.documents || []).filter(row => {
+    const status = String(row.status || '').toLowerCase();
+    return row.requiresVerification === true || status.includes('need') || status.includes('review') || status.includes('pending');
+  }).forEach(row => {
+    items.push({
+      type: 'Document proof',
+      customer: row.customer || 'Unassigned',
+      detail: [row.type || 'Document', row.vehicle || '', row.reference || row.policyNumber || '', row.proofUrl || row.url || ''].filter(Boolean).join(' | ')
+    });
+  });
+  (data.payments || []).filter(row => {
+    const status = String(row.status || '').toLowerCase();
+    return row.requiresVerification === true || status.includes('needs verification');
+  }).forEach(row => {
+    items.push({
+      type: 'Paid outside app',
+      customer: closeoutUsefulCustomerName(row) || row.customer || 'Unassigned',
+      detail: [moneyText(row.amount || 0), row.date || row.createdAt || '', row.method || row.type || '', row.notes || ''].filter(Boolean).join(' | ')
+    });
+  });
+  (data.maintenance || []).filter(row => String(row.source || '').toLowerCase().includes('customer portal') && (row.proofUrl || row.url || row.evidence)).forEach(row => {
+    items.push({
+      type: 'Service proof',
+      customer: row.customer || 'Unassigned',
+      detail: [row.type || row.issue || 'Service', row.vehicle || '', row.due || row.nextDue || '', row.proofUrl || row.url || row.evidence || ''].filter(Boolean).join(' | ')
+    });
+  });
+  (data.claims || []).filter(row => String(row.source || '').toLowerCase().includes('customer portal') && (row.proofUrl || row.url || row.evidence)).forEach(row => {
+    items.push({
+      type: 'Claim / toll proof',
+      customer: row.customer || 'Unassigned',
+      detail: [row.type || 'Issue', moneyText(row.amount || 0), row.incidentDate || row.nextFollowUp || '', row.proofUrl || row.url || row.evidence || ''].filter(Boolean).join(' | ')
+    });
+  });
+  return items.slice(0, 30);
+}
 function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), ownerNote = '') {
   const recurring = allRecurringRows(data).filter(row => {
     if (!row) return false;
@@ -900,6 +938,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const failed = recurring.filter(row => /Failed|not found/i.test(closeoutRecurringState(row, dateKeyValue)));
   const pending = recurring.filter(row => ['Pending', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
+  const verificationItems = closeoutVerificationItems(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
   const closeoutNote = String(ownerNote || savedNote && savedNote.note || '').trim();
@@ -911,6 +950,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Still open or setup/not-found: ' + pending.length,
     'Failed once/twice/not-found: ' + failed.length,
     'Today transactions recorded: ' + payments.length,
+    'Verification inbox waiting: ' + verificationItems.length,
     ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
     'Customers to review:',
@@ -918,6 +958,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Recent transactions:',
     ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.']),
+    '',
+    'Verification inbox:',
+    ...(verificationItems.length ? verificationItems.slice(0, 20).map(item => '- ' + item.type + ' | ' + item.customer + ' | ' + item.detail) : ['- No customer proof, paid-outside, service, toll, claim, or document review items waiting.']),
     '',
     'Sensitive changes today:',
     ...(auditEvents.length ? auditEvents.map(row => '- ' + (row.action || 'Audit') + ' | ' + (row.user || 'Unknown') + ' | ' + (row.details || 'No detail')) : ['- No owner/staff changes recorded today.'])
@@ -927,7 +970,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     subject: 'WheelsonAuto daily closeout - ' + dateKeyValue,
     body: lines.join('\n'),
     template: 'Daily closeout',
-    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length, auditEvents: auditEvents.length, ownerNote: closeoutNote }
+    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length, verificationItems: verificationItems.length, auditEvents: auditEvents.length, ownerNote: closeoutNote }
   };
 }
 function maintenanceDueForNotification(item = {}, dateKeyValue = localDateKey()) {
