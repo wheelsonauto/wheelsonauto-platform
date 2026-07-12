@@ -57,6 +57,7 @@ Completed in this build pass:
 - Staff and customer password-help requests now write owner audit-log rows showing matched/not-matched status, keeping login recovery visible without storing password material.
 - Daily closeout summaries now return structured sensitive-change audit rows, not just a text section, so Star/UI/report checks can review exactly what changed today.
 - Star now treats receipt requests as their own approval-required payment action instead of mixing them into toll/claim handling, and normal AI reply approval cannot send receipts without admin payment confirmation.
+- System health/readiness now includes `WOA_MESSAGING_WEBHOOK_SECRET` coverage so live SMS/email inbound webhooks are flagged before provider setup goes production.
 
 Checks passed at this checkpoint:
 

@@ -1690,6 +1690,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(20, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
   if (isOwnerUser(user)) issue(21, 'api_provider_readiness', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'warn' : 'good', 'API Roadmap', '', 'Provider dependency matrix needs env keys, endpoint, live test plan, and last test result before Star or workflows can rely on it.');
   if (isOwnerUser(user)) issue(22, 'session_signing_secret', 'Session signing secret', SESSION_SIGNING_SECRET_CONFIGURED ? 0 : 1, SESSION_SIGNING_SECRET_CONFIGURED ? 'good' : 'warn', 'Settings', '', 'Set WOA_SESSION_SECRET or WOA_COOKIE_SECRET in Render so signed staff/customer sessions use an intentional stable secret across deploys.');
+  if (isOwnerUser(user)) issue(23, 'messaging_webhook_secret', 'Messaging webhook secret', MESSAGING_WEBHOOK_SECRET ? 0 : 1, MESSAGING_WEBHOOK_SECRET ? 'good' : 'warn', 'Messages', 'Setup', 'Set WOA_MESSAGING_WEBHOOK_SECRET in Render before live SMS/email inbound webhooks are connected.');
   if (isOwnerUser(user)) issue(22, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
@@ -4055,6 +4056,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('missing_contact', 'Missing contact', missingContact.length, 'warning', 'Customers need phone or email before Star can follow up.', 'Payments', 'Active'),
     truthCheck('toll_violation_recovery', 'Toll/violation recovery', tollRecovery.length, tollMatchReview.length ? 'critical' : 'warning', 'Open tolls/violations total ' + moneyText(tollRecoveryAmount) + '; each row needs customer, vehicle, plate/VIN, proof, and payment-link follow-up before charging.', 'Claims & Issues'),
     truthCheck('api_provider_readiness', 'API provider readiness', apiProviderReview.length, 'warning', 'Provider records need env keys, endpoint/route, live test plan, and last test result before Star, messages, EZPass, insurance, tracker, accounting, or disputes can rely on them.', 'API Roadmap'),
+    truthCheck('messaging_webhook_secret', 'Messaging webhook secret', MESSAGING_WEBHOOK_SECRET ? 0 : 1, 'warning', 'Set WOA_MESSAGING_WEBHOOK_SECRET in Render before live SMS/email inbound webhooks are connected.', 'Messages', 'Setup'),
     truthCheck('verification_inbox', 'Verification inbox', verificationItems.length, 'warning', 'Customer proof, paid-outside, service, toll, claim, and document items need staff review.', 'Documents')
   ];
   const dataCriticalIssues = truthChecks.filter(item => item.severity === 'critical' && item.count > 0);
