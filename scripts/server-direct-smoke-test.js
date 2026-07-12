@@ -126,6 +126,7 @@ async function main() {
     const loginPage = await request(server, 'GET', '/login');
     assert(loginPage.status === 200, 'Login page did not load.');
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
+    assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
 
     const ownerCookie = await login(server, { pin: adminPin });
     const ownerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -324,6 +325,33 @@ async function main() {
     });
     assert(managerEdit.status === 200 && managerEdit.json.ok, 'Owner could not edit manager without replacing password.');
 
+    const staffForgotPage = await request(server, 'GET', '/forgot');
+    assert(staffForgotPage.status === 200 && staffForgotPage.text.includes('Reset staff access'), 'Staff forgot-password page did not render.');
+    const staffResetRequest = await request(server, 'POST', '/forgot', { form: { identity: 'direct-manager' } });
+    assert(staffResetRequest.status === 200 && staffResetRequest.text.includes('request was sent'), 'Staff reset request did not save.');
+    const staffResetState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(staffResetState.json.messages.some(message => message.event === 'staff_password_reset' && message.staffAccountId === 'direct-manager'), 'Staff reset request should be saved in Messages.');
+    const resetRequestedStaff = (staffResetState.json.staffAccounts || []).find(account => account.id === 'direct-manager');
+    assert(resetRequestedStaff && resetRequestedStaff.passwordResetStatus === 'Requested' && resetRequestedStaff.passwordResetRequestedAt, 'Staff reset request should mark the staff login for owner follow-up.');
+    const resetManagerPassword = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-manager',
+        name: 'Direct Manager Edited',
+        username: 'direct-manager',
+        password: 'DirectManager456!',
+        role: 'Manager',
+        organizationId: 'org-wheelsonauto',
+        status: 'Active',
+        phone: '3135550888',
+        pinHint: '7822'
+      }
+    });
+    assert(resetManagerPassword.status === 200 && resetManagerPassword.json.ok && resetManagerPassword.json.staff.passwordResetStatus === 'Reset complete', 'Owner staff password reset should clear the staff reset request.');
+    assert(!resetManagerPassword.json.staff.passwordHash && !resetManagerPassword.json.staff.passwordSalt, 'Staff reset response should not expose password secrets.');
+    const oldStaffPasswordAttempt = await request(server, 'POST', '/login', { form: { username: 'direct-manager', password: 'DirectManager123!' } });
+    assert(oldStaffPasswordAttempt.status === 401, 'Old staff password should stop working after owner reset.');
+
     const customerLogin = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,
       json: {
@@ -485,7 +513,7 @@ async function main() {
     assert(franchiseReadiness.json.records.vehicles === 1 && franchiseReadiness.json.records.customerAccounts === 1, 'Franchise manager readiness should only count scoped franchise fleet and customer portal records.');
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
-    const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
+    const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
     const ownerReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, Star QA, and audit sections.');
@@ -862,7 +890,7 @@ async function main() {
     });
     assert(connectedApi.status === 200 && connectedApi.json.ok && connectedApi.json.provider.lastTestResult === 'Passed direct smoke test', 'Connected API provider should save only after credentials, endpoint, live test, and result are recorded.');
 
-    const defaultNotificationEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed', 'customer_message'];
+    const defaultNotificationEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message'];
     const filteredNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
       cookie: ownerCookie,
       json: { emailRecipients: ['notify@example.com'], emailEnabled: true, events: ['customer_message'] }
@@ -1236,7 +1264,7 @@ async function main() {
       assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
     });
     assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');
-    assert(!JSON.stringify(auditLogs).includes('DirectCustomer123!') && !JSON.stringify(auditLogs).includes('DirectManager123!'), 'Owner audit trail must not store raw passwords.');
+    assert(!JSON.stringify(auditLogs).includes('DirectCustomer123!') && !JSON.stringify(auditLogs).includes('DirectManager123!') && !JSON.stringify(auditLogs).includes('DirectManager456!'), 'Owner audit trail must not store raw passwords.');
 
     const managerState = await request(server, 'GET', '/api/state', { cookie: managerCookie });
     assert(managerState.status === 200 && Array.isArray(managerState.json.messages), 'Manager should see message state.');

@@ -524,7 +524,7 @@ function emailNotificationSettings(data = {}) {
   return {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
     emailRecipients: recipients.map(item => String(item || '').trim()).filter(Boolean),
-    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed', 'customer_message'],
+    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message'],
     lastTestAt: saved.lastTestAt || '',
     lastError: saved.lastError || ''
   };
@@ -2652,6 +2652,19 @@ function findStaffByLogin(data, username, password) {
     return names.includes(cleanUser) && verifyPasswordRecord(password, staff);
   }) || null;
 }
+function findStaffByIdentity(data, identity) {
+  const key = normalizeLogin(identity);
+  const phone = phoneKey(identity);
+  const name = normKey(identity);
+  if (!key && !phone && !name) return null;
+  return (data.staffAccounts || []).find(staff => {
+    if (!staffStatusActive(staff)) return false;
+    const values = [staff.username, staff.email, staff.name].map(normalizeLogin).filter(Boolean);
+    if (key && values.includes(key)) return true;
+    if (phone && phoneKey(staff.phone) === phone) return true;
+    return !!(name && softNameMatch(staff.name, name));
+  }) || null;
+}
 function cleanStaffAccountPayload(payload, existing = null) {
   const staff = {
     id: String(payload.id || existing && existing.id || ('staff-' + Date.now())).trim(),
@@ -2674,9 +2687,17 @@ function cleanStaffAccountPayload(payload, existing = null) {
     staff.passwordHash = existing.passwordHash || '';
     staff.passwordSalt = existing.passwordSalt || '';
     staff.passwordUpdatedAt = existing.passwordUpdatedAt || '';
+    staff.passwordResetRequestedAt = existing.passwordResetRequestedAt || '';
+    staff.passwordResetStatus = existing.passwordResetStatus || '';
+    staff.passwordResetIdentity = existing.passwordResetIdentity || '';
+    staff.passwordResetResolvedAt = existing.passwordResetResolvedAt || '';
   }
   const password = String(payload.password || '').trim();
-  if (password) Object.assign(staff, createPasswordRecord(password));
+  if (password) {
+    Object.assign(staff, createPasswordRecord(password));
+    staff.passwordResetStatus = 'Reset complete';
+    staff.passwordResetResolvedAt = new Date().toISOString();
+  }
   delete staff.password;
   return staff;
 }
@@ -3045,7 +3066,10 @@ function passwordMatchesCurrentUser(data, user, password) {
   return !!(staff && verifyPasswordRecord(password, staff));
 }
 function loginPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label><button>Sign in</button><div class="login-pin">Use username/password for staff accounts. Owner PIN still works as a backup so you do not get locked out.</div></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label><button>Sign in</button><div class="login-pin">Use username/password for staff accounts. Owner PIN still works as a backup so you do not get locked out.</div><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
+}
+function staffForgotPage(message = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Staff Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Staff help</div><h1>Reset staff access</h1><p>Send the owner a secure request. Password changes stay owner-approved.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, staff passwords are reset by the owner after account verification.</div><a class="btn" href="/login" style="margin-top:10px;text-align:center">Back to staff login</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
 }
 function customerSessionCookie(account) {
   const payload = Buffer.from(JSON.stringify(customerLoginUser(account)), 'utf8').toString('base64url');
@@ -3352,6 +3376,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const routes = [
     route('GET', '/api/state', 'Dashboard state'),
     route('PUT', '/api/state', 'Role-aware dashboard saves'),
+    route('GET', '/forgot', 'Staff password help request page'),
+    route('POST', '/forgot', 'Staff password help request'),
     route('GET', '/customer/login', 'Customer login page'),
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
@@ -6252,6 +6278,54 @@ const server = http.createServer(async (req, res) => {
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
       if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
       return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
+    }
+    if (url.pathname === '/forgot' && req.method === 'GET') return send(res, 200, staffForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    if (url.pathname === '/forgot' && req.method === 'POST') {
+      const form = new URLSearchParams(await readBody(req));
+      const identity = String(form.get('identity') || '').trim();
+      if (!identity) return send(res, 400, staffForgotPage('Enter your name, username, phone, or email so the owner can find the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const data = await readData();
+      const staff = findStaffByIdentity(data, identity);
+      const staffName = staff && staff.name || identity;
+      if (staff) {
+        staff.passwordResetRequestedAt = new Date().toISOString();
+        staff.passwordResetStatus = 'Requested';
+        staff.passwordResetIdentity = identity;
+      }
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.messages.unshift({
+        id: 'msg-staff-reset-' + Date.now(),
+        date: new Date().toLocaleString('en-US'),
+        createdAt: new Date().toISOString(),
+        customer: staffName,
+        phone: staff && staff.phone || '',
+        email: staff && staff.email || '',
+        direction: 'Staff login request',
+        channel: 'Portal',
+        template: 'Staff password reset request',
+        subject: 'Staff portal password help',
+        status: staff ? 'Needs owner reset' : 'Needs staff match',
+        tone: staff ? 'warn' : 'bad',
+        body: 'Staff requested login help for: ' + identity + '. Verify identity before changing the password.',
+        source: 'Staff portal',
+        event: 'staff_password_reset',
+        staffAccountId: staff && staff.id || ''
+      });
+      await queueOwnerEmailNotification(data, 'staff_password_reset', {
+        customer: staffName,
+        subject: 'Staff password reset request - ' + staffName,
+        body: [
+          'A staff member requested portal login help.',
+          'Entered identity: ' + identity,
+          'Matched staff: ' + (staff ? staffName : 'No exact staff login match'),
+          'Role: ' + (staff && staff.role || 'Not available'),
+          'Phone: ' + (staff && staff.phone || 'Not available'),
+          'Email: ' + (staff && staff.email || 'Not available'),
+          'Action: verify the staff member, then update their password from Settings.'
+        ].join('\n')
+      });
+      await writeData(data);
+      return send(res, 200, staffForgotPage('Your request was sent to the owner. They will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));

@@ -78,6 +78,7 @@ requireText('Server public email webhook status', publicMessagingStatus, 'emailW
 requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
 requireText('Customer portal message route', server, "/customer/message");
 requireText('Customer portal message notification event', server, 'customer_message');
+requireText('Staff password reset notification event', server + app, 'staff_password_reset');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');

@@ -431,6 +431,7 @@ const customerPortalButton = finalFunctionSlice(app, 'customerPortalButton');
 const paymentCustomerPortalCard = finalFunctionSlice(app, 'paymentCustomerCard');
 const recurringCardActionButtons = finalFunctionSlice(app, 'cardActionButtons');
 assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
+assertIncludes('Settings staff password help', settings + server, ['Staff accounts', 'Reset requested', 'staff_password_reset', '/forgot', 'Reset staff access']);
 assertIncludes('Company account staff actions', organizations + companyReadinessCards, ['Company accounts', 'Add staff', 'new-staff', 'Staff list', 'company-scoped workspace', 'Subscriber mode needs final API separation']);
 assertIncludes('Customer portal account form', customerLoginForm, ['customerLoginName', 'customerLoginPassword', 'customerLoginRecurringId', 'customerLoginVehicleId']);
 assertIncludes('Customer portal action helper', customerPortalButton, ['open-customer-login', 'new-customer-login', 'data-name']);
