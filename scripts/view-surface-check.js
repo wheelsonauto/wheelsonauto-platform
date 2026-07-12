@@ -95,6 +95,9 @@ function renderViews() {
   'paymentCardSection',
   'vehicleTrackingStatus',
   'vehicleTrackingLine',
+  'verificationDocs',
+  'verificationDocForCustomer',
+  'verificationStatusTone',
   'Documents'
 ].forEach(name => {
   if (!finalFunctionSlice(app, name)) fail('Missing final frontend function: ' + name);
@@ -172,11 +175,27 @@ assertIncludes('Documents surface', documents + app + server, [
   'Portal visibility',
   'Customer visible',
   'Staff only',
+  'Background check',
+  'Verified by',
   'docVisibility',
+  'docProvider',
+  'docPolicy',
   'customerVisible',
   'portalVisible',
   'customerPortalDocuments',
   'Documents & receipts'
+]);
+
+const insurance = finalFunctionSlice(app, 'Insurance');
+assertIncludes('Insurance/background surface', insurance + app, [
+  'Insurance & background command',
+  'Background checks',
+  'new-background-doc',
+  'verificationDocs',
+  'verificationDocForCustomer',
+  'Search background by customer',
+  'Collect insurance proof',
+  'Finish background checks'
 ]);
 
 const auditTrailPanel = finalFunctionSlice(app, 'auditTrailPanel');
