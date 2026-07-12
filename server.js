@@ -1790,6 +1790,12 @@ function findCustomerAccountByLogin(data, username, password) {
 function cleanCustomerAccountPayload(payload, existing = null) {
   const name = String(payload.name || payload.customer || existing && existing.name || '').trim();
   const customer = String(payload.customer || payload.name || existing && existing.customer || name).trim();
+  const data = payload && payload.__data || null;
+  const customerKey = normKey(customer || name);
+  const matchedCustomer = data && (data.customers || []).find(row => normKey(row.name || row.customer) === customerKey || phoneKey(row.phone) && phoneKey(row.phone) === phoneKey(payload.phone || existing && existing.phone || '') || emailKey(row.email) && emailKey(row.email) === emailKey(payload.email || existing && existing.email || '')) || null;
+  const matchedContract = data && (data.contracts || []).find(row => normKey(row.customer || row.name) === customerKey || phoneKey(row.phone) && phoneKey(row.phone) === phoneKey(payload.phone || existing && existing.phone || '') || emailKey(row.email) && emailKey(row.email) === emailKey(payload.email || existing && existing.email || '')) || null;
+  const matchedRecurring = data && allRecurringRows(data).find(row => normKey(row.customer || row.name) === customerKey || phoneKey(row.phone) && phoneKey(row.phone) === phoneKey(payload.phone || existing && existing.phone || '') || emailKey(row.email) && emailKey(row.email) === emailKey(payload.email || existing && existing.email || '')) || null;
+  const matchedVehicle = data && (data.vehicles || []).find(row => normKey(row.currentCustomer) === customerKey || row.id === (payload.vehicleId || existing && existing.vehicleId || '') || row.id === (matchedRecurring && matchedRecurring.vehicleId || '') || row.id === (matchedCustomer && matchedCustomer.vehicleId || '')) || null;
   const account = {
     id: String(payload.id || existing && existing.id || ('customer-login-' + Date.now())).trim(),
     name: name || customer || 'Customer',
@@ -1799,11 +1805,11 @@ function cleanCustomerAccountPayload(payload, existing = null) {
     email: String(payload.email || existing && existing.email || '').trim(),
     status: String(payload.status || existing && existing.status || 'Active').trim(),
     organizationId: String(payload.organizationId || existing && existing.organizationId || 'org-wheelsonauto').trim(),
-    customerId: String(payload.customerId || existing && existing.customerId || '').trim(),
-    contractId: String(payload.contractId || existing && existing.contractId || '').trim(),
-    recurringPaymentId: String(payload.recurringPaymentId || existing && existing.recurringPaymentId || '').trim(),
-    vehicleId: String(payload.vehicleId || existing && existing.vehicleId || '').trim(),
-    cloverCustomerId: String(payload.cloverCustomerId || existing && existing.cloverCustomerId || '').trim(),
+    customerId: String(payload.customerId || existing && existing.customerId || matchedCustomer && matchedCustomer.id || '').trim(),
+    contractId: String(payload.contractId || existing && existing.contractId || matchedContract && matchedContract.id || '').trim(),
+    recurringPaymentId: String(payload.recurringPaymentId || existing && existing.recurringPaymentId || matchedRecurring && matchedRecurring.id || '').trim(),
+    vehicleId: String(payload.vehicleId || existing && existing.vehicleId || matchedVehicle && matchedVehicle.id || '').trim(),
+    cloverCustomerId: String(payload.cloverCustomerId || existing && existing.cloverCustomerId || matchedRecurring && matchedRecurring.cloverCustomerId || matchedCustomer && matchedCustomer.cloverCustomerId || '').trim(),
     notes: String(payload.notes || existing && existing.notes || '').trim(),
     createdAt: existing && existing.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -4613,7 +4619,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
       const existing = data.customerAccounts.find(item => item.id === payload.id);
-      const account = cleanCustomerAccountPayload(payload, existing);
+      const account = cleanCustomerAccountPayload({ ...payload, __data: data }, existing);
       if (!account.username) return json(res, 400, { ok: false, error: 'Enter a username, email, or phone for this customer login.' });
       if (!existing && !account.passwordHash) return json(res, 400, { ok: false, error: 'Enter a password for the new customer login.' });
       const duplicate = data.customerAccounts.find(item => item.id !== account.id && normalizeLogin(item.username || item.email || item.phone) === account.username);
