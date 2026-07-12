@@ -449,6 +449,9 @@ async function main() {
     const franchiseHealth = await request(server, 'GET', '/api/system/health', { cookie: franchiseManagerCookie });
     assert(franchiseHealth.status === 200 && franchiseHealth.json && franchiseHealth.json.organizationId === 'direct-franchise', 'Franchise manager system health should be scoped to their company.');
     assert(franchiseHealth.json.star && /admin approval/i.test(franchiseHealth.json.star.guardrails || ''), 'Franchise manager system health should include Star guardrails.');
+    const franchiseReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: franchiseManagerCookie });
+    assert(franchiseReadiness.status === 200 && franchiseReadiness.json && franchiseReadiness.json.organizationId === 'direct-franchise', 'Franchise manager readiness should be scoped to their company.');
+    assert(franchiseReadiness.json.records.vehicles === 1 && franchiseReadiness.json.records.customerAccounts === 1, 'Franchise manager readiness should only count scoped franchise fleet and customer portal records.');
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });

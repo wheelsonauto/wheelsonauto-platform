@@ -3128,7 +3128,8 @@ function checkoutStatus() {
     message: CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Hosted Checkout is ready to create Clover payment sessions.' : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.'
   };
 }
-function systemReadiness(data) {
+function systemReadiness(data, user = { role: 'Owner' }) {
+  const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
   const env = key => process.env[key] ? 'Set' : 'Missing';
   const route = (method, path, purpose, status = 'Ready') => ({ method, path, purpose, status });
   const envChecks = [
@@ -3178,27 +3179,27 @@ function systemReadiness(data) {
   ];
   const missing = envChecks.filter(item => item[1] === 'Missing').map(item => item[0]);
   const records = {
-    vehicles: (data.vehicles || []).length,
-    customers: (data.customers || []).length,
-    customerAccounts: (data.customerAccounts || []).length,
-    contracts: (data.contracts || []).length,
-    recurringPayments: (data.recurringPayments || []).length,
-    apiProviders: (data.apiProviders || []).length,
-    tasks: (data.tasks || []).length,
-    documents: (data.documents || []).length
+    vehicles: (scoped.vehicles || []).length,
+    customers: (scoped.customers || []).length,
+    customerAccounts: (scoped.customerAccounts || []).length,
+    contracts: (scoped.contracts || []).length,
+    recurringPayments: (scoped.recurringPayments || []).length,
+    apiProviders: (scoped.apiProviders || []).length,
+    tasks: (scoped.tasks || []).length,
+    documents: (scoped.documents || []).length
   };
-  const recurring = allRecurringRows(data);
-  const payments = uniqueCloseoutPayments(data.payments || []);
+  const recurring = allRecurringRows(scoped);
+  const payments = uniqueCloseoutPayments(scoped.payments || []);
   const today = localDateKey();
   const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
   const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
   const paymentNotFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
-  const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(data, payment, recurring) === 'Unmatched payment');
+  const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
-  const missingVin = (data.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
-  const verificationItems = closeoutVerificationItems(data);
+  const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
+  const verificationItems = closeoutVerificationItems(scoped);
   const truthCheck = (key, label, count, severity, detail, view, tab = '') => ({
     key,
     label,
@@ -3227,6 +3228,8 @@ function systemReadiness(data) {
     dataIssueCount: dataCriticalIssues.length + dataWarningIssues.length,
     checkedAt: new Date().toISOString(),
     environment: CLOVER_ENV,
+    role: String(user && user.role || 'Owner'),
+    organizationId: userOrganizationId(user),
     publicBaseUrl: PUBLIC_BASE_URL,
     missing,
     envChecks: envChecks.map(item => ({ key: item[0], status: item[1], purpose: item[2] })),
@@ -6297,7 +6300,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/system/readiness' && req.method === 'POST') {
       const data = await readData();
-      return json(res, 200, systemReadiness(data));
+      return json(res, 200, systemReadiness(data, user));
     }
     if (url.pathname === '/api/system/health' && req.method === 'GET') {
       const data = await readData();
