@@ -52,6 +52,7 @@ Completed in this build pass:
 - Staff PIN-only login is now disabled by default; manager/mechanic accounts require username/password while owner PIN remains the separate backup path.
 - Manual customer SMS/email sends, drafts, and provider failures now create owner audit-log rows with customer, channel, status, and vehicle/VIN context so communication actions are traceable.
 - Star draft creation now writes owner audit-log rows for normal replies, approval-needed drafts, human-review drafts, and safe payment/card setup link prep with customer, channel, action, and vehicle/VIN context.
+- Customer portal messages, paid-outside reports, service requests, issue/toll reports, document updates, and card-change link openings now write owner audit-log rows with customer and vehicle/VIN/tag context.
 
 Checks passed at this checkpoint:
 

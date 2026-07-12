@@ -3250,6 +3250,17 @@ function appendAuditLog(data, user, action, details = []) {
   });
   data.auditLogs = data.auditLogs.slice(0, 250);
 }
+function appendCustomerPortalAudit(data, account = {}, action, details = []) {
+  const organizationId = account.organizationId || MAIN_ORG_ID;
+  appendAuditLog(data, {
+    id: account.id || 'customer-portal',
+    username: account.username || account.email || account.phone || '',
+    name: account.customer || account.name || 'Customer portal',
+    role: 'Customer portal',
+    organizationId,
+    companyName: companyNameById(data, organizationId)
+  }, action, details);
+}
 function preserveStaffLoginSecrets(current, incoming) {
   const next = { ...(incoming || {}) };
   if (current.security && current.security.ownerLogin) {
@@ -6625,6 +6636,7 @@ const server = http.createServer(async (req, res) => {
           'Message: ' + body
         ].filter(Boolean).join('\n')
       });
+      appendCustomerPortalAudit(data, account, 'Customer portal message received', [message.customer, triage.intent, triage.status, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '']);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
     }
@@ -6719,6 +6731,7 @@ const server = http.createServer(async (req, res) => {
         subject: 'Paid outside app needs verification - ' + customerName,
         body: message.body
       });
+      appendCustomerPortalAudit(data, account, 'Customer portal paid-outside reported', [customerName, moneyText(amount), method, vehicleName || payment.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
     }
@@ -6814,6 +6827,7 @@ const server = http.createServer(async (req, res) => {
           'Notes: ' + (notes || 'No notes')
         ].join('\n')
       });
+      appendCustomerPortalAudit(data, account, 'Customer portal service requested', [customerName, type, due, vehicleName || service.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
     }
@@ -6912,6 +6926,7 @@ const server = http.createServer(async (req, res) => {
         subject: 'Customer issue report - ' + customerName,
         body: message.body
       });
+      appendCustomerPortalAudit(data, account, 'Customer portal issue reported', [customerName, type, moneyText(claim.amount || 0), vehicleName || claim.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
     }
@@ -7020,6 +7035,7 @@ const server = http.createServer(async (req, res) => {
         subject: type + ' verification needed - ' + customerName,
         body: message.body
       });
+      appendCustomerPortalAudit(data, account, 'Customer portal document submitted', [customerName, type, provider || reference || 'Document proof', vehicleName || document.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
     }
@@ -7066,6 +7082,7 @@ const server = http.createServer(async (req, res) => {
           subject: 'Card change review needed - ' + customerName,
           body: message.body
         });
+        appendCustomerPortalAudit(data, account, 'Customer portal card change needs review', [customerName, message.status, message.vehicleId || 'No vehicle linked']);
         await writeData(data);
         return send(res, 302, '', 'text/plain', { Location: '/customer' });
       }
@@ -7117,6 +7134,7 @@ const server = http.createServer(async (req, res) => {
         subject: 'Customer opened card setup link - ' + customerName,
         body: 'Customer opened a secure card setup/change link from the WheelsonAuto portal: ' + setup.request.url
       });
+      appendCustomerPortalAudit(data, account, 'Customer portal card setup link opened', [customerName, moneyText(setup.request.amount || 0), setup.request.vehicle || setup.request.vin || 'No vehicle linked', setup.request.licensePlate ? 'Tag ' + setup.request.licensePlate : '', setup.request.id]);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/setup-card/' + encodeURIComponent(setup.request.id) });
     }

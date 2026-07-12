@@ -980,6 +980,7 @@ async function main() {
     const customerCardSetupRequest = (customerCardChangeRead.json.cardSetupRequests || []).find(request => request.id === customerCardSetupId);
     assert(customerCardSetupRequest && customerCardSetupRequest.customer === 'Alicia Brown' && customerCardSetupRequest.cardOnlyUpdate === true, 'Customer card-change request should create a card-only setup request for the logged-in customer.');
     assert((customerCardChangeRead.json.messages || []).some(message => message.cardSetupRequestId === customerCardSetupId && message.customer === 'Alicia Brown'), 'Customer card-change request should be logged in Messages.');
+    assert((customerCardChangeRead.json.auditLogs || []).some(row => row.action === 'Customer portal card setup link opened' && String(row.details || '').includes('Alicia Brown') && String(row.details || '').includes(customerCardSetupId)), 'Customer card-change request should be audit logged with the setup request.');
     const customerCardSetupPage = await request(server, 'GET', customerCardChange.location);
     assert(customerCardSetupPage.status === 200 && customerCardSetupPage.text.includes('Set up automatic payments') && customerCardSetupPage.text.includes('Alicia Brown'), 'Customer-created card setup page should render.');
     assert(!customerCardSetupPage.text.includes('secret-source-token') && !customerCardSetupPage.text.includes('secret-payment-token') && !customerCardSetupPage.text.includes('secret-raw-value'), 'Customer-created card setup page should not expose private payment tokens.');
@@ -1007,6 +1008,7 @@ async function main() {
     assert(savedPortalMessage.vehicleId === 'veh-003' && savedPortalMessage.vin === '3LN6L2G91FR123456' && savedPortalMessage.plate === 'LNZ-229' && Number(savedPortalMessage.amount) === 229, 'Customer portal messages should carry vehicle, VIN/tag, and payment context into staff Messages.');
     assert((customerPortalMessageRead.json.messages || []).some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === savedPortalMessage.id), 'Customer portal message should create a Star draft for staff review.');
     assert((customerPortalMessageRead.json.messages || []).some(note => note.event === 'customer_message' && /money\/account review/i.test(note.subject || '') && /Admin approval required: Yes/.test(note.body || '')), 'Customer portal message should notify the owner by email with triage and approval context.');
+    assert((customerPortalMessageRead.json.auditLogs || []).some(row => row.action === 'Customer portal message received' && String(row.details || '').includes('Alicia Brown') && String(row.details || '').includes('Money/account question')), 'Customer portal messages should be audit logged with triage context.');
 
     const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');
@@ -1658,7 +1660,7 @@ async function main() {
     const ownerAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const auditLogs = ownerAuditState.json.auditLogs || [];
     const auditActions = auditLogs.map(row => row.action);
-    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
+    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Customer portal paid-outside reported', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
       assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
     });
     assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');

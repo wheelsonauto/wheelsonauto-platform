@@ -124,6 +124,13 @@ requireText('Message send linked vehicle', server, 'vehicleId: payload.vehicleId
 requireText('Message send audit trail', server, 'Customer message sent');
 requireText('Message draft audit trail', server, 'Customer message drafted');
 requireText('Message failure audit trail', server, 'Customer message failed');
+requireText('Customer portal audit helper', server, 'appendCustomerPortalAudit');
+requireText('Customer portal message audit trail', server, 'Customer portal message received');
+requireText('Customer portal card audit trail', server, 'Customer portal card setup link opened');
+requireText('Customer portal paid-outside audit trail', server, 'Customer portal paid-outside reported');
+requireText('Customer portal service audit trail', server, 'Customer portal service requested');
+requireText('Customer portal issue audit trail', server, 'Customer portal issue reported');
+requireText('Customer portal document audit trail', server, 'Customer portal document submitted');
 requireText('Star reply draft audit trail', server, 'Star AI reply drafted');
 requireText('Star approval draft audit trail', server, 'Star AI approval drafted');
 requireText('Star human review draft audit trail', server, 'Star AI human review drafted');
