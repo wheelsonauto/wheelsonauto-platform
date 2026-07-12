@@ -544,6 +544,7 @@ assertIncludes('Star readiness panel', starReadiness + app, [
 ]);
 
 const setupPanel = finalFunctionSlice(app, 'messageSetupPanel');
+const notificationCommandBoard = finalFunctionSlice(app, 'notificationCommandBoard');
 assertIncludes('Messaging setup panel', setupPanel, [
   'emailWebhook',
   'Email',
@@ -552,6 +553,19 @@ assertIncludes('Messaging setup panel', setupPanel, [
   'notificationEmailTo',
   'notificationEventOptions',
   'send-email-notification-test'
+]);
+assertIncludes('Notification command board', notificationCommandBoard + app + css, [
+  'Email notification command',
+  'Owner email',
+  'Email mode',
+  'Events watched',
+  'Daily closeout',
+  'Customer replies',
+  'Provider setup',
+  'Email drafts in Messages',
+  'notification-command-board',
+  'notification-command-grid',
+  'notification-command-card'
 ]);
 
 const settings = finalFunctionSlice(app, 'Settings');

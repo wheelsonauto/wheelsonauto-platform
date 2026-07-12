@@ -51,6 +51,7 @@ const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotificatio
 const queueOwnerEmailNotification = finalFunctionSlice(server, 'queueOwnerEmailNotification');
 const messageContextFields = finalFunctionSlice(server, 'messageContextFields');
 const createAiMessageDraft = finalFunctionSlice(server, 'createAiMessageDraft');
+const notificationCommandBoard = finalFunctionSlice(app, 'notificationCommandBoard');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
 if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !createAiMessageDraft) fail('Missing server messaging channel functions.');
@@ -61,6 +62,10 @@ requireText('Message setup panel', messageSetupPanel, 'Email webhook');
 requireText('Message setup notification email', messageSetupPanel, 'notificationEmailTo');
 requireText('Message setup notification events', messageSetupPanel, 'notificationEventOptions');
 requireText('Message setup notification test', messageSetupPanel, 'send-email-notification-test');
+requireText('Notification command board', notificationCommandBoard + messagesView + app, 'Email notification command');
+requireText('Notification command owner email', notificationCommandBoard, 'Owner email');
+requireText('Notification command closeout', notificationCommandBoard, 'Daily closeout');
+requireText('Notification command fallback', notificationCommandBoard, 'Email drafts in Messages');
 requireText('Compose modal channel selector', openComposeMessage, '<select id="messageChannel">');
 requireText('Compose modal email option', openComposeMessage, '<option value="Email"');
 requireText('Messages view channel summary', messagesView, "stat('Channels'");

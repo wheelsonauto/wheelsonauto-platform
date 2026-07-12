@@ -3980,6 +3980,58 @@ body.fast-tab-switch .admin-shell .section{
   line-height:1;
   text-align:right;
 }
+.notification-command-board{
+  background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(24,27,31,.93));
+  border-color:rgba(240,211,148,.20);
+}
+.notification-command-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.notification-command-card{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  box-shadow:0 14px 28px rgba(0,0,0,.16);
+}
+.notification-command-card.good{border-left:3px solid #7ee787}
+.notification-command-card.warn{border-left:3px solid #f0d394}
+.notification-command-card.blue{border-left:3px solid #58a6ff}
+.notification-command-card.bad{border-left:3px solid #ff705c}
+.notification-command-card>div{
+  min-width:0;
+}
+.notification-command-card strong{
+  display:block;
+  color:#f7df9b;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+.notification-command-card small{
+  display:block;
+  margin-top:5px;
+  color:#c8d2dc;
+  line-height:1.32;
+  overflow-wrap:anywhere;
+}
+.notification-command-card span{
+  flex:0 0 auto;
+  max-width:96px;
+  color:#fff;
+  font-size:15px;
+  font-weight:950;
+  line-height:1.15;
+  text-align:right;
+  overflow-wrap:anywhere;
+}
 .star-provider-strip{
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
@@ -4060,7 +4112,8 @@ body.fast-tab-switch .admin-shell .section{
   .dispute-recovery-grid,
   .api-operational-grid,
   .service-inspection-grid,
-  .company-launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .company-launch-grid,
+  .notification-command-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
@@ -4069,7 +4122,8 @@ body.fast-tab-switch .admin-shell .section{
   .dispute-recovery-grid,
   .api-operational-grid,
   .service-inspection-grid,
-  .company-launch-grid{grid-template-columns:1fr}
+  .company-launch-grid,
+  .notification-command-grid{grid-template-columns:1fr}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:1fr}
   .star-provider-strip .actions{flex-direction:row;flex-wrap:wrap}
