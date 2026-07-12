@@ -2866,7 +2866,7 @@ function mergeScopedCollection(currentRows, incomingRows, user) {
   if (!Array.isArray(incomingRows) || isOwnerUser(user)) return incomingRows;
   const keep = (Array.isArray(currentRows) ? currentRows : []).filter(row => !rowVisibleToUserOrganization(row, user));
   const currentById = new Map((Array.isArray(currentRows) ? currentRows : []).map(row => [String(row && row.id || ''), row || {}]));
-  const owned = incomingRows.map(row => preservePrivateOperationalFields(currentById.get(String(row && row.id || '')) || {}, { ...row, organizationId: rowOrganizationId(row) === MAIN_ORG_ID && userOrganizationId(user) !== MAIN_ORG_ID ? userOrganizationId(user) : rowOrganizationId(row) }));
+  const owned = incomingRows.map(row => preservePrivateOperationalFields(currentById.get(String(row && row.id || '')) || {}, { ...row, organizationId: userOrganizationId(user) }));
   return keep.concat(owned);
 }
 const MECHANIC_MONEY_FIELDS = ['amount', 'cost', 'price', 'rate', 'weekly', 'weeklyAmount', 'balance', 'down', 'deposit', 'payment', 'paymentAmount', 'profit', 'income', 'recovery', 'recoveryAmount', 'deductible'];

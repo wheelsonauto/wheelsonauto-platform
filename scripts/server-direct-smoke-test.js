@@ -521,6 +521,21 @@ async function main() {
     assert((ownerAfterFranchiseWrite.json.vehicles || []).some(vehicle => vehicle.id === 'direct-franchise-car' && vehicle.organizationId === 'direct-franchise'), 'Franchise manager save should keep the scoped franchise fleet record.');
     assert((ownerAfterFranchiseWrite.json.staffAccounts || []).some(staff => staff.id === 'direct-mechanic'), 'Franchise manager save should not remove main staff accounts.');
     assert((ownerAfterFranchiseWrite.json.staffAccounts || []).some(staff => staff.id === 'direct-manager'), 'Franchise manager save should not remove main manager accounts.');
+    const franchiseSpoofState = JSON.parse(JSON.stringify(franchiseState.json));
+    franchiseSpoofState.messages = [{
+      id: 'direct-franchise-spoof-message',
+      organizationId: 'org-wheelsonauto',
+      customer: 'Spoofed org customer',
+      channel: 'SMS',
+      direction: 'Outbound',
+      status: 'Draft',
+      body: 'This should be scoped to the signed-in franchise company.'
+    }];
+    const franchiseSpoofWrite = await request(server, 'PUT', '/api/state', { cookie: franchiseManagerCookie, json: franchiseSpoofState });
+    assert(franchiseSpoofWrite.status === 200 && franchiseSpoofWrite.json.ok, 'Franchise manager spoof save should be accepted but re-scoped.');
+    const ownerAfterFranchiseSpoof = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const spoofedMessage = (ownerAfterFranchiseSpoof.json.messages || []).find(message => message.id === 'direct-franchise-spoof-message');
+    assert(spoofedMessage && spoofedMessage.organizationId === 'direct-franchise', 'Staff saves must stamp incoming rows to the signed-in company, not a spoofed organization id.');
 
     const franchiseCustomerState = JSON.parse(JSON.stringify(ownerAfterFranchiseWrite.json));
     franchiseCustomerState.customers = franchiseCustomerState.customers || [];

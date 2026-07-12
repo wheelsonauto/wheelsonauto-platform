@@ -150,6 +150,9 @@ if (!/key === 'organizations' \? String\(row && row\.id \|\| ''\) === orgId : ro
 if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
   fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
 }
+if (!/organizationId:\s*userOrganizationId\(user\)/.test(server)) {
+  fail('Staff write merges should stamp incoming rows to the signed-in company.');
+}
 if (!/changed:\s*changes\.length > 0/.test(server) || !/changes \}/.test(server)) {
   fail('State save route should return changed status and change details.');
 }
