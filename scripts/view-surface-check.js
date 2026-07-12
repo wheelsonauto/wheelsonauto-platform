@@ -242,6 +242,16 @@ assertIncludes('Documents surface', documents + app + server, [
   'Documents & receipts'
 ]);
 
+const marketing = finalFunctionSlice(app, 'Marketing');
+assertIncludes('Marketing surface', marketing, [
+  'Marketing command',
+  'Lead board',
+  'Search leads by customer, phone, email, car, source, or status',
+  'Website tools',
+  'Message queue',
+  'future SMS/email campaign tracking'
+]);
+
 const customerPortalHtml = finalFunctionSlice(server, 'customerPortalHtml');
 assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   '/customer/service-request',
