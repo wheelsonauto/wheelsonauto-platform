@@ -41,7 +41,8 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.WOA_OPENAI_API_KEY || '';
 const OPENAI_BASE_URL = (process.env.WOA_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-4o-mini' : '');
+const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-5.6' : '');
+const WOA_AI_REASONING_EFFORT = ['minimal', 'low', 'medium', 'high'].includes(String(process.env.WOA_AI_REASONING_EFFORT || process.env.OPENAI_REASONING_EFFORT || '').toLowerCase()) ? String(process.env.WOA_AI_REASONING_EFFORT || process.env.OPENAI_REASONING_EFFORT).toLowerCase() : 'medium';
 const WOA_AI_TIMEOUT_MS = Math.max(3000, Number(process.env.WOA_AI_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS || 15000));
 const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
 const WOA_STAR_AI_ENABLED = process.env.WOA_STAR_AI_ENABLED !== '0';
@@ -2220,6 +2221,18 @@ function parseStarAiJson(text) {
     throw firstErr;
   }
 }
+function starModelSupportsReasoning(model = '') {
+  return /(^|[-_])(gpt-5|o[0-9]|o-series)/i.test(String(model || ''));
+}
+function starSafetyIdentifier(context = {}, payload = {}) {
+  const raw = [
+    context.organizationId || '',
+    context.customerName || payload.customer || payload.name || '',
+    context.phone || payload.phone || payload.from || '',
+    context.email || payload.email || ''
+  ].join('|');
+  return 'woa-star-' + crypto.createHash('sha256').update(raw || 'anonymous').digest('hex').slice(0, 32);
+}
 async function openAiReplyPlan(data, payload, context, fallback) {
   if (!OPENAI_API_KEY || !WOA_AI_MODEL) return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: OPENAI_API_KEY ? 'Star AI model is not set.' : 'OpenAI API key is not configured.' }, fallback);
   const input = [
@@ -2241,23 +2254,29 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WOA_AI_TIMEOUT_MS);
   try {
+    const requestBody = {
+      model: WOA_AI_MODEL,
+      input,
+      max_output_tokens: 900,
+      store: false,
+      truncation: 'auto',
+      safety_identifier: starSafetyIdentifier(context, payload),
+      prompt_cache_key: 'wheelsonauto-star-reply-v1',
+      text: { format: { type: 'json_object' } }
+    };
+    if (starModelSupportsReasoning(WOA_AI_MODEL)) requestBody.reasoning = { effort: WOA_AI_REASONING_EFFORT };
+    else requestBody.temperature = 0.2;
     const response = await fetch(OPENAI_BASE_URL + '/responses', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + OPENAI_API_KEY, 'Content-Type': 'application/json' },
       signal: controller.signal,
-      body: JSON.stringify({
-        model: WOA_AI_MODEL,
-        input,
-        temperature: 0.2,
-        reasoning: { effort: 'low' },
-        max_output_tokens: 700
-      })
+      body: JSON.stringify(requestBody)
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error && body.error.message || 'OpenAI response failed.');
     const text = body.output_text || (body.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('\n');
     const parsed = parseStarAiJson(text);
-    return sanitizeAiPlan({ ...parsed, mode: 'openai', provider: 'openai', model: WOA_AI_MODEL }, fallback);
+    return sanitizeAiPlan({ ...parsed, mode: 'openai', provider: 'openai', model: WOA_AI_MODEL, reasoningEffort: requestBody.reasoning && requestBody.reasoning.effort || '' }, fallback);
   } catch (err) {
     const message = err && err.name === 'AbortError' ? 'OpenAI provider timed out.' : String(err && err.message || err);
     return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: message }, fallback);
@@ -2466,8 +2485,9 @@ async function starAiProviderHealthCheck(data, payload = {}) {
     aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
     provider,
     mode: plan.mode || provider,
-    model: provider === 'openai' ? 'stored in Render' : '',
-    status: provider === 'openai' ? 'OpenAI answered and Star sanitized the plan.' : 'Rules fallback answered. Add OPENAI_API_KEY or WOA_OPENAI_API_KEY in Render for model-backed replies.',
+    model: provider === 'openai' ? WOA_AI_MODEL : '',
+    reasoningEffort: provider === 'openai' && starModelSupportsReasoning(WOA_AI_MODEL) ? WOA_AI_REASONING_EFFORT : '',
+    status: provider === 'openai' ? 'OpenAI answered through the Responses API and Star sanitized the plan.' : 'Rules fallback answered. Add OPENAI_API_KEY or WOA_OPENAI_API_KEY in Render for model-backed replies.',
     providerError: plan.providerError || '',
     actionType: plan.actionType || '',
     approvalRequired: !!plan.approvalRequired,

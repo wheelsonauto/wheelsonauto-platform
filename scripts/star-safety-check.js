@@ -86,8 +86,16 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 
 [
   'OPENAI_BASE_URL',
+  "'gpt-5.6'",
+  'WOA_AI_REASONING_EFFORT',
   'WOA_AI_TIMEOUT_MS',
   'parseStarAiJson',
+  'starModelSupportsReasoning',
+  'starSafetyIdentifier',
+  'store: false',
+  "text: { format: { type: 'json_object' } }",
+  'prompt_cache_key',
+  'safety_identifier',
   'provider: \'openai\'',
   'provider: \'rules\'',
   'providerError',
@@ -100,7 +108,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'paid outside app verification',
   'receipt after charge confirmation',
   'account statement or payoff letter'
-].forEach(text => requireText('OpenAI Star prompt guardrails', openAiPlan, text));
+].forEach(text => requireText('OpenAI Star prompt guardrails', server + openAiPlan, text));
 
 [
   'systemHealthSnapshot',
