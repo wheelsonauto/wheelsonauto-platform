@@ -441,7 +441,9 @@ function ownerSmoke() {
     ['Marketing', 'Marketing', undefined, ['Marketing command', 'Lead board', 'Search leads by customer'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
-    ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout', 'Car profitability & recovery'], false]
+    ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Daily closeout', 'Executive snapshot'], false],
+    ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Accounting control', 'Car profitability & recovery'], false],
+    ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Customer risk report', 'Failed / retry payments'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
@@ -462,7 +464,7 @@ function managerSmoke() {
   [
     ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
-    ['Manager reports', 'Reports', undefined, ['Reports', 'Executive snapshot'], false],
+    ['Manager reports', 'Reports', 'Summary', ['Reports', 'Executive snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'table-wrap'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
@@ -497,6 +499,42 @@ function publicSmoke() {
   assertHealthy('Public apply', html(context), ['Apply', 'WheelsonAuto', 'public']);
 }
 
+function heavyMessagesReportsSmoke() {
+  const context = makeContext({ name: 'Owner Heavy Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
+  const customers = context.db.contracts || [];
+  context.db.messages = Array.from({ length: 420 }, (_, i) => {
+    const customer = customers[i % Math.max(1, customers.length)] || {};
+    const name = customer.customer || 'Heavy Customer ' + i;
+    return {
+      id: 'heavy-msg-' + i,
+      createdAt: new Date(Date.now() - i * 60000).toISOString(),
+      date: 'Today',
+      customer: name,
+      phone: '(555) 100-' + String(i % 10000).padStart(4, '0'),
+      direction: i % 3 === 0 ? 'Inbound' : 'Outbound',
+      channel: i % 5 === 0 ? 'Star AI' : 'SMS',
+      status: i % 7 === 0 ? 'Needs admin approval' : (i % 3 === 0 ? 'Received' : 'Draft'),
+      body: 'Heavy render message for ' + name + ' about payment, vehicle, VIN, tag, service, and follow-up #' + i,
+      aiPlan: i % 7 === 0 ? { approvalRequired: true, actionType: 'draft_reply' } : null
+    };
+  });
+  const started = Date.now();
+  const inbox = renderView(context, 'Messages', 'Inbox');
+  assertHealthy('Heavy Messages inbox', inbox, ['Messages', 'Showing latest 24', 'message-inbox-layout', 'message-conversation-panel']);
+  assert(inbox.length < 220000, 'Heavy Messages inbox rendered too much HTML at once.');
+  const history = renderView(context, 'Messages', 'History');
+  assertHealthy('Heavy Messages history', history, ['Message history', 'Showing latest 80']);
+  assert(history.length < 220000, 'Heavy Messages history rendered too much HTML at once.');
+  const star = renderView(context, 'Messages', 'Star');
+  assertHealthy('Heavy Messages Star', star, ['Star AI', 'Auto-ready replies', 'Needs admin approval']);
+  ['Summary', 'Accounting', 'Risk', 'Pipeline'].forEach(tabName => {
+    const report = renderView(context, 'Reports', tabName);
+    assertHealthy('Heavy Reports ' + tabName, report, ['Reports', tabName]);
+    assert(report.length < 260000, 'Heavy Reports ' + tabName + ' rendered too much HTML at once.');
+  });
+  assert(Date.now() - started < 3000, 'Heavy Messages/Reports render path took too long.');
+}
+
 async function main() {
   ownerSmoke();
   await ownerInteractionSmoke();
@@ -505,7 +543,8 @@ async function main() {
   mechanicSmoke();
   await mechanicInteractionSmoke();
   publicSmoke();
-  console.log('Frontend render smoke passed: owner, manager, mechanic, public, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
+  heavyMessagesReportsSmoke();
+  console.log('Frontend render smoke passed: owner, manager, mechanic, public, heavy Messages/Reports, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
 }
 
 main().catch(err => {
