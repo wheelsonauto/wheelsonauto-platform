@@ -71,13 +71,17 @@ const mobileQuickbar = finalFunctionSlice(app, 'mobileQuickbar');
 const actionAllowed = finalFunctionSlice(app, 'actionAllowed');
 const textCustomerButton = finalFunctionSlice(app, 'textCustomerButton');
 const accessCommandPanel = finalFunctionSlice(app, 'accessCommandPanel');
+const managerCommandItems = finalFunctionSlice(app, 'managerCommandItems');
+const managerCommandBoard = finalFunctionSlice(app, 'managerCommandBoard');
+const mechanicCommandItems = finalFunctionSlice(app, 'mechanicCommandItems');
+const mechanicCommandBoard = finalFunctionSlice(app, 'mechanicCommandBoard');
 const apiAllowedForUser = finalFunctionSlice(server, 'apiAllowedForUser');
 const stateForUserRead = finalFunctionSlice(server, 'stateForUserRead');
 const stateForUserWrite = finalFunctionSlice(server, 'stateForUserWrite');
 const protectConcurrentLocalWrites = finalFunctionSlice(server, 'protectConcurrentLocalWrites');
 const dataScopedToOrganization = finalFunctionSlice(server, 'dataScopedToOrganization');
 
-if (!navForRole || !navSections || !mobileQuickbar || !actionAllowed || !apiAllowedForUser) {
+if (!navForRole || !navSections || !mobileQuickbar || !actionAllowed || !apiAllowedForUser || !managerCommandItems || !managerCommandBoard || !mechanicCommandItems || !mechanicCommandBoard) {
   fail('Could not find every role/access function.');
 }
 if (!protectConcurrentLocalWrites) fail('Could not find concurrent-write protection helper.');
@@ -135,6 +139,12 @@ assertIncludes('Mechanic message blocked actions', strings(actionAllowed), [
 if (!/roleName\(\)==='mechanic'&&mechanicMessageBlocked/.test(actionAllowed)) fail('Mechanic message block is not enforced in actionAllowed.');
 if (!/\(roleName\(\)==='mechanic'\|\|roleName\(\)==='manager'\)&&moneyBlocked/.test(actionAllowed)) fail('Mechanic/manager money block is not enforced in actionAllowed.');
 if (!/roleName\(\)==='mechanic'\)return''/.test(textCustomerButton)) fail('Mechanic text buttons are not suppressed.');
+assertIncludes('Manager command board', managerCommandBoard, ['Manager command queue', 'No Clover keys or payment controls', 'manager-command-board']);
+assertIncludes('Manager command items', managerCommandItems, ['Applications', 'Messages', 'Claims & Issues', 'Maintenance', 'Fleet']);
+assertExcludes('Manager command items', strings(managerCommandItems), ['charge-saved-card', 'send-pay-link', 'new-autopay', 'save-autopay', 'change-card-on-file']);
+assertIncludes('Mechanic command board', mechanicCommandBoard, ['Mechanic shop queue', 'No customer messaging or money tools', 'mechanic-command-board']);
+assertIncludes('Mechanic command items', mechanicCommandItems, ['Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
+assertExcludes('Mechanic command items', strings(mechanicCommandItems), ['Messages', 'Reports', 'Payments', 'charge-saved-card', 'send-pay-link', 'compose-message', 'Text']);
 if (!/STAFF_PIN_LOGIN_ENABLED/.test(server) || !/if \(!STAFF_PIN_LOGIN_ENABLED\) return null;/.test(server)) fail('Staff PIN login should be disabled unless explicitly enabled.');
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
 if (!/Customer password help requested/.test(server) || !/Staff password help requested/.test(server)) {

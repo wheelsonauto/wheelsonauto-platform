@@ -3722,6 +3722,83 @@ body.fast-tab-switch .admin-shell .section{
   .platform-readiness-grid{grid-template-columns:1fr}
   .platform-readiness-card{min-height:0}
 }
+.role-command-board{
+  background:linear-gradient(145deg,rgba(13,16,20,.96),rgba(28,29,31,.93));
+  border-color:rgba(240,211,148,.18);
+}
+.role-command-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
+.role-command-card{
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  box-shadow:0 14px 28px rgba(0,0,0,.16);
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+.role-command-card:hover{
+  transform:translateY(-1px);
+  border-color:rgba(240,211,148,.28);
+  background:rgba(240,211,148,.085);
+  filter:none;
+}
+.role-command-card.bad{border-left:3px solid #ff705c}
+.role-command-card.warn{border-left:3px solid #f0d394}
+.role-command-card.blue{border-left:3px solid #58a6ff}
+.role-command-card.good{border-left:3px solid #7ee787}
+.role-command-top{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  min-width:0;
+}
+.role-command-top>div{
+  min-width:0;
+}
+.role-command-card strong{
+  display:block;
+  color:#f7df9b;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+.role-command-card small{
+  display:block;
+  margin-top:5px;
+  color:#c8d2dc;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
+.role-command-card .actions{
+  margin-top:10px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:7px;
+}
+.view-manager-portal .role-command-board,
+.view-mechanic-portal .role-command-board{
+  margin-top:12px;
+}
+@media(max-width:980px){
+  .role-command-grid{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .role-command-board{
+    margin-top:8px;
+  }
+  .role-command-card{
+    padding:10px;
+  }
+  .role-command-card .actions .btn{
+    flex:1 1 auto;
+    min-height:38px;
+  }
+}
 .notification-event-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
