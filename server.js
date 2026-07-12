@@ -823,6 +823,64 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
     summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length }
   };
 }
+function maintenanceDueForNotification(item = {}, dateKeyValue = localDateKey()) {
+  const status = String(item.status || '').toLowerCase();
+  if (status.includes('complete') || status.includes('fixed') || status.includes('closed')) return false;
+  const due = recordDateKey(item.due || item.nextDue || item.followUp || '');
+  return !!(due && due <= dateKeyValue);
+}
+function claimDisputeForNotification(claim = {}) {
+  const status = String(claim.status || 'Open').toLowerCase();
+  if (status.includes('paid') || status.includes('closed')) return false;
+  return /dispute|chargeback|clover/i.test(String([claim.type, claim.source, claim.provider, claim.customerMatchStatus].filter(Boolean).join(' ')));
+}
+async function queueStateChangeNotifications(previous = {}, data = {}, user = {}) {
+  const dateKeyValue = localDateKey();
+  const promises = [];
+  const previousMaintenance = new Map((previous.maintenance || []).map(item => [item.id, item]));
+  const previousClaims = new Map((previous.claims || []).map(item => [item.id, item]));
+  (data.maintenance || []).forEach(item => {
+    if (!maintenanceDueForNotification(item, dateKeyValue) || item.maintenanceDueNotifiedDate === dateKeyValue) return;
+    const old = previousMaintenance.get(item.id) || {};
+    if (old.id && maintenanceDueForNotification(old, dateKeyValue) && String(old.status || '') === String(item.status || '') && String(old.due || old.nextDue || '') === String(item.due || item.nextDue || '')) return;
+    item.maintenanceDueNotifiedDate = dateKeyValue;
+    promises.push(queueOwnerEmailNotification(data, 'maintenance_due', {
+      customer: item.customer || item.vehicle || 'Maintenance',
+      subject: 'Maintenance due - ' + (item.customer || item.vehicle || 'Vehicle'),
+      body: [
+        'A maintenance item is due or overdue.',
+        'Vehicle: ' + (item.vehicle || item.vehicleId || 'Not linked'),
+        'Customer: ' + (item.customer || 'Not linked'),
+        'Type: ' + (item.type || item.issue || 'Maintenance'),
+        'Due: ' + (item.due || item.nextDue || 'Not set'),
+        'Status: ' + (item.status || 'Open'),
+        'Saved by: ' + (user.name || user.role || 'WheelsonAuto')
+      ].join('\n')
+    }));
+  });
+  (data.claims || []).forEach(claim => {
+    if (!claimDisputeForNotification(claim) || claim.claimDisputeNotifiedDate === dateKeyValue) return;
+    const old = previousClaims.get(claim.id) || {};
+    if (old.id && claimDisputeForNotification(old) && String(old.customerMatchStatus || '') === String(claim.customerMatchStatus || '') && String(old.status || '') === String(claim.status || '')) return;
+    claim.claimDisputeNotifiedDate = dateKeyValue;
+    promises.push(queueOwnerEmailNotification(data, 'claim_dispute', {
+      customer: claim.customer || 'Unmatched dispute',
+      subject: 'Claim/dispute needs review - ' + (claim.customer || claim.externalId || claim.disputeId || 'Unmatched'),
+      body: [
+        'A Clover dispute, chargeback, or claim needs review.',
+        'Customer: ' + (claim.customer || 'Unmatched'),
+        'Match status: ' + (claim.customerMatchStatus || 'Not set'),
+        'Match source: ' + (claim.customerMatchSource || 'None'),
+        'Amount: ' + moneyText(claim.amount || 0),
+        'Vehicle/ref: ' + ([claim.vehicle, claim.plate || claim.reference].filter(Boolean).join(' | ') || 'Not linked'),
+        'Case/payment ID: ' + (claim.externalId || claim.caseId || claim.disputeId || claim.paymentId || 'Not saved'),
+        'Saved by: ' + (user.name || user.role || 'WheelsonAuto')
+      ].join('\n')
+    }));
+  });
+  await Promise.all(promises);
+  return promises.length;
+}
 function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn') {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const customer = row.customer || row.name || 'Customer';
@@ -4203,7 +4261,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = JSON.parse(await readBody(req) || '{}');
       const current = await readData();
-      await writeData(stateForUserWrite(current, incoming, user));
+      const nextState = stateForUserWrite(current, incoming, user);
+      await queueStateChangeNotifications(current, nextState, user);
+      await writeData(nextState);
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/messages/status' && req.method === 'GET') {

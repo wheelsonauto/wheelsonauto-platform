@@ -410,6 +410,34 @@ async function main() {
     assert(notificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Notified Applicant'), 'Application notification should be saved in Messages.');
     assert(notificationState.json.messages.some(message => message.event === 'daily_closeout'), 'Daily closeout notification should be saved in Messages.');
 
+    const alertState = JSON.parse(JSON.stringify(notificationState.json));
+    alertState.maintenance = alertState.maintenance || [];
+    alertState.claims = alertState.claims || [];
+    alertState.maintenance.unshift({
+      id: 'direct-maintenance-alert',
+      vehicle: 'Direct Alert Vehicle',
+      customer: 'Direct Maintenance Customer',
+      type: 'Monthly inspection',
+      issue: 'Due inspection',
+      due: 'Today',
+      status: 'Scheduled'
+    });
+    alertState.claims.unshift({
+      id: 'direct-dispute-alert',
+      type: 'Clover dispute',
+      source: 'Clover',
+      customer: 'Unassigned',
+      amount: 44,
+      status: 'Open',
+      customerMatchStatus: 'Needs payment/customer match',
+      externalId: 'direct-dispute-alert-id'
+    });
+    const alertWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: alertState });
+    assert(alertWrite.status === 200 && alertWrite.json.ok, 'State-change notification write failed.');
+    const alertRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(alertRead.json.messages.some(message => message.event === 'maintenance_due' && message.customer === 'Direct Maintenance Customer'), 'Maintenance due notification should be saved.');
+    assert(alertRead.json.messages.some(message => message.event === 'claim_dispute' && /Direct|Unassigned|Unmatched/i.test(message.customer || message.subject || '')), 'Claim/dispute notification should be saved.');
+
     const autopayState = JSON.parse(JSON.stringify(notificationState.json));
     autopayState.recurringPayments = autopayState.recurringPayments || [];
     autopayState.recurringPayments.unshift({
