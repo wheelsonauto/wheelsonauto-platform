@@ -44,6 +44,7 @@ const dailyCloseout = finalFunctionSlice('dailyCloseout');
 const paymentCloseout = finalFunctionSlice('paymentCloseoutBoard');
 const customerFileVehicleOptions = finalFunctionSlice('customerFileVehicleOptions');
 const paymentTransactionCard = finalFunctionSlice('paymentTransactionCard');
+const transactionCustomerName = finalFunctionSlice('transactionCustomerName');
 
 if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   fail('Missing core payment workflow functions.');
@@ -149,6 +150,11 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
   'Needs Clover/customer match',
   'customerFileButton'
 ].forEach(text => requireText('Transaction customer matching card', paymentTransactionCard, text));
+[
+  'extCustomer&&/\\s/.test(extCustomer)',
+  'cloverCustomerId',
+  'same.length===1'
+].forEach(text => requireText('Transaction customer matching helper', transactionCustomerName, text));
 
 [
   '/api/integrations/clover/manual-charge',
