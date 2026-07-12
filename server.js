@@ -1185,6 +1185,12 @@ function reportCsvCell(value) {
 function reportCsvNote(parts = []) {
   return parts.filter(Boolean).map(value => String(value || '').trim()).filter(Boolean).join(' | ');
 }
+function safeReportText(value = '') {
+  return String(value || '')
+    .replace(/(password|token|secret|api[_ -]?key|source[_ -]?token|card[_ -]?token|payment[_ -]?source)\s*[:=]\s*[^|\n\r]+/ig, '$1: [redacted]')
+    .replace(/pbkdf2\$[0-9]+\$[a-f0-9]+/ig, '[redacted-hash]')
+    .slice(0, 500);
+}
 function addReportRow(rows, section, date, customer, vehicle, vin, tag, tracker, type, amount, status, source, notes) {
   rows.push([section || '', date || '', customer || '', vehicle || '', vin || '', tag || '', tracker || '', type || '', amount || 0, status || '', source || '', notes || '']);
 }
@@ -1394,6 +1400,12 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   (scoped.claims || []).forEach(claim => {
     const vehicle = reportVehicleFor(scoped, claim.customer, claim.vehicleId);
     addReportRow(rows, 'Claims / tolls / disputes', claim.createdAt || claim.incidentDate || claim.nextFollowUp || '', claim.customer || 'Unmatched', vehicle.id ? vehicleNameFromParts(vehicle) : (claim.vehicle || ''), vehicle.vin || claim.vin || '', vehicle.plate || vehicle.stock || claim.plate || claim.reference || '', vehicle.tracker || claim.tracker || '', claim.type || 'Issue', claim.amount || 0, claim.status || 'Open', claim.source || claim.provider || claim.agency || 'Manual', reportCsvNote([claim.notes, claim.customerMatchStatus, reportClaimCandidateNote(claim), claim.externalId || claim.caseId || claim.disputeId, claim.deadline ? 'Deadline ' + claim.deadline : '', claim.evidence || claim.proofUrl || '']));
+  });
+  (scoped.messages || []).forEach(message => {
+    const customer = message.customer || message.name || message.toName || message.fromName || 'Unassigned';
+    const vehicle = reportVehicleFor(scoped, customer, message.vehicleId);
+    const tag = vehicle.plate || vehicle.stock || message.plate || message.licensePlate || '';
+    addReportRow(rows, 'Messages / communications', message.createdAt || message.date || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (message.vehicle || ''), vehicle.vin || message.vin || '', tag, vehicle.tracker || message.tracker || '', message.event || message.template || message.subject || message.direction || 'Message', message.amount || 0, message.status || message.direction || 'Logged', message.channel || message.source || 'WheelsonAuto', reportCsvNote([safeReportText(message.subject), safeReportText(message.body), message.aiPlan ? 'Star AI draft/action' : '', message.paymentId ? 'Payment ' + message.paymentId : '', message.claimId ? 'Claim ' + message.claimId : '', message.customerAccountId ? 'Customer login ' + message.customerAccountId : '', message.staffAccountId ? 'Staff login ' + message.staffAccountId : '']));
   });
   (scoped.applications || []).forEach(app => addReportRow(rows, 'Applications', app.submittedAt || app.createdAt || '', app.name || app.customer || '', app.vehicle || '', app.vin || '', app.plate || '', app.tracker || '', 'Application', app.down || 0, app.stage || app.status || 'New', 'Website/apply', reportCsvNote([app.phone, app.email, app.license, app.employer, app.notes])));
   (scoped.documents || []).filter(doc => !doc.system).forEach(doc => {

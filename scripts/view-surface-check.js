@@ -188,6 +188,19 @@ assertIncludes('Daily closeout notes surface', app + server, [
   'auditEvents'
 ]);
 
+assertIncludes('Communications report export surface', app + server, [
+  'safeReportText',
+  'communicationReportRows',
+  'Messages / communications',
+  'staffAccountId',
+  'customerAccountId',
+  'Star AI draft/action',
+  '[redacted-hash]',
+  'payment[_ -]?source',
+  'reportRowsForData',
+  'reportCsvRows'
+]);
+
 const documents = finalFunctionSlice(app, 'Documents');
 assertIncludes('Documents surface', documents + app + server, [
   'Portal visibility',
