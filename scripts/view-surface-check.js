@@ -244,7 +244,10 @@ assertIncludes('Messages and Star surface', messages, [
   'New text/email',
   'Email live',
   'Email draft',
+  'message-inbox-layout',
+  'messageConversationPanel',
   'starAiPanel',
+  'starAiPromptPanel',
   'starAiLane',
   'Search customer, phone, email, VIN, tag, payment, or text',
   'Approval'
@@ -257,7 +260,24 @@ assertIncludes('Compose message modal', compose, [
   '<option value="Email"',
   'messageEmail'
 ]);
-assertIncludes('Message send action', app, ['/api/messages/send', 'channel:val', 'send-message-now']);
+assertIncludes('Message send action', app, ['/api/messages/send', 'channel:val', 'send-message-now', 'send-thread-message']);
+
+const conversationPanel = finalFunctionSlice(app, 'messageConversationPanel');
+assertIncludes('Message conversation panel', conversationPanel, [
+  'message-conversation-panel',
+  'message-bubbles',
+  'messageQuickReply',
+  'Ask Star',
+  'Customer file'
+]);
+
+const starPrompt = finalFunctionSlice(app, 'starAiPromptPanel');
+assertIncludes('Star prompt panel', starPrompt, [
+  'Ask Star',
+  'starPromptCustomer',
+  'starPromptBody',
+  'Prepare Star reply'
+]);
 
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
 assertIncludes('Star AI panel', starPanel, [
@@ -276,8 +296,16 @@ const setupPanel = finalFunctionSlice(app, 'messageSetupPanel');
 assertIncludes('Messaging setup panel', setupPanel, [
   'emailWebhook',
   'Email',
-  'Star'
+  'Star',
+  'Email notifications',
+  'notificationEmailTo',
+  'send-email-notification-test'
 ]);
+
+const settings = finalFunctionSlice(app, 'Settings');
+const customerLoginForm = finalFunctionSlice(app, 'customerLoginAccountForm');
+assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
+assertIncludes('Customer portal account form', customerLoginForm, ['customerLoginName', 'customerLoginPassword', 'customerLoginRecurringId', 'customerLoginVehicleId']);
 
 const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
 const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');

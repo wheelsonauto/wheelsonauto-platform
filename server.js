@@ -313,10 +313,38 @@ function repairVehicleSheetLinkConflicts(data) {
   }
   return repaired;
 }
+function ensureBaseOrganization(data) {
+  if (!data) return data;
+  data.organizations = Array.isArray(data.organizations) ? data.organizations : [];
+  let main = data.organizations.find(org => org.id === 'org-wheelsonauto');
+  if (!main) {
+    main = {
+      id: 'org-wheelsonauto',
+      name: 'WheelsonAuto',
+      type: 'Main company',
+      status: 'Active',
+      plan: 'Owner account',
+      primaryAdmin: 'Khaled',
+      dataScope: 'Global owner account',
+      billingOwner: 'WheelsonAuto',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    data.organizations.unshift(main);
+  }
+  data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
+  data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  [...data.staffAccounts, ...data.customerAccounts].forEach(account => {
+    if (!account.organizationId) account.organizationId = 'org-wheelsonauto';
+  });
+  return data;
+}
 function repairDataIds(data) {
   repairDuplicateVehicleIds(data);
   repairDuplicateRecordIds(data, 'contracts');
+  ensureBaseOrganization(data);
   repairVehicleSheetLinkConflicts(data);
+  resolveClaimCustomerLinks(data);
   return data;
 }
 function nextUniqueVehicleId(data, base, vehicle) {
@@ -379,7 +407,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -479,6 +507,17 @@ function messageSettings(data = {}) {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false
   };
 }
+function emailNotificationSettings(data = {}) {
+  const saved = (((data.integrations || {}).notifications) || {});
+  const recipients = Array.isArray(saved.emailRecipients) ? saved.emailRecipients : String(saved.emailRecipients || saved.emailTo || '').split(',');
+  return {
+    emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
+    emailRecipients: recipients.map(item => String(item || '').trim()).filter(Boolean),
+    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset'],
+    lastTestAt: saved.lastTestAt || '',
+    lastError: saved.lastError || ''
+  };
+}
 function emailProviderConfigured(provider) {
   const name = String(provider || WOA_EMAIL_PROVIDER || '').toLowerCase();
   if (!WOA_EMAIL_FROM) return false;
@@ -519,6 +558,8 @@ function publicMessagingStatus(data = {}) {
     emailProvider,
     emailConfigured,
     emailFrom: emailConfigured ? 'stored in Render' : '',
+    notificationEmail: settings.emailEnabled ? maskEmail(emailNotificationSettings(data).emailRecipients[0] || '') : '',
+    notificationsEnabled: emailNotificationSettings(data).emailEnabled,
     emailMode: emailConfigured ? 'Email can send customer replies, receipts, approvals, documents, and follow-ups.' : 'Email channel is built in and will save drafts until an email provider is connected.',
     aiGuardrails: 'AI can answer normal texts/emails and send safe links. Charges, card changes, autopay edits, removals, disputes, receipts after payment, and unclear money requests require admin approval.'
   };
@@ -672,6 +713,57 @@ async function sendProviderEmail(to, subject, body, meta = {}) {
     return { sent: true, status: 'Sent', provider: 'sendgrid', channel: 'Email', externalId: response.headers.get('x-message-id') || '', response: text };
   }
   return { sent: false, status: 'Email draft', provider, channel: 'Email', message: 'Email provider is not connected yet. Email saved in WheelsonAuto.' };
+}
+async function queueEmailNotification(data, payload = {}) {
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  data.integrations = data.integrations || {};
+  data.integrations.notifications = data.integrations.notifications || {};
+  const settings = emailNotificationSettings(data);
+  const to = String(payload.to || settings.emailRecipients[0] || '').trim();
+  const subject = String(payload.subject || 'WheelsonAuto notification').trim();
+  const body = String(payload.body || 'WheelsonAuto notification test.').trim();
+  const event = String(payload.event || 'manual_test').trim();
+  const customer = String(payload.customer || 'WheelsonAuto').trim();
+  let result;
+  try {
+    result = await sendProviderEmail(to, subject, body, { customer, messagingSettings: { emailEnabled: settings.emailEnabled } });
+  } catch (err) {
+    result = { sent: false, status: 'Email failed', provider: WOA_EMAIL_PROVIDER || 'not_configured', channel: 'Email', message: String(err && err.message || err) };
+  }
+  const record = {
+    id: 'msg-notify-' + Date.now(),
+    externalId: result.externalId || '',
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer,
+    email: to,
+    to,
+    direction: 'Outbound notification',
+    channel: 'Email',
+    template: payload.template || 'Notification',
+    subject,
+    status: result.sent ? (result.status || 'Sent') : (result.status || 'Email draft'),
+    tone: result.sent ? 'good' : 'warn',
+    body,
+    provider: result.provider || WOA_EMAIL_PROVIDER || 'not_configured',
+    source: 'WheelsonAuto email notification',
+    event
+  };
+  data.messages.unshift(record);
+  data.integrations.notifications.emailEnabled = settings.emailEnabled;
+  data.integrations.notifications.emailRecipients = settings.emailRecipients;
+  data.integrations.notifications.lastNotificationAt = new Date().toISOString();
+  data.integrations.notifications.lastNotificationEvent = event;
+  if (event === 'manual_test') data.integrations.notifications.lastTestAt = data.integrations.notifications.lastNotificationAt;
+  data.integrations.notifications.lastStatus = record.status;
+  data.integrations.notifications.lastError = result.sent ? '' : (result.message || '');
+  return { sent: !!result.sent, result, message: record };
+}
+async function queueOwnerEmailNotification(data, event, payload = {}) {
+  const settings = emailNotificationSettings(data);
+  if (!settings.emailEnabled || !settings.emailRecipients.length) return null;
+  if (settings.events.length && !settings.events.includes(event)) return null;
+  return queueEmailNotification(data, { ...payload, event });
 }
 function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn') {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -1456,6 +1548,15 @@ async function mergeVehicleImport(data) {
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
 function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8'); }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
+function cookieSecurityFlags(options = {}) {
+  const flags = ['HttpOnly', 'SameSite=Lax', 'Path=/'];
+  if (PUBLIC_BASE_URL.startsWith('https://')) flags.push('Secure');
+  if (Object.prototype.hasOwnProperty.call(options, 'maxAge')) flags.push('Max-Age=' + Number(options.maxAge || 0));
+  return flags.join('; ');
+}
+function sessionSetCookie(name, value, options = {}) {
+  return name + '=' + String(value || '') + '; ' + cookieSecurityFlags(options);
+}
 function sessionCookie(user) {
   const payload = Buffer.from(JSON.stringify(user), 'utf8').toString('base64url');
   return SESSION_VALUE + '.' + payload;
@@ -1533,13 +1634,100 @@ function cleanStaffAccountPayload(payload, existing = null) {
   delete staff.password;
   return staff;
 }
+function staffStatusActive(row) {
+  return String(row && row.status || 'Active').toLowerCase() !== 'disabled';
+}
+function safeCustomerAccount(account = {}) {
+  const safe = { ...account };
+  delete safe.passwordHash;
+  delete safe.passwordSalt;
+  delete safe.password;
+  return safe;
+}
+function customerLoginUser(account) {
+  return {
+    id: account.id || ('customer-' + Date.now()),
+    username: account.username || account.email || '',
+    name: account.name || account.customer || 'Customer',
+    customer: account.customer || account.name || '',
+    role: 'Customer',
+    access: 'Customer portal',
+    organizationId: account.organizationId || 'org-wheelsonauto',
+    customerId: account.customerId || '',
+    contractId: account.contractId || '',
+    recurringPaymentId: account.recurringPaymentId || '',
+    vehicleId: account.vehicleId || '',
+    cloverCustomerId: account.cloverCustomerId || '',
+    phone: account.phone || '',
+    email: account.email || ''
+  };
+}
+function findCustomerAccountByLogin(data, username, password) {
+  const cleanUser = normalizeLogin(username);
+  if (!cleanUser || !password) return null;
+  return (data.customerAccounts || []).find(account => {
+    if (!staffStatusActive(account)) return false;
+    const names = [account.username, account.email, account.phone, account.name, account.customer].map(normalizeLogin).filter(Boolean);
+    return names.includes(cleanUser) && verifyPasswordRecord(password, account);
+  }) || null;
+}
+function cleanCustomerAccountPayload(payload, existing = null) {
+  const name = String(payload.name || payload.customer || existing && existing.name || '').trim();
+  const customer = String(payload.customer || payload.name || existing && existing.customer || name).trim();
+  const account = {
+    id: String(payload.id || existing && existing.id || ('customer-login-' + Date.now())).trim(),
+    name: name || customer || 'Customer',
+    customer: customer || name || 'Customer',
+    username: normalizeLogin(payload.username || payload.email || existing && existing.username || ''),
+    phone: String(payload.phone || existing && existing.phone || '').trim(),
+    email: String(payload.email || existing && existing.email || '').trim(),
+    status: String(payload.status || existing && existing.status || 'Active').trim(),
+    organizationId: String(payload.organizationId || existing && existing.organizationId || 'org-wheelsonauto').trim(),
+    customerId: String(payload.customerId || existing && existing.customerId || '').trim(),
+    contractId: String(payload.contractId || existing && existing.contractId || '').trim(),
+    recurringPaymentId: String(payload.recurringPaymentId || existing && existing.recurringPaymentId || '').trim(),
+    vehicleId: String(payload.vehicleId || existing && existing.vehicleId || '').trim(),
+    cloverCustomerId: String(payload.cloverCustomerId || existing && existing.cloverCustomerId || '').trim(),
+    notes: String(payload.notes || existing && existing.notes || '').trim(),
+    createdAt: existing && existing.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!account.username) account.username = normalizeLogin(account.email || account.phone || account.name.replace(/\s+/g, '.'));
+  if (existing) {
+    account.passwordHash = existing.passwordHash || '';
+    account.passwordSalt = existing.passwordSalt || '';
+    account.passwordUpdatedAt = existing.passwordUpdatedAt || '';
+  }
+  const password = String(payload.password || '').trim();
+  if (password) Object.assign(account, createPasswordRecord(password));
+  delete account.password;
+  return account;
+}
+function cleanOrganizationPayload(payload, existing = null) {
+  const now = new Date().toISOString();
+  return {
+    id: String(payload.id || existing && existing.id || ('org-' + Date.now())).trim(),
+    name: String(payload.name || existing && existing.name || 'New company').trim(),
+    type: String(payload.type || existing && existing.type || 'Store / location').trim(),
+    status: String(payload.status || existing && existing.status || 'Active').trim(),
+    plan: String(payload.plan || existing && existing.plan || 'Internal').trim(),
+    primaryAdmin: String(payload.primaryAdmin || payload.admin || existing && existing.primaryAdmin || '').trim(),
+    fleetCount: Number(payload.fleetCount || existing && existing.fleetCount || 0),
+    parentOrganizationId: String(payload.parentOrganizationId || existing && existing.parentOrganizationId || '').trim(),
+    dataScope: String(payload.dataScope || existing && existing.dataScope || 'Shared owner account').trim(),
+    billingOwner: String(payload.billingOwner || existing && existing.billingOwner || 'WheelsonAuto').trim(),
+    notes: String(payload.notes || existing && existing.notes || '').trim(),
+    createdAt: existing && existing.createdAt || payload.createdAt || now,
+    updatedAt: now
+  };
+}
 function isOwnerUser(user) {
   return String(user && user.role || '').toLowerCase() === 'owner';
 }
 function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
-  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts'];
+  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments', '/api/card-setup-requests'].some(prefix => pathname.startsWith(prefix))) return false;
@@ -1573,17 +1761,30 @@ function preserveStaffLoginSecrets(current, incoming) {
       username: (next.security.ownerLogin && next.security.ownerLogin.username) || current.security.ownerLogin.username || LOGIN_USERNAME || 'admin'
     };
   }
-  if (!Array.isArray(next.staffAccounts)) return next;
-  const existingById = new Map((current.staffAccounts || []).map(staff => [staff.id, staff]));
-  next.staffAccounts = next.staffAccounts.map(staff => {
-    const old = existingById.get(staff.id) || {};
-    return {
-      ...staff,
-      passwordHash: staff.passwordHash || old.passwordHash || '',
-      passwordSalt: staff.passwordSalt || old.passwordSalt || '',
-      passwordUpdatedAt: staff.passwordUpdatedAt || old.passwordUpdatedAt || ''
-    };
-  });
+  if (Array.isArray(next.staffAccounts)) {
+    const existingById = new Map((current.staffAccounts || []).map(staff => [staff.id, staff]));
+    next.staffAccounts = next.staffAccounts.map(staff => {
+      const old = existingById.get(staff.id) || {};
+      return {
+        ...staff,
+        passwordHash: staff.passwordHash || old.passwordHash || '',
+        passwordSalt: staff.passwordSalt || old.passwordSalt || '',
+        passwordUpdatedAt: staff.passwordUpdatedAt || old.passwordUpdatedAt || ''
+      };
+    });
+  }
+  if (Array.isArray(next.customerAccounts)) {
+    const existingById = new Map((current.customerAccounts || []).map(account => [account.id, account]));
+    next.customerAccounts = next.customerAccounts.map(account => {
+      const old = existingById.get(account.id) || {};
+      return {
+        ...account,
+        passwordHash: account.passwordHash || old.passwordHash || '',
+        passwordSalt: account.passwordSalt || old.passwordSalt || '',
+        passwordUpdatedAt: account.passwordUpdatedAt || old.passwordUpdatedAt || ''
+      };
+    });
+  }
   return next;
 }
 function redactStaffSecrets(data) {
@@ -1593,6 +1794,7 @@ function redactStaffSecrets(data) {
     delete staff.passwordSalt;
     return staff;
   });
+  safe.customerAccounts = (safe.customerAccounts || []).map(safeCustomerAccount);
   if (safe.security && safe.security.ownerLogin) {
     delete safe.security.ownerLogin.passwordHash;
     delete safe.security.ownerLogin.passwordSalt;
@@ -1606,6 +1808,7 @@ function stateForUserRead(data, user) {
   delete safe.security;
   delete safe.apiProviders;
   delete safe.staffAccounts;
+  delete safe.customerAccounts;
   if (safe.integrations) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
@@ -1685,6 +1888,132 @@ function passwordMatchesCurrentUser(data, user, password) {
 }
 function loginPage(message = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label><button>Sign in</button><div class="login-pin">Use username/password for staff accounts. Owner PIN still works as a backup so you do not get locked out.</div></form></main></body></html>';
+}
+function customerSessionCookie(account) {
+  const payload = Buffer.from(JSON.stringify(customerLoginUser(account)), 'utf8').toString('base64url');
+  return SESSION_VALUE + '.customer.' + payload;
+}
+function customerSessionUser(req) {
+  const raw = cookies(req).woa_customer_session || '';
+  if (!raw.startsWith(SESSION_VALUE + '.customer.')) return null;
+  try {
+    const body = JSON.parse(Buffer.from(raw.slice((SESSION_VALUE + '.customer.').length), 'base64url').toString('utf8'));
+    return body && body.role === 'Customer' ? body : null;
+  } catch {
+    return null;
+  }
+}
+function customerLoginPage(message = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>View your vehicle, payment schedule, service reminders, and account messages.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username or email<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><button>Sign in</button><div class="login-pin">This is for customer accounts only. Staff should use the main WheelsonAuto Portal login.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
+}
+function customerForgotPage(message = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer help</div><h1>Reset access</h1><p>Send the office a secure request. We will verify the account before changing any login.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, passwords are changed by WheelsonAuto after account verification.</div><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Back to customer login</a></form></main></body></html>';
+}
+function findCustomerAccountByIdentity(data, identity) {
+  const key = normalizeLogin(identity);
+  const phone = phoneKey(identity);
+  const name = normKey(identity);
+  if (!key && !phone && !name) return null;
+  return (data.customerAccounts || []).find(account => {
+    if (!staffStatusActive(account)) return false;
+    const values = [account.username, account.email, account.name, account.customer].map(normalizeLogin).filter(Boolean);
+    if (key && values.includes(key)) return true;
+    if (phone && phoneKey(account.phone) === phone) return true;
+    return !!(name && [account.name, account.customer].some(value => softNameMatch(value, name)));
+  }) || null;
+}
+function moneyText(value) {
+  const amount = Number(value || 0);
+  return '$' + (Number.isFinite(amount) ? amount : 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+function stripPrivateCustomerFields(row = {}) {
+  const safe = { ...row };
+  ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response'].forEach(key => delete safe[key]);
+  return safe;
+}
+function customerPortalIdentity(account = {}, context = {}) {
+  const recurring = context.recurring || {};
+  const customer = context.customer || {};
+  const contract = context.contract || {};
+  const vehicle = context.vehicle || {};
+  const names = [account.customer, account.name, context.customerName, recurring.customer, customer.name, customer.customer, contract.customer, vehicle.currentCustomer].map(normKey).filter(Boolean);
+  const phones = [account.phone, context.phone, recurring.phone, customer.phone, contract.phone].map(phoneKey).filter(Boolean);
+  const emails = [account.email, context.email, recurring.email, customer.email, contract.email].map(emailKey).filter(Boolean);
+  const ids = {
+    customerId: account.customerId || customer.id || '',
+    contractId: account.contractId || contract.id || '',
+    recurringPaymentId: account.recurringPaymentId || recurring.id || '',
+    vehicleId: account.vehicleId || recurring.vehicleId || customer.vehicleId || contract.vehicleId || vehicle.id || '',
+    cloverCustomerId: account.cloverCustomerId || recurring.cloverCustomerId || customer.cloverCustomerId || ''
+  };
+  return { names: [...new Set(names)], phones: [...new Set(phones)], emails: [...new Set(emails)], ids };
+}
+function customerPortalRecordMatches(row = {}, identity = {}, kind = '') {
+  const ids = identity.ids || {};
+  if (kind === 'customer' && ids.customerId && row.id === ids.customerId) return true;
+  if (kind === 'contract' && ids.contractId && row.id === ids.contractId) return true;
+  if (kind === 'recurring' && ids.recurringPaymentId && row.id === ids.recurringPaymentId) return true;
+  if (kind === 'vehicle' && ids.vehicleId && row.id === ids.vehicleId) return true;
+  if (ids.vehicleId && row.vehicleId === ids.vehicleId) return true;
+  if (ids.recurringPaymentId && row.recurringPaymentId === ids.recurringPaymentId) return true;
+  if (ids.cloverCustomerId && String(row.cloverCustomerId || row.customerId || '') === String(ids.cloverCustomerId)) return true;
+  const rowPhone = phoneKey(row.phone || row.from || row.to || '');
+  if (rowPhone && identity.phones.includes(rowPhone)) return true;
+  const rowEmail = emailKey(row.email || row.from || row.to || '');
+  if (rowEmail && identity.emails.includes(rowEmail)) return true;
+  const rowNames = [row.customer, row.name, row.currentCustomer, row.cardholderName, row.customerName].map(normKey).filter(Boolean);
+  return rowNames.some(name => identity.names.some(wanted => softNameMatch(name, wanted)));
+}
+function customerPortalState(data, account) {
+  enrichLinkedProfiles(data);
+  const context = aiFindCustomerContext(data, {
+    customer: account.customer || account.name,
+    phone: account.phone,
+    email: account.email,
+    recurringPaymentId: account.recurringPaymentId,
+    id: account.recurringPaymentId
+  });
+  const identity = customerPortalIdentity(account, context);
+  const vehicles = (data.vehicles || []).filter(row => customerPortalRecordMatches(row, identity, 'vehicle'));
+  const customers = (data.customers || []).filter(row => customerPortalRecordMatches(row, identity, 'customer'));
+  const contracts = (data.contracts || []).filter(row => customerPortalRecordMatches(row, identity, 'contract'));
+  const recurringPayments = allRecurringRows(data).filter(row => customerPortalRecordMatches(row, identity, 'recurring'));
+  const payments = (data.payments || []).filter(row => customerPortalRecordMatches(row, identity, 'payment')).slice(0, 20);
+  const maintenance = (data.maintenance || []).filter(row => customerPortalRecordMatches(row, identity, 'maintenance')).slice(0, 20);
+  const claims = (data.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
+  const messages = (data.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message')).slice(0, 20);
+  const paymentRequests = (data.paymentRequests || []).filter(row => customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
+  const primaryRecurring = recurringPayments[0] || context.recurring || {};
+  const primaryVehicle = vehicles[0] || context.vehicle || {};
+  return {
+    account: safeCustomerAccount(account),
+    summary: aiContextSummary({ ...context, recurring: primaryRecurring, vehicle: primaryVehicle }),
+    customer: stripPrivateCustomerFields(customers[0] || context.customer || {}),
+    contract: stripPrivateCustomerFields(contracts[0] || context.contract || {}),
+    recurring: stripPrivateCustomerFields(primaryRecurring),
+    vehicle: stripPrivateCustomerFields(primaryVehicle),
+    vehicles: vehicles.map(stripPrivateCustomerFields),
+    payments: payments.map(stripPrivateCustomerFields),
+    maintenance: maintenance.map(stripPrivateCustomerFields),
+    claims: claims.map(stripPrivateCustomerFields),
+    messages: messages.map(stripPrivateCustomerFields),
+    paymentRequests: paymentRequests.map(stripPrivateCustomerFields),
+    generatedAt: new Date().toISOString()
+  };
+}
+function customerPortalList(rows, empty, render) {
+  return rows && rows.length ? rows.map(render).join('') : '<div class="customer-empty">' + escapeHtml(empty) + '</div>';
+}
+function customerPortalHtml(account, state) {
+  const vehicle = state.vehicle || {};
+  const recurring = state.recurring || {};
+  const summary = state.summary || {};
+  const amount = recurring.amount || recurring.weeklyAmount || state.customer.weeklyAmount || vehicle.rate || 0;
+  const paymentStatus = recurring.status || summary.paymentStatus || 'Not scheduled';
+  const vehicleTitle = summary.vehicle || vehicleNameFromParts(vehicle) || 'Vehicle not linked yet';
+  const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || '';
+  const customerName = account.name || account.customer || summary.customer || 'Customer';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div><div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div><div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div><div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -1789,6 +2118,11 @@ function systemReadiness(data) {
   const routes = [
     route('GET', '/api/state', 'Dashboard state'),
     route('PUT', '/api/state', 'Role-aware dashboard saves'),
+    route('GET', '/customer/login', 'Customer login page'),
+    route('GET', '/customer', 'Customer self-service portal'),
+    route('GET', '/api/customer/portal-state', 'Customer-only account state'),
+    route('POST', '/api/customer-accounts', 'Owner-managed customer logins'),
+    route('POST', '/api/organizations', 'Owner-managed company/store/franchise accounts'),
     route('POST', '/api/api-providers', 'API readiness setup records'),
     route('POST', '/api/tasks', 'Dispatch task creation'),
     route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
@@ -1798,6 +2132,8 @@ function systemReadiness(data) {
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
+    route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
+    route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
@@ -1809,6 +2145,7 @@ function systemReadiness(data) {
   const records = {
     vehicles: (data.vehicles || []).length,
     customers: (data.customers || []).length,
+    customerAccounts: (data.customerAccounts || []).length,
     contracts: (data.contracts || []).length,
     recurringPayments: (data.recurringPayments || []).length,
     apiProviders: (data.apiProviders || []).length,
@@ -2169,6 +2506,114 @@ function mergePaymentRecord(existing, incoming) {
   });
   return merged;
 }
+function weakClaimCustomer(value) {
+  const raw = String(value || '').trim();
+  return !raw || /^(unknown|unassigned|customer|unmatched clover payment|clover dispute|clover customer|n\/a|na)$/i.test(raw);
+}
+function claimIdentityTokens(claim = {}) {
+  return [
+    claim.paymentId,
+    claim.cloverPaymentId,
+    claim.cloverChargeId,
+    claim.chargeId,
+    claim.transactionId,
+    claim.externalPaymentId,
+    claim.externalReferenceId,
+    claim.externalId,
+    claim.caseId,
+    claim.disputeId,
+    claim.paymentRequestId
+  ].map(normalizedPaymentRecordId).filter(Boolean);
+}
+function paymentMatchesClaim(payment = {}, claim = {}) {
+  const claimTokens = claimIdentityTokens(claim);
+  if (claimTokens.length && paymentRecordIds(payment).some(id => claimTokens.includes(id))) return true;
+  const reference = normKey([claim.reference, claim.plate, claim.evidence, claim.notes].filter(Boolean).join(' '));
+  if (!reference) return false;
+  return paymentRecordIds(payment).some(id => id && reference.includes(normKey(id)));
+}
+function findClaimPaymentRequest(data, claim = {}) {
+  const requests = data.paymentRequests || [];
+  const ids = [claim.paymentRequestId, claim.paymentLinkId, claim.requestId].map(String).filter(Boolean);
+  if (ids.length) {
+    const found = requests.find(request => ids.includes(String(request.id || '')));
+    if (found) return found;
+  }
+  const link = String(claim.paymentLinkUrl || claim.url || '').trim();
+  if (link) return requests.find(request => request.url === link || request.checkoutHref === link) || null;
+  return null;
+}
+function findClaimVehicle(data, claim = {}) {
+  const vehicles = data.vehicles || [];
+  const vehicleId = String(claim.vehicleId || '').trim();
+  if (vehicleId) {
+    const found = vehicles.find(vehicle => vehicle.id === vehicleId);
+    if (found) return found;
+  }
+  const vin = normKey(claim.vin);
+  if (vin) {
+    const found = vehicles.find(vehicle => normKey(vehicle.vin) === vin);
+    if (found) return found;
+  }
+  const plate = normKey(claim.plate || claim.reference || claim.licensePlate || claim.tag);
+  if (plate) {
+    const found = vehicles.find(vehicle => [vehicle.plate, vehicle.stock, vehicle.tempTag].map(normKey).includes(plate));
+    if (found) return found;
+  }
+  const vehicleName = normKey(claim.vehicle);
+  if (vehicleName) return vehicles.find(vehicle => normKey(vehicleNameFromParts(vehicle)) === vehicleName || normKey(vehicle.name) === vehicleName) || null;
+  return null;
+}
+function applyClaimCustomerMatch(claim, source, sourceLabel) {
+  if (!claim || !source) return false;
+  const customer = source.customer || source.name || source.currentCustomer || '';
+  if (weakClaimCustomer(claim.customer) && customer) claim.customer = customer;
+  ['phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'cloverCustomerId', 'recurringPaymentId'].forEach(key => {
+    if (!claim[key] && source[key]) claim[key] = source[key];
+  });
+  if (!claim.vehicle && source.vehicleName) claim.vehicle = source.vehicleName;
+  if (!claim.paymentId && (source.cloverPaymentId || source.paymentId)) claim.paymentId = source.cloverPaymentId || source.paymentId;
+  if (!claim.cloverPaymentId && source.cloverPaymentId) claim.cloverPaymentId = source.cloverPaymentId;
+  if (!claim.amount && source.amount) claim.amount = source.amount;
+  if (customer) {
+    claim.customerMatchStatus = 'Matched';
+    claim.customerMatchSource = sourceLabel;
+    claim.customerMatchedAt = new Date().toISOString();
+    return true;
+  }
+  return false;
+}
+function resolveClaimCustomerLinks(data) {
+  if (!data || !Array.isArray(data.claims)) return 0;
+  const payments = data.payments || [];
+  const requests = data.paymentRequests || [];
+  let matched = 0;
+  data.claims.forEach(claim => {
+    const before = JSON.stringify([claim.customer, claim.vehicle, claim.vehicleId, claim.paymentId, claim.cloverPaymentId, claim.customerMatchSource]);
+    const linkedPayment = payments.find(payment => paymentMatchesClaim(payment, claim));
+    if (linkedPayment) applyClaimCustomerMatch(claim, linkedPayment, 'Payment record');
+    const linkedRequest = !claim.customerMatchStatus ? findClaimPaymentRequest(data, claim) : null;
+    if (linkedRequest) applyClaimCustomerMatch(claim, linkedRequest, 'Payment request');
+    if (!claim.customerMatchStatus && claim.cloverCustomerId) {
+      const recurring = allRecurringRows(data).find(row => String(row.cloverCustomerId || '') === String(claim.cloverCustomerId));
+      if (recurring) applyClaimCustomerMatch(claim, recurring, 'Recurring customer');
+    }
+    if (!claim.customerMatchStatus) {
+      const vehicle = findClaimVehicle(data, claim);
+      if (vehicle) applyClaimCustomerMatch(claim, { ...vehicle, customer: vehicle.currentCustomer, vehicle: vehicleNameFromParts(vehicle), vehicleId: vehicle.id, licensePlate: vehicle.plate || vehicle.stock, plate: vehicle.plate || vehicle.stock }, 'Fleet vehicle');
+    }
+    if (!claim.customerMatchStatus && !weakClaimCustomer(claim.customer)) {
+      claim.customerMatchStatus = 'Matched';
+      claim.customerMatchSource = claim.customerMatchSource || 'Saved claim customer';
+    }
+    if (!claim.customerMatchStatus && /dispute|clover|chargeback/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' ')))) {
+      claim.customerMatchStatus = 'Needs payment/customer match';
+    }
+    const after = JSON.stringify([claim.customer, claim.vehicle, claim.vehicleId, claim.paymentId, claim.cloverPaymentId, claim.customerMatchSource]);
+    if (before !== after) matched += 1;
+  });
+  return matched;
+}
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
   incoming.forEach(item => {
@@ -2192,13 +2637,14 @@ function mergeById(preferred, fallback) {
   });
   return merged;
 }
-async function protectConcurrentLocalWrites(data) {
+async function protectConcurrentLocalWrites(data, options = {}) {
   const latest = await readData();
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'tasks', 'apiProviders'].forEach(key => {
-    data[key] = mergeById(latest[key], data[key]);
+  const preferIncoming = !!options.preferIncoming;
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations'].forEach(key => {
+    data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
   });
-  data.customers = upsertById(latest.customers, data.customers);
-  data.payments = upsertById(latest.payments, data.payments);
+  data.customers = preferIncoming ? upsertById(data.customers, latest.customers) : upsertById(latest.customers, data.customers);
+  data.payments = preferIncoming ? upsertById(data.payments, latest.payments) : upsertById(latest.payments, data.payments);
   return data;
 }
 async function syncCloverIntoData(data, options = {}) {
@@ -3273,6 +3719,19 @@ async function runWheelsonAutoAutopay(options = {}) {
           row.lastAutoChargeAttemptDate = dateKey;
           row.lastAutoChargeAttemptAt = new Date().toISOString();
           queueCustomerMessage(data, row, 'Payment not found', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. We could not confirm today\'s payment of $' + Number(row.amount || 0).toLocaleString() + '. Please contact us so we can verify your payment source.', 'warn');
+          await queueOwnerEmailNotification(data, 'payment_not_found', {
+            customer: row.customer || 'Unknown customer',
+            subject: 'Payment not found - ' + (row.customer || 'Unknown customer'),
+            body: [
+              'WheelsonAuto could not confirm an autopay payment.',
+              'Customer: ' + (row.customer || 'Unknown customer'),
+              'Amount: $' + Number(row.amount || 0).toLocaleString(),
+              'Due date: ' + dateKey,
+              'Vehicle: ' + (row.vehicle || row.vin || 'Not linked'),
+              'Status: ' + payment.status,
+              'Error: ' + String(err && err.message || err)
+            ].join('\n')
+          });
           result.notFound = (result.notFound || 0) + 1;
           result.errors.push((row.customer || row.id) + ': ' + payment.status);
           continue;
@@ -3287,6 +3746,20 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeAttemptDate = dateKey;
         row.lastAutoChargeAttemptAt = new Date().toISOString();
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
+        await queueOwnerEmailNotification(data, 'payment_failed', {
+          customer: row.customer || 'Unknown customer',
+          subject: (attempts >= 2 ? '2x failed autopay - ' : '1x failed autopay - ') + (row.customer || 'Unknown customer'),
+          body: [
+            'WheelsonAuto autopay failed.',
+            'Customer: ' + (row.customer || 'Unknown customer'),
+            'Amount: $' + Number(row.amount || 0).toLocaleString(),
+            'Due date: ' + dateKey,
+            'Attempt: ' + attempts + ' of 2',
+            'Vehicle: ' + (row.vehicle || row.vin || 'Not linked'),
+            'Status: ' + row.status,
+            'Error: ' + row.lastAutoChargeError
+          ].join('\n')
+        });
         result.errors.push((row.customer || row.id) + ': ' + row.lastAutoChargeError);
       }
     }
@@ -3400,6 +3873,20 @@ const server = http.createServer(async (req, res) => {
         selectedVehicle.notes = [selectedVehicle.notes, 'Website application submitted by ' + (app.name || 'applicant') + ' on ' + app.submittedAt].filter(Boolean).join('\n');
       }
       if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, created: 'Just now', status: 'Submitted' });
+      await queueOwnerEmailNotification(data, 'application_submitted', {
+        customer: app.name || 'New applicant',
+        subject: 'New WheelsonAuto application - ' + (app.name || 'Applicant'),
+        body: [
+          'A new application was submitted on WheelsonAuto.',
+          'Applicant: ' + (app.name || 'Not provided'),
+          'Phone: ' + (app.phone || 'Not provided'),
+          'Email: ' + (app.email || 'Not provided'),
+          'Vehicle: ' + (app.vehicle || (selectedVehicle && vehicleNameFromParts(selectedVehicle)) || 'Not selected'),
+          'Score: ' + (app.score || 'Not scored'),
+          'Income: $' + Number(app.income || 0).toLocaleString(),
+          'Down payment: $' + Number(app.down || 0).toLocaleString()
+        ].join('\n')
+      });
       await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, 201, { ok: true, application: app });
@@ -3565,23 +4052,91 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
+    if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    if (url.pathname === '/customer/login' && req.method === 'POST') {
+      const form = new URLSearchParams(await readBody(req));
+      const username = form.get('username') || '';
+      const password = form.get('password') || '';
+      const data = await readData();
+      const account = findCustomerAccountByLogin(data, username, password);
+      if (!account) return send(res, 401, customerLoginPage('That customer login did not match an active account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: '/customer' });
+    }
+    if (url.pathname === '/customer/forgot' && req.method === 'GET') return send(res, 200, customerForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    if (url.pathname === '/customer/forgot' && req.method === 'POST') {
+      const form = new URLSearchParams(await readBody(req));
+      const identity = String(form.get('identity') || '').trim();
+      if (!identity) return send(res, 400, customerForgotPage('Enter your name, username, phone, or email so we can find the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const data = await readData();
+      const account = findCustomerAccountByIdentity(data, identity);
+      const customer = account && (account.name || account.customer) || identity;
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.messages.unshift({
+        id: 'msg-customer-reset-' + Date.now(),
+        date: new Date().toLocaleString('en-US'),
+        createdAt: new Date().toISOString(),
+        customer,
+        phone: account && account.phone || '',
+        email: account && account.email || '',
+        direction: 'Customer portal request',
+        channel: 'Portal',
+        template: 'Password reset request',
+        subject: 'Customer portal password help',
+        status: account ? 'Needs admin reset' : 'Needs account match',
+        tone: account ? 'warn' : 'bad',
+        body: 'Customer requested login help for: ' + identity + '. Verify identity before changing the password.',
+        source: 'Customer portal',
+        event: 'customer_password_reset'
+      });
+      await queueOwnerEmailNotification(data, 'customer_password_reset', {
+        customer,
+        subject: 'Customer password reset request - ' + customer,
+        body: [
+          'A customer requested portal login help.',
+          'Entered identity: ' + identity,
+          'Matched customer: ' + (account ? customer : 'No exact customer login match'),
+          'Phone: ' + (account && account.phone || 'Not available'),
+          'Email: ' + (account && account.email || 'Not available'),
+          'Action: verify the customer, then update their customer portal password from Settings.'
+        ].join('\n')
+      });
+      await writeData(data);
+      return send(res, 200, customerForgotPage('Your request was sent to WheelsonAuto. We will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+    if (url.pathname === '/customer' && req.method === 'GET') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      return send(res, 200, customerPortalHtml(account, customerPortalState(data, account)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/api/customer/portal-state' && req.method === 'GET') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return json(res, 401, { ok: false, error: 'Customer login required.' });
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
+      return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
+    }
     if (url.pathname === '/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));
       const username = form.get('username') || '';
       const password = form.get('password') || '';
       const pin = form.get('pin') || '';
-      if (ownerLoginMatches(username, password, pin)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie({ id: 'owner', username: LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      if (ownerLoginMatches(username, password, pin)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
       const data = await readData();
-      if (storedOwnerLoginMatches(data, username, password)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie({ id: 'owner', username: (data.security && data.security.ownerLogin && data.security.ownerLogin.username) || LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+      if (storedOwnerLoginMatches(data, username, password)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: (data.security && data.security.ownerLogin && data.security.ownerLogin.username) || LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
       const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
       if (staff) {
         const user = staffLoginUser(staff);
         user.companyName = companyNameById(data, user.organizationId);
-        return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=' + sessionCookie(user) + '; HttpOnly; SameSite=Lax; Path=/', Location: '/' });
+        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(user)), Location: '/' });
       }
       return send(res, 401, loginPage('That login did not match an active account.'));
     }
-    if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': 'woa_session=; Max-Age=0; Path=/', Location: '/' });
+    if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });
     const user = sessionUser(req);
     if (!user) return send(res, 200, loginPage());
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
@@ -3609,6 +4164,35 @@ const server = http.createServer(async (req, res) => {
       data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
       await writeData(data);
       return json(res, 200, { ok: true, messaging: data.integrations.messaging });
+    }
+    if (url.pathname === '/api/notifications/email/settings' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change email notification settings.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.notifications = data.integrations.notifications || {};
+      const recipients = Array.isArray(payload.emailRecipients) ? payload.emailRecipients : String(payload.emailRecipients || payload.emailTo || '').split(',');
+      data.integrations.notifications.emailRecipients = recipients.map(item => String(item || '').trim()).filter(Boolean);
+      if (Object.prototype.hasOwnProperty.call(payload, 'emailEnabled')) data.integrations.notifications.emailEnabled = payload.emailEnabled !== false;
+      data.integrations.notifications.events = Array.isArray(payload.events) && payload.events.length ? payload.events.map(String) : emailNotificationSettings(data).events;
+      data.integrations.notifications.updatedAt = new Date().toISOString();
+      await writeData(data);
+      return json(res, 200, { ok: true, notifications: emailNotificationSettings(data), messaging: publicMessagingStatus(data) });
+    }
+    if (url.pathname === '/api/notifications/email/test' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can send email notification tests.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const settings = emailNotificationSettings(data);
+      const result = await queueEmailNotification(data, {
+        to: payload.to || payload.email || settings.emailRecipients[0],
+        subject: payload.subject || 'WheelsonAuto email notification test',
+        body: payload.body || 'This is a WheelsonAuto notification test. If email is not connected yet, this stays saved as a draft in Messages.',
+        event: payload.event || 'manual_test',
+        customer: payload.customer || 'WheelsonAuto'
+      });
+      await writeData(data);
+      return json(res, result.sent ? 200 : 202, { ok: true, sent: result.sent, message: result.message, warning: result.result.message || '', notifications: emailNotificationSettings(data), messaging: publicMessagingStatus(data) });
     }
     if (url.pathname === '/api/messages/send' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');
@@ -3832,7 +4416,7 @@ const server = http.createServer(async (req, res) => {
       else data.apiProviders.unshift(provider);
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({ id: 'msg-api-' + Date.now(), date: new Date().toLocaleString('en-US'), customer: provider.name, channel: 'Internal log', template: 'API setup', status: provider.status, subject: provider.group, body: provider.liveTest || provider.notes || '' });
-      await protectConcurrentLocalWrites(data);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, provider });
     }
@@ -3844,7 +4428,7 @@ const server = http.createServer(async (req, res) => {
       const existing = data.tasks.find(item => item.id === task.id);
       if (existing) Object.assign(existing, task, { createdAt: existing.createdAt || task.createdAt });
       else data.tasks.unshift(task);
-      await protectConcurrentLocalWrites(data);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, task });
     }
@@ -3868,7 +4452,7 @@ const server = http.createServer(async (req, res) => {
         if (!staff) return json(res, 404, { ok: false, error: 'Staff account was not found.' });
         Object.assign(staff, record, { updatedAt: new Date().toISOString() });
       }
-      await protectConcurrentLocalWrites(data);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt });
     }
@@ -3885,12 +4469,45 @@ const server = http.createServer(async (req, res) => {
       if (duplicate) return json(res, 409, { ok: false, error: 'That username is already used by another staff account.' });
       if (existing) Object.assign(existing, staff);
       else data.staffAccounts.unshift(staff);
-      await protectConcurrentLocalWrites(data);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       const safeStaff = { ...staff };
       delete safeStaff.passwordHash;
       delete safeStaff.passwordSalt;
       return json(res, 200, { ok: true, staff: safeStaff });
+    }
+    if (url.pathname === '/api/customer-accounts' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage customer logins.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+      const existing = data.customerAccounts.find(item => item.id === payload.id);
+      const account = cleanCustomerAccountPayload(payload, existing);
+      if (!account.username) return json(res, 400, { ok: false, error: 'Enter a username, email, or phone for this customer login.' });
+      if (!existing && !account.passwordHash) return json(res, 400, { ok: false, error: 'Enter a password for the new customer login.' });
+      const duplicate = data.customerAccounts.find(item => item.id !== account.id && normalizeLogin(item.username || item.email || item.phone) === account.username);
+      if (duplicate) return json(res, 409, { ok: false, error: 'That customer login is already used by another account.' });
+      if (existing) Object.assign(existing, account);
+      else data.customerAccounts.unshift(account);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, account: safeCustomerAccount(existing || account), loginUrl: PUBLIC_BASE_URL + '/customer/login' });
+    }
+    if (url.pathname === '/api/organizations' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage company accounts.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      ensureBaseOrganization(data);
+      const existing = data.organizations.find(item => item.id === payload.id);
+      const organization = cleanOrganizationPayload(payload, existing);
+      if (!organization.name) return json(res, 400, { ok: false, error: 'Enter a company/store name.' });
+      const duplicate = data.organizations.find(item => item.id !== organization.id && normKey(item.name) === normKey(organization.name));
+      if (duplicate) return json(res, 409, { ok: false, error: 'That company/store name already exists.' });
+      if (existing) Object.assign(existing, organization);
+      else data.organizations.unshift(organization);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, organization: existing || organization });
     }
     if (url.pathname === '/api/recurring-payments' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');

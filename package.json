@@ -11,6 +11,7 @@
     "navigation-check": "node scripts/navigation-state-check.js",
     "render-smoke": "node scripts/frontend-render-smoke-test.js",
     "workflow-check": "node scripts/workflow-integrity-check.js",
+    "live-data-check": "node scripts/data-consistency-check.js data.json && node scripts/workflow-integrity-check.js data.json",
     "repair-data": "node scripts/repair-data.js",
     "direct-smoke": "node scripts/server-direct-smoke-test.js",
     "ui-check": "node scripts/static-ui-check.js",

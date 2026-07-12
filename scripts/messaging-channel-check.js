@@ -46,20 +46,34 @@ const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
 const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
 const approveAiMessage = finalFunctionSlice(server, 'approveAiMessage');
 const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus');
+const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotification');
+const queueOwnerEmailNotification = finalFunctionSlice(server, 'queueOwnerEmailNotification');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
+requireText('Messaging notification status', messagingStatus, 'notificationEmail');
 requireText('Message setup panel', messageSetupPanel, 'Email webhook');
+requireText('Message setup notification email', messageSetupPanel, 'notificationEmailTo');
+requireText('Message setup notification test', messageSetupPanel, 'send-email-notification-test');
 requireText('Compose modal channel selector', openComposeMessage, '<select id="messageChannel">');
 requireText('Compose modal email option', openComposeMessage, '<option value="Email"');
 requireText('Messages view channel summary', messagesView, "stat('Channels'");
+requireText('Messages inbox layout', messagesView, 'message-inbox-layout');
+requireText('Messages conversation panel', app, 'messageConversationPanel');
+requireText('Thread reply action', app, 'send-thread-message');
+requireText('Star custom prompt action', app, 'star-ai-custom');
 requireText('Server email webhook route', server, "/api/webhooks/email");
+requireText('Server notification settings route', server, "/api/notifications/email/settings");
+requireText('Server notification test route', server, "/api/notifications/email/test");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
+requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
+requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');
+requireText('Owner notification event filter', queueOwnerEmailNotification, 'settings.events.includes(event)');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
 
-console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, and channel UI are wired.');
+console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, notification email, and channel UI are wired.');

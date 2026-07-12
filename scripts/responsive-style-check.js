@@ -21,6 +21,19 @@ function requireBlock(label, selector, required) {
   });
 }
 
+function requireAnyBlock(label, selector, required) {
+  const blocks = [];
+  let index = -1;
+  while (true) {
+    index = css.indexOf(selector, index + 1);
+    if (index < 0) break;
+    blocks.push(css.slice(index, css.indexOf('}', index) + 1));
+  }
+  if (!blocks.length) fail(label + ' selector is missing: ' + selector);
+  const found = blocks.some(block => required.every(text => block.includes(text)));
+  if (!found) fail(label + ' is missing one block containing: ' + required.join(', '));
+}
+
 requireText('Phone breakpoint', '@media(max-width:760px)');
 requireText('Tablet/dashboard breakpoint', '@media(max-width:920px)');
 requireText('Desktop layout breakpoint', '@media(min-width:921px)');
@@ -47,6 +60,13 @@ requireBlock('Mechanic portal cards', '.view-mechanic-portal .mechanic-card,', [
 requireBlock('Mechanic/manager hover cards', '.view-mechanic-portal .mechanic-card:hover,', ['background:rgba(240,184,58,.10)', 'filter:none', 'transform:none']);
 requireBlock('Customer pay cards', '.admin-shell .customer-pay-card{', ['background:rgba(255,255,255,.055)', '!important']);
 requireBlock('Customer pay hover cards', '.admin-shell .customer-pay-card:hover{', ['background:rgba(240,184,58,.10)', '!important']);
+requireAnyBlock('Customer portal shell', '.customer-portal{', ['min-height:100vh', 'display:grid', 'gap:18px']);
+requireAnyBlock('Customer portal hero', '.customer-hero{', ['width:min(1180px,100%)', 'grid-template-columns:1fr minmax(0,1.4fr) auto', 'border-radius:14px']);
+requireAnyBlock('Customer portal summary grid', '.customer-summary-grid{', ['grid-template-columns:repeat(4,minmax(0,1fr))']);
+requireAnyBlock('Customer portal detail grid', '.customer-grid{', ['grid-template-columns:repeat(2,minmax(0,1fr))']);
+requireAnyBlock('Customer portal mobile shell', '.customer-portal{', ['padding:12px']);
+requireAnyBlock('Customer portal mobile summary grid', '.customer-summary-grid{', ['grid-template-columns:repeat(2,minmax(0,1fr))']);
+requireAnyBlock('Customer portal mobile detail grid', '.customer-grid{', ['grid-template-columns:1fr']);
 
 const finalGuard = css.slice(css.indexOf('Final no-blur pass: every staff information surface stays sharp on hover.'));
 if (/filter\s*:\s*blur/i.test(finalGuard)) fail('A blur filter appears after the final no-blur guard.');

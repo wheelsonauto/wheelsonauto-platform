@@ -313,6 +313,7 @@ async function actionModalSmoke(context) {
     ['new-maintenance', '', ['Add maintenance job', 'Vehicle', 'Due date']],
     ['new-claim', '', ['Add claim or issue', 'Customer', 'Next follow-up']],
     ['new-staff', '', ['Add staff account', 'Username', 'Password']],
+    ['new-customer-login', '', ['Add customer portal login', 'Customer name', 'Portal link']],
     ['new-message-template', '', ['Add message template', 'Message body']]
   ];
 
@@ -391,7 +392,7 @@ async function managerInteractionSmoke() {
   const context = makeContext({ name: 'Manager Interaction', role: 'Manager', homeView: 'Manager Portal', access: 'Manager access' });
   await dispatchClick(context, { view: 'Messages' });
   assert(context.view === 'Messages', 'Manager should be able to open Messages.');
-  assertHealthy('Manager clicked Messages', html(context), ['Messages', 'Customer conversations']);
+  assertHealthy('Manager clicked Messages', html(context), ['Messages', 'message-inbox-layout', 'Reply']);
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
   assertHealthy('Manager compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
   context.closeModal();
@@ -424,7 +425,7 @@ function ownerSmoke() {
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
     ['Operations service', 'Operations', 'Service', ['Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
-    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
+    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
     ['Reports', 'Reports', undefined, ['Reports', 'Daily closeout'], false]
@@ -447,7 +448,7 @@ function managerSmoke() {
 
   [
     ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
-    ['Manager messages', 'Messages', 'Inbox', ['Messages', 'Customer conversations', 'New text/email', 'message-thread-grid'], true],
+    ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
     ['Manager reports', 'Reports', undefined, ['Reports', 'Executive snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'table-wrap'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
@@ -475,7 +476,7 @@ function mechanicSmoke() {
 
   const blocked = renderView(context, 'Messages', 'Inbox');
   assertHealthy('Mechanic blocked Messages redirect', blocked, ['Mechanic Portal']);
-  assertNo('Mechanic blocked Messages redirect', blocked, ['Customer conversations', 'New text/email']);
+  assertNo('Mechanic blocked Messages redirect', blocked, ['message-inbox-layout', 'New text/email']);
 }
 
 function publicSmoke() {

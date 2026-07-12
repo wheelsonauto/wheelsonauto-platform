@@ -3,6 +3,8 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -170,6 +172,27 @@ function assertIncludes(label, source, required) {
   if (missing.length) fail(label + ' is missing: ' + missing.join(', '));
 }
 
+function assetVersions(source, asset) {
+  return unique(source.matchAll(new RegExp('/' + asset.replace('.', '\\.') + '\\?v=([^"\']+)', 'g')), match => match[1]);
+}
+
+const indexCssVersions = assetVersions(indexHtml, 'styles.css');
+const indexAppVersions = assetVersions(indexHtml, 'app.js');
+if (indexCssVersions.length !== 1) fail('index.html should reference exactly one styles.css asset version.');
+if (indexAppVersions.length !== 1) fail('index.html should reference exactly one app.js asset version.');
+if (indexCssVersions[0] !== indexAppVersions[0]) {
+  fail('index.html styles.css and app.js should share the same cache-busting version.');
+}
+if (indexHtml.includes('platform-20260711-public-qa') || server.includes('platform-20260711-public-qa')) {
+  fail('Stale public QA asset version is still referenced.');
+}
+assertIncludes('Server CSS cache-busting link', server, ['/styles.css?v=' + indexCssVersions[0]]);
+assertIncludes('Static asset no-store headers', server, ['staticFile(res, pathname)', "'Cache-Control': 'no-store'"]);
+assertIncludes('Public app shell no-store headers', server, ["appHtml({ publicMode: true })", "'Cache-Control': 'no-store'"]);
+assertIncludes('Authenticated app shell no-store headers', server, ["appHtml({ publicMode: false, user })", "'Cache-Control': 'no-store'"]);
+assertIncludes('Session cookie security flags', server, ['function cookieSecurityFlags', 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Secure']);
+assertIncludes('Staff session cookie helper usage', server, ["sessionSetCookie('woa_session'", "sessionSetCookie('woa_customer_session'"]);
+
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
   const value = match[1];
   if (value.includes("'+") || value.includes('"+') || value.includes('+esc') || value.includes('${')) return '';
@@ -198,6 +221,10 @@ const criticalActionRequirements = [
   ['Vehicle save flow', 'save-vehicle', ['clearVehicleFromCustomerRecords', 'syncVehicleCustomerAssignment', 'await save()', 'closeModal()', "view='Operations'"]],
   ['Customer file save flow', 'save-contract-file', ['resolveCustomerFileVehicle', 'transferVehicleToCustomer', 'updateRecurringState', 'await save()', 'closeModal()', "tab=removed?'History':'Active'"]],
   ['Message send flow', 'send-message-now', ['/api/messages/send', 'channel:val', 'await refreshData(true)', 'closeModal()', "view='Messages'"]],
+  ['Thread reply send flow', 'send-thread-message', ['/api/messages/send', 'threadMessageBody', 'messageThreadKey', "tab='Inbox'", "view='Messages'"]],
+  ['Customer portal login save flow', 'save-customer-login', ['/api/customer-accounts', 'customerLoginName', 'await refreshData(true)', 'Settings()']],
+  ['Company account save flow', 'save-org', ['/api/organizations', 'await refreshData(true)', 'Organizations()']],
+  ['Email notification test flow', 'send-email-notification-test', ['/api/notifications/email/test', 'notificationEmailTo', "tab='Setup'", 'Messages()']],
   ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
   ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'await save()', 'closeModal()', 'Maintenance()']]
 ];
@@ -247,4 +274,4 @@ if (duplicateTopLevelNames.length) {
   fail('Duplicate top-level function definition(s): ' + duplicateTopLevelNames.join(', '));
 }
 
-console.log('Static UI check passed: ' + staticActions.length + ' button actions, ' + staticViews.length + ' static view links, and ' + renderViews.size + ' render views are wired.');
+console.log('Static UI check passed: ' + staticActions.length + ' button actions, ' + staticViews.length + ' static view links, ' + renderViews.size + ' render views, and fresh asset version ' + indexCssVersions[0] + ' are wired.');

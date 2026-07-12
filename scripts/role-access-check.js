@@ -13,13 +13,17 @@ function finalFunctionSlice(source, name) {
   let start = -1;
   let cursor = 0;
   while (true) {
-    const next = source.indexOf('function ' + name + '(', cursor);
+    const normalNext = source.indexOf('function ' + name + '(', cursor);
+    const asyncNext = source.indexOf('async function ' + name + '(', cursor);
+    const candidates = [normalNext, asyncNext].filter(index => index >= 0);
+    const next = candidates.length ? Math.min(...candidates) : -1;
     if (next < 0) break;
     start = next;
     cursor = next + 1;
   }
   if (start < 0) return '';
-  const open = source.indexOf('{', start);
+  const argsClose = source.indexOf(')', start);
+  const open = source.indexOf('{', argsClose > -1 ? argsClose : start);
   if (open < 0) return '';
   let depth = 0;
   for (let index = open; index < source.length; index += 1) {
@@ -69,10 +73,12 @@ const textCustomerButton = finalFunctionSlice(app, 'textCustomerButton');
 const apiAllowedForUser = finalFunctionSlice(server, 'apiAllowedForUser');
 const stateForUserRead = finalFunctionSlice(server, 'stateForUserRead');
 const stateForUserWrite = finalFunctionSlice(server, 'stateForUserWrite');
+const protectConcurrentLocalWrites = finalFunctionSlice(server, 'protectConcurrentLocalWrites');
 
 if (!navForRole || !navSections || !mobileQuickbar || !actionAllowed || !apiAllowedForUser) {
   fail('Could not find every role/access function.');
 }
+if (!protectConcurrentLocalWrites) fail('Could not find concurrent-write protection helper.');
 
 const mechanicNav = roleReturnArray(navForRole, 'mechanic');
 const managerNav = roleReturnArray(navForRole, 'manager');
@@ -96,10 +102,14 @@ assertIncludes('Owner-only blocked actions', strings(actionAllowed), [
   'sync-all',
   'save-clover',
   'new-staff',
+  'new-customer-login',
+  'save-customer-login',
   'toggle-messaging',
   'toggle-star-ai',
   'toggle-star-autosend',
-  'toggle-email-messaging'
+  'toggle-email-messaging',
+  'save-email-notification-settings',
+  'send-email-notification-test'
 ]);
 assertIncludes('Money blocked actions', strings(actionAllowed), [
   'charge-saved-card',
@@ -113,7 +123,10 @@ assertIncludes('Money blocked actions', strings(actionAllowed), [
 assertIncludes('Mechanic message blocked actions', strings(actionAllowed), [
   'compose-message',
   'send-message-now',
+  'send-thread-message',
+  'select-message-thread',
   'star-ai-reply',
+  'star-ai-custom',
   'approve-star-ai'
 ]);
 if (!/roleName\(\)==='mechanic'&&mechanicMessageBlocked/.test(actionAllowed)) fail('Mechanic message block is not enforced in actionAllowed.');
@@ -122,7 +135,16 @@ if (!/roleName\(\)==='mechanic'\)return''/.test(textCustomerButton)) fail('Mecha
 
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/messages'\)/.test(apiAllowedForUser)) fail('Mechanic API message routes are not blocked.');
 if (!/role === 'mechanic' \|\| role === 'manager'/.test(apiAllowedForUser)) fail('Mechanic/manager payment route block is missing.');
-assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts']);
+assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications']);
+if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
+  fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
+}
+['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/tasks', '/api/account/password'].forEach(route => {
+  const index = server.indexOf("url.pathname === '" + route + "'");
+  if (index < 0) fail('Could not find direct-save route: ' + route);
+  const slice = server.slice(index, index + 2200);
+  if (!slice.includes('preferIncoming: true')) fail(route + ' must preserve the just-saved row during concurrent-write protection.');
+});
 
 const mechanicReadMatch = stateForUserRead.match(/if \(role === 'mechanic'\) \{((?:.|\n)*?)return mechanic;/m);
 if (!mechanicReadMatch) fail('Could not find mechanic read filter.');
@@ -136,6 +158,6 @@ if (!mechanicWriteMatch || !managerWriteMatch) fail('Could not find staff write 
 assertIncludes('Mechanic write data', strings(mechanicWriteMatch[1]), ['maintenance', 'vehicles']);
 assertExcludes('Mechanic write data', strings(mechanicWriteMatch[1]), ['messages', 'payments', 'recurringPayments', 'integrations']);
 assertIncludes('Manager write data', strings(managerWriteMatch[1]), ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'tasks']);
-assertExcludes('Manager write data', strings(managerWriteMatch[1]), ['payments', 'recurringPayments', 'integrations', 'apiProviders', 'staffAccounts']);
+assertExcludes('Manager write data', strings(managerWriteMatch[1]), ['payments', 'recurringPayments', 'integrations', 'apiProviders', 'staffAccounts', 'customerAccounts']);
 
 console.log('Role access check passed: owner, manager, and mechanic navigation, actions, and API/state filters are guarded.');
