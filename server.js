@@ -3385,7 +3385,7 @@ function customerPortalServiceRow(row = {}, vehicleTitle = 'Vehicle', vehicle = 
 }
 function customerPortalPaymentRequestRow(row = {}) {
   const payUrl = row.url || (row.id ? '/pay/' + encodeURIComponent(row.id) : '');
-  const detail = [row.createdAt || row.date || '', row.frequency || row.reason || 'Payment request', row.vehicle || 'WheelsonAuto account'].filter(Boolean).join(' - ');
+  const detail = [row.createdAt || row.date || '', paymentRequestAgeLabel(row), row.frequency || row.reason || 'Payment request', row.vehicle || 'WheelsonAuto account'].filter(Boolean).join(' - ');
   const status = row.status || 'Open';
   const action = payUrl ? '<a class="btn primary" href="' + escapeHtml(payUrl) + '">Pay securely</a>' : '<span>' + escapeHtml(status) + '</span>';
   return '<div class="customer-row customer-pay-request"><div><strong>' + escapeHtml(status) + '</strong><small>' + escapeHtml(detail) + '</small></div><div class="customer-request-action"><b>' + moneyText(row.amount || 0) + '</b>' + action + '</div></div>';
