@@ -202,6 +202,7 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Star QA',
   'Claims / tolls / disputes',
   'Audit trail',
+  'paymentRequests',
   'auditTrailPanel'
 ].forEach(text => requireText('Reports/accounting surface', app + reports + executiveReport + server, text));
 

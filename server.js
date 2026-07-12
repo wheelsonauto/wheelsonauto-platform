@@ -2920,7 +2920,7 @@ function stateForUserWrite(current, incoming, user) {
   return next;
 }
 function auditChangedSections(current = {}, next = {}) {
-  const keys = ['recurringPayments', 'payments', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
+  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
   const details = [];
   keys.forEach(key => {
     const beforeRows = Array.isArray(current[key]) ? auditComparableRows(current[key]) : [];
