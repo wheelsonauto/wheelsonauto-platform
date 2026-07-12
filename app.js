@@ -601,3 +601,63 @@ MechanicPortal=function(){
   }
 }
 if(view==='Manager Portal'||view==='Mechanic Portal')queueRender();
+function coreSystemItems(){
+  var roster=recurringRoster(),cars=db.vehicles||[],jobs=customerMaintenanceJobs(),claims=db.claims||[],docs=docRows(),apps=db.applications||[],messages=db.messages||[],staff=db.staffAccounts||[],portalMissing=missingCustomerPortalRecords(),apiReview=apiProviderReviewRows(),openClaims=claims.filter(function(c){var s=String(c.status||'Open').toLowerCase();return s.indexOf('paid')<0&&s.indexOf('closed')<0}),tolls=tollClaims(),verify=verificationInboxItems(),todayRows=roster.filter(function(r){return dueOrTouchedToday(r)}),unmatched=(db.payments||[]).filter(function(p){return transactionCustomerName(p,roster)==='Customer match needed'}),serviceDue=jobs.filter(function(m){var d=dateKeyFrom(m.due||m.nextDue);return d&&d<=todayKey()&&isOpenMaintenance(m)}),managerCount=staff.filter(function(s){return String(s.role||'').toLowerCase()==='manager'&&staffStatusActive(s)}).length,mechanicCount=staff.filter(function(s){return String(s.role||'').toLowerCase()==='mechanic'&&staffStatusActive(s)}).length;
+  return [
+    {title:'Payment/autopay engine',status:'Live',tone:'good',count:activeRecurringCount(),detail:'Statuses, manual charge, saved-card setup/change, retry tracking, paid outside app, and closeout links.',view:'Payments',tab:'Active'},
+    {title:'Customer + fleet truth',status:'Live',tone:'good',count:cars.length,detail:'Customer file connects vehicle, VIN, tag/plate, tracker, payments, service, claims, messages, and history.',view:'Payments',tab:'Active'},
+    {title:'Today + daily closeout',status:'Live',tone:todayRows.length?'blue':'good',count:todayRows.length,detail:'Expected money, collected, pending, failed once/twice, payment-not-found, open links, and owner signoff.',view:'Payments',tab:'Today'},
+    {title:'Messages + Star',status:messagingStatus().configured||messagingStatus().emailConfigured?'Live provider':'Draft-live',tone:'blue',count:messages.length,detail:'SMS/email inbox, templates, follow-up queue, Star drafts, approvals, provider setup, and safe-mode fallback.',view:'Messages',tab:'Star'},
+    {title:'Customer portal',status:portalMissing.length?'Needs logins':'Live',tone:portalMissing.length?'warn':'good',count:portalMissing.length,detail:'Customer login, card change request, messages, receipts, paid-outside proof, service requests, documents, and issues.',view:'Settings',tab:''},
+    {title:'Applications + approvals',status:'Live',tone:'good',count:apps.length,detail:'Public application, vehicle selection, approve/deny/remove, approval message, contract/autopay handoff.',view:'Applications',tab:'Pipeline'},
+    {title:'Inspections + service',status:'Live',tone:serviceDue.length?'warn':'good',count:serviceDue.length,detail:'Monthly inspections, oil change cycle, repair jobs, mechanic signoff, history, and mobile shop queue.',view:'Operations',tab:'Service'},
+    {title:'Tolls/violations/recovery',status:'Manual-live',tone:tolls.length?'warn':'blue',count:tolls.length,detail:'Manual import now; matches plate/VIN/tag/customer, creates recovery claim, message/payment-link workflow, EZPass API later.',view:'Claims & Issues',tab:'Open'},
+    {title:'Claims + disputes',status:'Manual-live',tone:openClaims.length?'warn':'good',count:openClaims.length,detail:'Damage, reimbursement, Clover dispute matching, evidence/proof, follow-up, recovery, and reports.',view:'Claims & Issues',tab:'Open'},
+    {title:'Documents + verification',status:'Live',tone:verify.length?'warn':'good',count:verify.length,detail:'Contracts, receipts, insurance/background proof, temp tags, customer uploads, verification inbox, portal visibility.',view:'Documents',tab:''},
+    {title:'Role portals',status:'Live',tone:(managerCount&&mechanicCount)?'good':'warn',count:managerCount+'/'+mechanicCount,detail:'Admin, manager, mechanic, and customer access with scoped navigation, hidden money controls, and mobile layouts.',view:'Settings',tab:''},
+    {title:'Franchise/company base',status:'Foundation',tone:'blue',count:orgs().length,detail:'Companies/stores, assigned staff, scoped records, owner overview, with SaaS billing/API isolation left for launch.',view:'Companies',tab:''},
+    {title:'Reports/accounting',status:unmatched.length?'Review':'Live',tone:unmatched.length?'warn':'good',count:unmatched.length,detail:'Deep CSV export, closeout, collected vs expected, car profitability, customer risk, service cost, claims recovery.',view:'Reports',tab:'Accounting'},
+    {title:'API-ready layer',status:apiReview.length?'Setup left':'Ready map',tone:apiReview.length?'warn':'good',count:apiReview.length,detail:'Clover, webhooks, SMS/email, EZPass, insurance/background, tracker/location, accounting, billing.',view:'API Roadmap',tab:''}
+  ]
+}
+function coreSystemBoard(compact){
+  var items=coreSystemItems(),shown=items.slice(0,compact?8:14),warn=items.filter(function(i){return i.tone==='warn'}).length,bad=items.filter(function(i){return i.tone==='bad'}).length,live=items.filter(function(i){return i.status==='Live'}).length;
+  return '<section class="card section core-system-board" data-limit="'+(compact?8:14)+'"><div class="section-head"><div><h2>Core system board</h2><p>The iFleet-style operating system plus WheelsonAuto add-ons. Each area opens a real working module; APIs are the last-mile providers.</p></div><div class="star-command-stats"><span class="bad">'+bad+' blocked</span><span class="warn">'+warn+' review</span><span class="blue">'+live+' live</span></div></div>'+localSearch('Search core system by payment, customer, fleet, Star, portal, inspection, toll, claim, franchise, report, or API')+'<div class="core-system-grid">'+shown.map(function(i){return '<button class="core-system-card '+esc(i.tone)+'" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'><div><span>'+esc(i.status)+'</span><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div><b>'+esc(i.count)+'</b></button>'}).join('')+'</div><div class="notice">Rule: if a provider is not connected yet, the platform still saves drafts, proof, matching, queues, and owner approvals honestly instead of pretending the API is live.</div></section>'
+}
+var __woaDashboardCoreSystemBase=Dashboard;
+Dashboard=function(){
+  __woaDashboardCoreSystemBase();
+  var main=document.querySelector('.main.view-dashboard'),map=main&&main.querySelector('.platform-readiness-board');
+  if(main&&!main.querySelector('.core-system-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=coreSystemBoard(true);
+    if(map)map.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('beforeend',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+}
+var __woaOperationsCoreSystemBase=Operations;
+Operations=function(){
+  __woaOperationsCoreSystemBase();
+  var main=document.querySelector('.main.view-operations'),tabs=main&&main.querySelector('.staff-tabs');
+  if(main&&!main.querySelector('.core-system-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=coreSystemBoard(true);
+    if(tabs)tabs.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+}
+var __woaApiCoreSystemBase=ApiRoadmap;
+ApiRoadmap=function(){
+  __woaApiCoreSystemBase();
+  var main=document.querySelector('.main.view-api-roadmap'),matrix=main&&main.querySelector('.api-dependency-matrix');
+  if(main&&!main.querySelector('.core-system-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=coreSystemBoard(false);
+    if(matrix)matrix.insertAdjacentElement('beforebegin',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+}
+if(view==='Dashboard'||view==='Operations'||view==='API Roadmap')queueRender();

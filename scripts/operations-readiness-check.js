@@ -64,6 +64,8 @@ const executiveReport = finalFunctionSlice(app, 'executiveReportBoard');
 const dailyCloseout = finalFunctionSlice(app, 'dailyCloseout');
 const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
+const coreSystemItems = finalFunctionSlice(app, 'coreSystemItems');
+const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
 
 [
   maintenance,
@@ -81,7 +83,9 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   executiveReport,
   dailyCloseout,
   claimMatchNote,
-  operationsQueue
+  operationsQueue,
+  coreSystemItems,
+  coreSystemBoard
 ].forEach((source, index) => {
   if (!source) fail('Missing operations function #' + index);
 });
@@ -296,6 +300,27 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'new-org',
   'save-org'
 ].forEach(text => requireText('Company/franchise foundation UI', organizations + app, text));
+
+[
+  'Core system board',
+  'The iFleet-style operating system plus WheelsonAuto add-ons',
+  'Payment/autopay engine',
+  'Customer + fleet truth',
+  'Today + daily closeout',
+  'Messages + Star',
+  'Customer portal',
+  'Applications + approvals',
+  'Inspections + service',
+  'Tolls/violations/recovery',
+  'Claims + disputes',
+  'Documents + verification',
+  'Role portals',
+  'Franchise/company base',
+  'Reports/accounting',
+  'API-ready layer',
+  'Manual-live',
+  'Draft-live'
+].forEach(text => requireText('Core before APIs board', coreSystemItems + coreSystemBoard + app, text));
 
 [
   'Clover',
