@@ -219,6 +219,8 @@ assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   '/customer/issue-report',
   'Proof link / photo note',
   'proofUrl',
+  '/customer/paid-outside',
+  'Receipt photo link',
   'Photo link, dashboard light photo note',
   'Notice photo/link',
   'Proof link/note: '
