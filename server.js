@@ -2706,7 +2706,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
@@ -3358,10 +3358,19 @@ function customerPortalRecordMatches(row = {}, identity = {}, kind = '') {
 }
 function customerPortalVisibleMessage(row = {}) {
   const meta = String([row.channel, row.source, row.direction, row.template, row.subject, row.status].filter(Boolean).join(' ')).toLowerCase();
-  if (row.aiPlan || row.aiSourceMessageId || /star ai|ai draft|ai action|internal log|notification|owner email/.test(meta)) return false;
+  const direction = String(row.direction || '').toLowerCase();
+  const status = String(row.status || '').toLowerCase();
+  if (row.aiPlan || row.aiSourceMessageId || /ai draft|ai action|internal log|notification|owner email/.test(meta)) return false;
+  if (/star ai/.test(meta) && !(row.aiDraftId && /outbound/.test(direction) && /sent|delivered/.test(status))) return false;
   if (String(row.channel || '').toLowerCase() === 'customer portal') return true;
   if (/outbound|sent|delivered|received/.test(meta) && !/draft|needs approval|human needed|needs admin/.test(meta)) return true;
   return false;
+}
+function stripCustomerPortalMessage(row = {}) {
+  const safe = stripPrivateCustomerFields(row);
+  if (/star ai/i.test(String(safe.source || ''))) safe.source = 'WheelsonAuto';
+  if (/star ai/i.test(String(safe.channel || ''))) safe.channel = 'WheelsonAuto';
+  return safe;
 }
 function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) {
   const visibleDocs = (scopedData.documents || []).filter(row => {
@@ -3487,7 +3496,7 @@ function customerPortalState(data, account) {
     payments: payments.map(stripPrivateCustomerFields),
     maintenance: maintenance.map(stripPrivateCustomerFields),
     claims: claims.map(stripPrivateCustomerFields),
-    messages: messages.map(stripPrivateCustomerFields),
+    messages: messages.map(stripCustomerPortalMessage),
     documents: documents.map(stripPrivateCustomerFields),
     paymentRequests: paymentRequests.map(stripPrivateCustomerFields),
     generatedAt: new Date().toISOString()

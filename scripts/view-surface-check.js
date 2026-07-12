@@ -255,6 +255,7 @@ assertIncludes('Marketing surface', marketing, [
 const customerPortalHtml = finalFunctionSlice(server, 'customerPortalHtml');
 const customerPortalState = finalFunctionSlice(server, 'customerPortalState');
 const customerPortalVisibleMessage = finalFunctionSlice(server, 'customerPortalVisibleMessage');
+const stripCustomerPortalMessage = finalFunctionSlice(server, 'stripCustomerPortalMessage');
 assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   '/customer/service-request',
   '/customer/issue-report',
@@ -278,10 +279,13 @@ assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   'payment.source',
   'Tracker '
 ]);
-assertIncludes('Customer portal message privacy', customerPortalState + customerPortalVisibleMessage, [
+assertIncludes('Customer portal message privacy', customerPortalState + customerPortalVisibleMessage + stripCustomerPortalMessage, [
   'customerPortalVisibleMessage',
+  'stripCustomerPortalMessage',
   'star ai',
   'aiPlan',
+  'aiDraftId',
+  "safe.source = 'WheelsonAuto'",
   'customer portal',
   'sent',
   'delivered'

@@ -707,6 +707,35 @@ async function main() {
         notes: 'Private staff document smoke test.'
       }
     );
+    portalPrivacyState.messages = portalPrivacyState.messages || [];
+    portalPrivacyState.messages.unshift(
+      {
+        id: 'direct-customer-approved-star-reply',
+        organizationId: 'org-wheelsonauto',
+        customer: 'Alicia Brown',
+        phone: '3135551111',
+        direction: 'Outbound',
+        channel: 'SMS',
+        template: 'Star approved reply',
+        status: 'Sent',
+        source: 'Star AI + SMS provider',
+        aiDraftId: 'direct-hidden-draft-id',
+        aiApprovedAt: '2026-08-04T10:30:00.000Z',
+        body: 'Approved Star reply visible to the customer after it is sent.'
+      },
+      {
+        id: 'direct-customer-internal-star-draft',
+        organizationId: 'org-wheelsonauto',
+        customer: 'Alicia Brown',
+        phone: '3135551111',
+        direction: 'AI draft',
+        channel: 'Star AI',
+        status: 'Needs approval',
+        source: 'WheelsonAuto Star AI',
+        aiPlan: { actionType: 'reply' },
+        body: 'INTERNAL_STAR_DRAFT_SHOULD_HIDE'
+      }
+    );
     const portalPrivacyWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: portalPrivacyState });
     assert(portalPrivacyWrite.status === 200 && portalPrivacyWrite.json.ok, 'Owner could not seed customer portal privacy fields.');
     const ownerPaymentLinkReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
@@ -880,7 +909,9 @@ async function main() {
     assert((customerPortalState.json.portal.documents || []).some(doc => doc.reference === 'POLICY-PORTAL-SMOKE' && doc.status === 'Verified'), 'Customer portal state should show customer-submitted document updates after staff verification.');
     assert((customerPortalState.json.portal.documents || []).some(doc => doc.kind === 'Receipt' && Number(doc.amount) === 229), 'Customer portal state should include generated customer payment receipts.');
     assert((customerPortalState.json.portal.messages || []).some(message => message.channel === 'Customer portal' && /update my card/i.test(message.body || '')), 'Customer portal should show the customer-submitted portal message.');
+    assert((customerPortalState.json.portal.messages || []).some(message => /Approved Star reply visible/.test(message.body || '') && message.direction === 'Outbound'), 'Customer portal should show approved Star-assisted replies after they are sent.');
     assert(!(customerPortalState.json.portal.messages || []).some(message => /Star AI|AI draft|AI action/i.test(String([message.source, message.channel, message.direction].filter(Boolean).join(' '))) || message.aiPlan), 'Customer portal must not expose internal Star drafts or AI plans.');
+    assert(!JSON.stringify(customerPortalState.json.portal.messages || []).includes('INTERNAL_STAR_DRAFT_SHOULD_HIDE') && !JSON.stringify(customerPortalState.json.portal.messages || []).includes('direct-hidden-draft-id'), 'Customer portal should hide internal Star draft bodies and approval identifiers.');
     assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('PRIVATE-DOC-SHOULD-HIDE'), 'Customer portal state should not expose staff-only document references.');
     assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('needs staff verification before the account is marked complete'), 'Customer portal state should not expose staff-only verification notes.');
     assert(!JSON.stringify(customerPortalState.json.portal.documents || []).includes('secret-internal-doc-note'), 'Customer portal state should not expose internal document notes.');
