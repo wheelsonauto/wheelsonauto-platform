@@ -52,7 +52,7 @@ const aiHealth = finalFunctionSlice(server, 'aiSystemHealthForContext');
 const approve = finalFunctionSlice(server, 'approveAiMessage');
 const apiAllowed = finalFunctionSlice(server, 'apiAllowedForUser');
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
-const starHealth = finalFunctionSlice(app, 'starSystemHealthPanel');
+const starHealth = finalFunctionSlice(app, 'starSystemHealthPanelFresh') || finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
 const starActions = finalFunctionSlice(app, 'starAiActions');
 
@@ -145,6 +145,8 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Setup / not found',
   'Open payment links',
   'Stale payment links',
+  'Open card setup links',
+  'Pending Star approvals',
   'Vehicle assignment conflicts',
   'Sensitive changes',
   'Star can flag issues and draft fixes',

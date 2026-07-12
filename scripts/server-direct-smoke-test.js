@@ -1480,6 +1480,15 @@ async function main() {
       json: { draftId: starChargeDraft.json.draft.id, channel: 'SMS' }
     });
     assert(blockedStarChargeSend.status === 409 && /money or account change/i.test(blockedStarChargeSend.json.error || ''), 'Star should not approve/send money-action drafts without explicit admin workflow approval.');
+    const pendingStarHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    assert(pendingStarHealth.json.issues.some(row => row.key === 'pending_star_approvals' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Star'), 'System health should surface pending Star approvals for admin review.');
+    assert(pendingStarHealth.json.issues.some(row => row.key === 'open_card_setup_links' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Queue'), 'System health should surface open card setup/change links for follow-up.');
+    assert(Number(pendingStarHealth.json.summary.pendingStarApprovals || 0) >= 1 && Number(pendingStarHealth.json.summary.openCardSetupRequests || 0) >= 1, 'System health summary should count pending Star approvals and open card setup links.');
+    const pendingStarReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
+    assert(pendingStarReadiness.json.truthChecks.some(row => row.key === 'pending_star_approvals' && Number(row.count) >= 1), 'System readiness should include pending Star approval review rows.');
+    assert(pendingStarReadiness.json.truthChecks.some(row => row.key === 'open_card_setup_links' && Number(row.count) >= 1), 'System readiness should include open card setup link review rows.');
+    const pendingStarReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
+    assert(pendingStarReport.text.includes('Pending Star approvals') && pendingStarReport.text.includes('Open card setup links'), 'Deep report should include pending Star approval and open card setup QA rows.');
 
     const starOff = await request(server, 'POST', '/api/messages/settings', {
       cookie: ownerCookie,

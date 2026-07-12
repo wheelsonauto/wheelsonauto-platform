@@ -1507,6 +1507,9 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const apiProviderReview = apiProviderReviewRows(scoped);
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const verificationItems = closeoutVerificationItems(scoped);
+  const openCardSetupRequests = (scoped.cardSetupRequests || []).filter(isOpenCardSetupRequest);
+  const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
+  const pendingStarApprovals = pendingStarApprovalRows(scoped);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
   const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalLoginReady(customerPortalAccountForName(scoped, name)));
@@ -1521,6 +1524,8 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'Review' : 'Clean', 'Star QA', apiProviderReview.length ? apiProviderReview.map(provider => (provider.name || provider.group || 'API provider') + ' - ' + (provider.status || 'Needs setup')).slice(0, 8).join(' | ') : 'Provider dependency matrix is clean or intentionally not created yet');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing contact', missingContact.length, missingContact.length ? 'Review' : 'Clean', 'Star QA', 'Customers without phone or email cannot receive Star follow-up');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Verification inbox', verificationItems.length, verificationItems.length ? 'Review' : 'Clean', 'Star QA', 'Customer proof, paid-outside, service, toll, claim, and document reviews waiting');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Open card setup links', openCardSetupRequests.length, openCardSetupRequests.length ? 'Review' : 'Clean', 'Star QA', staleCardSetupRequests.length ? staleCardSetupRequests.length + ' card setup link(s) are older than 24 hours and need follow-up' : 'Open card setup/change links waiting for customers to save cards');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Pending Star approvals', pendingStarApprovals.length, pendingStarApprovals.length ? 'Review' : 'Clean', 'Star QA', 'Star drafts that need admin approval or human review before any message, charge, card, claim, receipt, or account action moves forward');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Background checks', missingBackground.length, missingBackground.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing background verification');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'Review' : 'Clean', 'Star QA', 'Active customers without a login-ready customer portal account');
@@ -1583,6 +1588,9 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
   const stalePaymentRequestAmount = stalePaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
+  const openCardSetupRequests = (scoped.cardSetupRequests || []).filter(isOpenCardSetupRequest);
+  const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
+  const pendingStarApprovals = pendingStarApprovalRows(scoped);
   const disputeMatchReview = openClaims.filter(claim => String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || (/dispute|chargeback|clover/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' '))) && weakClaimCustomer(claim.customer)));
   const auditToday = isOwnerUser(user) ? (scoped.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === today) : [];
   const issues = [];
@@ -1606,9 +1614,11 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(15, 'dispute_match_review', 'Dispute match review', disputeMatchReview.length, disputeMatchReview.length ? 'bad' : 'good', 'Claims & Issues', '', 'Clover disputes or chargebacks need customer, payment, vehicle, VIN/tag, and proof matched before closeout.');
   issue(16, 'stale_payment_requests', 'Stale payment links', stalePaymentRequests.length, stalePaymentRequests.length ? 'warn' : 'good', 'Messages', 'Queue', 'Hosted checkout links open more than 24 hours need follow-up.');
   issue(17, 'open_payment_requests', 'Open payment requests', openPaymentRequests.length, openPaymentRequests.length ? 'warn' : 'good', 'Payments', 'Today', 'Hosted checkout links still open and should be followed up before closeout.');
-  issue(18, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
-  if (isOwnerUser(user)) issue(19, 'api_provider_readiness', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'warn' : 'good', 'API Roadmap', '', 'Provider dependency matrix needs env keys, endpoint, live test plan, and last test result before Star or workflows can rely on it.');
-  if (isOwnerUser(user)) issue(20, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  issue(18, 'open_card_setup_links', 'Open card setup links', openCardSetupRequests.length, openCardSetupRequests.length ? 'warn' : 'good', 'Messages', 'Queue', (staleCardSetupRequests.length ? staleCardSetupRequests.length + ' card setup link(s) are older than 24 hours. ' : '') + 'Card setup/change links need follow-up until a chargeable saved card is linked.');
+  issue(19, 'pending_star_approvals', 'Pending Star approvals', pendingStarApprovals.length, pendingStarApprovals.length ? 'warn' : 'good', 'Messages', 'Star', 'Star drafts waiting for admin approval or human review before messages, charges, card changes, claims, receipts, or account actions move forward.');
+  issue(20, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
+  if (isOwnerUser(user)) issue(21, 'api_provider_readiness', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'warn' : 'good', 'API Roadmap', '', 'Provider dependency matrix needs env keys, endpoint, live test plan, and last test result before Star or workflows can rely on it.');
+  if (isOwnerUser(user)) issue(22, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
   return {
@@ -1640,6 +1650,9 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
       openPaymentRequestAmount,
       stalePaymentRequests: stalePaymentRequests.length,
       stalePaymentRequestAmount,
+      openCardSetupRequests: openCardSetupRequests.length,
+      staleCardSetupRequests: staleCardSetupRequests.length,
+      pendingStarApprovals: pendingStarApprovals.length,
       badCount,
       warnCount
     },
@@ -3469,6 +3482,28 @@ function paymentRequestAgeLabel(row = {}, now = new Date()) {
 function staleOpenPaymentRequests(rows = [], now = new Date()) {
   return rows.filter(row => isOpenCustomerPaymentRequest(row) && paymentRequestAgeHours(row, now) >= 24);
 }
+function isOpenCardSetupRequest(row = {}) {
+  const status = String(row.status || 'Open').toLowerCase();
+  return status.indexOf('complete') < 0 && status.indexOf('saved') < 0 && status.indexOf('closed') < 0 && status.indexOf('cancel') < 0 && status.indexOf('expired') < 0 && status.indexOf('deleted') < 0;
+}
+function cardSetupRequestAgeHours(row = {}, now = new Date()) {
+  const raw = row.createdAt || row.date || row.updatedAt || '';
+  const created = raw ? new Date(raw) : null;
+  if (!created || Number.isNaN(created.getTime())) return 0;
+  return Math.max(0, Math.floor((now.getTime() - created.getTime()) / 3600000));
+}
+function staleOpenCardSetupRequests(rows = [], now = new Date()) {
+  return rows.filter(row => isOpenCardSetupRequest(row) && cardSetupRequestAgeHours(row, now) >= 24);
+}
+function pendingStarApprovalRows(data = {}) {
+  return (data.messages || []).filter(message => {
+    const text = String([message.source, message.channel, message.direction, message.status, message.template, message.subject].filter(Boolean).join(' '));
+    if (!/Star AI|AI draft|AI action|Needs approval|Human needed/i.test(text)) return false;
+    if (/sent|approved|closed|cancel|deleted/i.test(String(message.status || ''))) return false;
+    const plan = message.aiPlan || {};
+    return !!(plan.approvalRequired || plan.needsHuman || /Needs approval|Human needed/i.test(String(message.status || '')));
+  });
+}
 function customerPortalState(data, account) {
   const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
   enrichLinkedProfiles(scopedData);
@@ -3763,6 +3798,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const apiProviderReview = apiProviderReviewRows(scoped);
+  const openCardSetupRequests = (scoped.cardSetupRequests || []).filter(isOpenCardSetupRequest);
+  const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
+  const pendingStarApprovals = pendingStarApprovalRows(scoped);
   const truthCheck = (key, label, count, severity, detail, view, tab = '') => ({
     key,
     label,
@@ -3782,6 +3820,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
     truthCheck('open_payment_requests', 'Open payment requests', openPaymentRequests.length, 'warning', 'Hosted checkout links are still open and should be followed up, closed, or collected before final closeout.', 'Payments', 'Today'),
+    truthCheck('open_card_setup_links', 'Open card setup links', openCardSetupRequests.length, 'warning', (staleCardSetupRequests.length ? staleCardSetupRequests.length + ' card setup link(s) are older than 24 hours. ' : '') + 'Card setup/change links need customer follow-up until a chargeable saved card is linked.', 'Messages', 'Queue'),
+    truthCheck('pending_star_approvals', 'Pending Star approvals', pendingStarApprovals.length, 'warning', 'Star drafts that need admin approval or human review are waiting before any message, charge, card, claim, receipt, or account action moves forward.', 'Messages', 'Star'),
     truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),
     truthCheck('missing_contact', 'Missing contact', missingContact.length, 'warning', 'Customers need phone or email before Star can follow up.', 'Payments', 'Active'),
     truthCheck('toll_violation_recovery', 'Toll/violation recovery', tollRecovery.length, tollMatchReview.length ? 'critical' : 'warning', 'Open tolls/violations total ' + moneyText(tollRecoveryAmount) + '; each row needs customer, vehicle, plate/VIN, proof, and payment-link follow-up before charging.', 'Claims & Issues'),
