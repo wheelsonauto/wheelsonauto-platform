@@ -315,8 +315,10 @@ assertIncludes('Recurring customer portal card actions', recurringCardActionButt
 
 const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
 const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
+const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 assertIncludes('Staff service cards', staffServiceCard, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance']);
-assertIncludes('Staff claim cards', staffClaimCard, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link']);
+assertIncludes('Staff claim cards', staffClaimCard, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link', 'claimMatchNote']);
+assertIncludes('Clover dispute match note', claimMatchNote, ['Needs payment/customer match', 'Matched: ', 'customerMatchSource']);
 
 const quickbar = finalFunctionSlice(app, 'mobileQuickbar');
 assertStringsInclude('Mobile quickbar labels', quickbar, ['Dashboard', 'Payments', 'Operations', 'Messages', 'Settings', 'Manager Portal', 'Reports', 'Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
