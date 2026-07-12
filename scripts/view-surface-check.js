@@ -201,6 +201,17 @@ assertIncludes('Documents surface', documents + app + server, [
   'Documents & receipts'
 ]);
 
+const customerPortalHtml = finalFunctionSlice(server, 'customerPortalHtml');
+assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
+  '/customer/service-request',
+  '/customer/issue-report',
+  'Proof link / photo note',
+  'proofUrl',
+  'Photo link, dashboard light photo note',
+  'Notice photo/link',
+  'Proof link/note: '
+]);
+
 const insurance = finalFunctionSlice(app, 'Insurance');
 assertIncludes('Insurance/background surface', insurance + app, [
   'Insurance & background command',

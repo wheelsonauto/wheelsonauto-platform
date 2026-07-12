@@ -550,14 +550,15 @@ async function main() {
       form: {
         type: 'Warning light',
         preferredDate: '2026-08-01',
+        proofUrl: 'https://proof.example/check-engine-light',
         notes: 'Check engine light came on during the customer portal smoke test.'
       }
     });
     assert(customerServiceRequest.status === 302 && customerServiceRequest.location === '/customer', 'Customer service request should return to the customer portal.');
     const customerServiceState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerServiceJob = (customerServiceState.json.maintenance || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Warning light' && item.due === '2026-08-01' && String(item.notes || '').includes('smoke test'));
-    assert(customerServiceJob && customerServiceJob.vehicleId === 'veh-003' && customerServiceJob.vin === '3LN6L2G91FR123456', 'Customer service request should create a vehicle-linked maintenance job: ' + JSON.stringify(customerServiceJob || null));
-    assert((customerServiceState.json.messages || []).some(message => message.maintenanceId === customerServiceJob.id && message.customer === 'Alicia Brown'), 'Customer service request should be logged in Messages.');
+    assert(customerServiceJob && customerServiceJob.vehicleId === 'veh-003' && customerServiceJob.vin === '3LN6L2G91FR123456' && customerServiceJob.proofUrl === 'https://proof.example/check-engine-light', 'Customer service request should create a vehicle-linked maintenance job with proof: ' + JSON.stringify(customerServiceJob || null));
+    assert((customerServiceState.json.messages || []).some(message => message.maintenanceId === customerServiceJob.id && message.customer === 'Alicia Brown' && String(message.body || '').includes('Proof link/note: https://proof.example/check-engine-light')), 'Customer service request should be logged in Messages with proof context.');
 
     const customerIssueNoAuth = await request(server, 'POST', '/customer/issue-report');
     assert(customerIssueNoAuth.status === 302 && customerIssueNoAuth.location === '/customer/login', 'Customer issue report should require customer login.');
@@ -568,14 +569,15 @@ async function main() {
         type: 'Toll / E-ZPass notice',
         incidentDate: '2026-08-03',
         amount: '12.50',
+        proofUrl: 'https://proof.example/ezpass-notice',
         notes: 'Notice number PORTAL-TOLL-SMOKE.'
       }
     });
     assert(customerIssueRequest.status === 302 && customerIssueRequest.location === '/customer', 'Customer issue report should return to the customer portal.');
     const customerIssueState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerIssue = (customerIssueState.json.claims || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Toll / E-ZPass notice' && item.incidentDate === '2026-08-03');
-    assert(customerIssue && customerIssue.vehicleId === 'veh-003' && customerIssue.vin === '3LN6L2G91FR123456' && customerIssue.amount === 12.5 && customerIssue.customerMatchStatus === 'Matched from customer portal', 'Customer issue report should create a vehicle-linked claim/issue: ' + JSON.stringify(customerIssue || null));
-    assert((customerIssueState.json.messages || []).some(message => message.claimId === customerIssue.id && message.customer === 'Alicia Brown'), 'Customer issue report should be logged in Messages.');
+    assert(customerIssue && customerIssue.vehicleId === 'veh-003' && customerIssue.vin === '3LN6L2G91FR123456' && customerIssue.amount === 12.5 && customerIssue.customerMatchStatus === 'Matched from customer portal' && customerIssue.proofUrl === 'https://proof.example/ezpass-notice', 'Customer issue report should create a vehicle-linked claim/issue with proof: ' + JSON.stringify(customerIssue || null));
+    assert((customerIssueState.json.messages || []).some(message => message.claimId === customerIssue.id && message.customer === 'Alicia Brown' && String(message.body || '').includes('Proof link/note: https://proof.example/ezpass-notice')), 'Customer issue report should be logged in Messages with proof context.');
 
     const customerDocumentNoAuth = await request(server, 'POST', '/customer/document-update');
     assert(customerDocumentNoAuth.status === 302 && customerDocumentNoAuth.location === '/customer/login', 'Customer document update should require customer login.');
