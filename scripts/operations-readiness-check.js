@@ -144,7 +144,9 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'customerRiskReportPanel',
   'Customer risk report',
   'Star QA',
-  'Claims / tolls / disputes'
+  'Claims / tolls / disputes',
+  'Audit trail',
+  'auditTrailPanel'
 ].forEach(text => requireText('Reports/accounting surface', app + reports + executiveReport, text));
 
 [

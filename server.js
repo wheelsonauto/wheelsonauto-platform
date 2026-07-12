@@ -54,6 +54,7 @@ const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260711-s
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
+const WEBHOOK_AUTO_SYNC_DELAY_MS = Math.max(1000, Number(process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS || 5000));
 const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
 const autoSyncStatus = {
   enabled: true,
@@ -337,6 +338,7 @@ function ensureBaseOrganization(data) {
   }
   data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
   data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  data.auditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
   [...data.staffAccounts, ...data.customerAccounts].forEach(account => {
     if (!account.organizationId) account.organizationId = MAIN_ORG_ID;
   });
@@ -410,16 +412,22 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], integrations: { clover: {}, shopify: {} } };
     }
   }
 }
-async function writeData(data) {
+let writeDataQueue = Promise.resolve();
+async function writeDataNow(data) {
   repairDataIds(data);
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpFile = DATA_FILE + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
   await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
   await fs.rename(tmpFile, DATA_FILE);
+}
+async function writeData(data) {
+  const job = writeDataQueue.then(() => writeDataNow(data));
+  writeDataQueue = job.catch(() => {});
+  return job;
 }
 function normKey(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -2030,6 +2038,29 @@ function stateForUserWrite(current, incoming, user) {
   next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
   return next;
 }
+function auditChangedSections(current = {}, next = {}) {
+  const keys = ['recurringPayments', 'payments', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
+  return keys.filter(key => JSON.stringify(current[key] || []) !== JSON.stringify(next[key] || [])).map(key => {
+    const before = Array.isArray(current[key]) ? current[key].length : 0;
+    const after = Array.isArray(next[key]) ? next[key].length : 0;
+    return key + ' ' + before + '->' + after;
+  });
+}
+function appendAuditLog(data, user, action, details = []) {
+  data.auditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
+  const safeDetails = (details || []).slice(0, 12).map(item => String(item || '').replace(/token|password|secret|source/ig, '[redacted]').slice(0, 180));
+  data.auditLogs.unshift({
+    id: 'audit-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex'),
+    at: new Date().toISOString(),
+    action: String(action || 'State update').slice(0, 80),
+    user: user && (user.name || user.username || user.role) || 'Unknown user',
+    role: user && user.role || 'Unknown',
+    organizationId: userOrganizationId(user),
+    companyName: user && user.companyName || 'WheelsonAuto',
+    details: safeDetails.join(' | ') || 'No section-level change detected'
+  });
+  data.auditLogs = data.auditLogs.slice(0, 250);
+}
 function preserveStaffLoginSecrets(current, incoming) {
   const next = { ...(incoming || {}) };
   if (current.security && current.security.ownerLogin) {
@@ -2090,6 +2121,7 @@ function stateForUserRead(data, user) {
   delete safe.apiProviders;
   delete safe.staffAccounts;
   delete safe.customerAccounts;
+  delete safe.auditLogs;
   if (safe.integrations) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
@@ -2325,7 +2357,8 @@ function customerPortalState(data, account) {
   const paymentRequests = (scopedData.paymentRequests || []).filter(row => customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
   const primaryRecurring = recurringPayments[0] || context.recurring || {};
-  const primaryVehicle = vehicles[0] || context.vehicle || {};
+  const namedVehicle = (scopedData.vehicles || []).find(row => [primaryRecurring.vehicle, customers[0] && customers[0].vehicle, contracts[0] && contracts[0].vehicle, context.vehicleName].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || {};
+  const primaryVehicle = vehicles[0] || namedVehicle || context.vehicle || {};
   return {
     account: safeCustomerAccount(account),
     summary: aiContextSummary({ ...context, recurring: primaryRecurring, vehicle: primaryVehicle }),
@@ -3067,7 +3100,8 @@ async function recordCloverWebhookEvent(event = {}) {
     await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
   }
   await writeData(data);
-  setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), 0);
+  const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), WEBHOOK_AUTO_SYNC_DELAY_MS);
+  if (webhookSyncTimer.unref) webhookSyncTimer.unref();
   return { ok: true, disputeClaimId: createdClaimId };
 }
 function upsertById(list, incoming) {
@@ -3094,9 +3128,10 @@ function mergeById(preferred, fallback) {
   return merged;
 }
 async function protectConcurrentLocalWrites(data, options = {}) {
+  await writeDataQueue.catch(() => {});
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
   });
   data.customers = preferIncoming ? upsertById(data.customers, latest.customers) : upsertById(latest.customers, data.customers);
@@ -4708,34 +4743,28 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
-      const context = aiFindCustomerContext(scopedData, {
-        customer: account.customer || account.name,
-        phone: account.phone,
-        email: account.email,
-        recurringPaymentId: account.recurringPaymentId,
-        id: account.recurringPaymentId
-      });
-      const recurring = context.recurring || {};
-      const vehicle = context.vehicle || {};
-      const customerName = context.customerName || account.customer || account.name || 'Customer';
-      const vehicleName = context.vehicleName || recurring.vehicle || '';
-      const tag = vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
+      const portal = customerPortalState(data, account);
+      const recurring = portal.recurring || {};
+      const vehicle = portal.vehicle || {};
+      const summary = portal.summary || {};
+      const customerName = summary.customer || account.customer || account.name || 'Customer';
+      const vehicleName = summary.vehicle || recurring.vehicle || vehicleNameFromParts(vehicle) || '';
+      const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
       const payment = {
         id: 'paid-outside-review-' + Date.now(),
         date: paidDate || new Date().toLocaleString('en-US'),
         createdAt: new Date().toISOString(),
         organizationId: account.organizationId || MAIN_ORG_ID,
         customer: customerName,
-        phone: account.phone || context.phone || '',
-        email: account.email || context.email || '',
+        phone: account.phone || '',
+        email: account.email || '',
         vehicle: vehicleName,
         vehicleId: account.vehicleId || vehicle.id || recurring.vehicleId || '',
-        vin: vehicle.vin || recurring.vin || '',
+        vin: summary.vin || vehicle.vin || recurring.vin || '',
         licensePlate: tag,
         plate: tag,
         tempTag: vehicle.tempTag || recurring.tempTag || '',
-        tracker: vehicle.tracker || recurring.tracker || '',
+        tracker: summary.tracker || vehicle.tracker || recurring.tracker || '',
         recurringPaymentId: recurring.id || account.recurringPaymentId || '',
         cloverCustomerId: recurring.cloverCustomerId || '',
         method: method + ' outside app',
@@ -5112,6 +5141,7 @@ const server = http.createServer(async (req, res) => {
       const current = await readData();
       const nextState = stateForUserWrite(current, incoming, user);
       await queueStateChangeNotifications(current, nextState, user);
+      appendAuditLog(nextState, user, 'Platform state saved', auditChangedSections(current, nextState));
       await writeData(nextState);
       return json(res, 200, { ok: true });
     }
@@ -5535,6 +5565,7 @@ const server = http.createServer(async (req, res) => {
         const activeAutopay = String(autopay.status || '').toLowerCase() === 'active';
         data.contracts.unshift({ id: 'con-autopay-' + Date.now(), customer: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, vin: autopay.vin, licensePlate: autopay.licensePlate, plate: autopay.plate || autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, weekly: autopay.amount, balance: 0, status: activeAutopay ? 'Active' : 'Pending pickup', autopay: autopay.status || 'Setup needed', paymentProvider: 'Clover', notes: 'Customer file created from WheelsonAuto autopay setup.', source: 'WheelsonAuto autopay', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       }
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
     }

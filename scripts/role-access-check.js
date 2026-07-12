@@ -151,6 +151,7 @@ if (!mechanicReadMatch) fail('Could not find mechanic read filter.');
 assertIncludes('Mechanic read data', strings(mechanicReadMatch[1]), ['vehicles', 'maintenance', 'claims']);
 assertExcludes('Mechanic read data', strings(mechanicReadMatch[1]), ['payments', 'recurringPayments', 'apiProviders']);
 if (!/configured:\s*false/.test(mechanicReadMatch[1])) fail('Mechanic messaging read state should be disabled.');
+assertIncludes('Staff read redaction', stateForUserRead, ['delete safe.auditLogs']);
 
 const mechanicWriteMatch = stateForUserWrite.match(/role === 'mechanic'\s*\?\s*\[((?:.|\n)*?)\]/m);
 const managerWriteMatch = stateForUserWrite.match(/role === 'manager'\s*\?\s*\[((?:.|\n)*?)\]/m);

@@ -177,6 +177,15 @@ assertIncludes('Documents surface', documents + app + server, [
   'Documents & receipts'
 ]);
 
+const auditTrailPanel = finalFunctionSlice(app, 'auditTrailPanel');
+assertIncludes('Owner audit trail surface', auditTrailPanel + app + server, [
+  'Audit trail',
+  'Owner-only history',
+  'appendAuditLog',
+  'auditChangedSections',
+  'delete safe.auditLogs'
+]);
+
 const paymentRecurringCard = finalFunctionSlice(app, 'paymentRecurringCard');
 assertIncludes('Recurring payment cards', paymentRecurringCard, [
   'paymentContactFor',
