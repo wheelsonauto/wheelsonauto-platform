@@ -4758,6 +4758,54 @@ function cleanApiProviderPayload(payload) {
     createdAt: payload.createdAt || now
   };
 }
+function apiProviderReadyForLiveUse(provider = {}) {
+  const connected = String(provider.status || '').toLowerCase() === 'connected';
+  const proofReady = ['envKeys', 'endpoint', 'liveTest', 'lastTestResult'].every(key => String(provider[key] || '').trim());
+  return connected && proofReady;
+}
+function syncApiProviderDispatchTask(data = {}, provider = {}) {
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const now = new Date().toISOString();
+  const taskId = 'task-api-' + normKey(provider.id || provider.name || Date.now()).slice(0, 80);
+  const checklist = [
+    provider.envKeys ? 'Env keys: ' + provider.envKeys : 'Env keys still needed',
+    provider.endpoint ? 'Endpoint: ' + provider.endpoint : 'Endpoint/route still needed',
+    provider.liveTest ? 'Live test: ' + provider.liveTest : 'Live test plan still needed',
+    provider.lastTestResult ? 'Last test: ' + provider.lastTestResult : 'Last live-test result still needed',
+    provider.notes || ''
+  ].filter(Boolean).join('\n');
+  let task = data.tasks.find(item => item.id === taskId);
+  if (apiProviderReadyForLiveUse(provider)) {
+    if (task && !/done|closed|complete/i.test(String(task.status || 'Open'))) {
+      Object.assign(task, {
+        status: 'Done',
+        doneAt: now,
+        updatedAt: now,
+        notes: checklist + '\n\nAuto-closed because this provider is marked Connected with env keys, endpoint, live test, and last result.'
+      });
+    }
+    return task || null;
+  }
+  const patch = {
+    id: taskId,
+    title: 'API setup: ' + (provider.name || 'API system'),
+    type: 'API setup',
+    customer: provider.name || 'API system',
+    vehicle: provider.group || 'API',
+    due: now.slice(0, 10),
+    status: 'Open',
+    owner: provider.owner || 'Owner',
+    notes: checklist,
+    updatedAt: now,
+    createdAt: task && task.createdAt || now
+  };
+  if (task) Object.assign(task, patch);
+  else {
+    task = patch;
+    data.tasks.unshift(task);
+  }
+  return task;
+}
 function cleanTaskPayload(payload) {
   const now = new Date().toISOString();
   return {
@@ -7081,12 +7129,13 @@ const server = http.createServer(async (req, res) => {
       const existing = data.apiProviders.find(item => item.id === provider.id);
       if (existing) Object.assign(existing, provider, { createdAt: existing.createdAt || provider.createdAt });
       else data.apiProviders.unshift(provider);
+      const apiTask = syncApiProviderDispatchTask(data, provider);
       data.messages = Array.isArray(data.messages) ? data.messages : [];
-      data.messages.unshift({ id: 'msg-api-' + Date.now(), date: new Date().toLocaleString('en-US'), customer: provider.name, channel: 'Internal log', template: 'API setup', status: provider.status, subject: provider.group, body: provider.liveTest || provider.notes || '' });
+      data.messages.unshift({ id: 'msg-api-' + Date.now(), date: new Date().toLocaleString('en-US'), customer: provider.name, channel: 'Internal log', template: 'API setup', status: provider.status, subject: provider.group, body: provider.liveTest || provider.notes || (apiTask ? 'Dispatch task updated: ' + apiTask.title : '') });
       appendAuditLog(data, user, 'API provider saved', [provider.name, provider.group, provider.status, provider.lastTestResult || provider.liveTest || 'No live test result saved']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, provider });
+      return json(res, 200, { ok: true, provider, task: apiTask });
     }
     if (url.pathname === '/api/tasks' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');

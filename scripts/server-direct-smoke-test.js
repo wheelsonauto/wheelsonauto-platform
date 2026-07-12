@@ -992,6 +992,36 @@ async function main() {
       }
     });
     assert(connectedApi.status === 200 && connectedApi.json.ok && connectedApi.json.provider.lastTestResult === 'Passed direct smoke test', 'Connected API provider should save only after credentials, endpoint, live test, and result are recorded.');
+    const incompleteApi = await request(server, 'POST', '/api/api-providers', {
+      cookie: ownerCookie,
+      json: {
+        id: 'api-direct-needs-task',
+        name: 'Direct API Needs Task',
+        group: 'Comms',
+        status: 'Provider needed',
+        owner: 'Owner',
+        envKeys: 'DIRECT_PROVIDER_KEY',
+        endpoint: 'Future /api/direct/provider',
+        liveTest: 'Run provider sync after credentials are live.'
+      }
+    });
+    assert(incompleteApi.status === 200 && incompleteApi.json.ok && incompleteApi.json.task && incompleteApi.json.task.status === 'Open' && incompleteApi.json.task.id === 'task-api-api-direct-needs-task', 'Incomplete API provider should create or update one open Dispatch task.');
+    const completedApi = await request(server, 'POST', '/api/api-providers', {
+      cookie: ownerCookie,
+      json: {
+        id: 'api-direct-needs-task',
+        name: 'Direct API Needs Task',
+        group: 'Comms',
+        status: 'Connected',
+        owner: 'Owner',
+        envKeys: 'DIRECT_PROVIDER_KEY',
+        endpoint: 'Future /api/direct/provider',
+        liveTest: 'Run provider sync after credentials are live.',
+        lastTestAt: '2026-08-05',
+        lastTestResult: 'Passed provider connection smoke test'
+      }
+    });
+    assert(completedApi.status === 200 && completedApi.json.ok && completedApi.json.task && completedApi.json.task.status === 'Done' && /Auto-closed/.test(completedApi.json.task.notes || ''), 'Connected live-tested API provider should close the related Dispatch task.');
 
     const defaultNotificationEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message'];
     const filteredNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
