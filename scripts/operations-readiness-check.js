@@ -150,6 +150,8 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Verification inbox',
   'WheelsonAuto verification',
   '/api/reports/deep.csv',
+  "fetch('/api/reports/deep.csv'",
+  'downloadCsvBlob',
   'deepReportCsv',
   'reportRowsForData',
   'Role-scoped deep CSV export',
