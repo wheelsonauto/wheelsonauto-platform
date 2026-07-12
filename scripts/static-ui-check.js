@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+const cardSetup = fs.readFileSync(path.join(root, 'card-setup.js'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -199,6 +200,18 @@ const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
   const value = match[1];
   if (value.includes("'+") || value.includes('"+') || value.includes('+esc') || value.includes('${')) return '';
   return value;
+});
+
+const fakeUiPatterns = [
+  ['placeholder hash links', /href=["']#["']/],
+  ['javascript void links', /javascript:void/i],
+  ['not implemented controls', /not implemented/i]
+];
+[app, server, cardSetup].forEach((source, index) => {
+  const label = ['app.js', 'server.js', 'card-setup.js'][index];
+  fakeUiPatterns.forEach(([name, pattern]) => {
+    if (pattern.test(source)) fail(label + ' contains fake UI ' + name + '. Visible controls must work, save a draft, or clearly route to provider setup.');
+  });
 });
 
 const handledActions = new Set([

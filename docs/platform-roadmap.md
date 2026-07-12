@@ -53,6 +53,7 @@ Completed in this build pass:
 - Manual customer SMS/email sends, drafts, and provider failures now create owner audit-log rows with customer, channel, status, and vehicle/VIN context so communication actions are traceable.
 - Star draft creation now writes owner audit-log rows for normal replies, approval-needed drafts, human-review drafts, and safe payment/card setup link prep with customer, channel, action, and vehicle/VIN context.
 - Customer portal messages, paid-outside reports, service requests, issue/toll reports, document updates, and card-change link openings now write owner audit-log rows with customer and vehicle/VIN/tag context.
+- Static UI checks now block placeholder `href="#"`, `javascript:void`, and not-implemented controls so visible buttons must be wired, save a draft, or route honestly to setup.
 
 Checks passed at this checkpoint:
 
