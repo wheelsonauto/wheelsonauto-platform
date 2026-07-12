@@ -1194,6 +1194,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       body: message.subject || message.body || ''
     };
   });
+  const receiptRequestRows = starApprovalRows.filter(item => item.action === 'send_receipt');
+  const statementRequestRows = starApprovalRows.filter(item => item.action === 'send_account_statement');
   const verificationItems = closeoutVerificationItems(data);
   const assignmentConflicts = assignmentConflictRows(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
@@ -1230,6 +1232,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Open card setup links: ' + openCardSetupRequests.length,
     'Stale card setup links: ' + staleCardSetupRequests.length,
     'Pending Star approvals: ' + pendingStarApprovals.length,
+    'Receipt requests waiting: ' + receiptRequestRows.length,
+    'Statement/payoff requests waiting: ' + statementRequestRows.length,
     'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
@@ -1300,6 +1304,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       staleCardSetupRequests: staleCardSetupRequests.length,
       cardSetupRows: cardSetupRows.slice(0, 50),
       pendingStarApprovals: pendingStarApprovals.length,
+      receiptRequests: receiptRequestRows.length,
+      statementRequests: statementRequestRows.length,
       starApprovalRows: starApprovalRows.slice(0, 50),
       verificationItems: verificationItems.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
@@ -3734,9 +3740,10 @@ function staleOpenCardSetupRequests(rows = [], now = new Date()) {
 function pendingStarApprovalRows(data = {}) {
   return (data.messages || []).filter(message => {
     const text = String([message.source, message.channel, message.direction, message.status, message.template, message.subject].filter(Boolean).join(' '));
-    if (!/Star AI|AI draft|AI action|Needs approval|Human needed/i.test(text)) return false;
     if (/sent|approved|closed|cancel|deleted/i.test(String(message.status || ''))) return false;
     const plan = message.aiPlan || {};
+    if (plan.approvalRequired || plan.needsHuman) return true;
+    if (!/Star AI|AI draft|AI action|Needs approval|Needs admin approval|Human needed/i.test(text)) return false;
     return !!(plan.approvalRequired || plan.needsHuman || /Needs approval|Human needed/i.test(String(message.status || '')));
   });
 }

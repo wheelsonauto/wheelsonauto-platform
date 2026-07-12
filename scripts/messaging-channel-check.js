@@ -107,6 +107,8 @@ requireText('Daily closeout stale card setup count', server, 'staleCardSetupRequ
 requireText('Daily closeout card setup body', server, 'Open card setup/change links:');
 requireText('Daily closeout pending Star approval count', server, 'pendingStarApprovals');
 requireText('Daily closeout pending Star approval body', server, 'Pending Star approvals:');
+requireText('Daily closeout receipt request count', server, 'receiptRequests');
+requireText('Daily closeout statement request count', server, 'statementRequests');
 requireText('Daily closeout verification payload', server, 'closeoutVerificationItems');
 requireText('Daily closeout verification body', server, 'Verification inbox:');
 requireText('Daily closeout assignment conflict payload', server, 'vehicleAssignmentConflicts');
