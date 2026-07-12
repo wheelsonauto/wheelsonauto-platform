@@ -438,6 +438,8 @@ function ownerSmoke() {
     ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Documents', 'Documents', undefined, ['Documents', 'Document vault', 'Payment receipt', 'Receipts'], true],
+    ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
+    ['Tolls match review', 'Tolls', 'Match review', ['Tolls', 'Match review tolls and violations', 'Search tolls by customer', 'Provider setup'], true],
     ['Marketing', 'Marketing', undefined, ['Marketing command', 'Lead board', 'Search leads by customer'], true],
     ['API roadmap launch proof', 'API Roadmap', undefined, ['API Roadmap', 'Launch proof board', 'Payment/autopay lock', 'API operating bridge'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
@@ -464,6 +466,7 @@ function managerSmoke() {
 
   [
     ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
+    ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Executive snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'table-wrap'], false]
@@ -471,7 +474,7 @@ function managerSmoke() {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
     else assertHealthy(label, output, required);
-    assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="save-clover"', 'data-view="Settings"']);
+    assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="new-toll"', 'data-action="new-toll-import"', 'data-action="send-claim-link"', 'data-action="save-clover"', 'data-view="Settings"']);
   });
 }
 
