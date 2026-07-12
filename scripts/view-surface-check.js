@@ -385,6 +385,15 @@ assertIncludes('Messages and Star surface', messages, [
   'Search customer, phone, email, VIN, tag, payment, or text',
   'Approval'
 ]);
+assertIncludes('Message queue payment truth layer', app, [
+  'messageQueueVehicleContext',
+  '__woaBaseMessageQueueItems',
+  "paymentState(r).key==='notfound'",
+  'Payment not found',
+  'Clover/card source missing',
+  'VIN ',
+  'Tracker '
+]);
 
 const compose = finalFunctionSlice(app, 'openComposeMessage');
 assertIncludes('Compose message modal', compose, [

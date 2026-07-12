@@ -150,6 +150,13 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star QA system health safety', starHealth, text));
 
 [
+  'star-ai-queue',
+  'payload={customer:q.customer,phone:q.phone,email:q.email',
+  'messageQueueVehicleContext',
+  'Payment not found'
+].forEach(text => requireText('Star queue context safety', app, text));
+
+[
   'Star QA manager',
   'Contact failed-twice customers',
   'Match transactions',
