@@ -84,6 +84,9 @@ requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/sen
 requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');
 requireText('Owner notification event filter', queueOwnerEmailNotification, 'settings.events.includes(event)');
 requireText('Daily closeout notification payload', server, 'dailyCloseoutNotificationPayload');
+requireText('Daily closeout paid-outside summary', server, 'paidOutsideAmount');
+requireText('Daily closeout contact summary', server, 'peopleToContact');
+requireText('Daily closeout Clover summary', server, 'cloverCollected');
 requireText('Daily closeout verification payload', server, 'closeoutVerificationItems');
 requireText('Daily closeout verification body', server, 'Verification inbox:');
 requireText('Card setup completion notification', server, 'card_setup_completed');

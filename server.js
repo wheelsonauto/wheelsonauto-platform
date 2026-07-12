@@ -788,7 +788,14 @@ function recordDateKey(value) {
 function closeoutPaymentPaid(payment = {}) {
   const status = String(payment.status || '').toLowerCase();
   const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.message, payment.error].filter(Boolean).join(' ')).toLowerCase();
-  return status === 'paid' && !/(refund|void|chargeback|dispute|failed|not found)/.test(meta) && Number(payment.amount || 0) > 0;
+  const paidOutside = status.includes('paid outside app') && !status.includes('rejected');
+  const paid = status === 'paid' || paidOutside;
+  return paid && !/(refund|void|chargeback|dispute|failed|not found|rejected)/.test(meta + ' ' + status) && Number(payment.amount || 0) > 0;
+}
+function closeoutPaymentOutsideApp(payment = {}) {
+  const status = String(payment.status || '').toLowerCase();
+  const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.message].filter(Boolean).join(' ')).toLowerCase();
+  return (status.includes('paid outside app') || /(paid outside app|cash|zelle|cash app|money order)/.test(meta)) && closeoutPaymentPaid(payment);
 }
 function weakCloseoutCustomerName(value) {
   const raw = String(value || '').trim();
@@ -1072,10 +1079,24 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   });
   const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
   const paidPayments = payments.filter(closeoutPaymentPaid);
+  const paidOutsidePayments = paidPayments.filter(closeoutPaymentOutsideApp);
+  const cloverPayments = paidPayments.filter(payment => /clover/i.test(String([payment.source, payment.method, payment.type, payment.notes].filter(Boolean).join(' '))) && !closeoutPaymentOutsideApp(payment));
+  const paidOutsideAmount = paidOutsidePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const cloverCollected = cloverPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const expected = recurring.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const failed = recurring.filter(row => /Failed|not found/i.test(closeoutRecurringState(row, dateKeyValue)));
-  const pending = recurring.filter(row => ['Pending today', 'Chargeable', 'Card linked', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
+  const recurringWithState = recurring.map(row => ({ row, state: closeoutRecurringState(row, dateKeyValue) }));
+  const failedOnce = recurringWithState.filter(item => item.state === 'Failed once').map(item => item.row);
+  const failedTwice = recurringWithState.filter(item => item.state === 'Failed twice').map(item => item.row);
+  const paymentNotFound = recurringWithState.filter(item => item.state === 'Payment not found').map(item => item.row);
+  const setupNeeded = recurringWithState.filter(item => item.state === 'Setup needed').map(item => item.row);
+  const chargeable = recurringWithState.filter(item => item.state === 'Chargeable').map(item => item.row);
+  const cardLinked = recurringWithState.filter(item => item.state === 'Card linked').map(item => item.row);
+  const pendingToday = recurringWithState.filter(item => item.state === 'Pending today').map(item => item.row);
+  const failed = failedOnce.concat(failedTwice).concat(paymentNotFound);
+  const pending = pendingToday.concat(chargeable).concat(cardLinked).concat(setupNeeded).concat(paymentNotFound);
+  const stillOpenAmount = Math.max(0, expected - collected);
+  const peopleToContact = failedTwice.length + paymentNotFound.length;
   const verificationItems = closeoutVerificationItems(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
@@ -1085,9 +1106,17 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Expected from due/active tracked customers: ' + moneyText(expected),
     'Collected in recorded paid transactions: ' + moneyText(collected),
-    'Still open or setup/not-found: ' + pending.length,
-    'Failed once/twice/not-found: ' + failed.length,
+    'Still open amount: ' + moneyText(stillOpenAmount),
+    'Pending today: ' + pendingToday.length,
+    'Chargeable or card linked: ' + (chargeable.length + cardLinked.length),
+    'Setup needed: ' + setupNeeded.length,
+    'Payment not found: ' + paymentNotFound.length,
+    'Failed once / retry watch: ' + failedOnce.length,
+    'Failed twice / contact now: ' + failedTwice.length,
+    'Paid outside app: ' + paidOutsidePayments.length + ' / ' + moneyText(paidOutsideAmount),
+    'Clover collected: ' + moneyText(cloverCollected),
     'Today transactions recorded: ' + payments.length,
+    'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
     ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
@@ -1108,7 +1137,31 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     subject: 'WheelsonAuto daily closeout - ' + dateKeyValue,
     body: lines.join('\n'),
     template: 'Daily closeout',
-    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length, verificationItems: verificationItems.length, auditEvents: auditEvents.length, ownerNote: closeoutNote }
+    summary: {
+      dateKey: dateKeyValue,
+      expected,
+      collected,
+      stillOpenAmount,
+      pending: pending.length,
+      failed: failed.length,
+      pendingToday: pendingToday.length,
+      chargeable: chargeable.length,
+      cardLinked: cardLinked.length,
+      setupNeeded: setupNeeded.length,
+      paymentNotFound: paymentNotFound.length,
+      failedOnce: failedOnce.length,
+      failedTwice: failedTwice.length,
+      peopleToContact,
+      paidOutsideApp: paidOutsidePayments.length,
+      paidOutsideAmount,
+      cloverCollected,
+      cloverTransactions: cloverPayments.length,
+      paidTransactions: paidPayments.length,
+      transactions: payments.length,
+      verificationItems: verificationItems.length,
+      auditEvents: auditEvents.length,
+      ownerNote: closeoutNote
+    }
   };
 }
 function reportCsvCell(value) {
@@ -1361,7 +1414,12 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const notFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
   const todayPayments = payments.filter(payment => recordDateKey(payment.date || payment.createdAt) === today);
-  const collectedToday = todayPayments.filter(closeoutPaymentPaid).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const collectedPaymentsToday = todayPayments.filter(closeoutPaymentPaid);
+  const paidOutsideToday = collectedPaymentsToday.filter(closeoutPaymentOutsideApp);
+  const cloverPaymentsToday = collectedPaymentsToday.filter(payment => /clover/i.test(String([payment.source, payment.method, payment.type, payment.notes].filter(Boolean).join(' '))) && !closeoutPaymentOutsideApp(payment));
+  const collectedToday = collectedPaymentsToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const paidOutsideAmountToday = paidOutsideToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const cloverCollectedToday = cloverPaymentsToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const expectedToday = dueToday.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
@@ -1422,7 +1480,13 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
       failedOnce: failedOnce.length,
       failedTwice: failedTwice.length,
       paymentNotFound: notFound.length,
+      peopleToContact: failedTwice.length + notFound.length,
       setupNeeded: setupNeeded.length,
+      paidOutsideApp: paidOutsideToday.length,
+      paidOutsideAmount: paidOutsideAmountToday,
+      cloverCollected: cloverCollectedToday,
+      cloverTransactions: cloverPaymentsToday.length,
+      paidTransactions: collectedPaymentsToday.length,
       verificationInbox: verificationInbox.length,
       openService: openService.length,
       openClaims: openClaims.length,

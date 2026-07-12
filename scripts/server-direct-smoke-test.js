@@ -904,6 +904,7 @@ async function main() {
       { id: 'clover-payment-closeout-dedup-two', cloverPaymentId: 'pay-closeout-dedup', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'Paid', notes: 'WheelsonAuto weekly payment - Direct Closeout Customer' },
       { id: 'clover-payment-closeout-external-customer', cloverPaymentId: 'pay-closeout-external-customer', customer: 'Unmatched Clover payment', externalCustomerReference: 'direct-closeout-clover-customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 123, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
       { id: 'clover-payment-report-candidate', cloverPaymentId: 'pay-report-candidate', customer: 'Unmatched Clover payment', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 456, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
+      { id: 'payment-closeout-paid-outside', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Paid outside app', source: 'WheelsonAuto', amount: 45, status: 'Paid outside app', notes: 'Cash verified' },
       { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' }
     );
     const closeoutDedupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: closeoutDedupData });
@@ -915,9 +916,14 @@ async function main() {
       json: { dateKey: '2099-12-31' }
     });
     assert([200, 202].includes(closeoutDedupNotification.status) && closeoutDedupNotification.json.ok, 'Duplicate-safe daily closeout notification failed.');
-    assert(closeoutDedupNotification.json.summary.collected === 1356, 'Daily closeout should dedupe duplicate Clover paid rows, resolve external customer refs, and ignore failed rows.');
-    assert(closeoutDedupNotification.json.summary.transactions === 4, 'Daily closeout should report unique transaction rows after dedupe.');
+    assert(closeoutDedupNotification.json.summary.collected === 1401, 'Daily closeout should dedupe duplicate Clover paid rows, count verified paid-outside payments, resolve external customer refs, and ignore failed rows.');
+    assert(closeoutDedupNotification.json.summary.transactions === 5, 'Daily closeout should report unique transaction rows after dedupe.');
+    assert(closeoutDedupNotification.json.summary.paidOutsideApp === 1 && closeoutDedupNotification.json.summary.paidOutsideAmount === 45, 'Daily closeout should break out paid-outside-app records separately.');
+    assert(closeoutDedupNotification.json.summary.cloverCollected === 1356 && closeoutDedupNotification.json.summary.cloverTransactions === 3, 'Daily closeout should keep Clover collected totals separate from paid-outside-app records.');
+    assert(closeoutDedupNotification.json.summary.pendingToday >= 1 && closeoutDedupNotification.json.summary.stillOpenAmount === Math.max(0, closeoutDedupNotification.json.summary.expected - closeoutDedupNotification.json.summary.collected), 'Daily closeout should expose due customer counts and still-open amount.');
+    assert(closeoutDedupNotification.json.summary.peopleToContact === 0 && closeoutDedupNotification.json.summary.paidTransactions === 4, 'Daily closeout should expose contact and paid transaction counts.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
+    assert(String(closeoutDedupNotification.json.message.body || '').includes('Paid outside app: 1 / $45'), 'Daily closeout body should show paid-outside-app totals.');
 
     const receiptDraft = await request(server, 'POST', '/api/messages/send', {
       cookie: ownerCookie,
