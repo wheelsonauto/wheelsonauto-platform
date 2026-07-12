@@ -3356,6 +3356,13 @@ function customerPortalRecordMatches(row = {}, identity = {}, kind = '') {
   const rowNames = [row.customer, row.name, row.currentCustomer, row.cardholderName, row.customerName].map(normKey).filter(Boolean);
   return rowNames.some(name => identity.names.some(wanted => softNameMatch(name, wanted)));
 }
+function customerPortalVisibleMessage(row = {}) {
+  const meta = String([row.channel, row.source, row.direction, row.template, row.subject, row.status].filter(Boolean).join(' ')).toLowerCase();
+  if (row.aiPlan || row.aiSourceMessageId || /star ai|ai draft|ai action|internal log|notification|owner email/.test(meta)) return false;
+  if (String(row.channel || '').toLowerCase() === 'customer portal') return true;
+  if (/outbound|sent|delivered|received/.test(meta) && !/draft|needs approval|human needed|needs admin/.test(meta)) return true;
+  return false;
+}
 function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) {
   const visibleDocs = (scopedData.documents || []).filter(row => {
     if (!customerPortalRecordMatches(row, identity, 'document')) return false;
@@ -3463,7 +3470,7 @@ function customerPortalState(data, account) {
   const payments = (scopedData.payments || []).filter(row => customerPortalRecordMatches(row, identity, 'payment')).slice(0, 20);
   const maintenance = (scopedData.maintenance || []).filter(row => customerPortalRecordMatches(row, identity, 'maintenance')).slice(0, 20);
   const claims = (scopedData.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
-  const messages = (scopedData.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message')).slice(0, 20);
+  const messages = (scopedData.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message') && customerPortalVisibleMessage(row)).slice(0, 20);
   const paymentRequests = (scopedData.paymentRequests || []).filter(row => isOpenCustomerPaymentRequest(row) && customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
   const primaryRecurring = recurringPayments[0] || context.recurring || {};

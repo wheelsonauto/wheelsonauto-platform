@@ -253,6 +253,8 @@ assertIncludes('Marketing surface', marketing, [
 ]);
 
 const customerPortalHtml = finalFunctionSlice(server, 'customerPortalHtml');
+const customerPortalState = finalFunctionSlice(server, 'customerPortalState');
+const customerPortalVisibleMessage = finalFunctionSlice(server, 'customerPortalVisibleMessage');
 assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   '/customer/service-request',
   '/customer/issue-report',
@@ -275,6 +277,14 @@ assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   'Tag ',
   'payment.source',
   'Tracker '
+]);
+assertIncludes('Customer portal message privacy', customerPortalState + customerPortalVisibleMessage, [
+  'customerPortalVisibleMessage',
+  'star ai',
+  'aiPlan',
+  'customer portal',
+  'sent',
+  'delivered'
 ]);
 
 const insurance = finalFunctionSlice(app, 'Insurance');
