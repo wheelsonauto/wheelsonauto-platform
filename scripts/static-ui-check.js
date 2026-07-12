@@ -254,6 +254,9 @@ const criticalActionRequirements = [
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
+['repairAshleyDodgeTransfer', 'Ashley restored', 'Dodge Journey WHITE', 'Felicia V Gadson'].forEach(text => {
+  if (app.includes(text)) fail('Customer-specific frontend repair code must not ship: ' + text);
+});
 
 const functionNames = new Set(unique(app.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g), match => match[1]));
 const renderSlice = functionSlice('render');
