@@ -1161,7 +1161,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
     'Owner signoff: ' + (signedAt ? 'Signed off by ' + (signedBy || 'Owner') + ' at ' + signedAt : 'Not signed'),
-    ...(signoffSnapshot ? ['Signed snapshot: expected ' + moneyText(signoffSnapshot.expected || 0) + ' | collected ' + moneyText(signoffSnapshot.collected || 0) + ' | still open ' + moneyText(signoffSnapshot.stillOpen || 0) + ' | failed twice ' + Number(signoffSnapshot.failedTwice || 0) + ' | conflicts ' + Number(signoffSnapshot.vehicleAssignmentConflicts || 0)] : []),
+    ...(signoffSnapshot ? ['Signed snapshot: expected ' + moneyText(signoffSnapshot.expected || 0) + ' | collected ' + moneyText(signoffSnapshot.collected || 0) + ' | still open ' + moneyText(signoffSnapshot.stillOpen || 0) + ' | failed twice ' + Number(signoffSnapshot.failedTwice || 0) + ' | open links ' + Number(signoffSnapshot.openPaymentLinks || 0) + ' / ' + moneyText(signoffSnapshot.openPaymentLinkAmount || 0) + ' | conflicts ' + Number(signoffSnapshot.vehicleAssignmentConflicts || 0)] : []),
     ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
     'Customers to review:',

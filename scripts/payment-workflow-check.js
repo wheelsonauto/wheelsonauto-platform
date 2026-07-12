@@ -85,6 +85,7 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   'Failed once',
   'Contact now',
   'Today Clover transactions',
+  'Open payment links',
   'Verification inbox',
   'Vehicle conflicts',
   'assignmentConflicts',

@@ -1084,7 +1084,7 @@ async function main() {
       status: 'Signed off',
       signedAt: '2099-12-31T23:59:00.000Z',
       signedBy: 'Owner Smoke',
-      snapshot: { expected: 1689, collected: 1401, stillOpen: 288, failedTwice: 0, vehicleAssignmentConflicts: 1 }
+      snapshot: { expected: 1689, collected: 1401, stillOpen: 288, failedTwice: 0, openPaymentLinks: 1, openPaymentLinkAmount: 88, vehicleAssignmentConflicts: 1 }
     });
     const closeoutDedupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: closeoutDedupData });
     assert(closeoutDedupWrite.status === 200 && closeoutDedupWrite.json.ok, 'Owner could not seed closeout duplicate payment records.');
@@ -1106,7 +1106,7 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.vehicleAssignmentConflicts >= 1, 'Daily closeout should expose vehicle assignment conflicts before owner signoff.');
     assert(closeoutDedupNotification.json.summary.signedOff === true && closeoutDedupNotification.json.summary.signedBy === 'Owner Smoke', 'Daily closeout should expose saved owner signoff metadata.');
     assert(closeoutDedupNotification.json.summary.signoffSnapshot && closeoutDedupNotification.json.summary.signoffSnapshot.collected === 1401, 'Daily closeout should carry the frozen signoff snapshot.');
-    assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689'), 'Daily closeout message should include signoff status and snapshot numbers.');
+    assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689') && String(closeoutDedupNotification.json.message.body || '').includes('open links 1 / $88'), 'Daily closeout message should include signoff status, snapshot numbers, and open payment links.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Paid outside app: 1 / $45'), 'Daily closeout body should show paid-outside-app totals.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Open payment requests:') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Payment Link | $88 | Open') && !String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Paid Link'), 'Daily closeout body should list open hosted checkout links and exclude paid links.');
