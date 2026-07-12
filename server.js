@@ -2126,6 +2126,18 @@ function stripPrivateCustomerFields(row = {}) {
   ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response'].forEach(key => delete safe[key]);
   return safe;
 }
+function dataScopedToOrganization(data = {}, organizationId = MAIN_ORG_ID) {
+  const orgId = String(organizationId || MAIN_ORG_ID).trim() || MAIN_ORG_ID;
+  const scoped = { ...data, integrations: { ...((data && data.integrations) || {}) } };
+  Object.keys(scoped).forEach(key => {
+    if (Array.isArray(scoped[key])) scoped[key] = scoped[key].filter(row => rowOrganizationId(row) === orgId);
+  });
+  scoped.integrations.clover = { ...(((data.integrations || {}).clover) || {}) };
+  if (Array.isArray(scoped.integrations.clover.recurringPlanMembers)) {
+    scoped.integrations.clover.recurringPlanMembers = scoped.integrations.clover.recurringPlanMembers.filter(row => rowOrganizationId(row) === orgId);
+  }
+  return scoped;
+}
 function customerPortalIdentity(account = {}, context = {}) {
   const recurring = context.recurring || {};
   const customer = context.customer || {};
@@ -2160,8 +2172,9 @@ function customerPortalRecordMatches(row = {}, identity = {}, kind = '') {
   return rowNames.some(name => identity.names.some(wanted => softNameMatch(name, wanted)));
 }
 function customerPortalState(data, account) {
-  enrichLinkedProfiles(data);
-  const context = aiFindCustomerContext(data, {
+  const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
+  enrichLinkedProfiles(scopedData);
+  const context = aiFindCustomerContext(scopedData, {
     customer: account.customer || account.name,
     phone: account.phone,
     email: account.email,
@@ -2169,15 +2182,15 @@ function customerPortalState(data, account) {
     id: account.recurringPaymentId
   });
   const identity = customerPortalIdentity(account, context);
-  const vehicles = (data.vehicles || []).filter(row => customerPortalRecordMatches(row, identity, 'vehicle'));
-  const customers = (data.customers || []).filter(row => customerPortalRecordMatches(row, identity, 'customer'));
-  const contracts = (data.contracts || []).filter(row => customerPortalRecordMatches(row, identity, 'contract'));
-  const recurringPayments = allRecurringRows(data).filter(row => customerPortalRecordMatches(row, identity, 'recurring'));
-  const payments = (data.payments || []).filter(row => customerPortalRecordMatches(row, identity, 'payment')).slice(0, 20);
-  const maintenance = (data.maintenance || []).filter(row => customerPortalRecordMatches(row, identity, 'maintenance')).slice(0, 20);
-  const claims = (data.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
-  const messages = (data.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message')).slice(0, 20);
-  const paymentRequests = (data.paymentRequests || []).filter(row => customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
+  const vehicles = (scopedData.vehicles || []).filter(row => customerPortalRecordMatches(row, identity, 'vehicle'));
+  const customers = (scopedData.customers || []).filter(row => customerPortalRecordMatches(row, identity, 'customer'));
+  const contracts = (scopedData.contracts || []).filter(row => customerPortalRecordMatches(row, identity, 'contract'));
+  const recurringPayments = allRecurringRows(scopedData).filter(row => customerPortalRecordMatches(row, identity, 'recurring'));
+  const payments = (scopedData.payments || []).filter(row => customerPortalRecordMatches(row, identity, 'payment')).slice(0, 20);
+  const maintenance = (scopedData.maintenance || []).filter(row => customerPortalRecordMatches(row, identity, 'maintenance')).slice(0, 20);
+  const claims = (scopedData.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
+  const messages = (scopedData.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message')).slice(0, 20);
+  const paymentRequests = (scopedData.paymentRequests || []).filter(row => customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
   const primaryRecurring = recurringPayments[0] || context.recurring || {};
   const primaryVehicle = vehicles[0] || context.vehicle || {};
   return {

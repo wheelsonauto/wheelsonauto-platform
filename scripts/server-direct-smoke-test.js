@@ -361,6 +361,45 @@ async function main() {
     assert((ownerAfterFranchiseWrite.json.staffAccounts || []).some(staff => staff.id === 'direct-mechanic'), 'Franchise manager save should not remove main staff accounts.');
     assert((ownerAfterFranchiseWrite.json.staffAccounts || []).some(staff => staff.id === 'direct-manager'), 'Franchise manager save should not remove main manager accounts.');
 
+    const franchiseCustomerState = JSON.parse(JSON.stringify(ownerAfterFranchiseWrite.json));
+    franchiseCustomerState.customers = franchiseCustomerState.customers || [];
+    franchiseCustomerState.recurringPayments = franchiseCustomerState.recurringPayments || [];
+    franchiseCustomerState.payments = franchiseCustomerState.payments || [];
+    franchiseCustomerState.messages = franchiseCustomerState.messages || [];
+    franchiseCustomerState.customers.unshift({ id: 'direct-franchise-customer-file', organizationId: 'direct-franchise', name: 'Alicia Brown', phone: '3135558899', email: 'franchise-alicia@example.com', vehicleId: 'direct-franchise-car', vehicle: '2026 Franchise Fleet Car', licensePlate: 'FRANCHISE-1' });
+    franchiseCustomerState.recurringPayments.unshift({ id: 'direct-franchise-recurring', organizationId: 'direct-franchise', customer: 'Alicia Brown', phone: '3135558899', email: 'franchise-alicia@example.com', vehicleId: 'direct-franchise-car', vehicle: '2026 Franchise Fleet Car', amount: 88, status: 'Active', nextRun: '2026-07-15' });
+    franchiseCustomerState.payments.unshift({ id: 'direct-franchise-payment', organizationId: 'direct-franchise', customer: 'Alicia Brown', recurringPaymentId: 'direct-franchise-recurring', vehicleId: 'direct-franchise-car', amount: 88, status: 'Paid', source: 'Franchise test' });
+    franchiseCustomerState.messages.unshift({ id: 'direct-franchise-message', organizationId: 'direct-franchise', customer: 'Alicia Brown', phone: '3135558899', channel: 'SMS', direction: 'Inbound', status: 'Received', body: 'Franchise-only customer message.' });
+    const franchiseCustomerWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: franchiseCustomerState });
+    assert(franchiseCustomerWrite.status === 200 && franchiseCustomerWrite.json.ok, 'Owner could not seed franchise customer portal records.');
+    const franchiseCustomerAccount = await request(server, 'POST', '/api/customer-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-franchise-customer-login',
+        organizationId: 'direct-franchise',
+        name: 'Alicia Brown',
+        customer: 'Alicia Brown',
+        username: 'direct-franchise-customer',
+        password: 'DirectFranchiseCustomer123!',
+        phone: '3135558899',
+        email: 'franchise-alicia@example.com',
+        customerId: 'direct-franchise-customer-file',
+        recurringPaymentId: 'direct-franchise-recurring',
+        vehicleId: 'direct-franchise-car',
+        status: 'Active'
+      }
+    });
+    assert(franchiseCustomerAccount.status === 200 && franchiseCustomerAccount.json.ok, 'Owner could not create franchise customer portal login.');
+    const franchiseCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-franchise-customer', password: 'DirectFranchiseCustomer123!' } });
+    assert(franchiseCustomerLogin.status === 302 && String(franchiseCustomerLogin.cookie).includes('woa_customer_session='), 'Franchise customer login did not set a customer session.');
+    const franchiseCustomerCookie = cleanCookie(franchiseCustomerLogin.cookie);
+    const franchisePortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: franchiseCustomerCookie });
+    assert(franchisePortalState.status === 200 && franchisePortalState.json.ok, 'Franchise customer portal state did not load.');
+    assert(franchisePortalState.json.portal.vehicle.id === 'direct-franchise-car', 'Franchise customer portal should show the franchise vehicle, not the main matching-name vehicle.');
+    assert(franchisePortalState.json.portal.recurring.id === 'direct-franchise-recurring', 'Franchise customer portal should show the franchise recurring payment.');
+    assert(JSON.stringify(franchisePortalState.json).includes('Franchise-only customer message'), 'Franchise customer portal should show scoped franchise messages.');
+    assert(!JSON.stringify(franchisePortalState.json).includes('veh-001') && !JSON.stringify(franchisePortalState.json).includes('Direct Dispute Customer'), 'Franchise customer portal should not expose main WheelsonAuto records.');
+
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
     const staffLogout = await request(server, 'GET', '/logout', { cookie: managerCookie });
