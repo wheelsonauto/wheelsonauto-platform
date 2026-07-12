@@ -302,6 +302,7 @@ async function main() {
     const conflictVehicle = (assignmentConflictRead.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
     assert(conflictVehicle && /Direct Conflict One/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(conflictVehicle.assignmentConflict || ''), 'Competing active autopays should mark the vehicle assignment conflict.');
     const conflictHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    assert(conflictHealth.status === 200 && conflictHealth.json && Array.isArray(conflictHealth.json.issues), 'System health should return JSON after assignment conflict save. Got ' + conflictHealth.status + ': ' + String(conflictHealth.text || '').slice(0, 220));
     assert(conflictHealth.json.issues.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System health should flag vehicle assignment conflicts and route to Operations / Assigned.');
     const conflictReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
     assert(conflictReadiness.json.truthChecks.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System readiness should flag vehicle assignment conflicts and route to Operations / Assigned.');
@@ -575,7 +576,7 @@ async function main() {
     const tollHealth = ownerHealth.json.issues.find(row => row.key === 'toll_violation_recovery');
     assert(tollHealth && Number(tollHealth.count) > 0 && /Open tolls\/violations/.test(tollHealth.detail || ''), 'Owner system health should include toll/violation recovery with amount and review context.');
     const apiHealth = ownerHealth.json.issues.find(row => row.key === 'api_provider_readiness');
-    assert(apiHealth && Number(apiHealth.count) > 0 && /Provider dependency matrix/.test(apiHealth.detail || ''), 'Owner system health should include API provider readiness before providers are live-tested.');
+    assert(apiHealth && Number(apiHealth.count) >= 4 && /Provider dependency matrix/.test(apiHealth.detail || ''), 'Owner system health should include default API provider readiness before providers are live-tested.');
     const portalHealth = ownerHealth.json.issues.find(row => row.key === 'customer_portal_access');
     assert(portalHealth && Number(portalHealth.count) > 0 && /login-ready/i.test(portalHealth.detail || ''), 'Owner system health should flag active customers whose portal record is not login ready.');
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });

@@ -353,11 +353,14 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 
 [
   'cleanApiProviderPayload',
+  'defaultApiProviderRows',
+  'apiProviderRows',
   'syncApiProviderDispatchTask',
   'apiProviderReadyForLiveUse',
   'task-api-',
   'Auto-closed because this provider is marked Connected',
   'apiProviderReviewRows',
+  "status.includes('testing')",
   'api_provider_readiness',
   'API provider readiness',
   '/api/api-providers',

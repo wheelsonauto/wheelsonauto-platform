@@ -4159,12 +4159,71 @@ function isTollViolationClaim(claim = {}) {
 function tollViolationRecoveryRows(data = {}) {
   return (data.claims || []).filter(claim => isTollViolationClaim(claim) && !/paid|closed/i.test(String(claim.status || 'Open')));
 }
+function defaultApiProviderRows(data = {}) {
+  const messageStatus = publicMessagingStatus(data);
+  return [
+    {
+      id: 'clover-core',
+      name: 'Clover Core',
+      group: 'Money',
+      status: CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Testing' : 'Ready for credentials',
+      owner: 'Owner',
+      envKeys: 'CLOVER_ACCESS_TOKEN, CLOVER_MERCHANT_ID',
+      endpoint: '/api/integrations/clover/sync-all',
+      liveTest: 'Sync customers, payments, recurring roster, then compare Today closeout.'
+    },
+    {
+      id: 'clover-ecommerce',
+      name: 'Clover Ecommerce',
+      group: 'Money',
+      status: CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Testing' : 'Ready for credentials',
+      owner: 'Owner',
+      envKeys: 'CLOVER_ECOMMERCE_PUBLIC_KEY, CLOVER_ECOMMERCE_PRIVATE_KEY, CLOVER_MERCHANT_ID',
+      endpoint: '/api/card-setup-requests, /api/integrations/clover/manual-charge',
+      liveTest: 'Create card setup link, save card, charge controlled live test, verify Paid screen.'
+    },
+    {
+      id: 'sms-phone',
+      name: 'SMS / Business Phone',
+      group: 'Comms',
+      status: messageStatus.configured ? 'Testing' : 'Provider needed',
+      owner: 'Owner',
+      envKeys: 'SMS_PROVIDER_KEY, SMS_FROM_NUMBER',
+      endpoint: '/api/messages/send, /api/webhooks/messages',
+      liveTest: 'Send and receive a customer SMS while keeping T-Mobile voice calls.'
+    },
+    {
+      id: 'email',
+      name: 'Email Notifications',
+      group: 'Comms',
+      status: messageStatus.emailConfigured ? 'Testing' : 'Provider needed',
+      owner: 'Owner',
+      envKeys: 'WOA_EMAIL_FROM, RESEND_API_KEY or SENDGRID_API_KEY',
+      endpoint: '/api/messages/send, /api/webhooks/email, /api/notifications/email/settings',
+      liveTest: 'Send customer reply, receive inbound email webhook, and send owner notification test.'
+    },
+    { id: 'ezpass', name: 'E-ZPass / Tolls', group: 'Risk', status: 'API needed', owner: 'Owner', envKeys: 'EZPASS_ACCOUNT, EZPASS_API_KEY or import/login flow', endpoint: 'Future /api/integrations/ezpass/sync', liveTest: 'Import toll notice, match plate to vehicle/customer, create claim/payment link.' },
+    { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'INSURANCE_PROVIDER_KEY', endpoint: 'Future /api/integrations/insurance/verify', liveTest: 'Verify proof, set expiration, surface warning before due date.' },
+    { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'BACKGROUND_PROVIDER_KEY', endpoint: 'Future /api/integrations/background/run', liveTest: 'Run from approved application and attach result to customer file.' },
+    { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: 'Provider needed', owner: 'Manager', envKeys: 'TRACKER_PROVIDER_KEY', endpoint: 'Future /api/integrations/tracker/sync', liveTest: 'Connect tracker name to vehicle, show last location and alert state.' },
+    { id: 'accounting', name: 'Accounting / Exports', group: 'Finance', status: 'Ready for API', owner: 'Owner', envKeys: 'ACCOUNTING_PROVIDER_KEY', endpoint: 'Future /api/integrations/accounting/export', liveTest: 'Push paid payments, claims, repairs, reimbursements to accounting ledger.' },
+    { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: 'API needed', owner: 'Manager', envKeys: 'MARKETING_PROVIDER_KEY', endpoint: 'Future /api/integrations/marketing/sync', liveTest: 'Import lead source, follow-up status, and conversion into Marketing board.' },
+    { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: 'Architecture ready', owner: 'Owner', envKeys: 'BILLING_PROVIDER_KEY', endpoint: 'Future /api/billing/subscriptions', liveTest: 'Create company account, staff, fleet, separate provider credentials, subscription status.' }
+  ];
+}
+function apiProviderRows(data = {}) {
+  const saved = Array.isArray(data.apiProviders) ? data.apiProviders : [];
+  const byId = new Map(saved.map(provider => [String(provider.id || ''), provider]));
+  const defaults = defaultApiProviderRows(data).map(provider => ({ ...provider, ...(byId.get(provider.id) || {}) }));
+  return defaults.concat(saved.filter(provider => !defaultApiProviderRows(data).some(row => row.id === provider.id)));
+}
 function apiProviderReviewRows(data = {}) {
-  return (data.apiProviders || []).filter(provider => {
+  return apiProviderRows(data).filter(provider => {
     const status = String(provider.status || 'API needed').toLowerCase();
     const connected = status.includes('connected');
     const hasLiveReadyProof = ['envKeys', 'endpoint', 'liveTest', 'lastTestResult'].every(key => String(provider[key] || '').trim());
     if (connected) return !hasLiveReadyProof;
+    if (status.includes('testing')) return !hasLiveReadyProof;
     return /needed|blocked|setup|draft|review|not connected|waiting|planned|provider/i.test(status);
   });
 }
