@@ -1070,7 +1070,7 @@ function aiPlanRules(data, payload = {}, context = null) {
     confidence = 0.9;
     reply = 'Hi ' + first + ', this is WheelsonAuto. I understand. I am sending this to our team so a person can review your account and respond the right way.';
     reasons.push('Sensitive, dispute, cancellation, legal, or account-removal wording needs a human.');
-  } else if (aiMatches(lower, /charge (me|my card)|run (it|my card)|take (it|the payment)|pay it now|card on file|use my card/)) {
+  } else if (aiMatches(lower, /charge (me|my card)|run (it|my card)|take (it|the payment)|pay it now|use my card|use (the )?card on file|charge (the )?card on file/)) {
     actionType = 'charge_saved_card';
     intent = 'charge_request';
     approvalRequired = true;
@@ -1240,6 +1240,41 @@ function prepareAiSafeLink(data, plan, context) {
     plan.related = { ...(plan.related || {}), paymentLinkId: request.id, paymentLinkUrl: request.url };
     plan.reply = appendLinkToReply(plan.reply, 'Secure payment link', request.url);
     plan.summary = 'Secure payment link ready for ' + (plan.customer || context.customerName || 'customer');
+  }
+  if (plan.actionType === 'send_card_setup') {
+    const amount = Number(plan.related && plan.related.amount || recurring.amount || recurring.weeklyAmount || 0);
+    if (!amount || amount <= 0 || !(context.customerName || plan.customer)) {
+      plan.needsHuman = true;
+      plan.canAutoSend = false;
+      plan.status = 'Human needed';
+      plan.reasons = [...(plan.reasons || []), 'No customer or recurring amount was found for the secure card setup link.'];
+      plan.reply = 'Hi ' + aiCustomerFirstName(plan.customer || context.customerName) + ', I can help update your card on file. I am sending this to the office first so we send the correct secure setup link.';
+      return plan;
+    }
+    const setup = createCardSetupRequest(data, {
+      id: recurring.id || '',
+      recurringPaymentId: recurring.id || '',
+      reactivateExisting: !!recurring.id,
+      cardOnlyUpdate: !!recurring.id,
+      customer: context.customerName || plan.customer || '',
+      phone: context.phone || plan.phone || '',
+      email: context.email || '',
+      vehicle: context.vehicleName || '',
+      vehicleId: context.vehicle && context.vehicle.id || '',
+      vin: context.vehicle && context.vehicle.vin || '',
+      licensePlate: context.vehicle && (context.vehicle.plate || context.vehicle.licensePlate) || '',
+      tempTag: context.vehicle && context.vehicle.tempTag || '',
+      tracker: context.vehicle && context.vehicle.tracker || '',
+      amount,
+      frequency: recurring.frequency || 'Weekly',
+      nextRun: recurring.nextRun || localDateKey(),
+      chargeTime: recurring.chargeTime || recurring.paymentTime || '18:00',
+      reason: 'Star card setup request',
+      notes: 'Created by Star from a customer card-on-file message.'
+    });
+    plan.related = { ...(plan.related || {}), cardSetupRequestId: setup.request.id, cardSetupUrl: setup.request.url, recurringPaymentId: setup.autopay.id || plan.related && plan.related.recurringPaymentId || '' };
+    plan.reply = appendLinkToReply(plan.reply, 'Secure card setup link', setup.request.url);
+    plan.summary = 'Secure card setup link ready for ' + (plan.customer || context.customerName || 'customer');
   }
   return plan;
 }

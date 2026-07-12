@@ -562,6 +562,17 @@ async function main() {
     });
     assert(inboundEmail.status === 200 && inboundEmail.json.ok && inboundEmail.json.received, 'Inbound email webhook failed.');
 
+    const starCardSetup = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Direct Failed Once', phone: '3135550444', channel: 'SMS', body: 'I need to update my card on file.' }
+    });
+    assert(starCardSetup.status === 201 && starCardSetup.json.ok, 'Star card setup draft failed.');
+    assert(starCardSetup.json.plan.actionType === 'send_card_setup', 'Star should recognize card-on-file update requests.');
+    assert(String(starCardSetup.json.draft.body || '').includes('/setup-card/'), 'Star card setup reply should include a secure setup link.');
+    assert(starCardSetup.json.plan.related.cardSetupRequestId, 'Star card setup should save the setup request ID.');
+    const starCardState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((starCardState.json.cardSetupRequests || []).some(request => request.id === starCardSetup.json.plan.related.cardSetupRequestId && request.recurringPaymentId === 'direct-autopay-fail-once'), 'Star card setup request should attach to the existing autopay row.');
+
     const starDraft = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
       json: { customer: 'Direct Customer', email: 'direct-customer@example.com', channel: 'Email', body: 'What time can I come in for service?' }
