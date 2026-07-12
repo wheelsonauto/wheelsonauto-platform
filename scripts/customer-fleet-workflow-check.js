@@ -44,6 +44,7 @@ const saveContractHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='sa
 const saveVehicleHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='save-vehicle')"), app.indexOf("function openMaintenanceModal", app.indexOf("if(!b||b.dataset.action!=='save-vehicle')")));
 const endCustomer = finalFunctionSlice(app, 'confirmEndCustomerFile');
 const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
+const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/update'", server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')")));
 
 [
   'id="rVehicleSearch"',
@@ -113,5 +114,16 @@ const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
   'contract.tracker = autopay.tracker',
   'customer.stage'
 ].forEach(text => requireText('Server autopay assignment truth layer', assignAutopayVehicle, text));
+
+[
+  'data.contracts = Array.isArray(data.contracts)',
+  'data.customers.unshift',
+  'data.contracts.unshift',
+  'vin: autopay.vin',
+  'weeklyAmount: autopay.amount',
+  'weekly: autopay.amount',
+  'Customer file created from WheelsonAuto autopay setup.',
+  'source: \'WheelsonAuto autopay\''
+].forEach(text => requireText('Autopay creates full customer file', addRecurringRoute, text));
 
 console.log('Customer/fleet workflow check passed: searchable vehicle pickers, reassignment, return/end customer, and backend autopay assignment truth layer are wired.');

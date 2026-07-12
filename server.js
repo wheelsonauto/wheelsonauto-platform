@@ -4976,6 +4976,7 @@ const server = http.createServer(async (req, res) => {
       const autopay = cleanAutopayPayload(payload);
       data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
       data.customers = Array.isArray(data.customers) ? data.customers : [];
+      data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
       assignAutopayVehicle(data, autopay);
       const customerKey = normKey(autopay.customer);
       const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
@@ -4988,7 +4989,12 @@ const server = http.createServer(async (req, res) => {
         });
       } else data.recurringPayments.unshift(autopay);
       if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
-        data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, licensePlate: autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, contract: 'Autopay setup', balance: 0, source: 'WheelsonAuto', cloverCustomerId: autopay.cloverCustomerId });
+        const activeAutopay = String(autopay.status || '').toLowerCase() === 'active';
+        data.customers.unshift({ id: 'cus-' + Date.now(), name: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, vin: autopay.vin, licensePlate: autopay.licensePlate, plate: autopay.plate || autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, weeklyAmount: autopay.amount, amount: autopay.amount, status: activeAutopay ? 'Active' : 'Pending pickup', stage: activeAutopay ? 'Active contract' : 'Pending pickup', contract: 'Autopay setup', balance: 0, source: 'WheelsonAuto', cloverCustomerId: autopay.cloverCustomerId });
+      }
+      if (autopay.customer && !data.contracts.some(c => normKey(c.customer || c.name) === normKey(autopay.customer))) {
+        const activeAutopay = String(autopay.status || '').toLowerCase() === 'active';
+        data.contracts.unshift({ id: 'con-autopay-' + Date.now(), customer: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, vin: autopay.vin, licensePlate: autopay.licensePlate, plate: autopay.plate || autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, weekly: autopay.amount, balance: 0, status: activeAutopay ? 'Active' : 'Pending pickup', autopay: autopay.status || 'Setup needed', paymentProvider: 'Clover', notes: 'Customer file created from WheelsonAuto autopay setup.', source: 'WheelsonAuto autopay', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       }
       await writeData(data);
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
