@@ -56,6 +56,7 @@ Completed in this build pass:
 - Static UI checks now block placeholder `href="#"`, `javascript:void`, and not-implemented controls so visible buttons must be wired, save a draft, or route honestly to setup.
 - Staff and customer password-help requests now write owner audit-log rows showing matched/not-matched status, keeping login recovery visible without storing password material.
 - Daily closeout summaries now return structured sensitive-change audit rows, not just a text section, so Star/UI/report checks can review exactly what changed today.
+- Star now treats receipt requests as their own approval-required payment action instead of mixing them into toll/claim handling, and normal AI reply approval cannot send receipts without admin payment confirmation.
 
 Checks passed at this checkpoint:
 

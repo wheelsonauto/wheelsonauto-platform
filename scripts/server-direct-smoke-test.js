@@ -1610,6 +1610,16 @@ async function main() {
       json: { draftId: starChargeDraft.json.draft.id, channel: 'SMS' }
     });
     assert(blockedStarChargeSend.status === 409 && /money or account change/i.test(blockedStarChargeSend.json.error || ''), 'Star should not approve/send money-action drafts without explicit admin workflow approval.');
+    const starReceiptDraft = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Direct Closeout Customer', email: 'direct-closeout@example.com', channel: 'Email', body: 'Can you send me a receipt for my payment?' }
+    });
+    assert(starReceiptDraft.status === 201 && starReceiptDraft.json.plan.actionType === 'send_receipt' && starReceiptDraft.json.plan.approvalRequired === true, 'Star should classify receipt requests as approval-required payment actions.');
+    const blockedStarReceiptSend = await request(server, 'POST', '/api/messages/ai-action', {
+      cookie: managerCookie,
+      json: { draftId: starReceiptDraft.json.draft.id, channel: 'Email' }
+    });
+    assert(blockedStarReceiptSend.status === 409 && /money or account change/i.test(blockedStarReceiptSend.json.error || ''), 'Star should not send receipt drafts through normal reply approval without admin payment confirmation.');
     const pendingStarHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(pendingStarHealth.json.issues.some(row => row.key === 'pending_star_approvals' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Star'), 'System health should surface pending Star approvals for admin review.');
     assert(pendingStarHealth.json.issues.some(row => row.key === 'open_card_setup_links' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Queue'), 'System health should surface open card setup/change links for follow-up.');

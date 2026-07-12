@@ -2052,7 +2052,15 @@ function aiPlanRules(data, payload = {}, context = null) {
     confidence = 0.86;
     reply = 'Hi ' + first + ', I can send a secure card setup link so you can update your card on file. WheelsonAuto will not see your full card number.';
     reasons.push('Card setup link is safe; the customer enters card details in Clover secure fields.');
-  } else if (aiContains(lower, ['toll', 'ez pass', 'ezpass', 'violation', 'ticket', 'reimbursement', 'claim', 'receipt'])) {
+  } else if (aiContains(lower, ['receipt', 'proof i paid', 'payment proof', 'paid receipt'])) {
+    actionType = 'send_receipt';
+    intent = 'receipt_request';
+    approvalRequired = true;
+    tone = 'warn';
+    confidence = 0.84;
+    reply = 'Hi ' + first + ', I can help with a receipt. I am sending this to the office to confirm the payment first, then we can send the correct receipt.';
+    reasons.push('Receipts are tied to payment history and require admin confirmation before sending.');
+  } else if (aiContains(lower, ['toll', 'ez pass', 'ezpass', 'violation', 'ticket', 'reimbursement', 'claim'])) {
     actionType = openClaim ? 'send_claim_link' : 'human_review';
     intent = 'toll_claim_or_receipt';
     approvalRequired = !!openClaim;
@@ -2125,7 +2133,7 @@ function sanitizeAiPlan(plan, fallback) {
   safe.reply = String(safe.reply || (fallback && fallback.reply) || '').trim().slice(0, 900);
   safe.intent = String(safe.intent || 'general_reply').slice(0, 80);
   safe.actionType = String(safe.actionType || 'reply').slice(0, 80);
-  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review'].includes(safe.actionType);
+  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt'].includes(safe.actionType);
   safe.needsHuman = !!safe.needsHuman || safe.actionType === 'human_review';
   safe.canAutoSend = !!safe.canAutoSend && !safe.approvalRequired && !safe.needsHuman;
   safe.confidence = Math.max(0, Math.min(1, Number(safe.confidence || 0.7)));
