@@ -574,10 +574,12 @@ const companyFoundationPanel = finalFunctionSlice(app, 'companyFoundationPanel')
 const companyLaunchBoard = finalFunctionSlice(app, 'companyLaunchBoard');
 const companyReadinessCards = finalFunctionSlice(app, 'companyReadinessCards');
 const customerLoginForm = finalFunctionSlice(app, 'customerLoginAccountForm');
+const customerPortalCommandBoard = finalFunctionSlice(app, 'customerPortalCommandBoard');
 const customerPortalButton = finalFunctionSlice(app, 'customerPortalButton');
 const paymentCustomerPortalCard = finalFunctionSlice(app, 'paymentCustomerCard');
 const recurringCardActionButtons = finalFunctionSlice(app, 'cardActionButtons');
 assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
+assertIncludes('Customer portal command board', customerPortalCommandBoard + settings + app + css, ['Customer portal command', 'Login ready', 'Needs password', 'Active gaps', 'Reset requested', 'Card setup links', 'Portal messages', 'Proof uploads', 'Disabled logins', 'Customer portal access is scoped', 'customer-portal-command-board', 'customer-portal-command-grid', 'customer-portal-command-card']);
 assertIncludes('Settings staff password help', settings + server, ['Staff accounts', 'Reset requested', 'staff_password_reset', '/forgot', 'Reset staff access']);
 assertIncludes('Company account staff actions', organizations + companyFoundationPanel + companyLaunchBoard + companyReadinessCards + app + css, ['Company accounts', 'Franchise readiness', 'Staff scoping', 'isolated database storage', 'per-company', 'Data scope', 'API key mode', 'Tenant readiness', 'Subscriber locked', 'Add staff', 'new-staff', 'Staff list', 'company-scoped workspace', 'Subscriber mode needs final API separation', 'Company launch guardrails', 'Internal store mode', 'Staff scoped access', 'Customer portal scope', 'Subscriber accounts', 'Per-company API keys', 'Billing connected', 'Owner audit + reports', 'company-launch-board', 'company-launch-grid', 'company-launch-card']);
 const coreSystemItems = finalFunctionSlice(app, 'coreSystemItems');

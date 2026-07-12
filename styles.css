@@ -4032,6 +4032,56 @@ body.fast-tab-switch .admin-shell .section{
   text-align:right;
   overflow-wrap:anywhere;
 }
+.customer-portal-command-board{
+  background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(24,30,29,.93));
+  border-color:rgba(240,211,148,.20);
+}
+.customer-portal-command-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+}
+.customer-portal-command-card{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  box-shadow:0 14px 28px rgba(0,0,0,.16);
+}
+.customer-portal-command-card.good{border-left:3px solid #7ee787}
+.customer-portal-command-card.warn{border-left:3px solid #f0d394}
+.customer-portal-command-card.blue{border-left:3px solid #58a6ff}
+.customer-portal-command-card.bad{border-left:3px solid #ff705c}
+.customer-portal-command-card>div{
+  min-width:0;
+}
+.customer-portal-command-card strong{
+  display:block;
+  color:#f7df9b;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+.customer-portal-command-card small{
+  display:block;
+  margin-top:5px;
+  color:#c8d2dc;
+  line-height:1.32;
+  overflow-wrap:anywhere;
+}
+.customer-portal-command-card span{
+  flex:0 0 auto;
+  color:#fff;
+  font-size:21px;
+  font-weight:950;
+  line-height:1;
+  text-align:right;
+}
 .star-provider-strip{
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
@@ -4113,7 +4163,8 @@ body.fast-tab-switch .admin-shell .section{
   .api-operational-grid,
   .service-inspection-grid,
   .company-launch-grid,
-  .notification-command-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .notification-command-grid,
+  .customer-portal-command-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
@@ -4123,7 +4174,8 @@ body.fast-tab-switch .admin-shell .section{
   .api-operational-grid,
   .service-inspection-grid,
   .company-launch-grid,
-  .notification-command-grid{grid-template-columns:1fr}
+  .notification-command-grid,
+  .customer-portal-command-grid{grid-template-columns:1fr}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:1fr}
   .star-provider-strip .actions{flex-direction:row;flex-wrap:wrap}
