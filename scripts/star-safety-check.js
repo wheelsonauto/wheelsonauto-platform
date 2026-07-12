@@ -131,6 +131,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve |
   'Unmatched payments',
   'Missing contact',
   'Setup / not found',
+  'Sensitive changes',
   'Star can flag issues and draft fixes',
   'money moves, card changes, removals, disputes, and receipts still require admin approval'
 ].forEach(text => requireText('Star QA system health safety', starHealth, text));
@@ -140,6 +141,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve |
   'Contact failed-twice customers',
   'Match transactions',
   'Link autopay to vehicles',
+  'Review today sensitive changes',
   'admin approval is still required for charges, removals, card changes, claims, refunds, and receipts'
 ].forEach(text => requireText('Star QA manager suggestions', starQaManager, text));
 
