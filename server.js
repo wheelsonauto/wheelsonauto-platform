@@ -1622,6 +1622,11 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
   const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalLoginReady(customerPortalAccountForName(scoped, name)));
+  staleAutopay.forEach(row => {
+    const vehicle = reportVehicleFor(scoped, row.customer, row.vehicleId);
+    const tag = vehicle.plate || vehicle.stock || row.licensePlate || row.plate || '';
+    addReportRow(rows, 'Stale autopay schedules', recurringDateKey(row) || row.nextRun || row.nextPaymentDate || '', row.customer || 'Unknown customer', vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || ''), vehicle.vin || row.vin || '', tag, trackerName(vehicle) || trackerName(row), row.frequency || 'Autopay', row.amount || row.weeklyAmount || 0, 'Review', row.sourceType || row.provider || 'WheelsonAuto autopay', reportCsvNote([row.phone, row.email, 'Next run is before today with no paid/failed/setup status', row.cloverCustomerId ? 'Clover customer ' + row.cloverCustomerId : '', row.notes]));
+  });
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Failed twice', failedTwice.length, failedTwice.length ? 'Review' : 'Clean', 'Star QA', 'Customers failed twice and should be contacted before closeout');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Payment not found', paymentNotFound.length, paymentNotFound.length ? 'Review' : 'Clean', 'Star QA', 'Saved-card/payment records need Clover review');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'Review' : 'Clean', 'Star QA', 'Transactions without customer names need matching before receipts, disputes, and reports');

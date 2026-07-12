@@ -1407,6 +1407,7 @@ async function main() {
     assert(reconciledPaymentLink && /paid/i.test(reconciledPaymentLink.status || '') && reconciledPaymentLink.matchedPaymentId === 'payment-direct-reconciled-link', 'Open hosted payment links should auto-close when a matching paid payment record exists.');
     const closeoutCandidateReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(closeoutCandidateReport.status === 200 && closeoutCandidateReport.text.includes('Possible match Direct Report Candidate') && closeoutCandidateReport.text.includes('DIRECTREPORTVIN') && closeoutCandidateReport.text.includes('Tag DIR-RPT'), 'Deep report should show possible customer/vehicle evidence for unmatched transaction rows.');
+    assert(closeoutCandidateReport.text.includes('Stale autopay schedules') && closeoutCandidateReport.text.includes('Direct Closeout Stale Autopay') && closeoutCandidateReport.text.includes('DIRECTSTALEVIN') && closeoutCandidateReport.text.includes('DIR-STL'), 'Deep report should export stale autopay schedule rows with customer, VIN, and tag evidence.');
     const closeoutDedupNotification = await request(server, 'POST', '/api/notifications/daily-closeout', {
       cookie: ownerCookie,
       json: { dateKey: '2099-12-31' }
