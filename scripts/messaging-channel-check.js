@@ -95,6 +95,11 @@ requireText('Daily closeout open payment request amount', server, 'openPaymentRe
 requireText('Daily closeout stale payment request count', server, 'stalePaymentRequests');
 requireText('Daily closeout stale payment request body', server, 'Stale payment links:');
 requireText('Daily closeout payment request body', server, 'Open payment requests:');
+requireText('Daily closeout open card setup count', server, 'openCardSetupRequests');
+requireText('Daily closeout stale card setup count', server, 'staleCardSetupRequests');
+requireText('Daily closeout card setup body', server, 'Open card setup/change links:');
+requireText('Daily closeout pending Star approval count', server, 'pendingStarApprovals');
+requireText('Daily closeout pending Star approval body', server, 'Pending Star approvals:');
 requireText('Daily closeout verification payload', server, 'closeoutVerificationItems');
 requireText('Daily closeout verification body', server, 'Verification inbox:');
 requireText('Daily closeout assignment conflict payload', server, 'vehicleAssignmentConflicts');

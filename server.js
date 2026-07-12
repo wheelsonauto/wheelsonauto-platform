@@ -1097,6 +1097,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
   const stalePaymentRequestAmount = stalePaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
+  const openCardSetupRequests = (data.cardSetupRequests || []).filter(isOpenCardSetupRequest);
+  const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
+  const pendingStarApprovals = pendingStarApprovalRows(data);
   const recurringWithState = recurring.map(row => ({ row, state: closeoutRecurringState(row, dateKeyValue) }));
   const failedOnce = recurringWithState.filter(item => item.state === 'Failed once').map(item => item.row);
   const failedTwice = recurringWithState.filter(item => item.state === 'Failed twice').map(item => item.row);
@@ -1146,6 +1149,40 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       tracker: vehicle.tracker || request.tracker || (recurringRow && recurringRow.tracker) || ''
     };
   });
+  const cardSetupRows = openCardSetupRequests.map(request => {
+    const recurringRow = request.recurringPaymentId ? allRecurringRows(data).find(row => row.id === request.recurringPaymentId) : null;
+    const customer = request.customer || (recurringRow && recurringRow.customer) || 'Unassigned card setup';
+    const vehicle = reportVehicleFor(data, customer, request.vehicleId || (recurringRow && recurringRow.vehicleId));
+    return {
+      customer,
+      amount: Number(request.amount || recurringRow && (recurringRow.amount || recurringRow.weeklyAmount) || 0),
+      status: request.status || 'Open',
+      createdAt: request.createdAt || request.date || '',
+      ageHours: cardSetupRequestAgeHours(request),
+      ageLabel: cardSetupRequestAgeLabel(request),
+      stale: cardSetupRequestAgeHours(request) >= 24,
+      url: request.url || '',
+      vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (request.vehicle || (recurringRow && recurringRow.vehicle) || ''),
+      vin: vehicle.vin || request.vin || (recurringRow && recurringRow.vin) || '',
+      tag: vehicle.plate || vehicle.stock || request.licensePlate || request.plate || (recurringRow && (recurringRow.licensePlate || recurringRow.plate)) || '',
+      tracker: vehicle.tracker || request.tracker || (recurringRow && recurringRow.tracker) || ''
+    };
+  });
+  const starApprovalRows = pendingStarApprovals.map(message => {
+    const customer = message.customer || message.name || 'Unassigned Star item';
+    const vehicle = reportVehicleFor(data, customer, message.vehicleId || message.aiPlan && message.aiPlan.related && message.aiPlan.related.vehicleId);
+    const plan = message.aiPlan || {};
+    return {
+      customer,
+      status: message.status || (plan.needsHuman ? 'Human needed' : 'Needs approval'),
+      channel: message.deliveryChannel || message.channel || 'Message',
+      action: plan.actionType || message.template || message.subject || 'Star draft',
+      vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (message.vehicle || ''),
+      vin: vehicle.vin || message.vin || '',
+      tag: vehicle.plate || vehicle.stock || message.plate || message.licensePlate || '',
+      body: message.subject || message.body || ''
+    };
+  });
   const verificationItems = closeoutVerificationItems(data);
   const assignmentConflicts = assignmentConflictRows(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
@@ -1171,6 +1208,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Today transactions recorded: ' + payments.length,
     'Open payment requests: ' + openPaymentRequests.length + ' / ' + moneyText(openPaymentRequestAmount),
     'Stale payment links: ' + stalePaymentRequests.length + ' / ' + moneyText(stalePaymentRequestAmount),
+    'Open card setup links: ' + openCardSetupRequests.length,
+    'Stale card setup links: ' + staleCardSetupRequests.length,
+    'Pending Star approvals: ' + pendingStarApprovals.length,
     'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
@@ -1189,6 +1229,12 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Open payment requests:',
     ...(paymentRequestRows.length ? paymentRequestRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + item.ageLabel + (item.stale ? ' | Follow up now' : '') + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.url ? ' | ' + item.url : '')) : ['- No open hosted checkout links waiting.']),
+    '',
+    'Open card setup/change links:',
+    ...(cardSetupRows.length ? cardSetupRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + item.ageLabel + (item.stale ? ' | Follow up now' : '') + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.url ? ' | ' + item.url : '')) : ['- No open card setup/change links waiting.']),
+    '',
+    'Pending Star approvals:',
+    ...(starApprovalRows.length ? starApprovalRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + item.status + ' | ' + item.channel + ' | ' + item.action + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '')) : ['- No Star drafts are waiting for approval.']),
     '',
     'Verification inbox:',
     ...(verificationItems.length ? verificationItems.slice(0, 20).map(item => '- ' + item.type + ' | ' + item.customer + ' | ' + item.detail) : ['- No customer proof, paid-outside, service, toll, claim, or document review items waiting.']),
@@ -1231,6 +1277,11 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       stalePaymentRequests: stalePaymentRequests.length,
       stalePaymentRequestAmount,
       paymentRequestRows: paymentRequestRows.slice(0, 50),
+      openCardSetupRequests: openCardSetupRequests.length,
+      staleCardSetupRequests: staleCardSetupRequests.length,
+      cardSetupRows: cardSetupRows.slice(0, 50),
+      pendingStarApprovals: pendingStarApprovals.length,
+      starApprovalRows: starApprovalRows.slice(0, 50),
       verificationItems: verificationItems.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
       auditEvents: auditEvents.length,
@@ -3491,6 +3542,13 @@ function cardSetupRequestAgeHours(row = {}, now = new Date()) {
   const created = raw ? new Date(raw) : null;
   if (!created || Number.isNaN(created.getTime())) return 0;
   return Math.max(0, Math.floor((now.getTime() - created.getTime()) / 3600000));
+}
+function cardSetupRequestAgeLabel(row = {}, now = new Date()) {
+  const hours = cardSetupRequestAgeHours(row, now);
+  if (hours >= 48) return Math.floor(hours / 24) + ' days open';
+  if (hours >= 24) return '1 day open';
+  if (hours >= 1) return hours + ' hour' + (hours === 1 ? '' : 's') + ' open';
+  return 'New link';
 }
 function staleOpenCardSetupRequests(rows = [], now = new Date()) {
   return rows.filter(row => isOpenCardSetupRequest(row) && cardSetupRequestAgeHours(row, now) >= 24);

@@ -29,6 +29,7 @@ Completed in this build pass:
 - Backend Star QA, reports, and system health now include default API provider readiness rows even before any provider records are manually created, so Clover, SMS, email, EZPass, insurance, tracker, accounting, marketing, and billing gaps stay visible.
 - Live-data protection now clearly reports when `data.json` has local business-data edits that are safely unstaged, instead of silently passing.
 - Star QA, system health, readiness, and deep reports now surface open card setup/change links and pending Star approvals so unfinished customer card setup and AI review work cannot hide in Messages.
+- Daily closeout notifications now include open card setup/change links and pending Star approvals with customer context, so end-of-day review catches unfinished card setup and AI approval work.
 
 Checks passed at this checkpoint:
 
