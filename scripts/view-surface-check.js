@@ -507,7 +507,7 @@ assertIncludes('Recurring customer portal card actions', recurringCardActionButt
 const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
 const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
 const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
-const starHealth = finalFunctionSlice(app, 'starSystemHealthPanel');
+const starHealth = finalFunctionSlice(app, 'starSystemHealthPanelFresh') || finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
 const starExport = finalFunctionSlice(app, 'starSystemHealthExport');
 const trackerStatus = finalFunctionSlice(app, 'vehicleTrackingStatus');
@@ -517,12 +517,12 @@ assertIncludes('Staff service cards', staffServiceCard + app + css, ['roleName()
 assertIncludes('Staff claim cards', staffClaimCard + app + css, ['isMechanicVisibleClaim', 'roleName()===\'mechanic\'', 'Vehicle issue', 'open-claim', 'send-claim-link', 'claimMatchNote', 'proofLine', 'Open proof', 'proof-line', 'mechanic?\'vehicle issues\'']);
 assertIncludes('Tracker health layer', trackerStatus + app, ['Tracker offline', 'Tracker stale', 'Tracker setup', 'trackerLastPing', 'trackerLocation']);
 assertIncludes('Staff fleet tracker cards', staffFleetCard, ['vehicleTrackingBadge', 'vehicleTrackingLine', 'Assignment conflict', 'compact-conflict', 'Claimed by']);
-assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Vehicle assignment conflicts', 'assignmentConflicts', 'Open payment links', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review', 'Dispute match review', 'Toll/violation recovery', 'tollRecovery', 'API provider readiness', 'apiProviderReviewRows', 'Customer portal access', 'missingCustomerPortals', 'Sensitive changes', 'Verification inbox', 'Customer proof, paid-outside, service, toll, claim, and document reviews should be cleared before closeout', 'customer uploads stay pending until staff approves']);
+assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Vehicle assignment conflicts', 'assignmentConflicts', 'Open payment links', 'Open card setup links', 'Pending Star approvals', 'openCardSetupLinks', 'pendingStarApprovals', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review', 'Dispute match review', 'Toll/violation recovery', 'tollRecovery', 'API provider readiness', 'apiProviderReviewRows', 'Customer portal access', 'missingCustomerPortals', 'Sensitive changes', 'Verification inbox', 'Customer proof, paid-outside, service, toll, claim, and document reviews should be cleared before closeout', 'customer uploads stay pending until staff approves']);
 assertIncludes('Star QA manager suggestions', starQaManager, ['Star QA manager', 'Fix first', 'Contact failed-twice customers', 'Review dispute matches', 'Review toll/violation recovery', 'Finish API provider readiness', 'Resolve vehicle assignment conflicts', 'Link autopay to vehicles', 'Clear verification inbox', 'Create customer portal logins', 'Follow up open payment links', 'Verify customer uploads', 'Review today sensitive changes']);
 assertIncludes('Star QA fallback report export', starExport, ['Customer portal access', 'missingCustomerPortalRecords', 'Toll/violation recovery', 'tollReview', 'API provider readiness', 'apiReview', 'need customer/vehicle/plate review before charge or message']);
 assertIncludes('Operations queue assignment conflicts', operationsQueue, ['Assignment conflict', 'Claimed by', 'assignmentConflict', 'Resolve', 'view:"Operations"', 'tab:"Assigned"']);
 assertIncludes('Clover dispute match note', claimMatchNote, ['Needs payment/customer match', 'Matched: ', 'customerMatchSource', 'apply-claim-match', 'candidate.vin', 'candidate.plate', 'candidate.tracker', 'matchReason']);
-assertIncludes('Star QA health panel', starHealth, ['Star QA', 'Missing VIN', 'Unmatched payments', 'Setup / not found', 'Provider setup needed before live SMS sends']);
+assertIncludes('Star QA health panel', starHealth, ['Star QA', 'Missing VIN', 'Unmatched payments', 'Setup / not found', 'Open card setup links', 'Pending Star approvals', 'Provider setup needed before live SMS sends']);
 
 const quickbar = finalFunctionSlice(app, 'mobileQuickbar');
 assertStringsInclude('Mobile quickbar labels', quickbar, ['Dashboard', 'Payments', 'Operations', 'Messages', 'Settings', 'Manager Portal', 'Reports', 'Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
