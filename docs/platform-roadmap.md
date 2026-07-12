@@ -51,6 +51,7 @@ Completed in this build pass:
 - Staff, customer, and account password changes now share one password policy requiring at least 8 characters plus a letter and number before any password hash is created.
 - Staff PIN-only login is now disabled by default; manager/mechanic accounts require username/password while owner PIN remains the separate backup path.
 - Manual customer SMS/email sends, drafts, and provider failures now create owner audit-log rows with customer, channel, status, and vehicle/VIN context so communication actions are traceable.
+- Star draft creation now writes owner audit-log rows for normal replies, approval-needed drafts, human-review drafts, and safe payment/card setup link prep with customer, channel, action, and vehicle/VIN context.
 
 Checks passed at this checkpoint:
 

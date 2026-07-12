@@ -7440,6 +7440,21 @@ const server = http.createServer(async (req, res) => {
         body: payload.body || payload.message || (sourceMessage && sourceMessage.body) || ''
       };
       const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true, user });
+      if (!aiResult.existing) {
+        const plan = aiResult.plan || {};
+        const draft = aiResult.draft || {};
+        const action = plan.needsHuman
+          ? 'Star AI human review drafted'
+          : (plan.approvalRequired ? 'Star AI approval drafted' : 'Star AI reply drafted');
+        appendAuditLog(data, user, action, [
+          draft.customer || plan.customer || 'Unknown customer',
+          draft.deliveryChannel || request.channel || 'Message',
+          plan.actionType || draft.template || 'reply',
+          draft.vehicle || draft.vin || draft.plate || 'No vehicle linked',
+          plan.related && plan.related.paymentLinkUrl ? 'Payment link prepared' : '',
+          plan.related && plan.related.cardSetupUrl ? 'Card setup link prepared' : ''
+        ]);
+      }
       data.integrations = data.integrations || {};
       data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiDraftAt: new Date().toISOString(), lastError: '' };
       await writeData(data);

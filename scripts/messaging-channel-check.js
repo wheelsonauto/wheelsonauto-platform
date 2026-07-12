@@ -124,6 +124,10 @@ requireText('Message send linked vehicle', server, 'vehicleId: payload.vehicleId
 requireText('Message send audit trail', server, 'Customer message sent');
 requireText('Message draft audit trail', server, 'Customer message drafted');
 requireText('Message failure audit trail', server, 'Customer message failed');
+requireText('Star reply draft audit trail', server, 'Star AI reply drafted');
+requireText('Star approval draft audit trail', server, 'Star AI approval drafted');
+requireText('Star human review draft audit trail', server, 'Star AI human review drafted');
+requireText('Star safe link audit detail', server, 'Card setup link prepared');
 requireText('Star draft linked vehicle', createAiMessageDraft, 'vehicleId: messageFields.vehicleId');
 requireText('Star draft linked company', createAiMessageDraft, 'organizationId: messageFields.organizationId || MAIN_ORG_ID');
 requireText('Star approval keeps linked VIN', approveAiMessage, 'vin: draft.vin ||');

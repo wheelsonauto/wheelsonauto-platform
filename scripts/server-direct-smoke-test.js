@@ -1575,6 +1575,7 @@ async function main() {
     assert(starCardSetup.json.plan.related.cardSetupRequestId, 'Star card setup should save the setup request ID.');
     const starCardState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((starCardState.json.cardSetupRequests || []).some(request => request.id === starCardSetup.json.plan.related.cardSetupRequestId && request.recurringPaymentId === 'direct-autopay-fail-once'), 'Star card setup request should attach to the existing autopay row.');
+    assert((starCardState.json.auditLogs || []).some(row => row.action === 'Star AI reply drafted' && String(row.details || '').includes('Direct Failed Once') && String(row.details || '').includes('Card setup link prepared')), 'Star card setup drafts should create an owner audit trail.');
     const starCardSetupPage = await request(server, 'GET', '/setup-card/' + starCardSetup.json.plan.related.cardSetupRequestId);
     assert(starCardSetupPage.status === 200 && starCardSetupPage.text.includes('Set up automatic payments') && starCardSetupPage.text.includes('Direct Failed Once'), 'Star-created card setup page should render for the customer.');
     assert(!starCardSetupPage.text.includes('secret-source-token') && !starCardSetupPage.text.includes('secret-payment-token') && !starCardSetupPage.text.includes('secret-raw-value'), 'Star-created card setup page should not expose private payment tokens.');
@@ -1657,7 +1658,7 @@ async function main() {
     const ownerAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const auditLogs = ownerAuditState.json.auditLogs || [];
     const auditActions = auditLogs.map(row => row.action);
-    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Star AI reply approved'].forEach(action => {
+    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
       assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
     });
     assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');
