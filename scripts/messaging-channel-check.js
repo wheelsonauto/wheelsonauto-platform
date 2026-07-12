@@ -49,9 +49,11 @@ const approveAiMessage = finalFunctionSlice(server, 'approveAiMessage');
 const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus');
 const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotification');
 const queueOwnerEmailNotification = finalFunctionSlice(server, 'queueOwnerEmailNotification');
+const messageContextFields = finalFunctionSlice(server, 'messageContextFields');
+const createAiMessageDraft = finalFunctionSlice(server, 'createAiMessageDraft');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !createAiMessageDraft) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging notification status', messagingStatus, 'notificationEmail');
@@ -109,5 +111,17 @@ requireText('Daily closeout signoff snapshot', server, 'signoffSnapshot');
 requireText('Daily closeout assignment conflict body', server, 'Vehicle assignment conflicts:');
 requireText('Card setup completion notification', server, 'card_setup_completed');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
+requireText('Message context helper vehicle id', messageContextFields, 'vehicleId');
+requireText('Message context helper company scope', messageContextFields, 'organizationId');
+requireText('Message context helper VIN', messageContextFields, 'vin');
+requireText('Message context helper tag', messageContextFields, 'licensePlate');
+requireText('Message context helper tracker', messageContextFields, 'tracker');
+requireText('Message send context helper', server, 'const messageFields = messageContextFields(context, payload)');
+requireText('Message send linked customer file', server, 'customerId: messageFields.customerId');
+requireText('Message send linked company', server, 'organizationId: messageFields.organizationId || userOrganizationId(user)');
+requireText('Message send linked vehicle', server, 'vehicleId: payload.vehicleId || messageFields.vehicleId');
+requireText('Star draft linked vehicle', createAiMessageDraft, 'vehicleId: messageFields.vehicleId');
+requireText('Star draft linked company', createAiMessageDraft, 'organizationId: messageFields.organizationId || MAIN_ORG_ID');
+requireText('Star approval keeps linked VIN', approveAiMessage, 'vin: draft.vin ||');
 
 console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, notification email, and channel UI are wired.');

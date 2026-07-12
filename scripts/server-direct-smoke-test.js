@@ -1162,6 +1162,16 @@ async function main() {
     assert([200, 202].includes(notificationTest.status) && notificationTest.json.ok, 'Owner notification test failed.');
     assert(notificationTest.json.message.channel === 'Email', 'Notification test should save an Email message.');
     assert(notificationTest.json.message.direction === 'Outbound notification', 'Notification test should save as an outbound notification.');
+    const linkedOutboundMessage = await request(server, 'POST', '/api/messages/send', {
+      cookie: ownerCookie,
+      json: {
+        customer: 'Alicia Brown',
+        body: 'Direct smoke linked outbound message.',
+        channel: 'SMS'
+      }
+    });
+    assert([200, 202].includes(linkedOutboundMessage.status) && linkedOutboundMessage.json.ok, 'Linked outbound customer message failed.');
+    assert(linkedOutboundMessage.json.message.customer === 'Alicia Brown' && linkedOutboundMessage.json.message.vehicleId === 'veh-003' && linkedOutboundMessage.json.message.vin === '3LN6L2G91FR123456' && linkedOutboundMessage.json.message.plate === 'LNZ-229' && linkedOutboundMessage.json.message.tracker === 'Bouncie' && linkedOutboundMessage.json.message.recurringPaymentId === 'rec-001' && Number(linkedOutboundMessage.json.message.amount) === 229, 'Outbound messages should carry customer, recurring, vehicle, VIN/tag, tracker, and amount context: ' + JSON.stringify(linkedOutboundMessage.json.message));
     const closeoutDedupState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const closeoutDedupData = JSON.parse(JSON.stringify(closeoutDedupState.json));
     closeoutDedupData.recurringPayments = closeoutDedupData.recurringPayments || [];

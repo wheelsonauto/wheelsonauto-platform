@@ -1857,28 +1857,33 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
   const phone = phoneKey(payload.phone || payload.from || contact.phone || '');
   const email = emailKey(payload.email || contact.email || '');
   const name = normKey(payload.customer || contact.name || payload.name || '');
-  const recurringRows = allRecurringRows(data);
+  let preferredOrgId = String(payload.organizationId || payload.orgId || payload.companyId || userOrganizationId(user) || MAIN_ORG_ID).trim() || MAIN_ORG_ID;
   let recurring = null;
   if (payload.recurringPaymentId || payload.id) recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+  if (recurring && !payload.organizationId && !payload.orgId && !payload.companyId) preferredOrgId = rowOrganizationId(recurring);
+  const inPreferredOrg = row => rowOrganizationId(row) === preferredOrgId;
+  const recurringRows = allRecurringRows(data).filter(inPreferredOrg);
+  if (recurring && !inPreferredOrg(recurring)) recurring = null;
   if (!recurring && phone) recurring = recurringRows.find(row => phoneKey(row.phone) === phone);
   if (!recurring && email) recurring = recurringRows.find(row => emailKey(row.email) === email);
   if (!recurring && name) recurring = recurringRows.find(row => softNameMatch(row.customer, name));
-  const customerRows = data.customers || [];
+  const customerRows = (data.customers || []).filter(inPreferredOrg);
   let customer = null;
   if (phone) customer = customerRows.find(row => phoneKey(row.phone) === phone);
   if (!customer && email) customer = customerRows.find(row => emailKey(row.email) === email);
   if (!customer && name) customer = customerRows.find(row => softNameMatch(row.name || row.customer, name));
-  const contractRows = data.contracts || [];
+  const contractRows = (data.contracts || []).filter(inPreferredOrg);
   let contract = null;
   if (phone) contract = contractRows.find(row => phoneKey(row.phone) === phone);
   if (!contract && email) contract = contractRows.find(row => emailKey(row.email) === email);
   if (!contract && name) contract = contractRows.find(row => softNameMatch(row.customer || row.name, name));
   const customerName = (recurring && recurring.customer) || (customer && (customer.name || customer.customer)) || (contract && (contract.customer || contract.name)) || contact.name || payload.customer || payload.from || 'Customer';
   const vehicleId = (recurring && recurring.vehicleId) || (customer && customer.vehicleId) || (contract && contract.vehicleId) || '';
-  let vehicle = vehicleId ? (data.vehicles || []).find(row => row.id === vehicleId) : null;
-  if (!vehicle && customerName) vehicle = (data.vehicles || []).find(row => softNameMatch(row.currentCustomer || row.customer, customerName));
+  const vehicleRows = (data.vehicles || []).filter(inPreferredOrg);
+  let vehicle = vehicleId ? vehicleRows.find(row => row.id === vehicleId) : null;
+  if (!vehicle && customerName) vehicle = vehicleRows.find(row => softNameMatch(row.currentCustomer || row.customer, customerName));
   const vehicleName = vehicle ? vehicleNameFromParts(vehicle) : ((recurring && recurring.vehicle) || (customer && customer.vehicle) || (contract && contract.vehicle) || '');
-  if (!vehicle && vehicleName) vehicle = (data.vehicles || []).find(row => normKey(vehicleNameFromParts(row)) === normKey(vehicleName));
+  if (!vehicle && vehicleName) vehicle = vehicleRows.find(row => normKey(vehicleNameFromParts(row)) === normKey(vehicleName));
   const latestPayment = aiLatestPayment(data, { customerName, recurring });
   const maintenance = (data.maintenance || []).filter(row => {
     if (vehicle && (row.vehicleId === vehicle.id || normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)))) return true;
@@ -1898,8 +1903,9 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
   return {
     contact,
     customerName,
-    phone: payload.phone || contact.phone || (recurring && recurring.phone) || (customer && customer.phone) || (contract && contract.phone) || '',
-    email: payload.email || contact.email || (recurring && recurring.email) || (customer && customer.email) || (contract && contract.email) || '',
+    organizationId: preferredOrgId,
+    phone: payload.phone || (recurring && recurring.phone) || (customer && customer.phone) || (contract && contract.phone) || contact.phone || '',
+    email: payload.email || (recurring && recurring.email) || (customer && customer.email) || (contract && contract.email) || contact.email || '',
     recurring,
     customer,
     contract,
@@ -1948,6 +1954,31 @@ function aiContextSummary(context) {
     maintenance: context.maintenance.map(row => ({ id: row.id || '', vehicle: row.vehicle || context.vehicleName || '', type: row.type || row.issue || 'Service', due: row.due || row.nextDue || '', status: row.status || '' })),
     modules: context.platformModules,
     systemHealth: context.systemHealth
+  };
+}
+function messageContextFields(context = {}, payload = {}) {
+  const recurring = context.recurring || {};
+  const customer = context.customer || {};
+  const contract = context.contract || {};
+  const vehicle = context.vehicle || {};
+  const licensePlate = String(payload.licensePlate || payload.plate || vehicle.plate || vehicle.licensePlate || vehicle.stock || recurring.licensePlate || recurring.plate || customer.licensePlate || contract.licensePlate || '').trim();
+  const amount = Number(payload.amount || recurring.amount || recurring.weeklyAmount || customer.weeklyAmount || contract.weekly || vehicle.rate || 0);
+  return {
+    customer: context.customerName || payload.customer || payload.name || '',
+    organizationId: context.organizationId || payload.organizationId || payload.orgId || payload.companyId || '',
+    phone: context.phone || payload.phone || payload.from || payload.to || '',
+    email: context.email || payload.email || '',
+    customerId: customer.id || payload.customerId || '',
+    contractId: contract.id || payload.contractId || '',
+    recurringPaymentId: payload.recurringPaymentId || recurring.id || '',
+    vehicleId: payload.vehicleId || vehicle.id || recurring.vehicleId || customer.vehicleId || contract.vehicleId || '',
+    vehicle: payload.vehicle || context.vehicleName || recurring.vehicle || customer.vehicle || contract.vehicle || '',
+    vin: payload.vin || vehicle.vin || recurring.vin || customer.vin || contract.vin || '',
+    licensePlate,
+    plate: licensePlate,
+    tracker: payload.tracker || vehicle.tracker || vehicle.gps || recurring.tracker || customer.tracker || contract.tracker || '',
+    amount: Number.isFinite(amount) && amount > 0 ? amount : '',
+    frequency: payload.frequency || recurring.frequency || ''
   };
 }
 function aiPlanRules(data, payload = {}, context = null) {
@@ -2202,14 +2233,16 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
   const duplicateKey = String(options.sourceMessageId || payload.messageId || payload.externalId || '');
   const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
   if (existing && !options.forceNew) return { plan, draft: existing, existing: true };
+  const messageFields = messageContextFields(context, { ...payload, customer: plan.customer || context.customerName });
   const stamp = new Date();
   const draft = {
     id: 'msg-ai-' + Date.now() + '-' + Math.random().toString(16).slice(2, 7),
     date: stamp.toLocaleString('en-US'),
     createdAt: stamp.toISOString(),
-    customer: plan.customer || context.customerName || 'Customer',
-    phone: plan.phone || context.phone || payload.phone || '',
-    email: context.email || payload.email || '',
+    customer: messageFields.customer || plan.customer || context.customerName || 'Customer',
+    organizationId: messageFields.organizationId || MAIN_ORG_ID,
+    phone: plan.phone || messageFields.phone || context.phone || payload.phone || '',
+    email: messageFields.email || context.email || payload.email || '',
     direction: plan.needsHuman ? 'AI action' : 'AI draft',
     channel: 'Star AI',
     deliveryChannel: payload.channel || payload.deliveryChannel || (context.phone ? 'SMS' : (context.email ? 'Email' : 'SMS')),
@@ -2220,7 +2253,17 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
     body: plan.reply,
     aiPlan: plan,
     aiSourceMessageId: duplicateKey,
-    recurringPaymentId: plan.related && plan.related.recurringPaymentId || '',
+    customerId: messageFields.customerId,
+    contractId: messageFields.contractId,
+    recurringPaymentId: plan.related && plan.related.recurringPaymentId || messageFields.recurringPaymentId,
+    vehicleId: messageFields.vehicleId,
+    vehicle: messageFields.vehicle,
+    vin: messageFields.vin,
+    licensePlate: messageFields.licensePlate,
+    plate: messageFields.plate,
+    tracker: messageFields.tracker,
+    amount: messageFields.amount,
+    frequency: messageFields.frequency,
     claimId: plan.related && plan.related.claimId || '',
     source: 'WheelsonAuto Star AI'
   };
@@ -2247,6 +2290,7 @@ async function approveAiMessage(data, payload = {}) {
     date: new Date().toLocaleString('en-US'),
     createdAt: new Date().toISOString(),
     customer: draft.customer,
+    organizationId: draft.organizationId || MAIN_ORG_ID,
     phone: draft.phone,
     email: draft.email || '',
     direction: 'Outbound',
@@ -2259,7 +2303,19 @@ async function approveAiMessage(data, payload = {}) {
     provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
     source: result.sent ? ('Star AI + ' + channel + ' provider') : 'Star AI draft',
     aiApprovedAt: new Date().toISOString(),
-    aiDraftId: draft.id
+    aiDraftId: draft.id,
+    customerId: draft.customerId || '',
+    contractId: draft.contractId || '',
+    recurringPaymentId: draft.recurringPaymentId || '',
+    vehicleId: draft.vehicleId || '',
+    vehicle: draft.vehicle || '',
+    vin: draft.vin || '',
+    licensePlate: draft.licensePlate || draft.plate || '',
+    plate: draft.plate || draft.licensePlate || '',
+    tracker: draft.tracker || '',
+    amount: draft.amount || '',
+    frequency: draft.frequency || '',
+    claimId: draft.claimId || ''
   };
   draft.status = result.sent ? 'Approved + sent' : 'Approved + saved';
   draft.tone = sent.tone;
@@ -7262,13 +7318,15 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.integrations = data.integrations || {};
-      const contact = findMessageContact(data, payload);
+      const context = aiFindCustomerContext(data, payload, user);
+      const contact = context.contact || findMessageContact(data, payload);
       const channel = String(payload.channel || payload.deliveryChannel || 'SMS').toLowerCase() === 'email' ? 'Email' : 'SMS';
-      const phone = payload.phone || contact.phone || '';
-      const email = payload.email || contact.email || '';
+      const messageFields = messageContextFields(context, payload);
+      const phone = payload.phone || messageFields.phone || contact.phone || '';
+      const email = payload.email || messageFields.email || contact.email || '';
       const to = channel === 'Email' ? email : phone;
       const body = String(payload.body || payload.message || '').trim();
-      const customer = payload.customer || contact.name || 'Customer';
+      const customer = payload.customer || messageFields.customer || contact.name || 'Customer';
       if (!body) return json(res, 400, { ok: false, error: 'Message body is required.' });
       let result;
       try {
@@ -7282,6 +7340,7 @@ const server = http.createServer(async (req, res) => {
           date: new Date().toLocaleString('en-US'),
           createdAt: new Date().toISOString(),
           customer,
+          organizationId: messageFields.organizationId || userOrganizationId(user),
           phone,
           email,
           to,
@@ -7295,8 +7354,18 @@ const server = http.createServer(async (req, res) => {
           provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
           source: result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
           ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER,
+          customerId: messageFields.customerId,
+          contractId: messageFields.contractId,
           paymentId: payload.paymentId || '',
-          recurringPaymentId: payload.recurringPaymentId || '',
+          recurringPaymentId: payload.recurringPaymentId || messageFields.recurringPaymentId,
+          vehicleId: payload.vehicleId || messageFields.vehicleId,
+          vehicle: payload.vehicle || messageFields.vehicle,
+          vin: payload.vin || messageFields.vin,
+          licensePlate: payload.licensePlate || payload.plate || messageFields.licensePlate,
+          plate: payload.plate || payload.licensePlate || messageFields.plate,
+          tracker: payload.tracker || messageFields.tracker,
+          amount: payload.amount || messageFields.amount,
+          frequency: payload.frequency || messageFields.frequency,
           claimId: payload.claimId || ''
         };
         data.messages.unshift(record);
@@ -7309,6 +7378,7 @@ const server = http.createServer(async (req, res) => {
           date: new Date().toLocaleString('en-US'),
           createdAt: new Date().toISOString(),
           customer,
+          organizationId: messageFields.organizationId || userOrganizationId(user),
           phone,
           email,
           direction: 'Outbound',
@@ -7320,8 +7390,18 @@ const server = http.createServer(async (req, res) => {
           body,
           provider: channel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
           source: channel + ' provider',
+          customerId: messageFields.customerId,
+          contractId: messageFields.contractId,
           paymentId: payload.paymentId || '',
-          recurringPaymentId: payload.recurringPaymentId || '',
+          recurringPaymentId: payload.recurringPaymentId || messageFields.recurringPaymentId,
+          vehicleId: payload.vehicleId || messageFields.vehicleId,
+          vehicle: payload.vehicle || messageFields.vehicle,
+          vin: payload.vin || messageFields.vin,
+          licensePlate: payload.licensePlate || payload.plate || messageFields.licensePlate,
+          plate: payload.plate || payload.licensePlate || messageFields.plate,
+          tracker: payload.tracker || messageFields.tracker,
+          amount: payload.amount || messageFields.amount,
+          frequency: payload.frequency || messageFields.frequency,
           claimId: payload.claimId || '',
           error: String(err && err.message || err)
         };
