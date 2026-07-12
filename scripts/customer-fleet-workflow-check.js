@@ -43,6 +43,10 @@ const customerFileOptions = finalFunctionSlice(app, 'customerFileVehicleOptions'
 const saveContractHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='save-contract-file')"), app.indexOf("function reactivateCustomerModal", app.indexOf("if(!b||b.dataset.action!=='save-contract-file')")));
 const saveVehicleHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='save-vehicle')"), app.indexOf("function openMaintenanceModal", app.indexOf("if(!b||b.dataset.action!=='save-vehicle')")));
 const endCustomer = finalFunctionSlice(app, 'confirmEndCustomerFile');
+const tollParser = finalFunctionSlice(app, 'parseTollImportRows');
+const tollMatcher = finalFunctionSlice(app, 'matchTollImportRow');
+const tollClaim = finalFunctionSlice(app, 'tollImportClaim');
+const tollSave = finalFunctionSlice(app, 'saveTollImport');
 const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
 const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/update'", server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')")));
 
@@ -100,6 +104,38 @@ const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/ap
   "view='Payments'",
   "tab='History'"
 ].forEach(text => requireText('End customer return workflow', endCustomer, text));
+
+[
+  'JSON.parse',
+  'provider',
+  'amount'
+].forEach(text => requireText('Manual toll import parser', tollParser, text));
+
+[
+  'licenseplate',
+  'v.plate',
+  'v.stock',
+  'v.tempTag',
+  'v.vin',
+  'currentCustomer',
+  'existingCustomerProfile'
+].forEach(text => requireText('Manual toll import matching', tollMatcher, text));
+
+[
+  'vehicleId',
+  'vin',
+  'plate',
+  'customerMatchStatus',
+  'Matched from toll import',
+  'Needs payment/customer match',
+  'Manual toll import'
+].forEach(text => requireText('Manual toll import claim truth layer', tollClaim, text));
+
+[
+  'db.claims.unshift',
+  'logMessage',
+  'Toll / violation imported'
+].forEach(text => requireText('Manual toll import save flow', tollSave, text));
 
 [
   'previousCustomer',
