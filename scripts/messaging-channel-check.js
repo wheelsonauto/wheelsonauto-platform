@@ -76,6 +76,7 @@ requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/sen
 requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');
 requireText('Owner notification event filter', queueOwnerEmailNotification, 'settings.events.includes(event)');
 requireText('Daily closeout notification payload', server, 'dailyCloseoutNotificationPayload');
+requireText('Card setup completion notification', server, 'card_setup_completed');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
 
 console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, notification email, and channel UI are wired.');

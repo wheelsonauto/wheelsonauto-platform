@@ -513,7 +513,7 @@ function emailNotificationSettings(data = {}) {
   return {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
     emailRecipients: recipients.map(item => String(item || '').trim()).filter(Boolean),
-    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset'],
+    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed'],
     lastTestAt: saved.lastTestAt || '',
     lastError: saved.lastError || ''
   };
@@ -3617,6 +3617,20 @@ async function completeCardSetup(data, request, payload) {
   const existing = data.customers.find(c => String(c.name || '').toLowerCase() === String(request.customer || '').toLowerCase());
   const customerPatch = { cloverCustomerId: customer.id || '', cardLast4: payload.last4 || savedCard.last4 || '', cardLabel: payload.brand || savedCard.brand || savedCard.cardBrand || '', source: 'WheelsonAuto card setup' };
   if (existing) Object.assign(existing, customerPatch);
+  await queueOwnerEmailNotification(data, 'card_setup_completed', {
+    customer: request.customer || 'Customer',
+    subject: 'Card on file saved - ' + (request.customer || 'Customer'),
+    body: [
+      'A customer saved or updated a card on file through WheelsonAuto.',
+      'Customer: ' + (request.customer || 'Customer'),
+      'Vehicle: ' + (request.vehicle || request.vin || 'Not linked'),
+      'Amount: ' + moneyText(request.amount || 0),
+      'Frequency: ' + (request.frequency || 'Not set'),
+      'Next run: ' + (request.firstRun || 'Not set'),
+      'Card: ' + ([customerPatch.cardLabel, customerPatch.cardLast4 && ('ending ' + customerPatch.cardLast4)].filter(Boolean).join(' ') || 'Saved in Clover'),
+      'Mode: ' + (request.cardOnlyUpdate ? 'Card change' : 'New setup')
+    ].join('\n')
+  });
   await writeData(data);
   return { customer, subscription, recurring: recurringRows[0] || null };
 }
