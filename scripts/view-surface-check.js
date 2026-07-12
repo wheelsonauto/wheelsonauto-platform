@@ -90,6 +90,7 @@ function renderViews() {
   'starQaManagerPanel',
   'staffServiceCard',
   'staffClaimCard',
+  'proofLine',
   'paymentRecurringCard',
   'paymentCustomerCard',
   'paymentCardSection',
@@ -417,8 +418,8 @@ const starHealth = finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
 const trackerStatus = finalFunctionSlice(app, 'vehicleTrackingStatus');
 const staffFleetCard = finalFunctionSlice(app, 'staffFleetCard');
-assertIncludes('Staff service cards', staffServiceCard, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance']);
-assertIncludes('Staff claim cards', staffClaimCard, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link', 'claimMatchNote']);
+assertIncludes('Staff service cards', staffServiceCard + app + css, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance', 'proofLine', 'Open proof', 'proof-line']);
+assertIncludes('Staff claim cards', staffClaimCard + app + css, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link', 'claimMatchNote', 'proofLine', 'Open proof', 'proof-line']);
 assertIncludes('Tracker health layer', trackerStatus + app, ['Tracker offline', 'Tracker stale', 'Tracker setup', 'trackerLastPing', 'trackerLocation']);
 assertIncludes('Staff fleet tracker cards', staffFleetCard, ['vehicleTrackingBadge', 'vehicleTrackingLine']);
 assertIncludes('Star QA truth-layer checks', starHealth, ['Autopay vehicle link', 'missingVehicle', 'Active autopay rows need car, VIN, tag, and tracker', 'Tracker review', 'Sensitive changes', 'customer uploads stay pending until staff approves']);
