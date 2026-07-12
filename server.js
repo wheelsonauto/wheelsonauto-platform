@@ -1085,6 +1085,8 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const cloverCollected = cloverPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const expected = recurring.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
   const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const openPaymentRequests = (data.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
+  const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const recurringWithState = recurring.map(row => ({ row, state: closeoutRecurringState(row, dateKeyValue) }));
   const failedOnce = recurringWithState.filter(item => item.state === 'Failed once').map(item => item.row);
   const failedTwice = recurringWithState.filter(item => item.state === 'Failed twice').map(item => item.row);
@@ -1115,6 +1117,22 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     .concat(paymentNotFound.map(row => closeoutContactItem(row, 'Payment not found - verify Clover/card')))
     .concat(failedOnce.map(row => closeoutContactItem(row, 'Failed once - retry watch')))
     .concat(setupNeeded.map(row => closeoutContactItem(row, 'Setup needed - send card link')));
+  const paymentRequestRows = openPaymentRequests.map(request => {
+    const recurringRow = request.recurringPaymentId ? allRecurringRows(data).find(row => row.id === request.recurringPaymentId) : null;
+    const customer = request.customer || (recurringRow && recurringRow.customer) || 'Unassigned payment link';
+    const vehicle = reportVehicleFor(data, customer, request.vehicleId || (recurringRow && recurringRow.vehicleId));
+    return {
+      customer,
+      amount: Number(request.amount || 0),
+      status: request.status || 'Open',
+      createdAt: request.createdAt || request.date || '',
+      url: request.url || '',
+      vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (request.vehicle || (recurringRow && recurringRow.vehicle) || ''),
+      vin: vehicle.vin || request.vin || (recurringRow && recurringRow.vin) || '',
+      tag: vehicle.plate || vehicle.stock || request.licensePlate || request.plate || (recurringRow && (recurringRow.licensePlate || recurringRow.plate)) || '',
+      tracker: vehicle.tracker || request.tracker || (recurringRow && recurringRow.tracker) || ''
+    };
+  });
   const verificationItems = closeoutVerificationItems(data);
   const assignmentConflicts = assignmentConflictRows(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
@@ -1138,6 +1156,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Paid outside app: ' + paidOutsidePayments.length + ' / ' + moneyText(paidOutsideAmount),
     'Clover collected: ' + moneyText(cloverCollected),
     'Today transactions recorded: ' + payments.length,
+    'Open payment requests: ' + openPaymentRequests.length + ' / ' + moneyText(openPaymentRequestAmount),
     'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
     'Vehicle assignment conflicts: ' + assignmentConflicts.length,
@@ -1153,6 +1172,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Recent transactions:',
     ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + closeoutPaymentCustomerName(data, payment, recurring) + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.']),
+    '',
+    'Open payment requests:',
+    ...(paymentRequestRows.length ? paymentRequestRows.slice(0, 20).map(item => '- ' + item.customer + ' | ' + moneyText(item.amount) + ' | ' + item.status + ' | ' + (item.vehicle || item.vin || item.tag || 'No vehicle linked') + (item.vin ? ' | VIN ' + item.vin : '') + (item.tag ? ' | Tag ' + item.tag : '') + (item.url ? ' | ' + item.url : '')) : ['- No open hosted checkout links waiting.']),
     '',
     'Verification inbox:',
     ...(verificationItems.length ? verificationItems.slice(0, 20).map(item => '- ' + item.type + ' | ' + item.customer + ' | ' + item.detail) : ['- No customer proof, paid-outside, service, toll, claim, or document review items waiting.']),
@@ -1190,6 +1212,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       cloverTransactions: cloverPayments.length,
       paidTransactions: paidPayments.length,
       transactions: payments.length,
+      openPaymentRequests: openPaymentRequests.length,
+      openPaymentRequestAmount,
+      paymentRequestRows: paymentRequestRows.slice(0, 50),
       verificationItems: verificationItems.length,
       vehicleAssignmentConflicts: assignmentConflicts.length,
       auditEvents: auditEvents.length,
