@@ -502,7 +502,7 @@ function publicSmoke() {
 function heavyMessagesReportsSmoke() {
   const context = makeContext({ name: 'Owner Heavy Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
   const customers = context.db.contracts || [];
-  context.db.messages = Array.from({ length: 420 }, (_, i) => {
+  context.db.messages = Array.from({ length: 5000 }, (_, i) => {
     const customer = customers[i % Math.max(1, customers.length)] || {};
     const name = customer.customer || 'Heavy Customer ' + i;
     return {
@@ -527,6 +527,10 @@ function heavyMessagesReportsSmoke() {
   assert(history.length < 220000, 'Heavy Messages history rendered too much HTML at once.');
   const star = renderView(context, 'Messages', 'Star');
   assertHealthy('Heavy Messages Star', star, ['Star AI', 'Auto-ready replies', 'Needs admin approval']);
+  assert(star.length < 240000, 'Heavy Messages Star rendered too much HTML at once.');
+  const queue = renderView(context, 'Messages', 'Queue');
+  assertHealthy('Heavy Messages queue', queue, ['Follow-up queue']);
+  assert(queue.length < 220000, 'Heavy Messages queue rendered too much HTML at once.');
   ['Summary', 'Accounting', 'Risk', 'Pipeline'].forEach(tabName => {
     const report = renderView(context, 'Reports', tabName);
     assertHealthy('Heavy Reports ' + tabName, report, ['Reports', tabName]);
