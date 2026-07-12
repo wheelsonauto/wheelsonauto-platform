@@ -178,6 +178,9 @@ assertSetIncludes('Payments literal tabs', literalButtonTargets(payments).filter
 if (app.includes("data-tab=\"Attention\"") || app.includes("data-tab='Attention'") || app.includes(",'Attention'") || app.includes(',"Attention"')) {
   fail('Stale Payments Attention tab target found. Use Payments/Today for retry, not-found, setup, and failed-twice work.');
 }
+if (app.includes("view:'Today',tab:'Failed'") || app.includes('view:"Today",tab:"Failed"')) {
+  fail('Retry-watch work should route to Payments/Today, not the old Today/Failed view.');
+}
 
 const operations = finalFunctionSlice('Operations');
 assertSetIncludes('Operations literal tabs', literalButtonTargets(operations).filter(item => item.tab && !item.view).map(item => item.tab), ['Fleet', 'Assigned', 'Service', 'Claims']);
