@@ -156,6 +156,8 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Documents / verification',
   'reportDocumentClearedForCustomer',
   'reportClaimCandidateNote',
+  'reportPaymentCandidateNote',
+  'closeoutPaymentPossibleMatches',
   'Insurance proof',
   'Background checks',
   'dispute_match_review',

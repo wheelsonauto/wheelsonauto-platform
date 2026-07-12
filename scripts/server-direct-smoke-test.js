@@ -856,6 +856,7 @@ async function main() {
     const closeoutDedupData = JSON.parse(JSON.stringify(closeoutDedupState.json));
     closeoutDedupData.recurringPayments = closeoutDedupData.recurringPayments || [];
     closeoutDedupData.payments = closeoutDedupData.payments || [];
+    closeoutDedupData.vehicles = closeoutDedupData.vehicles || [];
     closeoutDedupData.recurringPayments.unshift({
       id: 'rec-direct-closeout-dedup',
       customer: 'Direct Closeout Customer',
@@ -867,22 +868,51 @@ async function main() {
       nextRun: '2099-12-31',
       cloverCustomerId: 'direct-closeout-clover-customer',
       status: 'Active'
+    }, {
+      id: 'rec-direct-report-candidate',
+      customer: 'Direct Report Candidate',
+      phone: '3135550456',
+      email: 'direct-report-candidate@example.com',
+      vehicleId: 'veh-direct-report-candidate',
+      vehicle: '2024 Direct Report Candidate Car',
+      amount: 456,
+      frequency: 'Weekly',
+      nextRun: '2099-12-31',
+      status: 'Active'
+    }, {
+      id: 'rec-direct-report-candidate-backup',
+      customer: 'Direct Report Candidate Backup',
+      phone: '3135551456',
+      email: 'direct-report-candidate-backup@example.com',
+      vehicleId: 'veh-direct-report-candidate-backup',
+      vehicle: '2024 Direct Report Candidate Backup',
+      amount: 456,
+      frequency: 'Weekly',
+      nextRun: '2099-12-31',
+      status: 'Active'
     });
+    closeoutDedupData.vehicles.unshift(
+      { id: 'veh-direct-report-candidate', year: 2024, make: 'Direct', model: 'Report Candidate Car', vin: 'DIRECTREPORTVIN', plate: 'DIR-RPT', tracker: 'TRK-RPT', status: 'Rented', currentCustomer: 'Direct Report Candidate' },
+      { id: 'veh-direct-report-candidate-backup', year: 2024, make: 'Direct', model: 'Report Candidate Backup', vin: 'DIRECTREPORTBACKUPVIN', plate: 'DIR-RP2', tracker: 'TRK-RP2', status: 'Rented', currentCustomer: 'Direct Report Candidate Backup' }
+    );
     closeoutDedupData.payments.unshift(
       { id: 'clover-payment-closeout-dedup-one', cloverPaymentId: 'pay-closeout-dedup', customer: 'Unmatched Clover payment', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
       { id: 'clover-payment-closeout-dedup-two', cloverPaymentId: 'pay-closeout-dedup', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'Paid', notes: 'WheelsonAuto weekly payment - Direct Closeout Customer' },
       { id: 'clover-payment-closeout-external-customer', cloverPaymentId: 'pay-closeout-external-customer', customer: 'Unmatched Clover payment', externalCustomerReference: 'direct-closeout-clover-customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 123, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
+      { id: 'clover-payment-report-candidate', cloverPaymentId: 'pay-report-candidate', customer: 'Unmatched Clover payment', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 456, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
       { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' }
     );
     const closeoutDedupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: closeoutDedupData });
     assert(closeoutDedupWrite.status === 200 && closeoutDedupWrite.json.ok, 'Owner could not seed closeout duplicate payment records.');
+    const closeoutCandidateReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
+    assert(closeoutCandidateReport.status === 200 && closeoutCandidateReport.text.includes('Possible match Direct Report Candidate') && closeoutCandidateReport.text.includes('DIRECTREPORTVIN') && closeoutCandidateReport.text.includes('Tag DIR-RPT'), 'Deep report should show possible customer/vehicle evidence for unmatched transaction rows.');
     const closeoutDedupNotification = await request(server, 'POST', '/api/notifications/daily-closeout', {
       cookie: ownerCookie,
       json: { dateKey: '2099-12-31' }
     });
     assert([200, 202].includes(closeoutDedupNotification.status) && closeoutDedupNotification.json.ok, 'Duplicate-safe daily closeout notification failed.');
-    assert(closeoutDedupNotification.json.summary.collected === 900, 'Daily closeout should dedupe duplicate Clover paid rows, resolve external customer refs, and ignore failed rows.');
-    assert(closeoutDedupNotification.json.summary.transactions === 3, 'Daily closeout should report unique transaction rows after dedupe.');
+    assert(closeoutDedupNotification.json.summary.collected === 1356, 'Daily closeout should dedupe duplicate Clover paid rows, resolve external customer refs, and ignore failed rows.');
+    assert(closeoutDedupNotification.json.summary.transactions === 4, 'Daily closeout should report unique transaction rows after dedupe.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
 
     const receiptDraft = await request(server, 'POST', '/api/messages/send', {

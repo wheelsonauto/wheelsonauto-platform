@@ -1166,6 +1166,100 @@ function reportClaimCandidateNote(claim = {}) {
     ].filter(Boolean).join(' / ');
   }).join(' || ');
 }
+function closeoutPaymentPossibleMatches(data = {}, payment = {}, recurringRows = allRecurringRows(data)) {
+  const amount = Number(payment.amount || 0);
+  const date = recordDateKey(payment.date || payment.createdAt);
+  const ids = closeoutPaymentIds(payment);
+  const seen = new Set();
+  const matches = [];
+  function add(row, reasons, score) {
+    if (!row || !row.customer) return;
+    const key = normKey(row.customer);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const vehicle = reportVehicleFor(data, row.customer, row.vehicleId);
+    const tag = vehicle.plate || vehicle.stock || row.licensePlate || row.plate || '';
+    matches.push({
+      customer: row.customer,
+      amount: Number(row.amount || row.weeklyAmount || 0),
+      date: recurringDateKey(row) || row.nextRun || row.nextPaymentDate || '',
+      vehicleId: vehicle.id || row.vehicleId || '',
+      vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || row.plan || ''),
+      vin: vehicle.vin || row.vin || '',
+      plate: tag,
+      tracker: vehicle.tracker || row.tracker || '',
+      phone: row.phone || '',
+      email: row.email || '',
+      recurringPaymentId: row.id || '',
+      cloverCustomerId: row.cloverCustomerId || '',
+      cloverSubscriptionId: row.cloverSubscriptionId || '',
+      matchReason: [...new Set(reasons)].join(', '),
+      score: score || 1
+    });
+  }
+  recurringRows.forEach(row => {
+    if (!row || !row.customer) return;
+    const rowAmount = Number(row.amount || row.weeklyAmount || 0);
+    const rowDate = recurringDateKey(row) || recordDateKey(row.nextRun || row.nextPaymentDate);
+    const customerRef = String(payment.cloverCustomerId || payment.customerId || payment.externalCustomerReference || '').trim();
+    let score = 0;
+    const reasons = [];
+    if (customerRef && (String(row.cloverCustomerId || '') === customerRef || normKey(row.customer) === normKey(customerRef))) {
+      score += 5;
+      reasons.push('Clover customer reference');
+    }
+    if (ids.length && ids.includes(String(row.id || ''))) {
+      score += 5;
+      reasons.push('recurring id');
+    }
+    if (ids.length && row.cloverSubscriptionId && ids.includes(String(row.cloverSubscriptionId))) {
+      score += 5;
+      reasons.push('subscription id');
+    }
+    if (amount && rowAmount && Math.abs(rowAmount - amount) < 0.01) {
+      score += 2;
+      reasons.push('same amount');
+    }
+    if (date && rowDate && date === rowDate) {
+      score += 1;
+      reasons.push('same due date');
+    }
+    if (payment.phone && row.phone && phoneKey(payment.phone) === phoneKey(row.phone)) {
+      score += 3;
+      reasons.push('same phone');
+    }
+    if (payment.email && row.email && emailKey(payment.email) === emailKey(row.email)) {
+      score += 3;
+      reasons.push('same email');
+    }
+    (row.paymentAttempts || []).forEach(attempt => {
+      const attemptIds = closeoutPaymentIds(attempt);
+      const sameId = ids.length && attemptIds.some(id => ids.includes(id));
+      const sameDayAmount = date && recordDateKey(attempt.date || attempt.createdAt) === date && amount && Number(attempt.amount || 0) === amount;
+      if (sameId) {
+        score += 5;
+        reasons.push('saved attempt id');
+      } else if (sameDayAmount) {
+        score += 3;
+        reasons.push('same attempt date/amount');
+      }
+    });
+    if (score >= 3) add(row, reasons, score);
+  });
+  return matches.sort((a, b) => b.score - a.score || String(a.customer).localeCompare(String(b.customer))).slice(0, 5);
+}
+function reportPaymentCandidateNote(data = {}, payment = {}, recurringRows = allRecurringRows(data)) {
+  return closeoutPaymentPossibleMatches(data, payment, recurringRows).slice(0, 3).map(candidate => {
+    return [
+      'Possible match ' + (candidate.customer || 'customer'),
+      candidate.vehicle || '',
+      candidate.vin ? 'VIN ' + candidate.vin : '',
+      candidate.plate ? 'Tag ' + candidate.plate : '',
+      candidate.tracker ? 'Tracker ' + candidate.tracker : '',
+      candidate.matchReason || ''
+    ].filter(Boolean).join(' / ');
+  }).join(' || ');
+}
 function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
   enrichLinkedProfiles(scoped);
@@ -1184,7 +1278,8 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const customer = closeoutPaymentCustomerName(scoped, payment, recurring);
     const vehicle = reportVehicleFor(scoped, customer, payment.vehicleId);
     const tag = vehicle.plate || vehicle.stock || payment.licensePlate || payment.plate || '';
-    addReportRow(rows, 'Transactions', payment.date || payment.createdAt || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (payment.vehicle || ''), vehicle.vin || payment.vin || '', tag, vehicle.tracker || payment.tracker || '', payment.method || payment.type || 'Payment', payment.amount || 0, payment.status || 'Recorded', payment.source || payment.provider || 'Payment', reportCsvNote([payment.notes, payment.error, payment.externalReferenceId, payment.cloverPaymentId, payment.paymentRequestId]));
+    const matchNote = customer === 'Unmatched payment' ? reportPaymentCandidateNote(scoped, payment, recurring) : '';
+    addReportRow(rows, 'Transactions', payment.date || payment.createdAt || '', customer, vehicle.id ? vehicleNameFromParts(vehicle) : (payment.vehicle || ''), vehicle.vin || payment.vin || '', tag, vehicle.tracker || payment.tracker || '', payment.method || payment.type || 'Payment', payment.amount || 0, payment.status || 'Recorded', payment.source || payment.provider || 'Payment', reportCsvNote([payment.notes, payment.error, matchNote, payment.externalReferenceId, payment.cloverPaymentId, payment.paymentRequestId]));
   });
   recurring.forEach(row => {
     const vehicle = reportVehicleFor(scoped, row.customer, row.vehicleId);
