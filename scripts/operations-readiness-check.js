@@ -118,6 +118,9 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Search assigned cars by customer, VIN, tag, tracker',
   'Available fleet',
   'Rented / assigned cars',
+  'Assignment conflict',
+  'Claimed by',
+  'compact-conflict',
   'open-vehicle',
   'vehicleIdentityLine'
 ].forEach(text => requireText('Fleet operations surface', fleet + staffFleetCard, text));
@@ -214,7 +217,7 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Tag missing',
   'Resolve',
   "view:\"Operations\"",
-  "tab:\"Fleet\""
+  "tab:\"Assigned\""
 ].forEach(text => requireText('Operations queue assignment conflicts', operationsQueue, text));
 
 [
