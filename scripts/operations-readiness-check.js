@@ -258,6 +258,11 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Insurance',
   'Tracker',
   'Accounting',
+  'Provider dependency matrix',
+  'Saved-card payments',
+  'Safe mode now',
+  'T-Mobile handles voice',
+  'admin-approved',
   'apiProviders',
   'save-api-provider',
   'apiLiveTest'
