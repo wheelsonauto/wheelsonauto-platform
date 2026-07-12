@@ -435,14 +435,24 @@ async function main() {
     assert(franchiseReport.text.includes('Daily closeout') && franchiseReport.text.includes('Customer files') && franchiseReport.text.includes('Fleet profitability'), 'Franchise manager deep report is missing core sections.');
     assert(franchiseReport.text.includes('DIRECTFRANCHISEVIN') && franchiseReport.text.includes('Franchise test'), 'Franchise manager deep report should include scoped franchise customer, fleet, and payment records.');
     assert(!franchiseReport.text.includes('Direct Dispute Customer') && !franchiseReport.text.includes('veh-001'), 'Franchise manager deep report should not expose main WheelsonAuto records.');
+    const franchiseHealth = await request(server, 'GET', '/api/system/health', { cookie: franchiseManagerCookie });
+    assert(franchiseHealth.status === 200 && franchiseHealth.json && franchiseHealth.json.organizationId === 'direct-franchise', 'Franchise manager system health should be scoped to their company.');
+    assert(franchiseHealth.json.star && /admin approval/i.test(franchiseHealth.json.star.guardrails || ''), 'Franchise manager system health should include Star guardrails.');
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
     const ownerReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, Star QA, and audit sections.');
+    const ownerHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    assert(ownerHealth.status === 200 && ownerHealth.json.summary && ownerHealth.json.star && Array.isArray(ownerHealth.json.issues), 'Owner system health should return summary, Star, and issue rows.');
+    assert(ownerHealth.json.issues.some(row => row.key === 'unmatched_payments') && ownerHealth.json.issues.some(row => row.key === 'missing_vin'), 'Owner system health should include payment and fleet truth checks.');
+    const managerHealth = await request(server, 'GET', '/api/system/health', { cookie: managerCookie });
+    assert(managerHealth.status === 200 && managerHealth.json.organizationId === 'org-wheelsonauto' && managerHealth.json.star.canAssist === true, 'Manager system health should be available and scoped.');
     const mechanicReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: mechanicCookie });
     assert(mechanicReport.status === 403, 'Mechanic should not be able to download deep financial reports.');
+    const mechanicHealth = await request(server, 'GET', '/api/system/health', { cookie: mechanicCookie });
+    assert(mechanicHealth.status === 403, 'Mechanic should not be able to read the money/system health snapshot.');
     const staffLogout = await request(server, 'GET', '/logout', { cookie: managerCookie });
     assert(staffLogout.status === 302 && staffLogout.location === '/', 'Staff logout should redirect to the login shell.');
     assertSecureCookie(staffLogout.cookie, 'Staff/admin logout', { clear: true });

@@ -1225,6 +1225,93 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
 function deepReportCsv(data = {}, user = { role: 'Owner' }) {
   return reportRowsForData(data, user).map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n';
 }
+function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
+  const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+  enrichLinkedProfiles(scoped);
+  const today = localDateKey();
+  const role = String(user && user.role || 'Owner');
+  const recurring = allRecurringRows(scoped);
+  const payments = uniqueCloseoutPayments(scoped.payments || []);
+  const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const failedOnce = dueToday.filter(row => closeoutRecurringState(row) === 'Failed once');
+  const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
+  const notFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
+  const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
+  const todayPayments = payments.filter(payment => recordDateKey(payment.date || payment.createdAt) === today);
+  const collectedToday = todayPayments.filter(closeoutPaymentPaid).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const expectedToday = dueToday.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
+  const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
+  const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
+  const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
+  const customerNames = [...new Set([...(scoped.customers || []).map(row => row.name || row.customer), ...(scoped.contracts || []).map(row => row.customer || row.name), ...recurring.map(row => row.customer)].map(value => String(value || '').trim()).filter(Boolean))];
+  const activeCustomerNames = customerNames.filter(name => {
+    const recurringRow = recurring.find(row => normKey(row.customer) === normKey(name)) || {};
+    const customer = (scoped.customers || []).find(row => normKey(row.name || row.customer) === normKey(name)) || {};
+    const contract = (scoped.contracts || []).find(row => normKey(row.customer || row.name) === normKey(name)) || {};
+    return !/removed|returned|history|archived/i.test(String(contract.status || customer.status || recurringRow.status || 'Active'));
+  });
+  const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
+  const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
+  const verificationInbox = closeoutVerificationItems(scoped);
+  const openService = (scoped.maintenance || []).filter(item => {
+    const status = String(item.status || '').toLowerCase();
+    return !/(complete|fixed|closed)/.test(status);
+  });
+  const serviceDue = openService.filter(item => {
+    const due = recordDateKey(item.due || item.nextDue || item.followUp || '');
+    return due && due <= today;
+  });
+  const openClaims = (scoped.claims || []).filter(claim => !/paid|closed/i.test(String(claim.status || 'Open')));
+  const auditToday = isOwnerUser(user) ? (scoped.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === today) : [];
+  const issues = [];
+  function issue(priority, key, label, count, tone, view, tab, detail) {
+    issues.push({ priority, key, label, count, tone, view, tab: tab || '', detail });
+  }
+  issue(1, 'failed_twice', 'Failed twice', failedTwice.length, failedTwice.length ? 'bad' : 'good', 'Payments', 'Today', 'Customers need contact before closeout.');
+  issue(2, 'payment_not_found', 'Payment not found', notFound.length, notFound.length ? 'warn' : 'good', 'Payments', 'Today', 'Saved-card/payment records need Clover review.');
+  issue(3, 'unmatched_payments', 'Unmatched payments', unmatchedPayments.length, unmatchedPayments.length ? 'bad' : 'good', 'Payments', 'Transactions', 'Transactions need customer names for receipts, disputes, and reports.');
+  issue(4, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
+  issue(5, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
+  issue(6, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
+  issue(7, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
+  issue(8, 'insurance_proof', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing verified insurance proof.');
+  issue(9, 'background_checks', 'Background checks', missingBackground.length, missingBackground.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing background verification.');
+  issue(10, 'missing_contact', 'Missing contact', missingContact.length, missingContact.length ? 'warn' : 'good', 'Payments', 'Active', 'Customers need phone or email before Star can follow up.');
+  issue(11, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
+  issue(12, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
+  if (isOwnerUser(user)) issue(13, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
+  const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
+  const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
+  return {
+    ok: badCount === 0,
+    checkedAt: new Date().toISOString(),
+    dateKey: today,
+    role,
+    organizationId: userOrganizationId(user),
+    summary: {
+      expectedToday,
+      collectedToday,
+      stillOpenToday: Math.max(0, expectedToday - collectedToday),
+      dueToday: dueToday.length,
+      failedOnce: failedOnce.length,
+      failedTwice: failedTwice.length,
+      paymentNotFound: notFound.length,
+      setupNeeded: setupNeeded.length,
+      verificationInbox: verificationInbox.length,
+      openService: openService.length,
+      openClaims: openClaims.length,
+      badCount,
+      warnCount
+    },
+    issues: issues.sort((a, b) => a.priority - b.priority),
+    star: {
+      canAssist: true,
+      guardrails: 'Star can draft fixes and messages, but charges, card changes, removals, claims, refunds, receipts, and unclear money requests still require admin approval.',
+      nextActions: issues.filter(row => row.count && row.tone !== 'good').slice(0, 8)
+    }
+  };
+}
 function maintenanceDueForNotification(item = {}, dateKeyValue = localDateKey()) {
   const status = String(item.status || '').toLowerCase();
   if (status.includes('complete') || status.includes('fixed') || status.includes('closed')) return false;
@@ -2327,6 +2414,7 @@ function apiAllowedForUser(user, pathname) {
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/reports')) return false;
+  if (role === 'mechanic' && pathname.startsWith('/api/system/health')) return false;
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments', '/api/card-setup-requests'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
 }
@@ -2873,6 +2961,7 @@ function systemReadiness(data) {
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
     route('GET', '/api/reports/deep.csv', 'Role-scoped deep CSV export'),
+    route('GET', '/api/system/health', 'Role-scoped Star/system health snapshot'),
     route('POST', '/api/verification/document', 'Staff document proof verification'),
     route('POST', '/api/verification/paid-outside', 'Owner paid-outside payment verification'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
@@ -5856,6 +5945,10 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/system/readiness' && req.method === 'POST') {
       const data = await readData();
       return json(res, 200, systemReadiness(data));
+    }
+    if (url.pathname === '/api/system/health' && req.method === 'GET') {
+      const data = await readData();
+      return json(res, 200, systemHealthSnapshot(data, user));
     }
     if (url.pathname === '/api/reports/deep.csv' && req.method === 'GET') {
       const data = await readData();

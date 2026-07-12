@@ -135,6 +135,7 @@ if (!/roleName\(\)==='mechanic'\)return''/.test(textCustomerButton)) fail('Mecha
 
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/messages'\)/.test(apiAllowedForUser)) fail('Mechanic API message routes are not blocked.');
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/reports'\)/.test(apiAllowedForUser)) fail('Mechanic API report routes are not blocked.');
+if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/system\/health'\)/.test(apiAllowedForUser)) fail('Mechanic API system health route is not blocked.');
 if (!/role === 'mechanic' \|\| role === 'manager'/.test(apiAllowedForUser)) fail('Mechanic/manager payment route block is missing.');
 assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications']);
 if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
