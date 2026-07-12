@@ -343,7 +343,12 @@ async function main() {
     const customerCookie = cleanCookie(customerLoginRes.cookie);
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
-    assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments'), 'Customer portal did not render account details.');
+    assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
+
+    const customerPortalMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, form: { body: 'Can you help me update my card and confirm my next payment?' } });
+    assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer', 'Customer portal message should return to portal.');
+    const customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((customerPortalMessageRead.json.messages || []).some(message => message.channel === 'Customer portal' && message.customer === 'Alicia Brown' && /update my card/i.test(message.body || '')), 'Customer portal message should be saved in staff Messages.');
 
     const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(customerPortalState.status === 200 && customerPortalState.json.ok, 'Customer portal API did not load.');

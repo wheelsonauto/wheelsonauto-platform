@@ -514,7 +514,7 @@ function emailNotificationSettings(data = {}) {
   return {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
     emailRecipients: recipients.map(item => String(item || '').trim()).filter(Boolean),
-    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed'],
+    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed', 'customer_message'],
     lastTestAt: saved.lastTestAt || '',
     lastError: saved.lastError || ''
   };
@@ -2179,7 +2179,8 @@ function customerPortalHtml(account, state) {
   const vehicleTitle = summary.vehicle || vehicleNameFromParts(vehicle) || 'Vehicle not linked yet';
   const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || '';
   const customerName = account.name || account.customer || summary.customer || 'Customer';
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div><div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div><div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div><div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
+  const portalMessageForm = '<form method="POST" action="/customer/message" class="customer-message-form"><label>Message WheelsonAuto<textarea name="body" maxlength="1200" placeholder="Type a payment, service, card, toll, or account question..."></textarea></label><button class="btn primary" type="submit">Send message</button><small>Messages arrive in the WheelsonAuto inbox for admin/manager follow-up.</small></form>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div><div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div><div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -2286,6 +2287,7 @@ function systemReadiness(data) {
     route('PUT', '/api/state', 'Role-aware dashboard saves'),
     route('GET', '/customer/login', 'Customer login page'),
     route('GET', '/customer', 'Customer self-service portal'),
+    route('POST', '/customer/message', 'Customer portal inbound message'),
     route('GET', '/api/customer/portal-state', 'Customer-only account state'),
     route('POST', '/api/customer-accounts', 'Owner-managed customer logins'),
     route('POST', '/api/organizations', 'Owner-managed company/store/franchise accounts'),
@@ -4313,6 +4315,61 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, customerForgotPage('Your request was sent to WheelsonAuto. We will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+    if (url.pathname === '/customer/message' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req));
+      const body = String(form.get('body') || '').trim().slice(0, 1200);
+      if (!body) return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && String(item.status || 'Active').toLowerCase() !== 'disabled');
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      const message = {
+        id: 'msg-customer-portal-' + Date.now(),
+        date: new Date().toLocaleString('en-US'),
+        createdAt: new Date().toISOString(),
+        customer: account.customer || account.name || 'Customer',
+        phone: account.phone || '',
+        email: account.email || '',
+        direction: 'Inbound',
+        channel: 'Customer portal',
+        template: 'Customer portal message',
+        subject: 'Customer portal message',
+        status: 'Received',
+        tone: 'blue',
+        body,
+        source: 'Customer portal',
+        customerAccountId: account.id,
+        recurringPaymentId: account.recurringPaymentId || '',
+        vehicleId: account.vehicleId || ''
+      };
+      data.messages.unshift(message);
+      const settings = messageSettings(data);
+      if (settings.aiEnabled && settings.aiDrafts) {
+        await createAiMessageDraft(data, {
+          messageId: message.id,
+          customer: message.customer,
+          phone: message.phone,
+          email: message.email,
+          channel: 'Customer portal',
+          body
+        }, { sourceMessageId: message.id });
+      }
+      await queueOwnerEmailNotification(data, 'customer_message', {
+        customer: message.customer,
+        subject: 'Customer portal message - ' + message.customer,
+        body: [
+          'A customer sent a message from the WheelsonAuto portal.',
+          'Customer: ' + message.customer,
+          'Phone: ' + (message.phone || 'Not saved'),
+          'Email: ' + (message.email || 'Not saved'),
+          'Message: ' + body
+        ].join('\n')
+      });
+      await writeData(data);
+      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+    }
     if (url.pathname === '/customer' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
