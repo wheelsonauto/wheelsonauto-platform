@@ -101,6 +101,8 @@ function renderViews() {
   'verificationDocClearedForCustomer',
   'documentNeedsVerification',
   'verificationStatusTone',
+  'verificationInboxItems',
+  'verificationInboxSection',
   'Documents'
 ].forEach(name => {
   if (!finalFunctionSlice(app, name)) fail('Missing final frontend function: ' + name);
@@ -193,6 +195,13 @@ assertIncludes('Documents surface', documents + app + server, [
   'portalVisible',
   'paymentReceiptDocuments',
   'Needs review',
+  'Verification inbox',
+  'Customer proof, paid-outside reports, service proof, tolls, claims, and document uploads waiting for staff review.',
+  'verify-paid-outside',
+  'reject-paid-outside',
+  'Paid outside app',
+  'Service proof',
+  'Claim / toll proof',
   'verify-document',
   'reject-document',
   'Customer-submitted proof is waiting for staff verification',
@@ -220,6 +229,7 @@ assertIncludes('Insurance/background surface', insurance + app, [
   'new-background-doc',
   'verificationDocs',
   'verificationDocClearedForCustomer',
+  '!verificationDocClearedForCustomer',
   'Verification follow-up',
   'Message queue',
   'Background check not verified',
