@@ -47,13 +47,14 @@ function checkDuplicateIds(name) {
   });
 }
 
-['vehicles', 'customers', 'contracts', 'recurringPayments', 'payments', 'maintenance', 'claims', 'messages', 'applications'].forEach(checkDuplicateIds);
+['vehicles', 'customers', 'contracts', 'recurringPayments', 'payments', 'paymentRequests', 'maintenance', 'claims', 'messages', 'applications'].forEach(checkDuplicateIds);
 
 const vehicles = rows('vehicles');
 const customers = rows('customers');
 const contracts = rows('contracts');
 const recurring = rows('recurringPayments');
 const payments = rows('payments');
+const paymentRequests = rows('paymentRequests');
 const maintenance = rows('maintenance');
 
 const vehicleById = new Map(vehicles.map(vehicle => [String(vehicle.id || ''), vehicle]).filter(([id]) => id));
@@ -127,6 +128,20 @@ payments.forEach(payment => {
   if (payment.recurringPaymentId && !recurring.some(row => row.id === payment.recurringPaymentId)) {
     add(errors, 'Payment points to missing recurring row', `${label} -> ${payment.recurringPaymentId}`);
   }
+});
+
+paymentRequests.forEach(request => {
+  const label = request.customer || request.id || request.url || 'Unknown payment request';
+  const status = String(request.status || 'Open').toLowerCase();
+  const open = !/(paid|closed|cancel|expired)/.test(status);
+  const linked = linkedVehicle(request, label, 'Payment request');
+  const hasVehicleContext = !!(linked || request.vehicle || request.vin || request.licensePlate || request.plate);
+  if (request.recurringPaymentId && !recurring.some(row => row.id === request.recurringPaymentId)) {
+    add(warnings, 'Payment request points to missing recurring row', `${label} -> ${request.recurringPaymentId}`);
+  }
+  if (open && weakCustomerName(request.customer)) add(warnings, 'Open payment request is missing customer name', label);
+  if (open && Number(request.amount || 0) <= 0) add(warnings, 'Open payment request is missing amount', label);
+  if (open && !hasVehicleContext) add(warnings, 'Open payment request is missing vehicle/VIN/tag context', label);
 });
 
 maintenance.forEach(job => {
