@@ -319,6 +319,16 @@ const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
   'Staff list',
   'company-scoped workspace',
   'Subscriber mode needs final API separation',
+  'companyLaunchBoard',
+  'Company launch guardrails',
+  'Internal store mode',
+  'Staff scoped access',
+  'Customer portal scope',
+  'Subscriber accounts',
+  'Per-company API keys',
+  'Billing connected',
+  'Owner audit + reports',
+  'Outside franchise/subscription launch stays locked',
   'new-org',
   'save-org'
 ].forEach(text => requireText('Company/franchise foundation UI', organizations + app, text));

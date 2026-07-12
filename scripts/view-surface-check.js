@@ -557,6 +557,7 @@ assertIncludes('Messaging setup panel', setupPanel, [
 const settings = finalFunctionSlice(app, 'Settings');
 const organizations = finalFunctionSlice(app, 'Organizations');
 const companyFoundationPanel = finalFunctionSlice(app, 'companyFoundationPanel');
+const companyLaunchBoard = finalFunctionSlice(app, 'companyLaunchBoard');
 const companyReadinessCards = finalFunctionSlice(app, 'companyReadinessCards');
 const customerLoginForm = finalFunctionSlice(app, 'customerLoginAccountForm');
 const customerPortalButton = finalFunctionSlice(app, 'customerPortalButton');
@@ -564,7 +565,7 @@ const paymentCustomerPortalCard = finalFunctionSlice(app, 'paymentCustomerCard')
 const recurringCardActionButtons = finalFunctionSlice(app, 'cardActionButtons');
 assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
 assertIncludes('Settings staff password help', settings + server, ['Staff accounts', 'Reset requested', 'staff_password_reset', '/forgot', 'Reset staff access']);
-assertIncludes('Company account staff actions', organizations + companyFoundationPanel + companyReadinessCards + app, ['Company accounts', 'Franchise readiness', 'Staff scoping', 'isolated database storage', 'per-company', 'Data scope', 'API key mode', 'Tenant readiness', 'Subscriber locked', 'Add staff', 'new-staff', 'Staff list', 'company-scoped workspace', 'Subscriber mode needs final API separation']);
+assertIncludes('Company account staff actions', organizations + companyFoundationPanel + companyLaunchBoard + companyReadinessCards + app + css, ['Company accounts', 'Franchise readiness', 'Staff scoping', 'isolated database storage', 'per-company', 'Data scope', 'API key mode', 'Tenant readiness', 'Subscriber locked', 'Add staff', 'new-staff', 'Staff list', 'company-scoped workspace', 'Subscriber mode needs final API separation', 'Company launch guardrails', 'Internal store mode', 'Staff scoped access', 'Customer portal scope', 'Subscriber accounts', 'Per-company API keys', 'Billing connected', 'Owner audit + reports', 'company-launch-board', 'company-launch-grid', 'company-launch-card']);
 const coreSystemItems = finalFunctionSlice(app, 'coreSystemItems');
 const coreSystemBoard = finalFunctionSlice(app, 'coreSystemBoard');
 const apiOperationalItems = finalFunctionSlice(app, 'apiOperationalItems');
