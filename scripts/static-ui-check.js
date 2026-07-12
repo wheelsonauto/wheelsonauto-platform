@@ -223,6 +223,7 @@ const criticalActionRequirements = [
   ['Message send flow', 'send-message-now', ['/api/messages/send', 'channel:val', 'await refreshData(true)', 'closeModal()', "view='Messages'"]],
   ['Thread reply send flow', 'send-thread-message', ['/api/messages/send', 'threadMessageBody', 'messageThreadKey', "tab='Inbox'", "view='Messages'"]],
   ['Customer portal login save flow', 'save-customer-login', ['/api/customer-accounts', 'customerLoginName', 'await refreshData(true)', 'Settings()']],
+  ['Customer portal draft creation flow', 'create-missing-customer-logins', ['/api/customer-accounts/create-missing-drafts', 'await refreshData(true)', 'portal draft']],
   ['Company account save flow', 'save-org', ['/api/organizations', 'await refreshData(true)', 'Organizations()']],
   ['Company staff prefill flow', 'new-staff', ['staffOrgPrefill', 'orgOptions(staffOrgPrefill)', 'staffOrg']],
   ['Email notification test flow', 'send-email-notification-test', ['/api/notifications/email/test', 'notificationEmailTo', 'notification-event:checked', "tab='Setup'", 'Messages()']],

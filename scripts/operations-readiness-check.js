@@ -176,6 +176,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'customer_portal_access',
   'customerPortalAccountForName',
   'customerPortalLoginReady',
+  '/api/customer-accounts/create-missing-drafts',
+  'Draft customer portal login created by WheelsonAuto',
   'login-ready customer portal account',
   'Payment request truth',
   'payment_request_truth',

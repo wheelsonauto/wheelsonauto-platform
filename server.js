@@ -2862,6 +2862,44 @@ function customerPortalAccountForName(data = {}, name = '') {
 function customerPortalLoginReady(account = {}) {
   return !!(account && staffStatusActive(account) && account.passwordHash && account.passwordSalt);
 }
+function activeCustomerPortalCandidates(data = {}) {
+  const rows = new Map();
+  function add(name, source = {}) {
+    const key = normKey(name);
+    if (!key || /^clover recurring customer$/i.test(String(name || ''))) return;
+    const current = rows.get(key) || { name, phone: '', email: '', customerId: '', contractId: '', recurringPaymentId: '', vehicleId: '', organizationId: MAIN_ORG_ID };
+    const vehicle = reportVehicleFor(data, name, source.vehicleId || current.vehicleId);
+    rows.set(key, {
+      ...current,
+      name: current.name || name,
+      phone: current.phone || source.phone || '',
+      email: current.email || source.email || '',
+      customerId: current.customerId || source.customerId || (/^cus|customer/i.test(String(source.id || '')) ? source.id : ''),
+      contractId: current.contractId || source.contractId || (/^con|contract/i.test(String(source.id || '')) ? source.id : ''),
+      recurringPaymentId: current.recurringPaymentId || source.recurringPaymentId || (/^rec/i.test(String(source.id || '')) ? source.id : ''),
+      vehicleId: current.vehicleId || source.vehicleId || vehicle.id || '',
+      cloverCustomerId: current.cloverCustomerId || source.cloverCustomerId || '',
+      organizationId: source.organizationId || current.organizationId || MAIN_ORG_ID
+    });
+  }
+  allRecurringRows(data).forEach(row => {
+    const status = String(row.status || 'Active').toLowerCase();
+    if (row.customer && status === 'active') add(row.customer, { ...row, recurringPaymentId: row.id });
+  });
+  (data.customers || []).forEach(row => {
+    const status = String(row.status || 'Active').toLowerCase();
+    if ((row.name || row.customer) && !/removed|history|inactive|ended|disabled/i.test(status)) add(row.name || row.customer, { ...row, customerId: row.id });
+  });
+  (data.contracts || []).forEach(row => {
+    const status = String(row.status || 'Active').toLowerCase();
+    if ((row.customer || row.name) && !/removed|history|inactive|ended|disabled/i.test(status)) add(row.customer || row.name, { ...row, contractId: row.id });
+  });
+  (data.vehicles || []).forEach(vehicle => {
+    const status = String(vehicle.status || '').toLowerCase();
+    if (vehicle.currentCustomer && !/removed|ready|in lot|prep/i.test(status)) add(vehicle.currentCustomer, { vehicleId: vehicle.id, organizationId: vehicle.organizationId || MAIN_ORG_ID });
+  });
+  return [...rows.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
 function cleanCustomerAccountPayload(payload, existing = null) {
   const name = String(payload.name || payload.customer || existing && existing.name || '').trim();
   const customer = String(payload.customer || payload.name || existing && existing.customer || name).trim();
@@ -3220,11 +3258,18 @@ function findCustomerAccountByIdentity(data, identity) {
   const phone = phoneKey(identity);
   const name = normKey(identity);
   if (!key && !phone && !name) return null;
-  return (data.customerAccounts || []).find(account => {
-    if (!staffStatusActive(account)) return false;
-    const values = [account.username, account.email, account.name, account.customer].map(normalizeLogin).filter(Boolean);
+  const accounts = (data.customerAccounts || []).filter(staffStatusActive);
+  const exact = accounts.find(account => {
+    const values = [account.username, account.email].map(normalizeLogin).filter(Boolean);
     if (key && values.includes(key)) return true;
     if (phone && phoneKey(account.phone) === phone) return true;
+    return false;
+  });
+  if (exact) return exact;
+  return accounts.find(account => {
+    if (!staffStatusActive(account)) return false;
+    const values = [account.name, account.customer].map(normalizeLogin).filter(Boolean);
+    if (key && values.includes(key)) return true;
     return !!(name && [account.name, account.customer].some(value => softNameMatch(value, name)));
   }) || null;
 }
@@ -3595,6 +3640,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/customer/card-change', 'Customer portal card-on-file change request'),
     route('GET', '/api/customer/portal-state', 'Customer-only account state'),
     route('POST', '/api/customer-accounts', 'Owner-managed customer logins'),
+    route('POST', '/api/customer-accounts/create-missing-drafts', 'Owner-created draft customer portal logins'),
     route('POST', '/api/organizations', 'Owner-managed company/store/franchise accounts'),
     route('POST', '/api/api-providers', 'API readiness setup records'),
     route('POST', '/api/tasks', 'Dispatch task creation'),
@@ -7019,6 +7065,39 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, account: safeCustomerAccount(existing || account), loginUrl: PUBLIC_BASE_URL + '/customer/login' });
+    }
+    if (url.pathname === '/api/customer-accounts/create-missing-drafts' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can create customer portal drafts.' });
+      const data = await readData();
+      data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+      const created = [];
+      const skipped = [];
+      activeCustomerPortalCandidates(data).forEach((candidate, index) => {
+        const existing = customerPortalAccountForName(data, candidate.name);
+        if (existing) {
+          skipped.push({ customer: candidate.name, reason: customerPortalLoginReady(existing) ? 'Already login-ready' : 'Draft already exists' });
+          return;
+        }
+        const draft = cleanCustomerAccountPayload({
+          ...candidate,
+          __data: data,
+          id: 'customer-login-draft-' + Date.now() + '-' + index,
+          username: candidate.email || candidate.phone || String(candidate.name || '').replace(/\s+/g, '.'),
+          status: 'Active',
+          notes: 'Draft customer portal login created by WheelsonAuto. Set a password before sharing the portal link.'
+        }, null);
+        const duplicate = data.customerAccounts.find(account => account.id !== draft.id && normalizeLogin(account.username || account.email || account.phone) === draft.username);
+        if (duplicate) {
+          skipped.push({ customer: candidate.name, reason: 'Username already used by another customer login' });
+          return;
+        }
+        data.customerAccounts.unshift(draft);
+        created.push(safeCustomerAccount(draft));
+      });
+      appendAuditLog(data, user, 'Customer portal drafts created', [created.length + ' draft(s)', skipped.length + ' skipped', 'Passwords still require owner setup']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, created, skipped, loginUrl: PUBLIC_BASE_URL + '/customer/login' });
     }
     if (url.pathname === '/api/organizations' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage company accounts.' });

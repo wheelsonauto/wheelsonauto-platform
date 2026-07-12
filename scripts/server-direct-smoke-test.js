@@ -151,6 +151,7 @@ async function main() {
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-draft-portal', customer: 'Direct Draft Portal Customer', phone: '3135550188', email: 'direct-draft-portal@example.com', vehicle: 'Direct Draft Portal Car', amount: 77, status: 'Active' });
+    duplicateState.recurringPayments.unshift({ id: 'rec-direct-missing-portal-draft', customer: 'Direct Missing Portal Draft Customer', phone: '3135550189', email: 'direct-missing-portal@example.com', vehicle: 'Direct Missing Portal Draft Car', amount: 79, status: 'Active' });
     duplicateState.customerAccounts.unshift({ id: 'direct-draft-portal-login', name: 'Direct Draft Portal Customer', customer: 'Direct Draft Portal Customer', username: 'direct-draft-portal', phone: '3135550188', email: 'direct-draft-portal@example.com', status: 'Active', recurringPaymentId: 'rec-direct-draft-portal' });
     duplicateState.maintenance.unshift({ id: 'mnt-direct-autopay-file-open', vehicleId: 'veh-direct-autopay-file', vehicle: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tracker: 'TRK-AUTO', customer: 'Previous Direct Service Customer', type: 'Monthly inspection', issue: 'Open inspection should follow reassigned vehicle', due: '2026-07-20', status: 'Scheduled' });
     duplicateState.claims.unshift(
@@ -552,6 +553,15 @@ async function main() {
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
     assert(ownerReadiness.status === 200 && Array.isArray(ownerReadiness.json.truthChecks) && Object.prototype.hasOwnProperty.call(ownerReadiness.json, 'dataOk'), 'System readiness should return customer/payment/fleet truth checks.');
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'unmatched_payments') && ownerReadiness.json.truthChecks.some(row => row.key === 'autopay_vehicle_link') && ownerReadiness.json.truthChecks.some(row => row.key === 'payment_request_truth') && ownerReadiness.json.truthChecks.some(row => row.key === 'open_payment_requests'), 'System readiness should include unmatched payment, payment-link, and autopay vehicle-link checks.');
+
+    const draftPortalLogins = await request(server, 'POST', '/api/customer-accounts/create-missing-drafts', { cookie: ownerCookie, json: {} });
+    assert(draftPortalLogins.status === 200 && draftPortalLogins.json.ok, 'Owner could not create draft customer portal logins.');
+    assert((draftPortalLogins.json.created || []).some(account => account.customer === 'Direct Missing Portal Draft Customer'), 'Draft portal login creation should include active customers with no portal record.');
+    const draftPortalState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const draftPortalAccount = (draftPortalState.json.customerAccounts || []).find(account => account.customer === 'Direct Missing Portal Draft Customer');
+    assert(draftPortalAccount && draftPortalAccount.loginReady === false && !draftPortalAccount.passwordHash && !draftPortalAccount.passwordSalt, 'Draft portal login should not be usable or expose password secrets until owner sets a password.');
+    const draftCustomerLoginAttempt = await request(server, 'POST', '/customer/login', { form: { username: 'direct-missing-portal@example.com', password: 'anything-wrong' } });
+    assert(draftCustomerLoginAttempt.status === 401, 'Draft portal login without owner-set password should not allow customer login.');
     const managerHealth = await request(server, 'GET', '/api/system/health', { cookie: managerCookie });
     assert(managerHealth.status === 200 && managerHealth.json.organizationId === 'org-wheelsonauto' && managerHealth.json.star.canAssist === true, 'Manager system health should be available and scoped.');
     const mechanicReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: mechanicCookie });
