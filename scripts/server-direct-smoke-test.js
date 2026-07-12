@@ -424,6 +424,33 @@ async function main() {
     assert(notificationSettings.status === 200 && notificationSettings.json.ok, 'Owner could not save email notification settings.');
     assert(notificationSettings.json.notifications.emailRecipients[0] === 'notify@example.com', 'Notification recipient did not save.');
 
+    const defaultNotificationEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed', 'customer_message'];
+    const filteredNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
+      cookie: ownerCookie,
+      json: { emailRecipients: ['notify@example.com'], emailEnabled: true, events: ['customer_message'] }
+    });
+    assert(filteredNotificationSettings.status === 200 && filteredNotificationSettings.json.notifications.events.length === 1 && filteredNotificationSettings.json.notifications.events[0] === 'customer_message', 'Notification event filters should save exactly.');
+    const filteredApplication = await request(server, 'POST', '/api/public/applications', {
+      json: {
+        id: 'direct-filtered-public-app',
+        name: 'Direct Filtered Applicant',
+        phone: '3135550333',
+        email: 'direct-filtered@example.com',
+        vehicleId: 'veh-002',
+        vehicle: '2017 Ford Fusion',
+        income: 5100,
+        down: 600
+      }
+    });
+    assert(filteredApplication.status === 201 && filteredApplication.json.ok, 'Filtered public application path did not save.');
+    const filteredNotificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(!filteredNotificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Filtered Applicant'), 'Disabled notification event should not create an application email alert.');
+    const restoredNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
+      cookie: ownerCookie,
+      json: { emailRecipients: ['notify@example.com'], emailEnabled: true, events: defaultNotificationEvents }
+    });
+    assert(restoredNotificationSettings.status === 200 && restoredNotificationSettings.json.notifications.events.includes('application_submitted'), 'Notification events should restore application alerts.');
+
     const notifiedApplication = await request(server, 'POST', '/api/public/applications', {
       json: {
         id: 'direct-notified-public-app',
