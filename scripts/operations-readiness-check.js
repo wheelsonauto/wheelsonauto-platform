@@ -214,6 +214,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Failed once',
   'Contact now',
   'Today Clover transactions',
+  'Open payment links',
+  'No open hosted checkout links are waiting for closeout follow-up',
   'Sensitive changes',
   'Verification inbox',
   'Vehicle conflicts',
