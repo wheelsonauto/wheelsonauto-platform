@@ -53,7 +53,7 @@ const approve = finalFunctionSlice(server, 'approveAiMessage');
 const apiAllowed = finalFunctionSlice(server, 'apiAllowedForUser');
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
 const starHealth = finalFunctionSlice(app, 'starSystemHealthPanelFresh') || finalFunctionSlice(app, 'starSystemHealthPanel');
-const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
+const starQaManager = (finalFunctionSlice(app, 'starQaManagerPanel') || '') + (finalFunctionSlice(app, 'starQaManagerPanelFresh') || '');
 const starActions = finalFunctionSlice(app, 'starAiActions');
 
 if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindContext || !aiContext || !aiHealth || !approve || !apiAllowed || !starPanel || !starHealth || !starQaManager || !starActions) {
@@ -172,6 +172,10 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'Clear verification inbox',
   'Follow up stale payment links',
   'Follow up open payment links',
+  'Follow up card setup links',
+  'Approve pending Star work',
+  'card setup/change link(s) are still waiting',
+  'need admin approval or human review',
   'Review today sensitive changes',
   'admin approval is still required for charges, removals, card changes, claims, refunds, and receipts'
 ].forEach(text => requireText('Star QA manager suggestions', starQaManager, text));
