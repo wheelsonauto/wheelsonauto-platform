@@ -472,7 +472,7 @@ function managerSmoke() {
     ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Executive snapshot'], false],
-    ['Manager applications', 'Applications', 'Active', ['Applications', 'table-wrap'], false]
+    ['Manager applications', 'Applications', 'Active', ['Applications', 'Approval handoff', 'table-wrap'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);

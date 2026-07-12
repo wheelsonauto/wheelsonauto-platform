@@ -533,6 +533,26 @@ assertIncludes('Compose message modal', compose, [
 ]);
 assertIncludes('Message send action', app, ['/api/messages/send', 'channel:val', 'send-message-now', 'send-thread-message']);
 
+const applicationHandoffItems = finalFunctionSlice(app, 'applicationHandoffItems');
+const applicationHandoffBoard = finalFunctionSlice(app, 'applicationHandoffBoard');
+assertIncludes('Application approval handoff board', applicationHandoffItems + applicationHandoffBoard + app + css, [
+  'Approval handoff',
+  'Approved applicants must move cleanly',
+  'approval message',
+  'customer file',
+  'vehicle link',
+  'autopay row',
+  'portal login',
+  'insurance proof',
+  'background proof',
+  'send-approval',
+  'contract-app',
+  'open-contract',
+  'application-handoff-board',
+  'application-handoff-grid',
+  'application-handoff-card'
+]);
+
 const customerPortalRequestItems = finalFunctionSlice(app, 'customerPortalRequestItems');
 const customerPortalRequestsBoard = finalFunctionSlice(app, 'customerPortalRequestsBoard');
 assertIncludes('Customer portal request board', customerPortalRequestItems + customerPortalRequestsBoard + app + css, [
