@@ -474,6 +474,21 @@ async function main() {
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
+    assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
+
+    const customerCardChangeNoAuth = await request(server, 'POST', '/customer/card-change');
+    assert(customerCardChangeNoAuth.status === 302 && customerCardChangeNoAuth.location === '/customer/login', 'Customer card-change request should require customer login.');
+
+    const customerCardChange = await request(server, 'POST', '/customer/card-change', { cookie: customerCookie });
+    assert(customerCardChange.status === 302 && String(customerCardChange.location || '').startsWith('/setup-card/'), 'Customer card-change request should redirect to a secure setup-card page.');
+    const customerCardSetupId = String(customerCardChange.location || '').split('/').pop();
+    const customerCardChangeRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const customerCardSetupRequest = (customerCardChangeRead.json.cardSetupRequests || []).find(request => request.id === customerCardSetupId);
+    assert(customerCardSetupRequest && customerCardSetupRequest.customer === 'Alicia Brown' && customerCardSetupRequest.cardOnlyUpdate === true, 'Customer card-change request should create a card-only setup request for the logged-in customer.');
+    assert((customerCardChangeRead.json.messages || []).some(message => message.cardSetupRequestId === customerCardSetupId && message.customer === 'Alicia Brown'), 'Customer card-change request should be logged in Messages.');
+    const customerCardSetupPage = await request(server, 'GET', customerCardChange.location);
+    assert(customerCardSetupPage.status === 200 && customerCardSetupPage.text.includes('Set up automatic payments') && customerCardSetupPage.text.includes('Alicia Brown'), 'Customer-created card setup page should render.');
+    assert(!customerCardSetupPage.text.includes('secret-source-token') && !customerCardSetupPage.text.includes('secret-payment-token') && !customerCardSetupPage.text.includes('secret-raw-value'), 'Customer-created card setup page should not expose private payment tokens.');
 
     const portalMessageNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
       cookie: ownerCookie,

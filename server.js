@@ -2212,6 +2212,9 @@ function customerPortalState(data, account) {
 function customerPortalList(rows, empty, render) {
   return rows && rows.length ? rows.map(render).join('') : '<div class="customer-empty">' + escapeHtml(empty) + '</div>';
 }
+function customerPortalActionForm(action, buttonText, note, className = '') {
+  return '<form method="POST" action="' + escapeHtml(action) + '" class="' + escapeHtml(className || 'customer-action-form') + '"><button class="btn primary" type="submit">' + escapeHtml(buttonText) + '</button>' + (note ? '<small>' + escapeHtml(note) + '</small>' : '') + '</form>';
+}
 function customerPortalHtml(account, state) {
   const vehicle = state.vehicle || {};
   const recurring = state.recurring || {};
@@ -2222,7 +2225,8 @@ function customerPortalHtml(account, state) {
   const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || '';
   const customerName = account.name || account.customer || summary.customer || 'Customer';
   const portalMessageForm = '<form method="POST" action="/customer/message" class="customer-message-form"><label>Message WheelsonAuto<textarea name="body" maxlength="1200" placeholder="Type a payment, service, card, toll, or account question..."></textarea></label><button class="btn primary" type="submit">Send message</button><small>Messages arrive in the WheelsonAuto inbox for admin/manager follow-up.</small></form>';
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div><div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div><div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
+  const cardChangeForm = customerPortalActionForm('/customer/card-change', 'Change card on file', 'Opens a secure Clover card setup link. WheelsonAuto never sees the full card number.', 'customer-card-form');
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || vehicle.tracker || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div><div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => '<div class="customer-row"><div><strong>' + escapeHtml(p.status || 'Recorded') + '</strong><small>' + escapeHtml([p.date || p.createdAt || '', p.method || p.type || p.source || 'Payment'].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(p.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Service</h2></div><div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.type || m.issue || 'Service') + '</strong><small>' + escapeHtml([m.vehicle || vehicleTitle, m.due || m.nextDue || '', m.status || 'Open'].filter(Boolean).join(' - ')) + '</small></div><span>' + escapeHtml(m.status || 'Open') + '</span></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div><div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -2330,6 +2334,7 @@ function systemReadiness(data) {
     route('GET', '/customer/login', 'Customer login page'),
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
+    route('POST', '/customer/card-change', 'Customer portal card-on-file change request'),
     route('GET', '/api/customer/portal-state', 'Customer-only account state'),
     route('POST', '/api/customer-accounts', 'Owner-managed customer logins'),
     route('POST', '/api/organizations', 'Owner-managed company/store/franchise accounts'),
@@ -3070,6 +3075,7 @@ function cleanAutopayPayload(payload) {
   const amount = Number(payload.amount || 0);
   return {
     id: payload.id || ('rec-' + Date.now()),
+    organizationId: String(payload.organizationId || payload.orgId || payload.companyId || MAIN_ORG_ID).trim(),
     customer: String(payload.customer || '').trim(),
     phone: String(payload.phone || '').trim(),
     email: String(payload.email || '').trim(),
@@ -3664,6 +3670,7 @@ function createCardSetupRequest(data, payload) {
   if (cardTarget) autopay.id = cardTarget.id || (existingAutopay && existingAutopay.id) || autopay.id;
   const request = {
     id: 'setup-' + crypto.randomBytes(12).toString('hex'),
+    organizationId: autopay.organizationId || MAIN_ORG_ID,
     recurringPaymentId: autopay.id,
     customer: autopay.customer,
     phone: autopay.phone,
@@ -4548,6 +4555,103 @@ const server = http.createServer(async (req, res) => {
       });
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
+    }
+    if (url.pathname === '/customer/card-change' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
+      const context = aiFindCustomerContext(scopedData, {
+        customer: account.customer || account.name,
+        phone: account.phone,
+        email: account.email,
+        recurringPaymentId: account.recurringPaymentId,
+        id: account.recurringPaymentId
+      });
+      const recurring = context.recurring || {};
+      const customerName = context.customerName || account.customer || account.name || 'Customer';
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      if (!recurring.id && !account.recurringPaymentId) {
+        const message = {
+          id: 'msg-customer-card-review-' + Date.now(),
+          date: new Date().toLocaleString('en-US'),
+          createdAt: new Date().toISOString(),
+          organizationId: account.organizationId || MAIN_ORG_ID,
+          customer: customerName,
+          phone: account.phone || context.phone || '',
+          email: account.email || context.email || '',
+          direction: 'Customer action',
+          channel: 'Customer portal',
+          template: 'Card change review',
+          subject: 'Customer requested card change - review needed',
+          status: 'Review needed',
+          tone: 'warn',
+          body: 'Customer requested a card change, but no linked recurring payment was found. Staff should open the customer file and send the correct setup link.',
+          source: 'Customer portal',
+          customerAccountId: account.id,
+          vehicleId: account.vehicleId || context.vehicle && context.vehicle.id || ''
+        };
+        data.messages.unshift(message);
+        await queueOwnerEmailNotification(data, 'customer_message', {
+          customer: customerName,
+          subject: 'Card change review needed - ' + customerName,
+          body: message.body
+        });
+        await writeData(data);
+        return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      }
+      const setup = createCardSetupRequest(data, {
+        id: recurring.id || account.recurringPaymentId,
+        recurringPaymentId: recurring.id || account.recurringPaymentId,
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        reactivateExisting: true,
+        cardOnlyUpdate: true,
+        customer: customerName,
+        phone: account.phone || context.phone || recurring.phone || '',
+        email: account.email || context.email || recurring.email || '',
+        vehicle: context.vehicleName || recurring.vehicle || '',
+        vehicleId: account.vehicleId || context.vehicle && context.vehicle.id || recurring.vehicleId || '',
+        vin: context.vehicle && context.vehicle.vin || recurring.vin || '',
+        licensePlate: context.vehicle && (context.vehicle.plate || context.vehicle.licensePlate) || recurring.licensePlate || recurring.plate || '',
+        tempTag: context.vehicle && context.vehicle.tempTag || recurring.tempTag || '',
+        tracker: context.vehicle && context.vehicle.tracker || recurring.tracker || '',
+        amount: Number(recurring.amount || recurring.weeklyAmount || context.customer && context.customer.weeklyAmount || 0),
+        frequency: recurring.frequency || 'Weekly',
+        nextRun: recurring.nextRun || localDateKey(),
+        chargeTime: recurring.chargeTime || recurring.paymentTime || '18:00',
+        reason: 'Customer portal card change request',
+        notes: 'Customer requested to change card on file from the WheelsonAuto portal.'
+      });
+      data.messages.unshift({
+        id: 'msg-customer-card-change-' + Date.now(),
+        date: new Date().toLocaleString('en-US'),
+        createdAt: new Date().toISOString(),
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customer: customerName,
+        phone: account.phone || context.phone || '',
+        email: account.email || context.email || '',
+        direction: 'Customer action',
+        channel: 'Customer portal',
+        template: 'Card change link',
+        subject: 'Customer opened card change link',
+        status: 'Setup link opened',
+        tone: 'blue',
+        body: 'Customer opened a secure card setup/change link from the customer portal.',
+        source: 'Customer portal',
+        customerAccountId: account.id,
+        recurringPaymentId: setup.request.recurringPaymentId || recurring.id || '',
+        cardSetupRequestId: setup.request.id,
+        vehicleId: setup.request.vehicleId || ''
+      });
+      await queueOwnerEmailNotification(data, 'customer_message', {
+        customer: customerName,
+        subject: 'Customer opened card setup link - ' + customerName,
+        body: 'Customer opened a secure card setup/change link from the WheelsonAuto portal: ' + setup.request.url
+      });
+      await writeData(data);
+      return send(res, 302, '', 'text/plain', { Location: '/setup-card/' + encodeURIComponent(setup.request.id) });
     }
     if (url.pathname === '/customer' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
