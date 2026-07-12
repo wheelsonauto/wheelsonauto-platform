@@ -34,6 +34,7 @@ Completed in this build pass:
 - Star QA manager now prepends visible action cards for open card setup/change links and pending Star approvals, so admin and manager review screens do not hide unfinished card or AI approval work behind background counts.
 - Owner daily closeout signoff snapshots now freeze open card setup/change link counts and pending Star approval counts beside money, failed-payment, stale-link, verification, and vehicle-conflict counts.
 - The visible Daily Closeout board now includes card setup link and Star approval rows plus summary reminders, so the day can be managed before signoff instead of only being audited afterward.
+- Daily closeout notification messages now include those frozen card setup link and Star approval counts in the signed snapshot line, matching what the owner saw in the app at signoff time.
 
 Checks passed at this checkpoint:
 
