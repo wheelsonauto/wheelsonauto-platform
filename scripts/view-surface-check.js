@@ -533,6 +533,24 @@ assertIncludes('Compose message modal', compose, [
 ]);
 assertIncludes('Message send action', app, ['/api/messages/send', 'channel:val', 'send-message-now', 'send-thread-message']);
 
+const customerPortalRequestItems = finalFunctionSlice(app, 'customerPortalRequestItems');
+const customerPortalRequestsBoard = finalFunctionSlice(app, 'customerPortalRequestsBoard');
+assertIncludes('Customer portal request board', customerPortalRequestItems + customerPortalRequestsBoard + app + css, [
+  'Customer portal requests',
+  'receipt',
+  'cardSetupRequests',
+  'paymentRequests',
+  'Proof upload',
+  'Service request',
+  'Issue report',
+  'Search portal requests by customer',
+  'compose-message',
+  'open-document',
+  'customer-portal-requests-board',
+  'customer-portal-request-grid',
+  'customer-portal-request-card'
+]);
+
 const conversationPanel = finalFunctionSlice(app, 'messageConversationPanel');
 assertIncludes('Message conversation panel', conversationPanel, [
   'message-conversation-panel',

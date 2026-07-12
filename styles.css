@@ -4143,6 +4143,42 @@ body.fast-tab-switch .admin-shell .section{
   line-height:1;
   text-align:right;
 }
+.customer-portal-requests-board{
+  background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(23,29,27,.93));
+  border-color:rgba(240,211,148,.22);
+}
+.customer-portal-request-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.customer-portal-request-card{
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  box-shadow:0 14px 28px rgba(0,0,0,.16);
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+.customer-portal-request-card:hover{
+  transform:translateY(-1px);
+  border-color:rgba(240,211,148,.30);
+  background:rgba(240,211,148,.08);
+}
+.customer-portal-request-card.good{border-left:3px solid #7ee787}
+.customer-portal-request-card.blue{border-left:3px solid #58a6ff}
+.customer-portal-request-card.warn{border-left:3px solid #f0d394}
+.customer-portal-request-card.bad{border-left:3px solid #ff705c}
+.customer-portal-request-card strong{
+  color:#f7df9b;
+}
+.customer-portal-request-card .muted{
+  color:#c8d2dc;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
 .star-provider-strip{
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
@@ -4227,7 +4263,8 @@ body.fast-tab-switch .admin-shell .section{
   .service-inspection-grid,
   .company-launch-grid,
   .notification-command-grid,
-  .customer-portal-command-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .customer-portal-command-grid,
+  .customer-portal-request-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
@@ -4240,7 +4277,8 @@ body.fast-tab-switch .admin-shell .section{
   .service-inspection-grid,
   .company-launch-grid,
   .notification-command-grid,
-  .customer-portal-command-grid{grid-template-columns:1fr}
+  .customer-portal-command-grid,
+  .customer-portal-request-grid{grid-template-columns:1fr}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:1fr}
   .star-provider-strip .actions{flex-direction:row;flex-wrap:wrap}
