@@ -474,7 +474,25 @@ async function main() {
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
+    assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
+
+    const customerServiceNoAuth = await request(server, 'POST', '/customer/service-request');
+    assert(customerServiceNoAuth.status === 302 && customerServiceNoAuth.location === '/customer/login', 'Customer service request should require customer login.');
+
+    const customerServiceRequest = await request(server, 'POST', '/customer/service-request', {
+      cookie: customerCookie,
+      form: {
+        type: 'Warning light',
+        preferredDate: '2026-08-01',
+        notes: 'Check engine light came on during the customer portal smoke test.'
+      }
+    });
+    assert(customerServiceRequest.status === 302 && customerServiceRequest.location === '/customer', 'Customer service request should return to the customer portal.');
+    const customerServiceState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const customerServiceJob = (customerServiceState.json.maintenance || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Warning light' && item.due === '2026-08-01' && String(item.notes || '').includes('smoke test'));
+    assert(customerServiceJob && customerServiceJob.vehicleId === 'veh-003' && customerServiceJob.vin === '3LN6L2G91FR123456', 'Customer service request should create a vehicle-linked maintenance job: ' + JSON.stringify(customerServiceJob || null));
+    assert((customerServiceState.json.messages || []).some(message => message.maintenanceId === customerServiceJob.id && message.customer === 'Alicia Brown'), 'Customer service request should be logged in Messages.');
 
     const customerCardChangeNoAuth = await request(server, 'POST', '/customer/card-change');
     assert(customerCardChangeNoAuth.status === 302 && customerCardChangeNoAuth.location === '/customer/login', 'Customer card-change request should require customer login.');
