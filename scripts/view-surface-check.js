@@ -304,8 +304,14 @@ assertIncludes('Messaging setup panel', setupPanel, [
 
 const settings = finalFunctionSlice(app, 'Settings');
 const customerLoginForm = finalFunctionSlice(app, 'customerLoginAccountForm');
+const customerPortalButton = finalFunctionSlice(app, 'customerPortalButton');
+const paymentCustomerPortalCard = finalFunctionSlice(app, 'paymentCustomerCard');
+const recurringCardActionButtons = finalFunctionSlice(app, 'cardActionButtons');
 assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
 assertIncludes('Customer portal account form', customerLoginForm, ['customerLoginName', 'customerLoginPassword', 'customerLoginRecurringId', 'customerLoginVehicleId']);
+assertIncludes('Customer portal action helper', customerPortalButton, ['open-customer-login', 'new-customer-login', 'data-name']);
+assertIncludes('Payment customer portal card actions', paymentCustomerPortalCard, ['customerPortalButton', 'Portal']);
+assertIncludes('Recurring customer portal card actions', recurringCardActionButtons, ['customerPortalButton', 'Portal']);
 
 const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
 const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
