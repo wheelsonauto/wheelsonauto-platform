@@ -7641,6 +7641,7 @@ const server = http.createServer(async (req, res) => {
       if (monthlyDay !== undefined) patch.monthlyDay = monthlyDay;
       const found = patchRecurringAdminState(data, id, patch);
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      enrichLinkedProfiles(data);
       appendAuditLog(data, user, 'Autopay schedule updated', [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
       return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
@@ -7660,6 +7661,7 @@ const server = http.createServer(async (req, res) => {
         notes: String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()
       });
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      enrichLinkedProfiles(data);
       appendAuditLog(data, user, 'Autopay removed', [id, String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()]);
       await writeData(data);
       return json(res, 200, { ok: true, removedAt });

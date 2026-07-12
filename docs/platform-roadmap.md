@@ -40,6 +40,7 @@ Completed in this build pass:
 - Staff/owner and customer sessions now use signed v2 cookies with a private HMAC secret, so browser-side cookie tampering cannot change a role, customer, or company identity.
 - System health/readiness now flags missing `WOA_SESSION_SECRET`/`WOA_COOKIE_SECRET` so Render can be configured with a stable private signing secret for staff and customer sessions.
 - Owner deep reports now include the same signed-session secret setup warning, keeping Star QA exports aligned with system health and readiness before production deploy.
+- Autopay schedule updates and removals now re-run the linked profile truth layer before saving, so customer, vehicle, service, and payment context stays connected after admin changes.
 
 Checks passed at this checkpoint:
 
