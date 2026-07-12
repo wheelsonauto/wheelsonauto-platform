@@ -3647,6 +3647,28 @@ body.fast-tab-switch .admin-shell .section{
   }
 }
 
+.inspection-check-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+}
+.inspection-check{
+  min-height:42px;
+  align-items:center;
+}
+.inspection-check input{
+  accent-color:var(--gold);
+  flex:0 0 auto;
+}
+.inspection-check span{
+  min-width:0;
+}
+@media(max-width:720px){
+  .inspection-check-grid{
+    grid-template-columns:1fr;
+  }
+}
+
 @media print{
   body.print-closeout-mode *{
     visibility:hidden!important;

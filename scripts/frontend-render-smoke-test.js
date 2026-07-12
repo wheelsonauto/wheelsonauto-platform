@@ -320,7 +320,7 @@ async function actionModalSmoke(context) {
   if (vehicle) checks.push(['open-vehicle', vehicle.id, ['Edit vehicle:', 'VIN', 'Tracker', 'Return to fleet']]);
   if (maintenance) {
     checks.push(['open-maintenance', maintenance.id, ['Edit maintenance:', 'Due date', 'Save job']]);
-    checks.push(['complete-maintenance', maintenance.id, ['Complete maintenance:', 'Completed date', 'Mark done']]);
+    checks.push(['complete-maintenance', maintenance.id, ['Complete maintenance:', 'Completed date', 'Inspection checklist', 'Mark done']]);
   }
   if (claim) {
     checks.push(['open-claim', claim.id, ['Issue:', 'Provider / agency', 'Save issue']]);

@@ -229,7 +229,7 @@ const criticalActionRequirements = [
   ['Dispute match accept flow', 'apply-claim-match', ['applyClaimCandidate', 'Dispute match accepted', 'await save()', 'ClaimsIssues()']],
   ['Transaction match accept flow', 'apply-transaction-match', ['applyTransactionCandidate', 'Transaction match accepted', 'await save()', "tab='Transactions'", 'render()']],
   ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
-  ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'await save()', 'closeModal()', 'Maintenance()']]
+  ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'inspectionChecklist', 'lastInspectionChecklist', 'await save()', 'closeModal()', 'Maintenance()']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
