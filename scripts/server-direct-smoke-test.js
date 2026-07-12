@@ -719,6 +719,36 @@ async function main() {
     assert(notificationSettings.status === 200 && notificationSettings.json.ok, 'Owner could not save email notification settings.');
     assert(notificationSettings.json.notifications.emailRecipients[0] === 'notify@example.com', 'Notification recipient did not save.');
 
+    const fakeConnectedApi = await request(server, 'POST', '/api/api-providers', {
+      cookie: ownerCookie,
+      json: {
+        id: 'api-direct-fake-connected',
+        name: 'Direct Fake API',
+        group: 'Risk',
+        status: 'Connected',
+        envKeys: 'DIRECT_FAKE_KEY',
+        endpoint: '/api/direct/fake',
+        liveTest: 'Run direct fake sync'
+      }
+    });
+    assert(fakeConnectedApi.status === 400 && /last test result/i.test(fakeConnectedApi.json.error || ''), 'Connected API providers should require a live-test result before saving.');
+    const connectedApi = await request(server, 'POST', '/api/api-providers', {
+      cookie: ownerCookie,
+      json: {
+        id: 'api-direct-connected',
+        name: 'Direct Connected API',
+        group: 'Risk',
+        status: 'Connected',
+        owner: 'Owner',
+        envKeys: 'DIRECT_CONNECTED_KEY',
+        endpoint: '/api/direct/connected',
+        liveTest: 'Run direct connected smoke sync',
+        lastTestAt: '2026-08-04',
+        lastTestResult: 'Passed direct smoke test'
+      }
+    });
+    assert(connectedApi.status === 200 && connectedApi.json.ok && connectedApi.json.provider.lastTestResult === 'Passed direct smoke test', 'Connected API provider should save only after credentials, endpoint, live test, and result are recorded.');
+
     const defaultNotificationEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'card_setup_completed', 'customer_message'];
     const filteredNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
       cookie: ownerCookie,

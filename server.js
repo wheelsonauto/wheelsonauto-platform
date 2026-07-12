@@ -5563,6 +5563,15 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.apiProviders = Array.isArray(data.apiProviders) ? data.apiProviders : [];
       const provider = cleanApiProviderPayload(payload);
+      if (String(provider.status || '').toLowerCase() === 'connected') {
+        const missing = [
+          ['env keys', provider.envKeys],
+          ['endpoint/route', provider.endpoint],
+          ['live test plan', provider.liveTest],
+          ['last test result', provider.lastTestResult]
+        ].filter(item => !String(item[1] || '').trim()).map(item => item[0]);
+        if (missing.length) return json(res, 400, { ok: false, error: 'Connected API systems need ' + missing.join(', ') + ' before they can be marked connected.' });
+      }
       const existing = data.apiProviders.find(item => item.id === provider.id);
       if (existing) Object.assign(existing, provider, { createdAt: existing.createdAt || provider.createdAt });
       else data.apiProviders.unshift(provider);
