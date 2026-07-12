@@ -421,6 +421,7 @@ async function main() {
     assert(staffResetRequest.status === 200 && staffResetRequest.text.includes('request was sent'), 'Staff reset request did not save.');
     const staffResetState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(staffResetState.json.messages.some(message => message.event === 'staff_password_reset' && message.staffAccountId === 'direct-manager'), 'Staff reset request should be saved in Messages.');
+    assert((staffResetState.json.auditLogs || []).some(row => row.action === 'Staff password help requested' && String(row.details || '').includes('Direct Manager') && String(row.details || '').includes('Matched staff account')), 'Staff reset request should be owner audit logged.');
     const resetRequestedStaff = (staffResetState.json.staffAccounts || []).find(account => account.id === 'direct-manager');
     assert(resetRequestedStaff && resetRequestedStaff.passwordResetStatus === 'Requested' && resetRequestedStaff.passwordResetRequestedAt, 'Staff reset request should mark the staff login for owner follow-up.');
     const resetManagerPassword = await request(server, 'POST', '/api/staff-accounts', {
@@ -696,6 +697,7 @@ async function main() {
     assert(customerResetRequest.status === 200 && customerResetRequest.text.includes('request was sent'), 'Customer reset request did not save.');
     const resetRequestState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(resetRequestState.json.messages.some(message => message.event === 'customer_password_reset' && message.customer === 'Alicia Brown'), 'Customer reset request should be saved in Messages.');
+    assert((resetRequestState.json.auditLogs || []).some(row => row.action === 'Customer password help requested' && String(row.details || '').includes('Alicia Brown') && String(row.details || '').includes('Matched customer account')), 'Customer reset request should be owner audit logged.');
     const resetRequestedAccount = (resetRequestState.json.customerAccounts || []).find(account => account.id === 'direct-customer-login');
     assert(resetRequestedAccount && resetRequestedAccount.passwordResetStatus === 'Requested' && resetRequestedAccount.passwordResetRequestedAt, 'Customer reset request should mark the customer portal login for owner follow-up.');
 
@@ -1660,7 +1662,7 @@ async function main() {
     const ownerAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const auditLogs = ownerAuditState.json.auditLogs || [];
     const auditActions = auditLogs.map(row => row.action);
-    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Customer portal paid-outside reported', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
+    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Staff password help requested', 'Customer password help requested', 'Customer portal paid-outside reported', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
       assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
     });
     assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');

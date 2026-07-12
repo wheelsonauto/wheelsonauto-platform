@@ -6556,6 +6556,13 @@ const server = http.createServer(async (req, res) => {
           'Action: verify the customer, then update their customer portal password from Settings.'
         ].join('\n')
       });
+      appendAuditLog(data, {
+        name: customer,
+        username: account && (account.username || account.email || account.phone) || identity,
+        role: 'Customer login help',
+        organizationId: account && account.organizationId || MAIN_ORG_ID,
+        companyName: companyNameById(data, account && account.organizationId || MAIN_ORG_ID)
+      }, 'Customer password help requested', [customer, account ? 'Matched customer account' : 'Needs account match', identity]);
       await writeData(data);
       return send(res, 200, customerForgotPage('Your request was sent to WheelsonAuto. We will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
@@ -7199,6 +7206,13 @@ const server = http.createServer(async (req, res) => {
           'Action: verify the staff member, then update their password from Settings.'
         ].join('\n')
       });
+      appendAuditLog(data, {
+        name: staffName,
+        username: staff && (staff.username || staff.email || staff.phone) || identity,
+        role: 'Staff login help',
+        organizationId: staff && staff.organizationId || MAIN_ORG_ID,
+        companyName: companyNameById(data, staff && staff.organizationId || MAIN_ORG_ID)
+      }, 'Staff password help requested', [staffName, staff ? 'Matched staff account' : 'Needs staff match', staff && staff.role || 'Unknown role']);
       await writeData(data);
       return send(res, 200, staffForgotPage('Your request was sent to the owner. They will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }

@@ -137,6 +137,9 @@ if (!/\(roleName\(\)==='mechanic'\|\|roleName\(\)==='manager'\)&&moneyBlocked/.t
 if (!/roleName\(\)==='mechanic'\)return''/.test(textCustomerButton)) fail('Mechanic text buttons are not suppressed.');
 if (!/STAFF_PIN_LOGIN_ENABLED/.test(server) || !/if \(!STAFF_PIN_LOGIN_ENABLED\) return null;/.test(server)) fail('Staff PIN login should be disabled unless explicitly enabled.');
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
+if (!/Customer password help requested/.test(server) || !/Staff password help requested/.test(server)) {
+  fail('Password help requests should be owner audit logged.');
+}
 
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/messages'\)/.test(apiAllowedForUser)) fail('Mechanic API message routes are not blocked.');
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/reports'\)/.test(apiAllowedForUser)) fail('Mechanic API report routes are not blocked.');
