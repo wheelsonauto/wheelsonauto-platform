@@ -303,11 +303,14 @@ assertIncludes('Messaging setup panel', setupPanel, [
 ]);
 
 const settings = finalFunctionSlice(app, 'Settings');
+const organizations = finalFunctionSlice(app, 'Organizations');
+const companyReadinessCards = finalFunctionSlice(app, 'companyReadinessCards');
 const customerLoginForm = finalFunctionSlice(app, 'customerLoginAccountForm');
 const customerPortalButton = finalFunctionSlice(app, 'customerPortalButton');
 const paymentCustomerPortalCard = finalFunctionSlice(app, 'paymentCustomerCard');
 const recurringCardActionButtons = finalFunctionSlice(app, 'cardActionButtons');
 assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
+assertIncludes('Company account staff actions', organizations + companyReadinessCards, ['Company accounts', 'Add staff', 'new-staff', 'Staff list']);
 assertIncludes('Customer portal account form', customerLoginForm, ['customerLoginName', 'customerLoginPassword', 'customerLoginRecurringId', 'customerLoginVehicleId']);
 assertIncludes('Customer portal action helper', customerPortalButton, ['open-customer-login', 'new-customer-login', 'data-name']);
 assertIncludes('Payment customer portal card actions', paymentCustomerPortalCard, ['customerPortalButton', 'Portal']);
@@ -318,7 +321,7 @@ const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
 const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 assertIncludes('Staff service cards', staffServiceCard, ['roleName()===\'mechanic\'', 'vehicleIdentityLine', 'complete-maintenance', 'open-maintenance']);
 assertIncludes('Staff claim cards', staffClaimCard, ['roleName()===\'mechanic\'', 'open-claim', 'send-claim-link', 'claimMatchNote']);
-assertIncludes('Clover dispute match note', claimMatchNote, ['Needs payment/customer match', 'Matched: ', 'customerMatchSource']);
+assertIncludes('Clover dispute match note', claimMatchNote, ['Needs payment/customer match', 'Matched: ', 'customerMatchSource', 'apply-claim-match']);
 
 const quickbar = finalFunctionSlice(app, 'mobileQuickbar');
 assertStringsInclude('Mobile quickbar labels', quickbar, ['Dashboard', 'Payments', 'Operations', 'Messages', 'Settings', 'Manager Portal', 'Reports', 'Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
