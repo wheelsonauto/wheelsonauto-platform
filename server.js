@@ -3248,6 +3248,10 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
     return true;
   }).slice(0, 30);
 }
+function isOpenCustomerPaymentRequest(row = {}) {
+  const status = String(row.status || 'Open').toLowerCase();
+  return status.indexOf('paid') < 0 && status.indexOf('closed') < 0 && status.indexOf('cancel') < 0 && status.indexOf('expired') < 0;
+}
 function customerPortalState(data, account) {
   const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
   enrichLinkedProfiles(scopedData);
@@ -3267,7 +3271,7 @@ function customerPortalState(data, account) {
   const maintenance = (scopedData.maintenance || []).filter(row => customerPortalRecordMatches(row, identity, 'maintenance')).slice(0, 20);
   const claims = (scopedData.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
   const messages = (scopedData.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message')).slice(0, 20);
-  const paymentRequests = (scopedData.paymentRequests || []).filter(row => customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
+  const paymentRequests = (scopedData.paymentRequests || []).filter(row => isOpenCustomerPaymentRequest(row) && customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
   const primaryRecurring = recurringPayments[0] || context.recurring || {};
   const namedVehicle = (scopedData.vehicles || []).find(row => [primaryRecurring.vehicle, customers[0] && customers[0].vehicle, contracts[0] && contracts[0].vehicle, context.vehicleName].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || {};

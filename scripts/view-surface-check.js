@@ -244,6 +244,7 @@ assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
   '/customer/paid-outside',
   'Open payment requests',
   'customerPortalPaymentRequestRow',
+  'isOpenCustomerPaymentRequest',
   'Pay securely',
   'Receipt photo link',
   'Photo link, dashboard light photo note',
