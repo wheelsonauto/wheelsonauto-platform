@@ -175,6 +175,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Customer portal access',
   'customer_portal_access',
   'customerPortalAccountForName',
+  'customerPortalLoginReady',
+  'login-ready customer portal account',
   'Payment request truth',
   'payment_request_truth',
   'WheelsonAuto hosted checkout',

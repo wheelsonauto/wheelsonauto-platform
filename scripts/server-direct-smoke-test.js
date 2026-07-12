@@ -143,12 +143,15 @@ async function main() {
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
+    duplicateState.customerAccounts = duplicateState.customerAccounts || [];
     duplicateState.maintenance = duplicateState.maintenance || [];
     duplicateState.payments.unshift(
       { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-dispute-customer@example.com' },
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
+    duplicateState.recurringPayments.unshift({ id: 'rec-direct-draft-portal', customer: 'Direct Draft Portal Customer', phone: '3135550188', email: 'direct-draft-portal@example.com', vehicle: 'Direct Draft Portal Car', amount: 77, status: 'Active' });
+    duplicateState.customerAccounts.unshift({ id: 'direct-draft-portal-login', name: 'Direct Draft Portal Customer', customer: 'Direct Draft Portal Customer', username: 'direct-draft-portal', phone: '3135550188', email: 'direct-draft-portal@example.com', status: 'Active', recurringPaymentId: 'rec-direct-draft-portal' });
     duplicateState.maintenance.unshift({ id: 'mnt-direct-autopay-file-open', vehicleId: 'veh-direct-autopay-file', vehicle: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tracker: 'TRK-AUTO', customer: 'Previous Direct Service Customer', type: 'Monthly inspection', issue: 'Open inspection should follow reassigned vehicle', due: '2026-07-20', status: 'Scheduled' });
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
@@ -535,6 +538,7 @@ async function main() {
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Messages / communications') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, communication, Star QA, and audit sections.');
     assert(ownerReport.text.includes('Failed twice') && ownerReport.text.includes('Payment not found') && ownerReport.text.includes('Unmatched payments') && ownerReport.text.includes('Missing contact') && ownerReport.text.includes('Customer portal access'), 'Owner deep report should include operational Star QA truth rows.');
+    assert(ownerReport.text.includes('login-ready customer portal account'), 'Owner deep report should treat draft customer portal records without passwords as unfinished access.');
     assert(ownerReport.text.includes('Possible match Direct Dispute Customer') && ownerReport.text.includes('DIRECTDISPUTEVIN') && ownerReport.text.includes('Tag DIR-DSP') && ownerReport.text.includes('Phone 3135550199') && ownerReport.text.includes('Email direct-dispute-customer@example.com'), 'Owner deep report should include possible dispute customer, vehicle, and contact evidence.');
     assert(ownerReport.text.includes('staff_password_reset') && ownerReport.text.includes('Staff login direct-manager'), 'Owner deep report should include safe staff reset/help communication rows.');
     ['DirectManager123!', 'DirectManager456!', 'DirectCustomer123!', 'DirectCustomer456!', 'passwordHash', 'passwordSalt', 'sourceToken', 'paymentSource'].forEach(secret => {
@@ -543,6 +547,8 @@ async function main() {
     const ownerHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(ownerHealth.status === 200 && ownerHealth.json.summary && ownerHealth.json.star && Array.isArray(ownerHealth.json.issues), 'Owner system health should return summary, Star, and issue rows.');
     assert(ownerHealth.json.issues.some(row => row.key === 'unmatched_payments') && ownerHealth.json.issues.some(row => row.key === 'missing_vin') && ownerHealth.json.issues.some(row => row.key === 'dispute_match_review') && ownerHealth.json.issues.some(row => row.key === 'customer_portal_access'), 'Owner system health should include payment, dispute, portal, and fleet truth checks.');
+    const portalHealth = ownerHealth.json.issues.find(row => row.key === 'customer_portal_access');
+    assert(portalHealth && Number(portalHealth.count) > 0 && /login-ready/i.test(portalHealth.detail || ''), 'Owner system health should flag active customers whose portal record is not login ready.');
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
     assert(ownerReadiness.status === 200 && Array.isArray(ownerReadiness.json.truthChecks) && Object.prototype.hasOwnProperty.call(ownerReadiness.json, 'dataOk'), 'System readiness should return customer/payment/fleet truth checks.');
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'unmatched_payments') && ownerReadiness.json.truthChecks.some(row => row.key === 'autopay_vehicle_link') && ownerReadiness.json.truthChecks.some(row => row.key === 'payment_request_truth') && ownerReadiness.json.truthChecks.some(row => row.key === 'open_payment_requests'), 'System readiness should include unmatched payment, payment-link, and autopay vehicle-link checks.');
