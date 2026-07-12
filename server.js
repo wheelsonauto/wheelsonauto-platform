@@ -765,6 +765,64 @@ async function queueOwnerEmailNotification(data, event, payload = {}) {
   if (settings.events.length && !settings.events.includes(event)) return null;
   return queueEmailNotification(data, { ...payload, event });
 }
+function recordDateKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/today/i.test(raw)) return localDateKey();
+  const iso = raw.match(/\d{4}-\d{2}-\d{2}/);
+  if (iso) return iso[0];
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : dateKey(parsed);
+}
+function closeoutPaymentPaid(payment = {}) {
+  const status = String(payment.status || '').toLowerCase();
+  const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.message, payment.error].filter(Boolean).join(' ')).toLowerCase();
+  return status === 'paid' && !/(refund|void|chargeback|dispute|failed|not found)/.test(meta) && Number(payment.amount || 0) > 0;
+}
+function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
+  const text = String([row.status, row.tone, row.lastAutoChargeResult, row.lastAutoChargeError].filter(Boolean).join(' ')).toLowerCase();
+  const failedAttempts = Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0));
+  if (String(row.lastAutoChargeDate || '') === dateKeyValue) return 'Paid';
+  if (text.includes('not found')) return 'Payment not found';
+  if (failedAttempts >= 2 || text.includes('2x') || text.includes('contact')) return 'Failed twice';
+  if (failedAttempts === 1 || text.includes('1x') || text.includes('retry')) return 'Failed once';
+  if (text.includes('setup') || text.includes('waiting') || text.includes('pending')) return 'Setup needed';
+  return 'Pending';
+}
+function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey()) {
+  const recurring = allRecurringRows(data).filter(row => {
+    if (!row) return false;
+    return recurringDateKey(row) === dateKeyValue || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === dateKeyValue || /fail|not found|retry|contact/i.test(String(row.status || ''));
+  });
+  const payments = (data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue);
+  const paidPayments = payments.filter(closeoutPaymentPaid);
+  const expected = recurring.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
+  const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const failed = recurring.filter(row => /Failed|not found/i.test(closeoutRecurringState(row, dateKeyValue)));
+  const pending = recurring.filter(row => ['Pending', 'Setup needed', 'Payment not found'].includes(closeoutRecurringState(row, dateKeyValue)));
+  const lines = [
+    'WheelsonAuto daily closeout for ' + dateKeyValue,
+    '',
+    'Expected from due/active tracked customers: ' + moneyText(expected),
+    'Collected in recorded paid transactions: ' + moneyText(collected),
+    'Still open or setup/not-found: ' + pending.length,
+    'Failed once/twice/not-found: ' + failed.length,
+    'Today transactions recorded: ' + payments.length,
+    '',
+    'Customers to review:',
+    ...(recurring.length ? recurring.slice(0, 20).map(row => '- ' + (row.customer || 'Unknown customer') + ' | ' + moneyText(row.amount || row.weeklyAmount || 0) + ' | ' + closeoutRecurringState(row, dateKeyValue) + ' | ' + (row.vehicle || row.vin || 'No vehicle linked')) : ['- No due/failed customers in closeout.']),
+    '',
+    'Recent transactions:',
+    ...(payments.length ? payments.slice(0, 20).map(payment => '- ' + (payment.customer || 'Unmatched payment') + ' | ' + moneyText(payment.amount || 0) + ' | ' + (payment.status || 'Recorded') + ' | ' + (payment.method || payment.type || payment.source || 'Payment')) : ['- No transactions recorded today.'])
+  ];
+  return {
+    customer: 'WheelsonAuto',
+    subject: 'WheelsonAuto daily closeout - ' + dateKeyValue,
+    body: lines.join('\n'),
+    template: 'Daily closeout',
+    summary: { dateKey: dateKeyValue, expected, collected, pending: pending.length, failed: failed.length, transactions: payments.length }
+  };
+}
 function queueCustomerMessage(data, row = {}, template, status, body, tone = 'warn') {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const customer = row.customer || row.name || 'Customer';
@@ -2134,6 +2192,7 @@ function systemReadiness(data) {
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
+    route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
@@ -4193,6 +4252,18 @@ const server = http.createServer(async (req, res) => {
       });
       await writeData(data);
       return json(res, result.sent ? 200 : 202, { ok: true, sent: result.sent, message: result.message, warning: result.result.message || '', notifications: emailNotificationSettings(data), messaging: publicMessagingStatus(data) });
+    }
+    if (url.pathname === '/api/notifications/daily-closeout' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can send daily closeout notifications.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const settings = emailNotificationSettings(data);
+      if (!settings.emailRecipients.length) return json(res, 400, { ok: false, error: 'Add a notification email in Messages setup first.' });
+      const closeout = dailyCloseoutNotificationPayload(data, payload.dateKey || localDateKey());
+      const result = await queueOwnerEmailNotification(data, 'daily_closeout', closeout);
+      if (!result) return json(res, 409, { ok: false, error: 'Daily closeout notifications are turned off in notification settings.' });
+      await writeData(data);
+      return json(res, result.sent ? 200 : 202, { ok: true, sent: result.sent, message: result.message, summary: closeout.summary, warning: result.result.message || '' });
     }
     if (url.pathname === '/api/messages/send' && req.method === 'POST') {
       const payload = JSON.parse(await readBody(req) || '{}');

@@ -67,6 +67,7 @@ requireText('Star custom prompt action', app, 'star-ai-custom');
 requireText('Server email webhook route', server, "/api/webhooks/email");
 requireText('Server notification settings route', server, "/api/notifications/email/settings");
 requireText('Server notification test route', server, "/api/notifications/email/test");
+requireText('Server daily closeout notification route', server, "/api/notifications/daily-closeout");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
 requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
@@ -74,6 +75,7 @@ requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
 requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');
 requireText('Owner notification event filter', queueOwnerEmailNotification, 'settings.events.includes(event)');
+requireText('Daily closeout notification payload', server, 'dailyCloseoutNotificationPayload');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
 
 console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, notification email, and channel UI are wired.');

@@ -399,8 +399,16 @@ async function main() {
     assert([200, 202].includes(notificationTest.status) && notificationTest.json.ok, 'Owner notification test failed.');
     assert(notificationTest.json.message.channel === 'Email', 'Notification test should save an Email message.');
     assert(notificationTest.json.message.direction === 'Outbound notification', 'Notification test should save as an outbound notification.');
+    const closeoutNotification = await request(server, 'POST', '/api/notifications/daily-closeout', {
+      cookie: ownerCookie,
+      json: {}
+    });
+    assert([200, 202].includes(closeoutNotification.status) && closeoutNotification.json.ok, 'Daily closeout notification failed.');
+    assert(closeoutNotification.json.message.event === 'daily_closeout', 'Daily closeout should save a daily_closeout notification message.');
+    assert(closeoutNotification.json.summary && Object.prototype.hasOwnProperty.call(closeoutNotification.json.summary, 'collected'), 'Daily closeout should return a money summary.');
     const notificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(notificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Notified Applicant'), 'Application notification should be saved in Messages.');
+    assert(notificationState.json.messages.some(message => message.event === 'daily_closeout'), 'Daily closeout notification should be saved in Messages.');
 
     const autopayState = JSON.parse(JSON.stringify(notificationState.json));
     autopayState.recurringPayments = autopayState.recurringPayments || [];
