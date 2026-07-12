@@ -192,6 +192,7 @@ assertIncludes('Public app shell no-store headers', server, ["appHtml({ publicMo
 assertIncludes('Authenticated app shell no-store headers', server, ["appHtml({ publicMode: false, user })", "'Cache-Control': 'no-store'"]);
 assertIncludes('Session cookie security flags', server, ['function cookieSecurityFlags', 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Secure']);
 assertIncludes('Staff session cookie helper usage', server, ["sessionSetCookie('woa_session'", "sessionSetCookie('woa_customer_session'"]);
+assertIncludes('Signed session cookies', server, ['SESSION_SIGNING_SECRET', 'sessionSignature', 'signedSessionCookie', 'verifySignedSessionCookie', "signedSessionCookie('staff'", "signedSessionCookie('customer'", "createHmac('sha256'"]);
 assertIncludes('Login throttling guard', server, ['loginFailureBuckets', 'LOGIN_THROTTLE_LIMIT', 'loginThrottleKey', 'loginThrottleWaitMs', 'recordLoginFailure', 'clearLoginFailure', 'Retry-After', 'Too many failed login attempts']);
 
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {

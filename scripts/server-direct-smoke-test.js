@@ -105,6 +105,7 @@ async function login(server, form) {
   const res = await request(server, 'POST', '/login', { form });
   assert(res.status === 302, 'Expected login redirect, got ' + res.status + ': ' + res.text.slice(0, 120));
   assert(String(res.cookie).includes('woa_session='), 'Login did not set a session cookie.');
+  assert(String(res.cookie).includes('woa_session=v2.staff.'), 'Staff/admin session cookie should use the signed v2 format.');
   assertSecureCookie(res.cookie, 'Staff/admin login');
   return cleanCookie(res.cookie);
 }
@@ -142,6 +143,9 @@ async function main() {
     assert(throttledCustomerLogin.status === 429 && throttledCustomerLogin.text.includes('Too many failed login attempts') && String(throttledCustomerLogin.headers['Retry-After'] || '').length, 'Repeated bad customer login should be throttled with retry guidance.');
 
     const ownerCookie = await login(server, { pin: adminPin });
+    const tamperedOwnerCookie = ownerCookie.replace(/\.[^.]+$/, '.bad-signature');
+    const tamperedOwnerRead = await request(server, 'GET', '/api/state', { cookie: tamperedOwnerCookie });
+    assert(!tamperedOwnerRead.json && tamperedOwnerRead.text.includes('WheelsonAuto Portal'), 'Tampered staff session cookie should not authenticate API access.');
     const ownerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(ownerState.status === 200 && ownerState.json, 'Owner could not read state.');
 
@@ -548,7 +552,7 @@ async function main() {
     });
     assert(franchiseCustomerAccount.status === 200 && franchiseCustomerAccount.json.ok, 'Owner could not create franchise customer portal login.');
     const franchiseCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-franchise-customer', password: 'DirectFranchiseCustomer123!' } });
-    assert(franchiseCustomerLogin.status === 302 && String(franchiseCustomerLogin.cookie).includes('woa_customer_session='), 'Franchise customer login did not set a customer session.');
+    assert(franchiseCustomerLogin.status === 302 && String(franchiseCustomerLogin.cookie).includes('woa_customer_session=v2.customer.'), 'Franchise customer login did not set a signed customer session.');
     const franchiseCustomerCookie = cleanCookie(franchiseCustomerLogin.cookie);
     const franchisePortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: franchiseCustomerCookie });
     assert(franchisePortalState.status === 200 && franchisePortalState.json.ok, 'Franchise customer portal state did not load.');

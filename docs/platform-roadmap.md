@@ -37,6 +37,7 @@ Completed in this build pass:
 - Daily closeout notification messages now include those frozen card setup link and Star approval counts in the signed snapshot line, matching what the owner saw in the app at signoff time.
 - Owner CSV/report exports now include Daily Closeout rows for open card setup links and pending Star approvals, keeping reports aligned with Dashboard, Messages, Star QA, and closeout signoff.
 - Staff/owner and customer login now have an in-memory repeated-failure throttle with clear retry guidance, adding a basic brute-force brake without changing live account data.
+- Staff/owner and customer sessions now use signed v2 cookies with a private HMAC secret, so browser-side cookie tampering cannot change a role, customer, or company identity.
 
 Checks passed at this checkpoint:
 

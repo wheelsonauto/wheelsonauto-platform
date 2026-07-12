@@ -17,6 +17,7 @@ const LOGIN_PASSWORD = process.env.WOA_ADMIN_PASSWORD || process.env.WOA_OWNER_P
 const LOGIN_PASSWORD_HASH = process.env.WOA_ADMIN_PASSWORD_HASH || process.env.WOA_OWNER_PASSWORD_HASH || '';
 const LOGIN_PASSWORD_SALT = process.env.WOA_ADMIN_PASSWORD_SALT || process.env.WOA_OWNER_PASSWORD_SALT || '';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
+const SESSION_SIGNING_SECRET = process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
 const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
 const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
@@ -2718,16 +2719,31 @@ function cookieSecurityFlags(options = {}) {
 function sessionSetCookie(name, value, options = {}) {
   return name + '=' + String(value || '') + '; ' + cookieSecurityFlags(options);
 }
-function sessionCookie(user) {
+function sessionSignature(scope, payload) {
+  return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(String(scope || '') + '.' + String(payload || '')).digest('base64url');
+}
+function signedSessionCookie(scope, user) {
   const payload = Buffer.from(JSON.stringify(user), 'utf8').toString('base64url');
-  return SESSION_VALUE + '.' + payload;
+  return 'v2.' + String(scope || 'staff') + '.' + payload + '.' + sessionSignature(scope || 'staff', payload);
+}
+function verifySignedSessionCookie(raw, scope) {
+  const prefix = 'v2.' + String(scope || 'staff') + '.';
+  if (!String(raw || '').startsWith(prefix)) return null;
+  const rest = String(raw).slice(prefix.length);
+  const cut = rest.lastIndexOf('.');
+  if (cut < 1) return null;
+  const payload = rest.slice(0, cut);
+  const signature = rest.slice(cut + 1);
+  if (!secureCompare(sessionSignature(scope || 'staff', payload), signature)) return null;
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+}
+function sessionCookie(user) {
+  return signedSessionCookie('staff', user);
 }
 function sessionUser(req) {
   const raw = cookies(req).woa_session || '';
-  if (raw === SESSION_VALUE) return { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' };
-  if (!raw.startsWith(SESSION_VALUE + '.')) return null;
   try {
-    const body = JSON.parse(Buffer.from(raw.slice(SESSION_VALUE.length + 1), 'base64url').toString('utf8'));
+    const body = verifySignedSessionCookie(raw, 'staff');
     return body && body.role ? body : null;
   } catch {
     return null;
@@ -3356,14 +3372,12 @@ function staffForgotPage(message = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Staff Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Staff help</div><h1>Reset staff access</h1><p>Send the owner a secure request. Password changes stay owner-approved.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, staff passwords are reset by the owner after account verification.</div><a class="btn" href="/login" style="margin-top:10px;text-align:center">Back to staff login</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
 }
 function customerSessionCookie(account) {
-  const payload = Buffer.from(JSON.stringify(customerLoginUser(account)), 'utf8').toString('base64url');
-  return SESSION_VALUE + '.customer.' + payload;
+  return signedSessionCookie('customer', customerLoginUser(account));
 }
 function customerSessionUser(req) {
   const raw = cookies(req).woa_customer_session || '';
-  if (!raw.startsWith(SESSION_VALUE + '.customer.')) return null;
   try {
-    const body = JSON.parse(Buffer.from(raw.slice((SESSION_VALUE + '.customer.').length), 'base64url').toString('utf8'));
+    const body = verifySignedSessionCookie(raw, 'customer');
     return body && body.role === 'Customer' ? body : null;
   } catch {
     return null;
