@@ -1175,6 +1175,16 @@ async function main() {
     const managerState = await request(server, 'GET', '/api/state', { cookie: managerCookie });
     assert(managerState.status === 200 && Array.isArray(managerState.json.messages), 'Manager should see message state.');
     assert(managerState.json.messages.some(message => message.channel === 'Email'), 'Manager state should include email history.');
+    const normalizeBefore = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const ownerNormalizeSave = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: normalizeBefore.json });
+    assert(ownerNormalizeSave.status === 200 && ownerNormalizeSave.json.ok && Array.isArray(ownerNormalizeSave.json.changes), 'Owner state save should return changed status and changes array.');
+    const noopBefore = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const noopBeforeAuditCount = (noopBefore.json.auditLogs || []).filter(row => row.action === 'Platform state saved').length;
+    const ownerNoopSave = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: noopBefore.json });
+    assert(ownerNoopSave.status === 200 && ownerNoopSave.json.ok && ownerNoopSave.json.changed === false && Array.isArray(ownerNoopSave.json.changes), 'Stable no-op owner state save should return changed=false and changes array: ' + JSON.stringify(ownerNoopSave.json));
+    const noopAfter = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const noopAfterAuditCount = (noopAfter.json.auditLogs || []).filter(row => row.action === 'Platform state saved').length;
+    assert(noopAfterAuditCount === noopBeforeAuditCount, 'No-op state save should not add a noisy Platform state saved audit row.');
 
     const mechanicState = await request(server, 'GET', '/api/state', { cookie: mechanicCookie });
     assert(mechanicState.status === 200 && mechanicState.json, 'Mechanic state should load.');
@@ -1190,7 +1200,7 @@ async function main() {
       mechanicVehicle.price = 99999;
       mechanicVehicle.trackerStatus = 'Mechanic smoke checked';
       const mechanicSave = await request(server, 'PUT', '/api/state', { cookie: mechanicCookie, json: mechanicWriteState });
-      assert(mechanicSave.status === 200 && mechanicSave.json.ok, 'Mechanic should be able to save service-safe state updates.');
+      assert(mechanicSave.status === 200 && mechanicSave.json.ok && mechanicSave.json.changed === true && mechanicSave.json.changes.some(row => /vehicles updated/i.test(row)), 'Mechanic should be able to save service-safe state updates and receive changed section details.');
       const ownerAfterMechanicSave = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
       const savedMechanicVehicle = (ownerAfterMechanicSave.json.vehicles || []).find(vehicle => vehicle.id === mechanicVehicle.id);
       assert(savedMechanicVehicle && savedMechanicVehicle.currentCustomer === oldCustomer && savedMechanicVehicle.price !== 99999 && savedMechanicVehicle.trackerStatus === 'Mechanic smoke checked', 'Mechanic vehicle save should preserve customer assignment and money fields while allowing service-safe fields.');

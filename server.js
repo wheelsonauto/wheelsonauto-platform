@@ -2691,26 +2691,41 @@ function auditChangedSections(current = {}, next = {}) {
   const keys = ['recurringPayments', 'payments', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
   const details = [];
   keys.forEach(key => {
-    if (JSON.stringify(current[key] || []) === JSON.stringify(next[key] || [])) return;
-    const beforeRows = Array.isArray(current[key]) ? current[key] : [];
-    const afterRows = Array.isArray(next[key]) ? next[key] : [];
-    details.push(key + ' ' + beforeRows.length + '->' + afterRows.length);
+    const beforeRows = Array.isArray(current[key]) ? auditComparableRows(current[key]) : [];
+    const afterRows = Array.isArray(next[key]) ? auditComparableRows(next[key]) : [];
+    if (JSON.stringify(beforeRows) === JSON.stringify(afterRows)) return;
+    const sectionDetails = [];
     const beforeMap = auditRecordMap(beforeRows);
     const afterMap = auditRecordMap(afterRows);
     afterMap.forEach((row, id) => {
-      if (!beforeMap.has(id)) details.push(key + ' added: ' + auditRecordLabel(row));
+      if (!beforeMap.has(id)) sectionDetails.push(key + ' added: ' + auditRecordLabel(row));
     });
     beforeMap.forEach((row, id) => {
-      if (!afterMap.has(id)) details.push(key + ' removed: ' + auditRecordLabel(row));
+      if (!afterMap.has(id)) sectionDetails.push(key + ' removed: ' + auditRecordLabel(row));
     });
     afterMap.forEach((row, id) => {
       const old = beforeMap.get(id);
       if (!old || JSON.stringify(old) === JSON.stringify(row)) return;
       const changed = auditChangedFields(old, row);
-      details.push(key + ' updated: ' + auditRecordLabel(row) + (changed ? ' (' + changed + ')' : ''));
+      if (changed) sectionDetails.push(key + ' updated: ' + auditRecordLabel(row) + ' (' + changed + ')');
     });
+    if (sectionDetails.length) details.push(key + ' ' + beforeRows.length + '->' + afterRows.length, ...sectionDetails);
   });
   return details.slice(0, 24);
+}
+const AUDIT_PRIVATE_FIELDS = new Set(['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey']);
+function auditComparableValue(value) {
+  if (Array.isArray(value)) return value.map(auditComparableValue);
+  if (!value || typeof value !== 'object') return value;
+  const clean = {};
+  Object.keys(value).sort().forEach(key => {
+    if (AUDIT_PRIVATE_FIELDS.has(key)) return;
+    clean[key] = auditComparableValue(value[key]);
+  });
+  return clean;
+}
+function auditComparableRows(rows = []) {
+  return rows.map(auditComparableValue);
 }
 function auditRecordMap(rows = []) {
   const map = new Map();
@@ -2730,7 +2745,7 @@ function auditRecordLabel(row = {}) {
   ].filter(Boolean).join(' / ').slice(0, 180);
 }
 function auditChangedFields(before = {}, after = {}) {
-  const fields = ['status', 'stage', 'customer', 'name', 'vehicle', 'vehicleId', 'vin', 'plate', 'licensePlate', 'tracker', 'amount', 'weeklyAmount', 'weekly', 'frequency', 'nextRun', 'chargeTime', 'paymentDay', 'currentCustomer', 'phone', 'email', 'role', 'organizationId'];
+  const fields = ['status', 'stage', 'customer', 'name', 'vehicle', 'vehicleId', 'vin', 'plate', 'licensePlate', 'tracker', 'trackerStatus', 'trackerLastPing', 'trackerLocation', 'amount', 'weeklyAmount', 'weekly', 'frequency', 'nextRun', 'chargeTime', 'paymentDay', 'currentCustomer', 'phone', 'email', 'role', 'organizationId', 'type', 'issue', 'due', 'nextDue', 'odometer', 'mileage', 'mileageAtService', 'mechanicSignoff'];
   return fields.filter(field => JSON.stringify(before[field] || '') !== JSON.stringify(after[field] || '')).slice(0, 8).join(', ');
 }
 function appendAuditLog(data, user, action, details = []) {
@@ -6117,10 +6132,11 @@ const server = http.createServer(async (req, res) => {
       const incoming = JSON.parse(await readBody(req) || '{}');
       const current = await readData();
       const nextState = stateForUserWrite(current, incoming, user);
+      const changes = auditChangedSections(current, nextState);
       await queueStateChangeNotifications(current, nextState, user);
-      appendAuditLog(nextState, user, 'Platform state saved', auditChangedSections(current, nextState));
+      if (changes.length) appendAuditLog(nextState, user, 'Platform state saved', changes);
       await writeData(nextState);
-      return json(res, 200, { ok: true });
+      return json(res, 200, { ok: true, changed: changes.length > 0, changes });
     }
     if (url.pathname === '/api/messages/status' && req.method === 'GET') {
       const data = await readData();

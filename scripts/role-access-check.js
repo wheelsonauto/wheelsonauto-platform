@@ -141,6 +141,9 @@ assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/int
 if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
   fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
 }
+if (!/changed:\s*changes\.length > 0/.test(server) || !/changes \}/.test(server)) {
+  fail('State save route should return changed status and change details.');
+}
 ['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/tasks', '/api/account/password'].forEach(route => {
   const index = server.indexOf("url.pathname === '" + route + "'");
   if (index < 0) fail('Could not find direct-save route: ' + route);
