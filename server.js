@@ -2049,11 +2049,49 @@ function stateForUserWrite(current, incoming, user) {
 }
 function auditChangedSections(current = {}, next = {}) {
   const keys = ['recurringPayments', 'payments', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
-  return keys.filter(key => JSON.stringify(current[key] || []) !== JSON.stringify(next[key] || [])).map(key => {
-    const before = Array.isArray(current[key]) ? current[key].length : 0;
-    const after = Array.isArray(next[key]) ? next[key].length : 0;
-    return key + ' ' + before + '->' + after;
+  const details = [];
+  keys.forEach(key => {
+    if (JSON.stringify(current[key] || []) === JSON.stringify(next[key] || [])) return;
+    const beforeRows = Array.isArray(current[key]) ? current[key] : [];
+    const afterRows = Array.isArray(next[key]) ? next[key] : [];
+    details.push(key + ' ' + beforeRows.length + '->' + afterRows.length);
+    const beforeMap = auditRecordMap(beforeRows);
+    const afterMap = auditRecordMap(afterRows);
+    afterMap.forEach((row, id) => {
+      if (!beforeMap.has(id)) details.push(key + ' added: ' + auditRecordLabel(row));
+    });
+    beforeMap.forEach((row, id) => {
+      if (!afterMap.has(id)) details.push(key + ' removed: ' + auditRecordLabel(row));
+    });
+    afterMap.forEach((row, id) => {
+      const old = beforeMap.get(id);
+      if (!old || JSON.stringify(old) === JSON.stringify(row)) return;
+      const changed = auditChangedFields(old, row);
+      details.push(key + ' updated: ' + auditRecordLabel(row) + (changed ? ' (' + changed + ')' : ''));
+    });
   });
+  return details.slice(0, 24);
+}
+function auditRecordMap(rows = []) {
+  const map = new Map();
+  rows.forEach((row, index) => {
+    const id = String(row && (row.id || row.recurringPaymentId || row.paymentRequestId || row.cloverPaymentId || row.externalId || row.username || row.email || row.phone || row.name || row.customer) || 'row-' + index).trim();
+    map.set(id || ('row-' + index), row || {});
+  });
+  return map;
+}
+function auditRecordLabel(row = {}) {
+  return [
+    row.customer || row.name || row.username || row.email || row.phone || row.id || 'record',
+    row.vehicle || [row.year, row.make, row.model].filter(Boolean).join(' '),
+    row.vin ? 'VIN ' + row.vin : '',
+    row.plate || row.licensePlate || row.stock ? 'Tag ' + (row.plate || row.licensePlate || row.stock) : '',
+    row.status || row.stage || row.type || row.role || ''
+  ].filter(Boolean).join(' / ').slice(0, 180);
+}
+function auditChangedFields(before = {}, after = {}) {
+  const fields = ['status', 'stage', 'customer', 'name', 'vehicle', 'vehicleId', 'vin', 'plate', 'licensePlate', 'tracker', 'amount', 'weeklyAmount', 'weekly', 'frequency', 'nextRun', 'chargeTime', 'paymentDay', 'currentCustomer', 'phone', 'email', 'role', 'organizationId'];
+  return fields.filter(field => JSON.stringify(before[field] || '') !== JSON.stringify(after[field] || '')).slice(0, 8).join(', ');
 }
 function appendAuditLog(data, user, action, details = []) {
   data.auditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
@@ -5443,6 +5481,7 @@ const server = http.createServer(async (req, res) => {
         const approved = await approveAiMessage(data, payload);
         data.integrations = data.integrations || {};
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiApprovalAt: new Date().toISOString(), lastError: '' };
+        appendAuditLog(data, user, 'Star AI reply approved', [approved.sent.customer || approved.draft.customer || 'Unknown customer', approved.sent.channel || approved.draft.deliveryChannel || 'Message', approved.sent.status || 'Draft saved']);
         await writeData(data);
         return json(res, approved.result.sent ? 200 : 202, { ok: true, sent: !!approved.result.sent, message: approved.sent, draft: approved.draft, warning: approved.result.message || '' });
       } catch (err) {
@@ -5452,6 +5491,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/import/vehicle-sheet' && req.method === 'POST') {
       const data = await readData();
       const imported = await mergeVehicleImport(data);
+      appendAuditLog(data, user, 'Vehicle sheet imported', ['Rows: ' + (imported.rows || 0), 'Customers: ' + (imported.customers || 0), 'Contracts: ' + (imported.contracts || 0), 'Recurring linked: ' + (imported.recurringLinked || 0), 'Maintenance rows: ' + (imported.maintenanceImported || 0)]);
       await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, 200, { ok: true, imported, vehicles: (data.vehicles || []).length, customers: (data.customers || []).length, contracts: (data.contracts || []).length });
@@ -5550,6 +5590,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const synced = await syncCloverIntoData(data);
       const vehicleSheet = await mergeVehicleImport(data);
+      appendAuditLog(data, user, 'Full sync completed', ['Payments: ' + (synced.payments || 0), 'Customers: ' + (synced.customers || 0), 'Recurring: ' + (synced.recurring || 0), 'Vehicle sheet rows: ' + (vehicleSheet.rows || 0), synced.errors.length ? 'Errors: ' + synced.errors.join('; ') : 'No sync errors']);
       await protectConcurrentLocalWrites(data);
       await writeData(data);
       return json(res, synced.errors.length ? 207 : 200, { ok: synced.errors.length === 0, ...synced, vehicleSheet, totalCustomers: (data.customers || []).length, totalPayments: (data.payments || []).length });
@@ -5577,6 +5618,7 @@ const server = http.createServer(async (req, res) => {
       else data.apiProviders.unshift(provider);
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({ id: 'msg-api-' + Date.now(), date: new Date().toLocaleString('en-US'), customer: provider.name, channel: 'Internal log', template: 'API setup', status: provider.status, subject: provider.group, body: provider.liveTest || provider.notes || '' });
+      appendAuditLog(data, user, 'API provider saved', [provider.name, provider.group, provider.status, provider.lastTestResult || provider.liveTest || 'No live test result saved']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, provider });
@@ -5613,6 +5655,7 @@ const server = http.createServer(async (req, res) => {
         if (!staff) return json(res, 404, { ok: false, error: 'Staff account was not found.' });
         Object.assign(staff, record, { updatedAt: new Date().toISOString() });
       }
+      appendAuditLog(data, user, 'Password changed', [isOwnerUser(user) ? 'Owner login' : 'Staff login ' + (user.name || user.username || user.id), 'Password hash updated']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt });
@@ -5632,6 +5675,7 @@ const server = http.createServer(async (req, res) => {
       if (duplicate) return json(res, 409, { ok: false, error: 'That username is already used by another staff account.' });
       if (existing) Object.assign(existing, staff);
       else data.staffAccounts.unshift(staff);
+      appendAuditLog(data, user, existing ? 'Staff account updated' : 'Staff account created', [staff.name || staff.username, staff.role, staff.companyName || companyNameById(data, staff.organizationId), staff.status || 'Active']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       const safeStaff = { ...staff };
@@ -5652,6 +5696,7 @@ const server = http.createServer(async (req, res) => {
       if (duplicate) return json(res, 409, { ok: false, error: 'That customer login is already used by another account.' });
       if (existing) Object.assign(existing, account);
       else data.customerAccounts.unshift(account);
+      appendAuditLog(data, user, existing ? 'Customer login updated' : 'Customer login created', [account.customer || account.name || account.username, account.status || 'Active', account.passwordUpdatedAt ? 'Password set' : 'No new password']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, account: safeCustomerAccount(existing || account), loginUrl: PUBLIC_BASE_URL + '/customer/login' });
@@ -5668,6 +5713,7 @@ const server = http.createServer(async (req, res) => {
       if (duplicate) return json(res, 409, { ok: false, error: 'That company/store name already exists.' });
       if (existing) Object.assign(existing, organization);
       else data.organizations.unshift(organization);
+      appendAuditLog(data, user, existing ? 'Company account updated' : 'Company account created', [organization.name, organization.type, organization.status, organization.dataScope]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, organization: existing || organization });
@@ -5698,6 +5744,7 @@ const server = http.createServer(async (req, res) => {
         const activeAutopay = String(autopay.status || '').toLowerCase() === 'active';
         data.contracts.unshift({ id: 'con-autopay-' + Date.now(), customer: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, vin: autopay.vin, licensePlate: autopay.licensePlate, plate: autopay.plate || autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, weekly: autopay.amount, balance: 0, status: activeAutopay ? 'Active' : 'Pending pickup', autopay: autopay.status || 'Setup needed', paymentProvider: 'Clover', notes: 'Customer file created from WheelsonAuto autopay setup.', source: 'WheelsonAuto autopay', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       }
+      appendAuditLog(data, user, existingAutopay ? 'Autopay reactivated' : 'Autopay created', [autopay.customer || 'Unknown customer', moneyText(autopay.amount || 0), autopay.frequency || 'Schedule', autopay.nextRun || 'No next date', autopay.vehicle || autopay.vin || 'No vehicle linked']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
@@ -5740,6 +5787,7 @@ const server = http.createServer(async (req, res) => {
       if (monthlyDay !== undefined) patch.monthlyDay = monthlyDay;
       const found = patchRecurringAdminState(data, id, patch);
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      appendAuditLog(data, user, 'Autopay schedule updated', [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
       return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
     }
@@ -5758,6 +5806,7 @@ const server = http.createServer(async (req, res) => {
         notes: String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()
       });
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      appendAuditLog(data, user, 'Autopay removed', [id, String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()]);
       await writeData(data);
       return json(res, 200, { ok: true, removedAt });
     }
@@ -5777,6 +5826,7 @@ const server = http.createServer(async (req, res) => {
       const deletedRecurring = beforeRecurring - data.recurringPayments.length;
       const deletedRequests = beforeRequests - data.cardSetupRequests.length;
       if (!deletedRecurring && !deletedRequests) return json(res, 404, { ok: false, error: 'Card setup row was not found.' });
+      appendAuditLog(data, user, 'Card setup deleted', [recurring && recurring.customer || id, 'Recurring rows removed: ' + deletedRecurring, 'Setup requests removed: ' + deletedRequests]);
       await writeData(data);
       return json(res, 200, { ok: true, deletedRecurring, deletedRequests });
     }
@@ -5784,6 +5834,7 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse(await readBody(req) || '{}');
       const data = await readData();
       const created = createCardSetupRequest(data, payload);
+      appendAuditLog(data, user, 'Card setup link created', [created.autopay.customer || payload.customer || 'Unknown customer', moneyText(created.autopay.amount || payload.amount || 0), created.request.url || 'Setup link saved']);
       await writeData(data);
       return json(res, 201, { ok: true, autopay: created.autopay, setupLink: created.request });
     }
@@ -5792,14 +5843,21 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       try {
         const result = await chargeSavedRecurringCard(data, payload, req);
+        appendAuditLog(data, user, 'Manual saved-card charge', [result.charge.customer || result.payment.customer || 'Unknown customer', moneyText(result.payment.amount || payload.amount || 0), result.payment.status || 'Paid', result.payment.vehicle || result.charge.vehicle || 'No vehicle linked']);
+        await writeData(data);
         return json(res, 201, { ok: true, charge: result.charge, payment: result.payment });
       } catch (err) {
         const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
         if (recurring && isPaymentNotFoundError(err)) {
           const payment = savePaymentNotFoundResult(data, recurring, payload, err, { source: 'Manual saved-card charge payment not found' });
+          appendAuditLog(data, user, 'Manual saved-card charge not found', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || 0), String(err && err.message || err)]);
           await protectConcurrentLocalWrites(data);
           await writeData(data);
           return json(res, 409, { ok: false, error: payment.status + ': ' + String(err && err.message || err), payment });
+        }
+        if (recurring) {
+          appendAuditLog(data, user, 'Manual saved-card charge failed', [recurring.customer || 'Unknown customer', moneyText(payload.amount || recurring.amount || 0), String(err && err.message || err)]);
+          await writeData(data);
         }
         return json(res, 400, { ok: false, error: String(err && err.message || err) });
       }
@@ -5815,6 +5873,7 @@ const server = http.createServer(async (req, res) => {
         recurring.lastPaymentLinkAt = new Date().toISOString();
         recurring.lastPaymentLinkUrl = request.url;
       }
+      appendAuditLog(data, user, 'Payment link created', [request.customer || 'Unknown customer', moneyText(request.amount || 0), request.reason || request.notes || 'Payment request', request.url || 'No URL']);
       if (payload.createCheckout) {
         await attachCloverCheckout(data, request);
       } else {
