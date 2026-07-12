@@ -171,6 +171,8 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'Payment not found',
   'Unmatched payments',
   'Open payment requests',
+  'Payment request truth',
+  'payment_request_truth',
   'WheelsonAuto hosted checkout',
   'open_payment_requests',
   'Vehicle assignment conflicts',

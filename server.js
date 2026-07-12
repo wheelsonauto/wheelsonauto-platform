@@ -3538,6 +3538,14 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
+  const brokenPaymentRequests = openPaymentRequests.filter(request => {
+    const recurringRow = request.recurringPaymentId ? recurring.find(row => row.id === request.recurringPaymentId) : null;
+    const customer = request.customer || (recurringRow && recurringRow.customer) || '';
+    const vehicle = reportVehicleFor(scoped, customer, request.vehicleId || (recurringRow && recurringRow.vehicleId));
+    const hasVehicleContext = !!(vehicle.id || request.vehicle || request.vin || request.licensePlate || request.plate || recurringRow && (recurringRow.vehicle || recurringRow.vin || recurringRow.licensePlate || recurringRow.plate));
+    return !customer || !Number(request.amount || 0) || !hasVehicleContext;
+  });
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const assignmentConflicts = assignmentConflictRows(scoped);
@@ -3556,9 +3564,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('failed_twice', 'Failed twice', failedTwice.length, 'critical', 'Customers that failed twice should be contacted before closeout.', 'Payments', 'Today'),
     truthCheck('payment_not_found', 'Payment not found', paymentNotFound.length, 'critical', 'Saved-card/payment records need Clover review before they can be trusted.', 'Payments', 'Today'),
     truthCheck('unmatched_payments', 'Unmatched payments', unmatchedPayments.length, 'critical', 'Transactions must have a customer name before receipts, disputes, and reports are reliable.', 'Payments', 'Transactions'),
+    truthCheck('payment_request_truth', 'Payment request truth', brokenPaymentRequests.length, 'critical', 'Open payment links need customer, amount, vehicle, VIN/tag context before closeout or Star follow-up.', 'Payments', 'Today'),
     truthCheck('vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, 'critical', 'Vehicles claimed by more than one active customer/autopay must be resolved before closeout, service, messages, or reports are trusted.', 'Operations', 'Assigned'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
+    truthCheck('open_payment_requests', 'Open payment requests', openPaymentRequests.length, 'warning', 'Hosted checkout links are still open and should be followed up, closed, or collected before final closeout.', 'Payments', 'Today'),
     truthCheck('missing_vin', 'Missing VIN', missingVin.length, 'warning', 'Fleet records need VINs for claims, inspections, disputes, and reports.', 'Fleet', 'VIN review'),
     truthCheck('missing_contact', 'Missing contact', missingContact.length, 'warning', 'Customers need phone or email before Star can follow up.', 'Payments', 'Active'),
     truthCheck('verification_inbox', 'Verification inbox', verificationItems.length, 'warning', 'Customer proof, paid-outside, service, toll, claim, and document items need staff review.', 'Documents')
