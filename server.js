@@ -18,6 +18,7 @@ const LOGIN_PASSWORD_HASH = process.env.WOA_ADMIN_PASSWORD_HASH || process.env.W
 const LOGIN_PASSWORD_SALT = process.env.WOA_ADMIN_PASSWORD_SALT || process.env.WOA_OWNER_PASSWORD_SALT || '';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 const SESSION_SIGNING_SECRET = process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_SIGNING_SECRET_CONFIGURED = !!(process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET);
 const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
 const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
@@ -1673,6 +1674,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(19, 'pending_star_approvals', 'Pending Star approvals', pendingStarApprovals.length, pendingStarApprovals.length ? 'warn' : 'good', 'Messages', 'Star', 'Star drafts waiting for admin approval or human review before messages, charges, card changes, claims, receipts, or account actions move forward.');
   issue(20, 'customer_portal_access', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'warn' : 'good', 'Settings', '', 'Active customers should have login-ready portal access for receipts, messages, proof, card changes, and service requests.');
   if (isOwnerUser(user)) issue(21, 'api_provider_readiness', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'warn' : 'good', 'API Roadmap', '', 'Provider dependency matrix needs env keys, endpoint, live test plan, and last test result before Star or workflows can rely on it.');
+  if (isOwnerUser(user)) issue(22, 'session_signing_secret', 'Session signing secret', SESSION_SIGNING_SECRET_CONFIGURED ? 0 : 1, SESSION_SIGNING_SECRET_CONFIGURED ? 'good' : 'warn', 'Settings', '', 'Set WOA_SESSION_SECRET or WOA_COOKIE_SECRET in Render so signed staff/customer sessions use an intentional stable secret across deploys.');
   if (isOwnerUser(user)) issue(22, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
@@ -3839,6 +3841,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
     ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
     ['PUBLIC_BASE_URL', PUBLIC_BASE_URL ? 'Set' : 'Missing', 'Customer payment/card setup links'],
+    ['WOA_SESSION_SECRET', SESSION_SIGNING_SECRET_CONFIGURED ? 'Set' : 'Missing', 'Stable signed staff/customer session cookies'],
     ['WOA_AUTOPAY_MS', process.env.WOA_AUTOPAY_MS ? 'Set' : 'Default', 'WheelsonAuto autopay monitor interval']
   ];
   const routes = [

@@ -38,6 +38,7 @@ Completed in this build pass:
 - Owner CSV/report exports now include Daily Closeout rows for open card setup links and pending Star approvals, keeping reports aligned with Dashboard, Messages, Star QA, and closeout signoff.
 - Staff/owner and customer login now have an in-memory repeated-failure throttle with clear retry guidance, adding a basic brute-force brake without changing live account data.
 - Staff/owner and customer sessions now use signed v2 cookies with a private HMAC secret, so browser-side cookie tampering cannot change a role, customer, or company identity.
+- System health/readiness now flags missing `WOA_SESSION_SECRET`/`WOA_COOKIE_SECRET` so Render can be configured with a stable private signing secret for staff and customer sessions.
 
 Checks passed at this checkpoint:
 

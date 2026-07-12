@@ -309,6 +309,10 @@ const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
   'dataIssueCount',
   'autopay_vehicle_link',
   "vehicle_assignment_conflict', 'Vehicle assignment conflicts'",
+  'session_signing_secret',
+  'Session signing secret',
+  'WOA_SESSION_SECRET',
+  'WOA_COOKIE_SECRET',
   "'Operations', 'Assigned'",
   'Customer/payment/fleet truth',
   'Data truth'

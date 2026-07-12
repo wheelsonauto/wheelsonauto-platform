@@ -594,6 +594,8 @@ async function main() {
     assert(tollHealth && Number(tollHealth.count) > 0 && /Open tolls\/violations/.test(tollHealth.detail || ''), 'Owner system health should include toll/violation recovery with amount and review context.');
     const apiHealth = ownerHealth.json.issues.find(row => row.key === 'api_provider_readiness');
     assert(apiHealth && Number(apiHealth.count) >= 4 && /Provider dependency matrix/.test(apiHealth.detail || ''), 'Owner system health should include default API provider readiness before providers are live-tested.');
+    const sessionSecretHealth = ownerHealth.json.issues.find(row => row.key === 'session_signing_secret');
+    assert(sessionSecretHealth && sessionSecretHealth.tone === 'warn' && /WOA_SESSION_SECRET|WOA_COOKIE_SECRET/.test(sessionSecretHealth.detail || ''), 'Owner system health should flag missing stable session signing secret.');
     const portalHealth = ownerHealth.json.issues.find(row => row.key === 'customer_portal_access');
     assert(portalHealth && Number(portalHealth.count) > 0 && /login-ready/i.test(portalHealth.detail || ''), 'Owner system health should flag active customers whose portal record is not login ready.');
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
@@ -601,6 +603,7 @@ async function main() {
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'unmatched_payments') && ownerReadiness.json.truthChecks.some(row => row.key === 'autopay_vehicle_link') && ownerReadiness.json.truthChecks.some(row => row.key === 'payment_request_truth') && ownerReadiness.json.truthChecks.some(row => row.key === 'open_payment_requests'), 'System readiness should include unmatched payment, payment-link, and autopay vehicle-link checks.');
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'toll_violation_recovery' && row.severity === 'critical'), 'System readiness should mark unmatched toll/violation recovery as critical before charge/message follow-up.');
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'api_provider_readiness' && row.severity === 'warning'), 'System readiness should include warning-level API provider readiness for future integrations.');
+    assert(ownerReadiness.json.envChecks.some(row => row.key === 'WOA_SESSION_SECRET' && row.status === 'Missing'), 'System readiness should list missing WOA_SESSION_SECRET for stable signed cookies.');
 
     const draftPortalLogins = await request(server, 'POST', '/api/customer-accounts/create-missing-drafts', { cookie: ownerCookie, json: {} });
     assert(draftPortalLogins.status === 200 && draftPortalLogins.json.ok, 'Owner could not create draft customer portal logins.');
