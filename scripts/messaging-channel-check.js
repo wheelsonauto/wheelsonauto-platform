@@ -89,6 +89,8 @@ requireText('Daily closeout contact summary', server, 'peopleToContact');
 requireText('Daily closeout Clover summary', server, 'cloverCollected');
 requireText('Daily closeout verification payload', server, 'closeoutVerificationItems');
 requireText('Daily closeout verification body', server, 'Verification inbox:');
+requireText('Daily closeout assignment conflict payload', server, 'vehicleAssignmentConflicts');
+requireText('Daily closeout assignment conflict body', server, 'Vehicle assignment conflicts:');
 requireText('Card setup completion notification', server, 'card_setup_completed');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
 

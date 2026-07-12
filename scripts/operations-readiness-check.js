@@ -196,6 +196,7 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Today Clover transactions',
   'Sensitive changes',
   'Verification inbox',
+  'Vehicle assignment conflicts:',
   'Paid-outside, document, service, toll, claim, or proof items waiting for review',
   'send-daily-closeout-email',
   'print-daily-closeout',

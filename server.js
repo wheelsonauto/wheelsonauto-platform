@@ -1098,6 +1098,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const stillOpenAmount = Math.max(0, expected - collected);
   const peopleToContact = failedTwice.length + paymentNotFound.length;
   const verificationItems = closeoutVerificationItems(data);
+  const assignmentConflicts = assignmentConflictRows(data);
   const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
   const savedNote = (data.dailyCloseouts || []).find(row => row.dateKey === dateKeyValue);
   const closeoutNote = String(ownerNote || savedNote && savedNote.note || '').trim();
@@ -1118,6 +1119,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     'Today transactions recorded: ' + payments.length,
     'People to contact: ' + peopleToContact,
     'Verification inbox waiting: ' + verificationItems.length,
+    'Vehicle assignment conflicts: ' + assignmentConflicts.length,
     ...(closeoutNote ? ['', 'Owner note:', closeoutNote] : []),
     '',
     'Customers to review:',
@@ -1128,6 +1130,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Verification inbox:',
     ...(verificationItems.length ? verificationItems.slice(0, 20).map(item => '- ' + item.type + ' | ' + item.customer + ' | ' + item.detail) : ['- No customer proof, paid-outside, service, toll, claim, or document review items waiting.']),
+    '',
+    'Vehicle assignment conflicts:',
+    ...(assignmentConflicts.length ? assignmentConflicts.slice(0, 20).map(vehicle => '- ' + vehicleNameFromParts(vehicle) + ' | VIN ' + (vehicle.vin || 'missing') + ' | Tag ' + (vehicle.plate || vehicle.stock || 'missing') + ' | Claimed by ' + vehicle.assignmentConflict) : ['- No vehicle assignment conflicts waiting.']),
     '',
     'Sensitive changes today:',
     ...(auditEvents.length ? auditEvents.map(row => '- ' + (row.action || 'Audit') + ' | ' + (row.user || 'Unknown') + ' | ' + (row.details || 'No detail')) : ['- No owner/staff changes recorded today.'])
@@ -1159,6 +1164,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       paidTransactions: paidPayments.length,
       transactions: payments.length,
       verificationItems: verificationItems.length,
+      vehicleAssignmentConflicts: assignmentConflicts.length,
       auditEvents: auditEvents.length,
       ownerNote: closeoutNote
     }
