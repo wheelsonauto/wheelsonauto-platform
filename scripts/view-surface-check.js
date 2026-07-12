@@ -194,6 +194,10 @@ assertIncludes('Insurance/background surface', insurance + app, [
   'verificationDocs',
   'verificationDocForCustomer',
   'Search background by customer',
+  'Documents / verification',
+  "'Document'",
+  'open-document',
+  'Insurance/background',
   'Collect insurance proof',
   'Finish background checks'
 ]);
