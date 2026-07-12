@@ -476,6 +476,7 @@ async function main() {
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
     assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Report payment'), 'Customer portal should include paid-outside-app reporting.');
     assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
+    assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Report issue'), 'Customer portal should include toll/claim/issue reporting.');
     assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
 
     const customerPaidOutsideNoAuth = await request(server, 'POST', '/customer/paid-outside');
@@ -513,6 +514,24 @@ async function main() {
     const customerServiceJob = (customerServiceState.json.maintenance || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Warning light' && item.due === '2026-08-01' && String(item.notes || '').includes('smoke test'));
     assert(customerServiceJob && customerServiceJob.vehicleId === 'veh-003' && customerServiceJob.vin === '3LN6L2G91FR123456', 'Customer service request should create a vehicle-linked maintenance job: ' + JSON.stringify(customerServiceJob || null));
     assert((customerServiceState.json.messages || []).some(message => message.maintenanceId === customerServiceJob.id && message.customer === 'Alicia Brown'), 'Customer service request should be logged in Messages.');
+
+    const customerIssueNoAuth = await request(server, 'POST', '/customer/issue-report');
+    assert(customerIssueNoAuth.status === 302 && customerIssueNoAuth.location === '/customer/login', 'Customer issue report should require customer login.');
+
+    const customerIssueRequest = await request(server, 'POST', '/customer/issue-report', {
+      cookie: customerCookie,
+      form: {
+        type: 'Toll / E-ZPass notice',
+        incidentDate: '2026-08-03',
+        amount: '12.50',
+        notes: 'Notice number PORTAL-TOLL-SMOKE.'
+      }
+    });
+    assert(customerIssueRequest.status === 302 && customerIssueRequest.location === '/customer', 'Customer issue report should return to the customer portal.');
+    const customerIssueState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const customerIssue = (customerIssueState.json.claims || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Toll / E-ZPass notice' && item.incidentDate === '2026-08-03');
+    assert(customerIssue && customerIssue.vehicleId === 'veh-003' && customerIssue.vin === '3LN6L2G91FR123456' && customerIssue.amount === 12.5 && customerIssue.customerMatchStatus === 'Matched from customer portal', 'Customer issue report should create a vehicle-linked claim/issue: ' + JSON.stringify(customerIssue || null));
+    assert((customerIssueState.json.messages || []).some(message => message.claimId === customerIssue.id && message.customer === 'Alicia Brown'), 'Customer issue report should be logged in Messages.');
 
     const customerCardChangeNoAuth = await request(server, 'POST', '/customer/card-change');
     assert(customerCardChangeNoAuth.status === 302 && customerCardChangeNoAuth.location === '/customer/login', 'Customer card-change request should require customer login.');
