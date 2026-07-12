@@ -74,11 +74,13 @@ const apiAllowedForUser = finalFunctionSlice(server, 'apiAllowedForUser');
 const stateForUserRead = finalFunctionSlice(server, 'stateForUserRead');
 const stateForUserWrite = finalFunctionSlice(server, 'stateForUserWrite');
 const protectConcurrentLocalWrites = finalFunctionSlice(server, 'protectConcurrentLocalWrites');
+const dataScopedToOrganization = finalFunctionSlice(server, 'dataScopedToOrganization');
 
 if (!navForRole || !navSections || !mobileQuickbar || !actionAllowed || !apiAllowedForUser) {
   fail('Could not find every role/access function.');
 }
 if (!protectConcurrentLocalWrites) fail('Could not find concurrent-write protection helper.');
+if (!dataScopedToOrganization) fail('Could not find organization scoping helper.');
 
 const mechanicNav = roleReturnArray(navForRole, 'mechanic');
 const managerNav = roleReturnArray(navForRole, 'manager');
@@ -139,6 +141,12 @@ if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/system'\)/.test(apiAl
 if (!/role === 'mechanic' \|\| role === 'manager'/.test(apiAllowedForUser)) fail('Mechanic/manager payment route block is missing.');
 assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications']);
 assertIncludes('Staff state scrub collections', strings(stateForUserRead), ['paymentRequests']);
+if (!/if \(!owner\) safe = dataScopedToOrganization\(safe, userOrganizationId\(user\)\);[\s\S]*enrichLinkedProfiles\(safe\);/.test(stateForUserRead)) {
+  fail('Staff read state should scope to the user company before profile enrichment.');
+}
+if (!/key === 'organizations' \? String\(row && row\.id \|\| ''\) === orgId : rowOrganizationId\(row\) === orgId/.test(dataScopedToOrganization)) {
+  fail('Organization scoping should filter company records by id while filtering data records by organizationId.');
+}
 if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
   fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
 }

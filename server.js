@@ -3241,9 +3241,11 @@ function redactStaffSecrets(data) {
   return safe;
 }
 function stateForUserRead(data, user) {
-  const safe = redactStaffSecrets(data);
+  let safe = redactStaffSecrets(data);
+  const owner = isOwnerUser(user);
+  if (!owner) safe = dataScopedToOrganization(safe, userOrganizationId(user));
   enrichLinkedProfiles(safe);
-  if (isOwnerUser(user)) return safe;
+  if (owner) return safe;
   const role = String(user && user.role || '').toLowerCase();
   delete safe.security;
   delete safe.apiProviders;
@@ -3435,7 +3437,7 @@ function dataScopedToOrganization(data = {}, organizationId = MAIN_ORG_ID) {
   const orgId = String(organizationId || MAIN_ORG_ID).trim() || MAIN_ORG_ID;
   const scoped = { ...data, integrations: { ...((data && data.integrations) || {}) } };
   Object.keys(scoped).forEach(key => {
-    if (Array.isArray(scoped[key])) scoped[key] = scoped[key].filter(row => rowOrganizationId(row) === orgId);
+    if (Array.isArray(scoped[key])) scoped[key] = scoped[key].filter(row => key === 'organizations' ? String(row && row.id || '') === orgId : rowOrganizationId(row) === orgId);
   });
   scoped.integrations.clover = { ...(((data.integrations || {}).clover) || {}) };
   if (Array.isArray(scoped.integrations.clover.recurringPlanMembers)) {

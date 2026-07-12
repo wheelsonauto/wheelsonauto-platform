@@ -42,6 +42,7 @@ Completed in this build pass:
 - Owner deep reports now include the same signed-session secret setup warning, keeping Star QA exports aligned with system health and readiness before production deploy.
 - Autopay schedule updates and removals now re-run the linked profile truth layer before saving, so customer, vehicle, service, and payment context stays connected after admin changes.
 - Failed saved-card charges now create named failed transaction records with customer, vehicle, VIN/tag, amount, attempt count, notes, and status, so Transactions, Closeout, Reports, and Star can track 1x/2x failures without guessing.
+- Manager/mechanic reads now scope records to the assigned company before profile enrichment, preventing same-name customers across future franchise/subscription accounts from borrowing another company’s vehicle/contact/payment context.
 
 Checks passed at this checkpoint:
 

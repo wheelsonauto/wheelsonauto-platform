@@ -533,6 +533,9 @@ async function main() {
     franchiseCustomerState.messages.unshift({ id: 'direct-franchise-message', organizationId: 'direct-franchise', customer: 'Alicia Brown', phone: '3135558899', channel: 'SMS', direction: 'Inbound', status: 'Received', body: 'Franchise-only customer message.' });
     const franchiseCustomerWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: franchiseCustomerState });
     assert(franchiseCustomerWrite.status === 200 && franchiseCustomerWrite.json.ok, 'Owner could not seed franchise customer portal records.');
+    const franchiseManagerCustomerState = await request(server, 'GET', '/api/state', { cookie: franchiseManagerCookie });
+    assert((franchiseManagerCustomerState.json.recurringPayments || []).some(row => row.id === 'direct-franchise-recurring' && row.vehicleId === 'direct-franchise-car' && row.email === 'franchise-alicia@example.com'), 'Franchise manager state should enrich Alicia Brown only from franchise company records.');
+    assert(!JSON.stringify(franchiseManagerCustomerState.json).includes('veh-001') && !JSON.stringify(franchiseManagerCustomerState.json).includes('Direct Dispute Customer'), 'Franchise manager state should not leak main-company records during profile enrichment.');
     const franchiseCustomerAccount = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,
       json: {
