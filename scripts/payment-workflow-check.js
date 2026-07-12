@@ -86,6 +86,10 @@ if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   'Contact now',
   'Today Clover transactions',
   'Verification inbox',
+  'Vehicle conflicts',
+  'assignmentConflicts',
+  'No vehicle assignment conflicts are waiting for closeout review',
+  'Edit car',
   'verifyRows',
   'paymentState(r).key'
 ].forEach(text => requireText('Daily closeout board', dailyCloseout, text));
