@@ -126,6 +126,7 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
 
 [
   'downloadReportCsv',
+  'reportCsvRows',
   'Executive snapshot',
   'Collected today',
   'Expected today',
@@ -133,7 +134,11 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Ready fleet',
   'Open service',
   'Applications',
-  'Paid records'
+  'Paid records',
+  'Fleet profitability',
+  'Customer truth',
+  'Star QA',
+  'Claims / tolls / disputes'
 ].forEach(text => requireText('Reports/accounting surface', app + reports + executiveReport, text));
 
 [
