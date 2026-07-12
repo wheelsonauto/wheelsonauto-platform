@@ -762,6 +762,23 @@ document.addEventListener('click',async function(e){
   if(saved.ok){await refreshData(true);view='Dispatch';tab='';Dispatch();notify('Launch proof task added to Dispatch')}else notify(saved.error||'Launch proof task did not save')
   }
 },true);
+function launchProofDispatchBoard(){
+  var items=ifleetLaunchProofItems().map(function(i,idx){return Object.assign({sourceIndex:idx},i)}).filter(function(i){return i.tone!=='good'}).slice(0,8);
+  if(!items.length)return '<section class="card section launch-proof-dispatch-board"><div class="section-head"><div><h2>Launch work queue</h2><p>iFleet-style proof gaps that become staff work orders.</p></div>'+badge('Clean','good')+'</div><div class="item">No launch-proof gaps need Dispatch tasks right now.</div></section>';
+  return '<section class="card section launch-proof-dispatch-board" data-limit="8"><div class="section-head"><div><h2>Launch work queue</h2><p>iFleet-style proof gaps that can be turned into Dispatch work orders.</p></div>'+badge(items.length+' review',items.some(function(i){return i.tone==='bad'})?'bad':'warn')+'</div>'+localSearch('Search launch work by payment, customer, fleet, portal, Star, claim, report, or API')+'<div class="role-command-grid">'+items.map(function(i){return '<div class="role-command-card '+esc(i.tone)+'"><div class="role-command-top"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.proof)+'</small></div>'+badge(i.count,i.tone)+'</div><div class="muted">'+esc(i.manual)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button><button class="btn" data-action="create-launch-proof-task" data-index="'+esc(i.sourceIndex)+'">Task</button></div></div>'}).join('')+'</div></section>'
+}
+var __woaDispatchLaunchProofBase=Dispatch;
+Dispatch=function(){
+  __woaDispatchLaunchProofBase();
+  var main=document.querySelector('.main.view-dispatch'),first=main&&main.querySelector('.card.section');
+  if(main&&!main.querySelector('.launch-proof-dispatch-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=launchProofDispatchBoard();
+    if(first)first.insertAdjacentElement('beforebegin',wrap.firstElementChild);
+    else main.insertAdjacentElement('beforeend',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+}
 var __woaApiRoadmapIfleetCoverageBase=ApiRoadmap;
 ApiRoadmap=function(){
   __woaApiRoadmapIfleetCoverageBase();

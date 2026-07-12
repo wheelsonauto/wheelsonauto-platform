@@ -419,6 +419,9 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'Open workflow',
   'create-launch-proof-task',
   'Launch proof task added to Dispatch',
+  'launchProofDispatchBoard',
+  'Launch work queue',
+  'iFleet-style proof gaps that can be turned into Dispatch work orders',
   'ifleet-launch-proof-board'
 ].forEach(text => requireText('iFleet launch proof board', ifleetLaunchProofItems + ifleetLaunchProofBoard + app, text));
 
