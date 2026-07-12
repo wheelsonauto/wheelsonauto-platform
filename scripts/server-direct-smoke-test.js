@@ -354,6 +354,20 @@ async function main() {
     });
     assert(weakStaffPassword.status === 400 && /letter and one number/i.test(weakStaffPassword.json.error || ''), 'Weak staff passwords should be rejected before account creation.');
 
+    const pinOnlyStaff = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-pin-only-staff',
+        name: 'Direct Pin Only Staff',
+        username: 'direct-pin-only-staff',
+        role: 'Mechanic',
+        organizationId: 'org-wheelsonauto',
+        status: 'Active',
+        pinHint: '7899'
+      }
+    });
+    assert(pinOnlyStaff.status === 400 && /password/i.test(pinOnlyStaff.json.error || ''), 'New staff accounts should require a password, not PIN-only access.');
+
     const mechanic = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
       json: {
@@ -368,6 +382,8 @@ async function main() {
       }
     });
     assert(mechanic.status === 200 && mechanic.json && mechanic.json.ok, 'Owner could not create mechanic: ' + mechanic.status + ' ' + mechanic.text.slice(0, 240));
+    const staffPinLoginAttempt = await request(server, 'POST', '/login', { form: { pin: '7811' } });
+    assert(staffPinLoginAttempt.status === 401, 'Staff PIN login should be disabled by default; staff should use username/password.');
 
     const manager = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,

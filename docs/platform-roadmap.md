@@ -49,6 +49,7 @@ Completed in this build pass:
 - Tracker evidence now normalizes `tracker`, `gps`, and related device fields across closeout, reports, Star context, customer portal submissions, payment/card links, service, claims, and messages so imported sheet tracker names do not disappear.
 - Staff direct saves now force every incoming manager/mechanic row onto the signed-in staff company, blocking spoofed `organizationId` payloads from writing into another company while preserving owner-wide data.
 - Staff, customer, and account password changes now share one password policy requiring at least 8 characters plus a letter and number before any password hash is created.
+- Staff PIN-only login is now disabled by default; manager/mechanic accounts require username/password while owner PIN remains the separate backup path.
 
 Checks passed at this checkpoint:
 

@@ -16,6 +16,7 @@ const LOGIN_USERNAME = process.env.WOA_ADMIN_USERNAME || process.env.WOA_OWNER_U
 const LOGIN_PASSWORD = process.env.WOA_ADMIN_PASSWORD || process.env.WOA_OWNER_PASSWORD || '';
 const LOGIN_PASSWORD_HASH = process.env.WOA_ADMIN_PASSWORD_HASH || process.env.WOA_OWNER_PASSWORD_HASH || '';
 const LOGIN_PASSWORD_SALT = process.env.WOA_ADMIN_PASSWORD_SALT || process.env.WOA_OWNER_PASSWORD_SALT || '';
+const STAFF_PIN_LOGIN_ENABLED = process.env.WOA_STAFF_PIN_LOGIN_ENABLED === '1';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 const SESSION_SIGNING_SECRET = process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_SIGNING_SECRET_CONFIGURED = !!(process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET);
@@ -2910,6 +2911,7 @@ function sanitizeMechanicCollectionWrite(key, currentRows = [], incomingRows = [
   return scoped;
 }
 function findStaffByPin(data, pin) {
+  if (!STAFF_PIN_LOGIN_ENABLED) return null;
   const clean = String(pin || '').trim();
   if (!clean) return null;
   return (data.staffAccounts || []).find(staff => String(staff.status || 'Active').toLowerCase() !== 'disabled' && String(staff.pinHint || '').trim() === clean) || null;
@@ -7654,7 +7656,7 @@ const server = http.createServer(async (req, res) => {
       const existing = data.staffAccounts.find(item => item.id === payload.id);
       const staff = cleanStaffAccountPayload(payload, existing);
       if (!staff.username) return json(res, 400, { ok: false, error: 'Enter a username for this staff account.' });
-      if (!existing && !staff.passwordHash && !staff.pinHint) return json(res, 400, { ok: false, error: 'Enter a password or temporary PIN for the new staff account.' });
+      if (!existing && !staff.passwordHash) return json(res, 400, { ok: false, error: 'Enter a password for the new staff account.' });
       if (!organizationExists(data, staff.organizationId)) return json(res, 400, { ok: false, error: 'Choose a saved company/store for this staff account.' });
       staff.companyName = companyNameById(data, staff.organizationId);
       const duplicate = data.staffAccounts.find(item => item.id !== staff.id && normalizeLogin(item.username || item.email) === staff.username);

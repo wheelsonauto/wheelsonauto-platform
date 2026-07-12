@@ -70,6 +70,7 @@ const navSections = finalFunctionSlice(app, 'navSections');
 const mobileQuickbar = finalFunctionSlice(app, 'mobileQuickbar');
 const actionAllowed = finalFunctionSlice(app, 'actionAllowed');
 const textCustomerButton = finalFunctionSlice(app, 'textCustomerButton');
+const accessCommandPanel = finalFunctionSlice(app, 'accessCommandPanel');
 const apiAllowedForUser = finalFunctionSlice(server, 'apiAllowedForUser');
 const stateForUserRead = finalFunctionSlice(server, 'stateForUserRead');
 const stateForUserWrite = finalFunctionSlice(server, 'stateForUserWrite');
@@ -134,6 +135,8 @@ assertIncludes('Mechanic message blocked actions', strings(actionAllowed), [
 if (!/roleName\(\)==='mechanic'&&mechanicMessageBlocked/.test(actionAllowed)) fail('Mechanic message block is not enforced in actionAllowed.');
 if (!/\(roleName\(\)==='mechanic'\|\|roleName\(\)==='manager'\)&&moneyBlocked/.test(actionAllowed)) fail('Mechanic/manager money block is not enforced in actionAllowed.');
 if (!/roleName\(\)==='mechanic'\)return''/.test(textCustomerButton)) fail('Mechanic text buttons are not suppressed.');
+if (!/STAFF_PIN_LOGIN_ENABLED/.test(server) || !/if \(!STAFF_PIN_LOGIN_ENABLED\) return null;/.test(server)) fail('Staff PIN login should be disabled unless explicitly enabled.');
+if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
 
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/messages'\)/.test(apiAllowedForUser)) fail('Mechanic API message routes are not blocked.');
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/reports'\)/.test(apiAllowedForUser)) fail('Mechanic API report routes are not blocked.');
