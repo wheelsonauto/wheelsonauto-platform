@@ -1967,6 +1967,41 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
     return false;
   }).slice(0, 8);
   const openClaims = claims.filter(row => !/paid|closed|done|removed/i.test(String(row.status || 'Open')) && Number(row.amount || 0) > 0);
+  const documents = (data.documents || []).filter(row => {
+    if (customerName && softNameMatch(row.customer, customerName)) return true;
+    if (vehicle && (row.vehicleId === vehicle.id || normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)))) return true;
+    return false;
+  }).slice(0, 10);
+  const applications = (data.applications || []).filter(row => {
+    if (customerName && softNameMatch(row.name || row.customer, customerName)) return true;
+    if (phone && phoneKey(row.phone) === phone) return true;
+    if (email && emailKey(row.email) === email) return true;
+    return false;
+  }).slice(0, 5);
+  const tasks = (data.tasks || []).filter(row => {
+    if (/done|closed|complete/i.test(String(row.status || 'Open'))) return false;
+    if (customerName && softNameMatch(row.customer || row.title, customerName)) return true;
+    if (vehicle && (row.vehicleId === vehicle.id || normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)))) return true;
+    return false;
+  }).slice(0, 8);
+  const portalAccount = (data.customerAccounts || []).find(row => {
+    if (customerName && softNameMatch(row.customer || row.name, customerName)) return true;
+    if (phone && phoneKey(row.phone) === phone) return true;
+    if (email && emailKey(row.email || row.username) === email) return true;
+    return false;
+  }) || null;
+  const paymentRequests = (data.paymentRequests || []).filter(row => {
+    if (!isOpenCustomerPaymentRequest(row)) return false;
+    if (recurring && row.recurringPaymentId === recurring.id) return true;
+    if (customerName && softNameMatch(row.customer, customerName)) return true;
+    return false;
+  }).slice(0, 6);
+  const cardSetupRequests = (data.cardSetupRequests || []).filter(row => {
+    if (!isOpenCardSetupRequest(row)) return false;
+    if (recurring && row.recurringPaymentId === recurring.id) return true;
+    if (customerName && softNameMatch(row.customer, customerName)) return true;
+    return false;
+  }).slice(0, 6);
   const latestMessages = (data.messages || []).filter(row => {
     if (/AI draft|AI action/i.test(String(row.direction || ''))) return false;
     if (phone && phoneKey(row.phone || row.from || row.to) === phone) return true;
@@ -1987,6 +2022,12 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
     maintenance,
     claims,
     openClaims,
+    documents,
+    applications,
+    tasks,
+    portalAccount,
+    paymentRequests,
+    cardSetupRequests,
     latestMessages,
     platformModules: {
       payments: (data.payments || []).length,
@@ -2024,6 +2065,13 @@ function aiContextSummary(context) {
     lastPayment: context.latestPayment ? [context.latestPayment.status, aiMoney(context.latestPayment.amount), context.latestPayment.date].filter(Boolean).join(' ') : '',
     openClaims: context.openClaims.map(row => ({ id: row.id || '', type: row.type || 'Balance', amount: aiMoney(row.amount || 0), status: row.status || 'Open' })),
     maintenance: context.maintenance.map(row => ({ id: row.id || '', vehicle: row.vehicle || context.vehicleName || '', type: row.type || row.issue || 'Service', due: row.due || row.nextDue || '', status: row.status || '' })),
+    application: (context.applications || []).map(row => ({ id: row.id || '', status: row.stage || row.status || 'New', vehicle: row.vehicle || '', submittedAt: row.submittedAt || row.date || '' })),
+    portal: context.portalAccount ? { status: context.portalAccount.status || 'Active', loginReady: !!(context.portalAccount.passwordHash || context.portalAccount.passwordUpdatedAt), username: context.portalAccount.username ? 'saved' : '' } : { status: 'No portal login found', loginReady: false },
+    openPaymentLinks: (context.paymentRequests || []).map(row => ({ id: row.id || '', amount: aiMoney(row.amount || 0), status: row.status || 'Open', age: paymentRequestAgeLabel(row), urlReady: !!row.url })),
+    openCardSetupLinks: (context.cardSetupRequests || []).map(row => ({ id: row.id || '', amount: aiMoney(row.amount || 0), status: row.status || 'Open', age: cardSetupRequestAgeLabel(row), urlReady: !!row.url })),
+    documents: (context.documents || []).map(row => ({ id: row.id || '', type: row.type || 'Document', status: row.status || 'Saved', expires: row.expires || row.due || '', visible: !!(row.customerVisible || row.portalVisible) })).slice(0, 8),
+    openTasks: (context.tasks || []).map(row => ({ id: row.id || '', title: row.title || row.type || 'Task', status: row.status || 'Open', due: row.due || '' })).slice(0, 8),
+    recentMessages: (context.latestMessages || []).map(row => ({ date: row.createdAt || row.date || '', direction: row.direction || row.channel || '', status: row.status || '', subject: row.subject || row.template || '', body: String(row.body || '').slice(0, 180) })).slice(0, 6),
     modules: context.platformModules,
     systemHealth: context.systemHealth
   };
@@ -2126,6 +2174,21 @@ function aiPlanRules(data, payload = {}, context = null) {
     confidence = 0.84;
     reply = 'Hi ' + first + ', I can help with that account document. I am sending this to the office so we verify your balance, payment history, and vehicle account before sending anything.';
     reasons.push('Account statements, payoff balances, and balance letters require admin confirmation before sending.');
+  } else if (aiContains(lower, ['contract', 'e-sign', 'esign', 'sign my contract', 'paperwork', 'agreement', 'documents to sign'])) {
+    actionType = 'contract_esign_request';
+    intent = 'contract_or_esign_request';
+    approvalRequired = true;
+    tone = 'warn';
+    confidence = 0.86;
+    reply = 'Hi ' + first + ', I can help with the contract/paperwork step. I am sending this to the office so we confirm your file, vehicle, and autopay setup before sending the correct documents.';
+    reasons.push('Contract/e-sign handoff requires staff confirmation before documents are sent.');
+  } else if (aiContains(lower, ['portal', 'login', 'password', 'reset password', 'customer login', 'account login'])) {
+    actionType = 'portal_login_help';
+    intent = 'customer_portal_help';
+    tone = 'good';
+    confidence = 0.82;
+    reply = 'Hi ' + first + ', I can help with your WheelsonAuto customer login. If you need a reset, the office can confirm your account and send the correct login help.';
+    reasons.push('Customer portal help is safe as a draft, but password resets still need the scoped account flow.');
   } else if (aiContains(lower, ['toll', 'ez pass', 'ezpass', 'violation', 'ticket', 'reimbursement', 'claim'])) {
     actionType = openClaim ? 'send_claim_link' : 'human_review';
     intent = 'toll_claim_or_receipt';
@@ -2200,7 +2263,7 @@ function sanitizeAiPlan(plan, fallback) {
   safe.reply = String(safe.reply || (fallback && fallback.reply) || '').trim().slice(0, 900);
   safe.intent = String(safe.intent || 'general_reply').slice(0, 80);
   safe.actionType = String(safe.actionType || 'reply').slice(0, 80);
-  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement'].includes(safe.actionType) || sensitiveActions.includes(safe.actionType);
+  safe.approvalRequired = !!safe.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement', 'contract_esign_request'].includes(safe.actionType) || sensitiveActions.includes(safe.actionType);
   safe.needsHuman = !!safe.needsHuman || safe.actionType === 'human_review';
   safe.canAutoSend = !!safe.canAutoSend && !safe.approvalRequired && !safe.needsHuman;
   safe.confidence = Math.max(0, Math.min(1, Number(safe.confidence || 0.7)));
@@ -2243,7 +2306,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   const input = [
     {
       role: 'developer',
-      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Use the platform context only. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, or saved-card action has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
+      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, and recent messages. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
     },
     {
       role: 'user',
@@ -2252,7 +2315,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
         platformContext: aiContextSummary(context),
         allowedWithoutApproval: ['general reply', 'payment link draft/send', 'card setup link draft/send', 'maintenance scheduling'],
         futureChannels: ['SMS now', 'email when provider is connected', 'receipts after approved payments', 'EZPass/tolls after provider is connected'],
-        requiresAdminApproval: ['saved-card charge', 'toll or claim charge', 'autopay date/time/frequency change', 'card removal', 'account removal', 'refund/dispute', 'paid outside app verification', 'receipt after charge confirmation', 'account statement or payoff letter']
+        requiresAdminApproval: ['saved-card charge', 'toll or claim charge', 'autopay date/time/frequency change', 'card removal', 'account removal', 'refund/dispute', 'paid outside app verification', 'receipt after charge confirmation', 'account statement or payoff letter', 'contract/e-sign send', 'password reset']
       })
     }
   ];
@@ -2373,12 +2436,14 @@ function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
     paid_outside_review: 'Verify paid outside app',
     send_receipt: 'Review receipt request',
     send_account_statement: 'Review account statement',
+    contract_esign_request: 'Review contract/e-sign request',
+    portal_login_help: 'Prepare portal login help',
     send_claim_link: 'Review toll/claim payment link',
     maintenance_schedule: 'Schedule service',
     human_review: 'Human review'
   };
   const amount = Number(related.amount || fields.amount || recurring.amount || recurring.weeklyAmount || 0);
-  const requiresAdminApproval = !!plan.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'paid_outside_review', 'send_receipt', 'send_account_statement', 'send_claim_link'].includes(actionType);
+  const requiresAdminApproval = !!plan.approvalRequired || ['charge_saved_card', 'change_autopay_date', 'paid_outside_review', 'send_receipt', 'send_account_statement', 'send_claim_link', 'contract_esign_request'].includes(actionType);
   const customer = fields.customer || plan.customer || context.customerName || 'Customer';
   const vehicle = fields.vehicle || context.vehicleName || related.vehicle || '';
   const tag = fields.plate || fields.licensePlate || related.plate || '';

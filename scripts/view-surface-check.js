@@ -737,7 +737,16 @@ assertIncludes('Server email and Star backend', server, [
   'futureChannels',
   'email when provider is connected',
   'Charges, card changes, autopay edits, removals, disputes, receipts after payment',
-  'Star AI, the built-in WheelsonAuto AI manager'
+  'Star AI, the built-in WheelsonAuto AI manager',
+  'portalAccount',
+  'paymentRequests',
+  'cardSetupRequests',
+  'recentMessages',
+  'contract_esign_request',
+  'portal_login_help',
+  'contract/e-sign send',
+  'password reset',
+  'customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, and recent messages'
 ]);
 
 assertIncludes('Modal, mobile, and no-blur style surface', css, [
