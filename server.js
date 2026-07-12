@@ -3061,7 +3061,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications'].forEach(key => {
+  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {

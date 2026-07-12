@@ -138,6 +138,7 @@ if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/reports'\)/.test(apiA
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/system'\)/.test(apiAllowedForUser)) fail('Mechanic API system routes are not blocked.');
 if (!/role === 'mechanic' \|\| role === 'manager'/.test(apiAllowedForUser)) fail('Mechanic/manager payment route block is missing.');
 assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications']);
+assertIncludes('Staff state scrub collections', strings(stateForUserRead), ['paymentRequests']);
 if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
   fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
 }
