@@ -128,6 +128,19 @@ async function main() {
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
     assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
 
+    for (let i = 0; i < 6; i += 1) {
+      const badLogin = await request(server, 'POST', '/login', { form: { username: 'direct-rate-limit-staff', password: 'wrong-' + i } });
+      assert(badLogin.status === 401, 'Bad staff login should fail before throttle limit.');
+    }
+    const throttledStaffLogin = await request(server, 'POST', '/login', { form: { username: 'direct-rate-limit-staff', password: 'still-wrong' } });
+    assert(throttledStaffLogin.status === 429 && throttledStaffLogin.text.includes('Too many failed login attempts') && String(throttledStaffLogin.headers['Retry-After'] || '').length, 'Repeated bad staff login should be throttled with retry guidance.');
+    for (let i = 0; i < 6; i += 1) {
+      const badCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-rate-limit-customer', password: 'wrong-' + i } });
+      assert(badCustomerLogin.status === 401, 'Bad customer login should fail before throttle limit.');
+    }
+    const throttledCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-rate-limit-customer', password: 'still-wrong' } });
+    assert(throttledCustomerLogin.status === 429 && throttledCustomerLogin.text.includes('Too many failed login attempts') && String(throttledCustomerLogin.headers['Retry-After'] || '').length, 'Repeated bad customer login should be throttled with retry guidance.');
+
     const ownerCookie = await login(server, { pin: adminPin });
     const ownerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(ownerState.status === 200 && ownerState.json, 'Owner could not read state.');

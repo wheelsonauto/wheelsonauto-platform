@@ -75,6 +75,9 @@ const woaAutopayStatus = {
   lastError: '',
   lastResult: null
 };
+const loginFailureBuckets = new Map();
+const LOGIN_THROTTLE_LIMIT = Math.max(3, Number(process.env.WOA_LOGIN_THROTTLE_LIMIT || 6));
+const LOGIN_THROTTLE_WINDOW_MS = Math.max(60000, Number(process.env.WOA_LOGIN_THROTTLE_WINDOW_MS || 10 * 60 * 1000));
 
 function stableVehicleId(base, vehicle) {
   const source = [vehicle && vehicle.vin, vehicle && vehicle.plate, vehicle && vehicle.stock, vehicle && vehicle.name, vehicle && vehicle.currentCustomer].filter(Boolean).join('|') || JSON.stringify(vehicle || {});
@@ -3266,6 +3269,34 @@ function escapeHtml(value) { return String(value || '').replace(/[&<>\"]/g, c =>
 function normalizeLogin(value) {
   return String(value || '').trim().toLowerCase();
 }
+function requestIp(req) {
+  return String((req.headers && (req.headers['x-forwarded-for'] || req.headers['x-real-ip'])) || (req.socket && req.socket.remoteAddress) || 'local').split(',')[0].trim() || 'local';
+}
+function loginThrottleKey(req, realm, identity) {
+  return [realm || 'login', requestIp(req), normalizeLogin(identity || 'blank')].join('|');
+}
+function loginThrottleWaitMs(key) {
+  const now = Date.now();
+  const bucket = loginFailureBuckets.get(key);
+  if (!bucket || now - Number(bucket.firstAt || 0) > LOGIN_THROTTLE_WINDOW_MS) {
+    loginFailureBuckets.delete(key);
+    return 0;
+  }
+  if (Number(bucket.count || 0) < LOGIN_THROTTLE_LIMIT) return 0;
+  return Math.max(1000, LOGIN_THROTTLE_WINDOW_MS - (now - Number(bucket.firstAt || 0)));
+}
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const bucket = loginFailureBuckets.get(key);
+  if (!bucket || now - Number(bucket.firstAt || 0) > LOGIN_THROTTLE_WINDOW_MS) loginFailureBuckets.set(key, { count: 1, firstAt: now, lastAt: now });
+  else loginFailureBuckets.set(key, { count: Number(bucket.count || 0) + 1, firstAt: bucket.firstAt, lastAt: now });
+}
+function clearLoginFailure(key) {
+  loginFailureBuckets.delete(key);
+}
+function loginThrottleMessage(waitMs) {
+  return 'Too many failed login attempts. Wait about ' + Math.ceil(Number(waitMs || 0) / 60000) + ' minute(s), then try again or use password help.';
+}
 function passwordHash(password, salt) {
   return crypto.createHash('sha256').update(String(salt || '') + ':' + String(password || '')).digest('hex');
 }
@@ -6302,9 +6333,16 @@ const server = http.createServer(async (req, res) => {
       const form = new URLSearchParams(await readBody(req));
       const username = form.get('username') || '';
       const password = form.get('password') || '';
+      const throttleKey = loginThrottleKey(req, 'customer', username);
+      const waitMs = loginThrottleWaitMs(throttleKey);
+      if (waitMs) return send(res, 429, customerLoginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const data = await readData();
       const account = findCustomerAccountByLogin(data, username, password);
-      if (!account) return send(res, 401, customerLoginPage('That customer login did not match an active account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (!account) {
+        recordLoginFailure(throttleKey);
+        return send(res, 401, customerLoginPage('That customer login did not match an active account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      }
+      clearLoginFailure(throttleKey);
       return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: '/customer' });
     }
     if (url.pathname === '/customer/forgot' && req.method === 'GET') return send(res, 200, customerForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
@@ -6995,15 +7033,26 @@ const server = http.createServer(async (req, res) => {
       const username = form.get('username') || '';
       const password = form.get('password') || '';
       const pin = form.get('pin') || '';
-      if (ownerLoginMatches(username, password, pin)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
+      const throttleKey = loginThrottleKey(req, 'staff', username || (pin ? 'pin-login' : 'blank'));
+      const waitMs = loginThrottleWaitMs(throttleKey);
+      if (waitMs) return send(res, 429, loginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
+      if (ownerLoginMatches(username, password, pin)) {
+        clearLoginFailure(throttleKey);
+        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
+      }
       const data = await readData();
-      if (storedOwnerLoginMatches(data, username, password)) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: (data.security && data.security.ownerLogin && data.security.ownerLogin.username) || LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
+      if (storedOwnerLoginMatches(data, username, password)) {
+        clearLoginFailure(throttleKey);
+        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: (data.security && data.security.ownerLogin && data.security.ownerLogin.username) || LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
+      }
       const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
       if (staff) {
+        clearLoginFailure(throttleKey);
         const user = staffLoginUser(staff);
         user.companyName = companyNameById(data, user.organizationId);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(user)), Location: '/' });
       }
+      recordLoginFailure(throttleKey);
       return send(res, 401, loginPage('That login did not match an active account.'));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });

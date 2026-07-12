@@ -36,6 +36,7 @@ Completed in this build pass:
 - The visible Daily Closeout board now includes card setup link and Star approval rows plus summary reminders, so the day can be managed before signoff instead of only being audited afterward.
 - Daily closeout notification messages now include those frozen card setup link and Star approval counts in the signed snapshot line, matching what the owner saw in the app at signoff time.
 - Owner CSV/report exports now include Daily Closeout rows for open card setup links and pending Star approvals, keeping reports aligned with Dashboard, Messages, Star QA, and closeout signoff.
+- Staff/owner and customer login now have an in-memory repeated-failure throttle with clear retry guidance, adding a basic brute-force brake without changing live account data.
 
 Checks passed at this checkpoint:
 
