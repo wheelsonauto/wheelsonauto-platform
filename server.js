@@ -2707,6 +2707,32 @@ function findClaimPaymentRequest(data, claim = {}) {
   if (link) return requests.find(request => request.url === link || request.checkoutHref === link) || null;
   return null;
 }
+function claimPossibleMatches(data, claim = {}) {
+  const amount = Number(claim.amount || 0);
+  if (!amount || amount <= 0) return [];
+  const seen = new Set();
+  const candidates = [];
+  function add(kind, row = {}) {
+    const customer = row.customer || row.name || row.currentCustomer || '';
+    if (!customer) return;
+    const candidateAmount = Number(row.amount || row.weeklyAmount || row.total || 0);
+    if (Math.abs(candidateAmount - amount) > 0.01) return;
+    const key = kind + '|' + normKey(customer) + '|' + normalizedPaymentRecordId(row.id || row.cloverPaymentId || row.paymentId || row.cloverCustomerId || '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push({
+      type: kind,
+      customer,
+      amount: candidateAmount,
+      date: row.date || row.createdAt || row.nextRun || '',
+      vehicle: row.vehicle || row.vehicleName || '',
+      reference: row.cloverPaymentId || row.paymentId || row.id || row.cloverCustomerId || ''
+    });
+  }
+  (data.payments || []).forEach(row => add('Payment', row));
+  allRecurringRows(data).forEach(row => add('Recurring', row));
+  return candidates.slice(0, 5);
+}
 function findClaimVehicle(data, claim = {}) {
   const vehicles = data.vehicles || [];
   const vehicleId = String(claim.vehicleId || '').trim();
@@ -2771,6 +2797,8 @@ function resolveClaimCustomerLinks(data) {
       claim.customerMatchSource = claim.customerMatchSource || 'Saved claim customer';
     }
     if (!claim.customerMatchStatus && /dispute|clover|chargeback/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' ')))) {
+      const candidates = claimPossibleMatches(data, claim);
+      if (candidates.length) claim.matchCandidates = candidates;
       claim.customerMatchStatus = 'Needs payment/customer match';
     }
     const after = JSON.stringify([claim.customer, claim.vehicle, claim.vehicleId, claim.paymentId, claim.cloverPaymentId, claim.customerMatchSource]);

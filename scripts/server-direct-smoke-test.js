@@ -142,6 +142,7 @@ async function main() {
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
+      { id: 'claim-direct-candidate-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', amount: 199, status: 'Open' },
       { id: 'claim-direct-unmatched-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'missing-payment-id', amount: 55, status: 'Open' }
     );
     const duplicateWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateState });
@@ -158,6 +159,9 @@ async function main() {
     assert(recurringDispute.customerMatchSource === 'Recurring customer', 'Clover customer-id dispute should record recurring match source.');
     const unmatchedDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-unmatched-dispute');
     assert(unmatchedDispute && unmatchedDispute.customerMatchStatus === 'Needs payment/customer match', 'Unmatched Clover dispute should be clearly flagged for manual match.');
+    const candidateDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-candidate-dispute');
+    assert(candidateDispute && candidateDispute.customerMatchStatus === 'Needs payment/customer match', 'Amount-only Clover dispute should still require manual match.');
+    assert((candidateDispute.matchCandidates || []).some(candidate => candidate.customer === 'Direct Dispute Customer'), 'Amount-only Clover dispute should surface possible customer/payment matches.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {
