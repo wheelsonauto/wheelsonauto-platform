@@ -49,6 +49,7 @@ class MockResponse {
     this.body += Buffer.isBuffer(body) ? body.toString('utf8') : String(body || '');
     this._done({
       status: this.statusCode,
+      headers: this.headers,
       text: this.body,
       json: parseJson(this.body),
       cookie: this.headers['Set-Cookie'] || this.headers['set-cookie'] || '',
@@ -429,8 +430,19 @@ async function main() {
     assert(JSON.stringify(franchisePortalState.json).includes('Franchise-only customer message'), 'Franchise customer portal should show scoped franchise messages.');
     assert(!JSON.stringify(franchisePortalState.json).includes('veh-001') && !JSON.stringify(franchisePortalState.json).includes('Direct Dispute Customer'), 'Franchise customer portal should not expose main WheelsonAuto records.');
 
+    const franchiseReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: franchiseManagerCookie });
+    assert(franchiseReport.status === 200 && /text\/csv/.test(franchiseReport.headers['Content-Type'] || franchiseReport.headers['content-type'] || ''), 'Franchise manager deep report should download as CSV.');
+    assert(franchiseReport.text.includes('Daily closeout') && franchiseReport.text.includes('Customer files') && franchiseReport.text.includes('Fleet profitability'), 'Franchise manager deep report is missing core sections.');
+    assert(franchiseReport.text.includes('DIRECTFRANCHISEVIN') && franchiseReport.text.includes('Franchise test'), 'Franchise manager deep report should include scoped franchise customer, fleet, and payment records.');
+    assert(!franchiseReport.text.includes('Direct Dispute Customer') && !franchiseReport.text.includes('veh-001'), 'Franchise manager deep report should not expose main WheelsonAuto records.');
+
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
+    const ownerReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
+    assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
+    assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, Star QA, and audit sections.');
+    const mechanicReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: mechanicCookie });
+    assert(mechanicReport.status === 403, 'Mechanic should not be able to download deep financial reports.');
     const staffLogout = await request(server, 'GET', '/logout', { cookie: managerCookie });
     assert(staffLogout.status === 302 && staffLogout.location === '/', 'Staff logout should redirect to the login shell.');
     assertSecureCookie(staffLogout.cookie, 'Staff/admin logout', { clear: true });

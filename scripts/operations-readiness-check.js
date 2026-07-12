@@ -149,13 +149,17 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Customer truth',
   'Verification inbox',
   'WheelsonAuto verification',
+  '/api/reports/deep.csv',
+  'deepReportCsv',
+  'reportRowsForData',
+  'Role-scoped deep CSV export',
   'customerRiskReportPanel',
   'Customer risk report',
   'Star QA',
   'Claims / tolls / disputes',
   'Audit trail',
   'auditTrailPanel'
-].forEach(text => requireText('Reports/accounting surface', app + reports + executiveReport, text));
+].forEach(text => requireText('Reports/accounting surface', app + reports + executiveReport + server, text));
 
 [
   'Expected today',
