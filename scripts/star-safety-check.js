@@ -195,6 +195,21 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star queue context safety', app, text));
 
 [
+  'function starCommandItems',
+  'Star command queue',
+  'Failed twice',
+  'Payment not found',
+  'Unmatched transaction',
+  'Vehicle conflict',
+  'Missing VIN',
+  'Service due',
+  'Claim match needed',
+  'Open card setup link',
+  'Star approval',
+  'Portal login needed'
+].forEach(text => requireText('Star command queue safety', app, text));
+
+[
   'Star QA manager',
   'Contact failed-twice customers',
   'Match transactions',

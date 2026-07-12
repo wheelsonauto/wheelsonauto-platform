@@ -413,3 +413,84 @@ document.addEventListener('click',async function(e){var b=e.target.closest('butt
 document.addEventListener('click',async function(e){var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(a==='close-payment-link'){e.preventDefault();e.stopImmediatePropagation();if(!isOwner()||!actionAllowed(a)){notify('Only owner can close hosted payment links');return}var id=b.dataset.id||'',row=(db.paymentRequests||[]).find(function(r){return r.id===id});if(!row){notify('Payment link was not found');return}row.status='Closed';row.closedAt=new Date().toISOString();row.closedBy=(currentUser&&(currentUser.name||currentUser.username||currentUser.email))||'Owner';row.closeReason='Closed from WheelsonAuto daily closeout';db.auditLogs=db.auditLogs||[];db.auditLogs.unshift({id:'audit-payment-link-close-'+Date.now(),at:row.closedAt,user:row.closedBy,role:(currentUser&&currentUser.role)||'Owner',action:'Hosted payment link closed',details:(row.customer||'Unassigned')+' | '+money(row.amount||0)+' | '+(row.vehicle||row.vin||row.licensePlate||row.plate||row.id)});b.disabled=true;b.classList.add('is-loading');var ok=await save();b.disabled=false;b.classList.remove('is-loading');if(ok){render();notify('Payment link closed')}else notify('Payment link close did not save')}},true);
 document.addEventListener('click',async function(e){var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(['toggle-messaging','toggle-email-messaging','toggle-star-ai','toggle-star-autosend'].indexOf(a)<0)return;e.preventDefault();e.stopImmediatePropagation();if(!isOwner()){notify('Only owner can change messaging and Star settings');return}var payload={};if(a==='toggle-messaging')payload.enabled=b.dataset.enabled==='1';if(a==='toggle-email-messaging')payload.emailEnabled=b.dataset.enabled==='1';if(a==='toggle-star-ai')payload.aiEnabled=b.dataset.enabled==='1';if(a==='toggle-star-autosend')payload.aiAutoSend=b.dataset.enabled==='1';b.disabled=true;b.classList.add('is-loading');var saved=await post('/api/messages/settings',payload);b.disabled=false;b.classList.remove('is-loading');if(saved.ok){db.integrations=db.integrations||{};db.integrations.messaging=saved.messaging||db.integrations.messaging;view='Messages';tab='Star';Messages();notify('Messaging settings updated')}else notify(saved.error||'Could not update messaging settings')},true);
 document.addEventListener('click',async function(e){var b=e.target.closest('button[data-action="test-star-provider"]');if(!b)return;e.preventDefault();e.stopImmediatePropagation();if(!isOwner()||!actionAllowed('test-star-provider')){notify('Only owner can test the Star AI provider');return}b.disabled=true;b.classList.add('is-loading');var result=await post('/api/messages/ai-health',{body:'Customer asks for a secure payment link and wants to know if their account is okay.',channel:'SMS'});b.disabled=false;b.classList.remove('is-loading');if(result.ok){db.integrations=db.integrations||{};db.integrations.messaging=result.messaging||db.integrations.messaging;view='Messages';tab='Star';Messages();notify(result.health&&result.health.provider==='openai'?'Star provider answered through OpenAI':'Star is working in rules fallback mode')}else notify(result.error||'Star provider test failed')},true);
+
+function starCommandItems(){
+  var items=[],seen={};
+  function add(priority,tone,type,title,detail,viewName,tabName,actionHtml){
+    var key=[type,normName(title),detail].join('|');
+    if(seen[key])return;
+    seen[key]=true;
+    items.push({priority:priority,tone:tone,type:type,title:title,detail:detail,view:viewName,tab:tabName,actionHtml:actionHtml||''});
+  }
+  var roster=recurringRoster(),payments=db.payments||[],cars=db.vehicles||[],jobs=customerMaintenanceJobs(),claims=db.claims||[];
+  roster.forEach(function(r){
+    var state=paymentState(r),tries=todayFailureCount(r),ctx=messageQueueVehicleContext(r.customer,r.vehicleId),amount=money(r.amount||0),detail=[amount,r.frequency||'payment',ctx.line,recurringDateText(r)||r.nextRun||''].filter(Boolean).join(' | ');
+    if(state.key==='contact'||tries>=2)add(1,'bad','Failed twice',r.customer||'Unknown customer',detail,'Payments','Today','<button class="btn primary" data-action="compose-message" data-id="customer-'+esc(encodeURIComponent(r.customer||''))+'">Text</button><button class="btn" data-action="record-charge" data-id="'+esc(r.id)+'">Review</button>');
+    else if(state.key==='retry'||tries===1)add(2,'warn','Failed once',r.customer||'Unknown customer',detail,'Payments','Today','<button class="btn" data-action="record-charge" data-id="'+esc(r.id)+'">Review</button><button class="btn" data-action="send-pay-link" data-id="'+esc(r.id)+'">Link</button>');
+    else if(state.key==='notfound')add(2,'bad','Payment not found',r.customer||'Unknown customer',detail,'Payments','Today','<button class="btn gold" data-action="change-card-on-file" data-id="'+esc(r.id)+'">Card</button><button class="btn" data-action="send-pay-link" data-id="'+esc(r.id)+'">Link</button>');
+    else if(state.key==='setup')add(3,'warn','Card setup needed',r.customer||'Unknown customer',detail,'Payments','Today','<button class="btn gold" data-action="change-card-on-file" data-id="'+esc(r.id)+'">Card</button><button class="btn" data-action="send-pay-link" data-id="'+esc(r.id)+'">Link</button>');
+    else if(isDueToday(r)&&!rowPaidToday(r))add(4,'blue','Due today',r.customer||'Unknown customer',detail,'Payments','Today','<button class="btn primary" data-action="record-charge" data-id="'+esc(r.id)+'">Charge</button><button class="btn" data-action="send-pay-link" data-id="'+esc(r.id)+'">Link</button>');
+    if(r.customer&&String(r.status||'').toLowerCase()==='active'&&!(r.vehicleId||r.vin||r.licensePlate||r.plate||r.vehicle))add(5,'warn','Missing vehicle link',r.customer,'Autopay needs car, VIN, tag, and tracker before reports/messages are trusted.','Payments','Active',customerFileButton(r.customer,'File'));
+  });
+  payments.filter(function(p){return transactionCustomerName(p,roster)==='Customer match needed'}).slice(0,12).forEach(function(p){
+    add(2,'bad','Unmatched transaction',p.customer||'Customer match needed',[p.date||'',money(p.amount||0),p.method||p.type||'Payment',p.status||'Recorded'].filter(Boolean).join(' | '),'Payments','Transactions','<button class="btn primary" data-view="Payments" data-tab="Transactions">Match</button>');
+  });
+  cars.filter(function(v){return String(v.assignmentConflict||'').trim()&&String(v.status||'').toLowerCase()!=='removed'}).slice(0,12).forEach(function(v){
+    var tag=v.plate||v.stock||'',detail=[v.vin?'VIN '+v.vin:'VIN missing',tag?'Tag '+tag:'Tag missing',v.tracker?'Tracker '+v.tracker:'Tracker missing',v.assignmentConflict].filter(Boolean).join(' | ');
+    add(1,'bad','Vehicle conflict',vehicleName(v),detail,'Operations','Assigned','<button class="btn primary" data-action="open-vehicle" data-id="'+esc(v.id)+'">Fix car</button>');
+  });
+  cars.filter(function(v){return !String(v.vin||'').trim()&&String(v.status||'').toLowerCase()!=='removed'}).slice(0,8).forEach(function(v){
+    add(6,'warn','Missing VIN',vehicleName(v),[v.currentCustomer||'No customer',v.plate||v.stock||'No tag',v.status||''].filter(Boolean).join(' | '),'Operations','Fleet','<button class="btn" data-action="open-vehicle" data-id="'+esc(v.id)+'">Edit car</button>');
+  });
+  jobs.filter(function(m){var d=dateKeyFrom(m.due||m.nextDue);return d&&d<=todayKey()&&isOpenMaintenance(m)}).slice(0,12).forEach(function(m){
+    add(4,dateKeyFrom(m.due||m.nextDue)<todayKey()?'bad':'warn','Service due',m.vehicle||'Vehicle',[m.customer||'Customer',m.issue||m.type||'Service',m.due||m.nextDue||''].filter(Boolean).join(' | '),'Operations','Service','<button class="btn primary" data-action="open-maintenance" data-id="'+esc(m.id)+'">Open</button>');
+  });
+  claims.filter(function(c){var s=String(c.status||'Open').toLowerCase();return s.indexOf('paid')<0&&s.indexOf('closed')<0}).slice(0,12).forEach(function(c){
+    if(String(c.customerMatchStatus||'')==='Needs payment/customer match')add(3,'bad','Claim match needed',c.customer||'Unmatched',[c.type||'Claim',money(c.amount||0),c.vehicle||c.reference||'No vehicle'].filter(Boolean).join(' | '),'Claims & Issues','', '<button class="btn primary" data-action="open-claim" data-id="'+esc(c.id)+'">Review</button>');
+    else if(Number(c.amount||0)>0)add(6,'warn','Open recovery',c.customer||'Unassigned',[c.type||'Claim',money(c.amount||0),c.vehicle||c.reference||''].filter(Boolean).join(' | '),'Claims & Issues','', '<button class="btn" data-action="open-claim" data-id="'+esc(c.id)+'">Open</button>');
+  });
+  starQaOpenCardSetupLinks().slice(0,12).forEach(function(r){
+    add(3,'warn','Open card setup link',r.customer||'Customer',[money(r.amount||0),r.vehicle||r.vin||'No vehicle',shortDate(r.createdAt||r.date||'')].filter(Boolean).join(' | '),'Messages','Queue','<button class="btn gold" data-view="Messages" data-tab="Queue">Queue</button>'+customerFileButton(r.customer,'File'));
+  });
+  starQaPendingApprovalRows().slice(0,12).forEach(function(m){
+    var p=m.aiPlan||{},prep=p.preparedAction||{};
+    add(2,p.needsHuman?'bad':'warn','Star approval',m.customer||prep.customer||'Customer',[prep.label||p.actionType||m.subject||'AI action',prep.vehicle||m.vehicle||'',prep.amount?money(prep.amount):''].filter(Boolean).join(' | '),'Messages','Star','<button class="btn gold" data-view="Messages" data-tab="Star">Review Star</button>'+customerFileButton(m.customer,'File'));
+  });
+  missingCustomerPortalRecords().slice(0,10).forEach(function(x){
+    add(7,'blue','Portal login needed',x.name||'Customer','Create login so customer can see card setup, receipts, service, documents, and messages.','Settings','',customerPortalButton(x.name,'Portal'));
+  });
+  return items.sort(function(a,b){return a.priority-b.priority||String(a.title).localeCompare(String(b.title))}).slice(0,24);
+}
+function starCommandCenter(compact){
+  var items=starCommandItems(),bad=items.filter(function(i){return i.tone==='bad'}).length,warn=items.filter(function(i){return i.tone==='warn'}).length,ready=items.filter(function(i){return i.tone==='blue'||i.tone==='good'}).length,shown=items.slice(0,compact?8:16);
+  var cards=shown.map(function(i){return '<div class="star-command-card '+esc(i.tone)+'"><div class="star-command-top"><div><strong>'+esc(i.title||'Work item')+'</strong><small>'+esc(i.detail||'Review needed')+'</small></div>'+badge(i.type||'Review',i.tone)+'</div><div class="actions">'+(i.actionHtml||'<button class="btn" data-view="'+esc(i.view||'Dashboard')+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button>')+'<button class="btn" data-view="'+esc(i.view||'Dashboard')+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Go</button></div></div>'}).join('');
+  if(!cards)cards='<div class="item">Star does not see urgent payment, customer, fleet, service, claim, or messaging work right now.</div>';
+  return '<section class="card section star-command-center" data-limit="'+(compact?8:16)+'"><div class="section-head"><div><h2>Star command queue</h2><p>AI-organized work pulled from payments, customers, fleet, service, claims, messages, and portal gaps.</p></div><div class="star-command-stats"><span class="bad">'+bad+' critical</span><span class="warn">'+warn+' review</span><span class="blue">'+ready+' ready</span></div></div>'+localSearch('Search Star queue by customer, VIN, tag, vehicle, amount, status, or issue')+'<div class="star-command-grid">'+cards+'</div><div class="notice">Star organizes and drafts. Charges, removals, card changes, disputes, receipts, and account edits still require admin approval.</div></section>';
+}
+var __woaDashboardStarCommandBase=Dashboard;
+Dashboard=function(){
+  __woaDashboardStarCommandBase();
+  var main=document.querySelector('.main.view-dashboard'),focus=main&&main.querySelector('.today-focus');
+  if(main&&!main.querySelector('.star-command-center')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=starCommandCenter(true);
+    if(focus)focus.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+  }
+};
+var __woaMessagesFastStarCommandBase=MessagesFast;
+MessagesFast=function(){
+  __woaMessagesFastStarCommandBase();
+  if(view==='Messages'&&tab==='Star'){
+    var main=document.querySelector('.main.view-messages'),prompt=main&&main.querySelector('.star-prompt-panel');
+    if(main&&!main.querySelector('.star-command-center')){
+      var wrap=document.createElement('div');
+      wrap.innerHTML=starCommandCenter(false);
+      if(prompt)prompt.insertAdjacentElement('afterend',wrap.firstElementChild);
+      else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+      hydrateLocalSearches();
+    }
+  }
+};
+Messages=MessagesFast;

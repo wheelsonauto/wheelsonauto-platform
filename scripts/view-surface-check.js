@@ -88,6 +88,8 @@ function renderViews() {
   'messageSetupPanel',
   'starAiPanel',
   'starQaManagerPanel',
+  'starCommandItems',
+  'starCommandCenter',
   'staffServiceCard',
   'staffClaimCard',
   'proofLine',

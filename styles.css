@@ -3591,6 +3591,75 @@ body.fast-tab-switch .admin-shell .section{
   font-size:12px;
   line-height:1.45;
 }
+.star-command-center{
+  border-color:rgba(240,211,148,.22);
+  background:linear-gradient(145deg,rgba(17,20,24,.96),rgba(40,34,22,.88));
+}
+.star-command-center .section-head{
+  align-items:flex-start;
+}
+.star-command-stats{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  justify-content:flex-end;
+}
+.star-command-stats span{
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:999px;
+  padding:6px 9px;
+  font-size:12px;
+  font-weight:900;
+  background:rgba(255,255,255,.055);
+}
+.star-command-stats .bad{color:#ffb4a8;border-color:rgba(255,112,92,.28)}
+.star-command-stats .warn{color:#f7df9b;border-color:rgba(240,211,148,.26)}
+.star-command-stats .blue{color:#9fd0ff;border-color:rgba(88,166,255,.24)}
+.star-command-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
+.star-command-card{
+  display:grid;
+  gap:10px;
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(240,211,148,.14);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  box-shadow:0 14px 32px rgba(0,0,0,.16);
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+.star-command-card:hover{
+  transform:translateY(-1px);
+  background:rgba(240,211,148,.08);
+  border-color:rgba(240,211,148,.3);
+}
+.star-command-card.bad{border-left:3px solid #ff705c}
+.star-command-card.warn{border-left:3px solid #f0d394}
+.star-command-card.blue{border-left:3px solid #58a6ff}
+.star-command-card.good{border-left:3px solid #7ee787}
+.star-command-top{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+}
+.star-command-top strong{
+  display:block;
+  color:#f7df9b;
+  line-height:1.25;
+}
+.star-command-top small{
+  display:block;
+  margin-top:4px;
+  color:#cbd5df;
+  line-height:1.35;
+}
+@media(max-width:860px){
+  .star-command-grid{grid-template-columns:1fr}
+  .star-command-stats{justify-content:flex-start}
+}
 .notification-event-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
