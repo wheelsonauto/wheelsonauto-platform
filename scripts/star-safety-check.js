@@ -46,6 +46,9 @@ const sanitize = finalFunctionSlice(server, 'sanitizeAiPlan');
 const openAiPlan = finalFunctionSlice(server, 'openAiReplyPlan');
 const safeLinks = finalFunctionSlice(server, 'prepareAiSafeLink');
 const aiDraft = finalFunctionSlice(server, 'createAiMessageDraft');
+const aiFindContext = finalFunctionSlice(server, 'aiFindCustomerContext');
+const aiContext = finalFunctionSlice(server, 'aiContextSummary');
+const aiHealth = finalFunctionSlice(server, 'aiSystemHealthForContext');
 const approve = finalFunctionSlice(server, 'approveAiMessage');
 const apiAllowed = finalFunctionSlice(server, 'apiAllowedForUser');
 const starPanel = finalFunctionSlice(app, 'starAiPanel');
@@ -53,7 +56,7 @@ const starHealth = finalFunctionSlice(app, 'starSystemHealthPanel');
 const starQaManager = finalFunctionSlice(app, 'starQaManagerPanel');
 const starActions = finalFunctionSlice(app, 'starAiActions');
 
-if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve || !apiAllowed || !starPanel || !starHealth || !starQaManager || !starActions) {
+if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindContext || !aiContext || !aiHealth || !approve || !apiAllowed || !starPanel || !starHealth || !starQaManager || !starActions) {
   fail('Missing Star AI frontend/backend safety functions.');
 }
 
@@ -88,6 +91,13 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve |
 ].forEach(text => requireText('OpenAI Star prompt guardrails', openAiPlan, text));
 
 [
+  'systemHealthSnapshot',
+  'nextActions',
+  'systemHealth: aiSystemHealthForContext',
+  'systemHealth: context.systemHealth'
+].forEach(text => requireText('Star platform health context', aiHealth + aiFindContext + aiContext, text));
+
+[
   'if (!plan || plan.needsHuman || plan.approvalRequired) return plan',
   "plan.actionType === 'send_payment_link'",
   'createPaymentRequest',
@@ -101,6 +111,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !approve |
   "status: plan.needsHuman ? 'Human needed' : (plan.approvalRequired ? 'Needs approval'",
   "source: 'WheelsonAuto Star AI'",
   'aiPlan: plan',
+  'options.user',
   'recurringPaymentId',
   'claimId'
 ].forEach(text => requireText('Star draft record context', aiDraft, text));

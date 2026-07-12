@@ -1056,6 +1056,7 @@ async function main() {
     });
     assert(starCardSetup.status === 201 && starCardSetup.json.ok, 'Star card setup draft failed.');
     assert(starCardSetup.json.plan.actionType === 'send_card_setup', 'Star should recognize card-on-file update requests.');
+    assert(starCardSetup.json.plan.context && starCardSetup.json.plan.context.systemHealth && Array.isArray(starCardSetup.json.plan.context.systemHealth.nextActions), 'Star drafts should include compact system health context.');
     assert(String(starCardSetup.json.draft.body || '').includes('/setup-card/'), 'Star card setup reply should include a secure setup link.');
     assert(starCardSetup.json.plan.related.cardSetupRequestId, 'Star card setup should save the setup request ID.');
     const starCardState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

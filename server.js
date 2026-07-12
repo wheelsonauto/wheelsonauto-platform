@@ -1427,7 +1427,21 @@ function aiLatestPayment(data, context) {
   });
   return rows.sort((a, b) => String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || '')))[0] || null;
 }
-function aiFindCustomerContext(data, payload = {}) {
+function aiSystemHealthForContext(data, user = { role: 'Owner' }) {
+  const health = systemHealthSnapshot(data, user);
+  return {
+    summary: health.summary,
+    nextActions: (health.star && health.star.nextActions || []).map(row => ({
+      key: row.key,
+      label: row.label,
+      count: row.count,
+      tone: row.tone,
+      view: row.view,
+      tab: row.tab
+    }))
+  };
+}
+function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
   enrichLinkedProfiles(data);
   const contact = findMessageContact(data, payload);
   const phone = phoneKey(payload.phone || payload.from || contact.phone || '');
@@ -1497,7 +1511,8 @@ function aiFindCustomerContext(data, payload = {}) {
       ezPassReady: !!(((data.integrations || {}).ezpass || {}).connected),
       emailReady: messageSettings(data).emailEnabled && !!(((data.integrations || {}).email || {}).connected),
       emailProvider: (((data.integrations || {}).email || {}).provider) || WOA_EMAIL_PROVIDER
-    }
+    },
+    systemHealth: aiSystemHealthForContext(data, user)
   };
 }
 function aiContextSummary(context) {
@@ -1521,7 +1536,8 @@ function aiContextSummary(context) {
     lastPayment: context.latestPayment ? [context.latestPayment.status, aiMoney(context.latestPayment.amount), context.latestPayment.date].filter(Boolean).join(' ') : '',
     openClaims: context.openClaims.map(row => ({ id: row.id || '', type: row.type || 'Balance', amount: aiMoney(row.amount || 0), status: row.status || 'Open' })),
     maintenance: context.maintenance.map(row => ({ id: row.id || '', vehicle: row.vehicle || context.vehicleName || '', type: row.type || row.issue || 'Service', due: row.due || row.nextDue || '', status: row.status || '' })),
-    modules: context.platformModules
+    modules: context.platformModules,
+    systemHealth: context.systemHealth
   };
 }
 function aiPlanRules(data, payload = {}, context = null) {
@@ -1769,7 +1785,7 @@ function prepareAiSafeLink(data, plan, context) {
 }
 async function createAiMessageDraft(data, payload = {}, options = {}) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
-  const context = aiFindCustomerContext(data, payload);
+  const context = aiFindCustomerContext(data, payload, options.user || { role: 'Owner' });
   const fallback = aiPlanRules(data, payload, context);
   let plan = await openAiReplyPlan(data, payload, context, fallback);
   plan = prepareAiSafeLink(data, plan, context);
@@ -5902,7 +5918,7 @@ const server = http.createServer(async (req, res) => {
         channel: payload.channel || (sourceMessage && sourceMessage.channel === 'Email' ? 'Email' : ''),
         body: payload.body || payload.message || (sourceMessage && sourceMessage.body) || ''
       };
-      const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true });
+      const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true, user });
       data.integrations = data.integrations || {};
       data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiDraftAt: new Date().toISOString(), lastError: '' };
       await writeData(data);
