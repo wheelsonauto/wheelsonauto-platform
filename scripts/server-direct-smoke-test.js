@@ -1403,6 +1403,33 @@ async function main() {
     });
     assert([200, 202].includes(starSend.status) && starSend.json.ok, 'Star email approval failed.');
 
+    const starChargeDraft = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Direct Failed Once', phone: '3135550444', channel: 'SMS', body: 'Can you charge the card on file right now?' }
+    });
+    assert(starChargeDraft.status === 201 && starChargeDraft.json.plan.actionType === 'charge_saved_card' && starChargeDraft.json.plan.approvalRequired === true, 'Star should classify saved-card charge requests as approval-required money actions.');
+    const blockedStarChargeSend = await request(server, 'POST', '/api/messages/ai-action', {
+      cookie: managerCookie,
+      json: { draftId: starChargeDraft.json.draft.id, channel: 'SMS' }
+    });
+    assert(blockedStarChargeSend.status === 409 && /money or account change/i.test(blockedStarChargeSend.json.error || ''), 'Star should not approve/send money-action drafts without explicit admin workflow approval.');
+
+    const starOff = await request(server, 'POST', '/api/messages/settings', {
+      cookie: ownerCookie,
+      json: { aiEnabled: false }
+    });
+    assert(starOff.status === 200 && starOff.json.messaging.aiEnabled === false, 'Owner should be able to turn Star off.');
+    const starBlockedWhileOff = await request(server, 'POST', '/api/messages/ai-reply', {
+      cookie: managerCookie,
+      json: { customer: 'Direct Customer', phone: '3135550101', body: 'Can you send me a payment link?' }
+    });
+    assert(starBlockedWhileOff.status === 423, 'Star AI should respect the WheelsonAuto off switch.');
+    const starBackOn = await request(server, 'POST', '/api/messages/settings', {
+      cookie: ownerCookie,
+      json: { aiEnabled: true, aiAutoSend: true }
+    });
+    assert(starBackOn.status === 200 && starBackOn.json.messaging.aiEnabled === true, 'Owner should be able to turn Star back on after the off-switch test.');
+
     const mechanicMessage = await request(server, 'POST', '/api/messages/send', {
       cookie: mechanicCookie,
       json: { customer: 'Blocked', phone: '3135550199', body: 'Should not save.' }
