@@ -45,6 +45,8 @@ const paymentCloseout = finalFunctionSlice('paymentCloseoutBoard');
 const customerFileVehicleOptions = finalFunctionSlice('customerFileVehicleOptions');
 const paymentTransactionCard = finalFunctionSlice('paymentTransactionCard');
 const transactionCustomerName = finalFunctionSlice('transactionCustomerName');
+const transactionPossibleMatches = finalFunctionSlice('transactionPossibleMatches');
+const applyTransactionCandidate = finalFunctionSlice('applyTransactionCandidate');
 
 if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout) {
   fail('Missing core payment workflow functions.');
@@ -147,7 +149,10 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
 
 [
   'transactionCustomerName',
+  'transactionPossibleMatches',
   'Needs Clover/customer match',
+  'apply-transaction-match',
+  'Use match',
   'customerFileButton'
 ].forEach(text => requireText('Transaction customer matching card', paymentTransactionCard, text));
 [
@@ -155,6 +160,24 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
   'cloverCustomerId',
   'same.length===1'
 ].forEach(text => requireText('Transaction customer matching helper', transactionCustomerName, text));
+[
+  'same amount',
+  'same attempt date/amount',
+  'saved attempt id',
+  'Clover customer reference',
+  'vin',
+  'plate',
+  'tracker'
+].forEach(text => requireText('Transaction possible match helper', transactionPossibleMatches, text));
+[
+  'customerMatchStatus',
+  'Admin accepted possible transaction match',
+  'candidate.vin',
+  'candidate.plate',
+  'candidate.tracker',
+  'candidate.phone',
+  'candidate.email'
+].forEach(text => requireText('Apply transaction match helper', applyTransactionCandidate, text));
 
 [
   '/api/integrations/clover/manual-charge',
