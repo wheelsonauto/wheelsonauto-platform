@@ -2738,6 +2738,13 @@ function scrubMechanicMoneyValue(value) {
 function scrubMechanicMoneyFields(row = {}) {
   return scrubMechanicMoneyValue(row || {});
 }
+function isMechanicVisibleClaim(row = {}) {
+  const text = [row.type, row.source, row.provider, row.agency, row.notes, row.responsibility, row.status, row.customerMatchStatus]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return !/(toll|ezpass|e-zpass|violation|dispute|clover|payment|chargeback|refund|reimbursement|recovery|invoice|receipt|paid outside|accounting)/.test(text);
+}
 function sanitizeMechanicCollectionWrite(key, currentRows = [], incomingRows = [], user = {}) {
   const scoped = mergeScopedCollection(currentRows, incomingRows, user);
   if (!Array.isArray(scoped)) return scoped;
@@ -3178,6 +3185,7 @@ function stateForUserRead(data, user) {
     ['vehicles', 'maintenance', 'claims'].forEach(key => {
       if (Array.isArray(mechanic[key])) mechanic[key] = mechanic[key].map(scrubMechanicMoneyFields);
     });
+    if (Array.isArray(mechanic.claims)) mechanic.claims = mechanic.claims.filter(isMechanicVisibleClaim);
     mechanic.integrations = {
       messaging: {
         provider: 'not_configured',

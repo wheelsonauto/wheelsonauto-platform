@@ -1549,6 +1549,7 @@ async function main() {
     assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'payments'), 'Mechanic state should not include payments.');
     assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'recurringPayments'), 'Mechanic state should not include recurring payments.');
     assert(!JSON.stringify(mechanicState.json.vehicles || []).includes('"price"') && !JSON.stringify(mechanicState.json.maintenance || []).includes('"cost"') && !JSON.stringify(mechanicState.json.claims || []).includes('"amount"'), 'Mechanic state should not expose vehicle, maintenance, or claim money fields.');
+    assert(!/toll|ezpass|e-zpass|clover|dispute|chargeback|reimbursement|recovery/i.test(JSON.stringify(mechanicState.json.claims || [])), 'Mechanic state should not expose toll, Clover dispute, or recovery claim records.');
     const mechanicWriteState = JSON.parse(JSON.stringify(mechanicState.json));
     const mechanicVehicle = (mechanicWriteState.vehicles || []).find(vehicle => vehicle.currentCustomer);
     if (mechanicVehicle) {

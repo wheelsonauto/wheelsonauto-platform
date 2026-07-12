@@ -480,11 +480,11 @@ function mechanicSmoke() {
   [
     ['Mechanic maintenance', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board']],
     ['Mechanic fleet', 'Fleet', 'Available', ['Fleet', 'Available fleet', 'staff-card-board']],
-    ['Mechanic claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls & issues', 'staff-card-board']]
+    ['Mechanic claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open vehicle issues', 'staff-card-board']]
   ].forEach(([label, view, tab, required]) => {
     const output = renderView(context, view, tab);
     assertCompactBoard(label, output, required);
-    assertNo(label, output, ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"', 'data-action="send-pay-link"', 'class="money"']);
+    assertNo(label, output, ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"', 'data-action="send-pay-link"', 'data-action="send-claim-link"', 'class="money"', 'tolls & issues', 'Import tolls', 'Clover dispute']);
   });
 
   const blocked = renderView(context, 'Messages', 'Inbox');

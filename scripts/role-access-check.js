@@ -158,6 +158,7 @@ assertIncludes('Mechanic read data', strings(mechanicReadMatch[1]), ['vehicles',
 assertExcludes('Mechanic read data', strings(mechanicReadMatch[1]), ['payments', 'recurringPayments', 'apiProviders']);
 if (!/configured:\s*false/.test(mechanicReadMatch[1])) fail('Mechanic messaging read state should be disabled.');
 if (!/scrubMechanicMoneyFields/.test(stateForUserRead)) fail('Mechanic read state should scrub money fields.');
+if (!/isMechanicVisibleClaim/.test(stateForUserRead + server)) fail('Mechanic read state should filter toll/dispute/payment claim records.');
 assertIncludes('Staff read redaction', stateForUserRead, ['delete safe.auditLogs', 'scrubPrivateOperationalFields', 'enrichLinkedProfiles(safe)']);
 
 const mechanicWriteMatch = stateForUserWrite.match(/role === 'mechanic'\s*\?\s*\[((?:.|\n)*?)\]/m);
