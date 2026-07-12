@@ -63,6 +63,7 @@ const vehicleIdentityLine = finalFunctionSlice(app, 'vehicleIdentityLine');
 const executiveReport = finalFunctionSlice(app, 'executiveReportBoard');
 const dailyCloseout = finalFunctionSlice(app, 'dailyCloseout');
 const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
+const operationsQueue = finalFunctionSlice(app, 'operationsQueue');
 
 [
   maintenance,
@@ -79,7 +80,8 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   vehicleIdentityLine,
   executiveReport,
   dailyCloseout,
-  claimMatchNote
+  claimMatchNote,
+  operationsQueue
 ].forEach((source, index) => {
   if (!source) fail('Missing operations function #' + index);
 });
@@ -203,6 +205,17 @@ const claimMatchNote = finalFunctionSlice(app, 'claimMatchNote');
   'Star closeout summary',
   'auditEvents'
 ].forEach(text => requireText('Daily closeout operations board', dailyCloseout + app + server, text));
+
+[
+  'Assignment conflict',
+  'Claimed by',
+  'assignmentConflict',
+  'VIN missing',
+  'Tag missing',
+  'Resolve',
+  "view:\"Operations\"",
+  "tab:\"Fleet\""
+].forEach(text => requireText('Operations queue assignment conflicts', operationsQueue, text));
 
 [
   'Company accounts',
