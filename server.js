@@ -829,7 +829,7 @@ function closeoutUsefulCustomerName(payment = {}) {
   const described = closeoutDescriptionCustomer(payment);
   if (described) return described;
   const external = String(payment.externalCustomerReference || '').trim();
-  if (external && !/^[A-Z0-9]{8,}$/i.test(external) && !weakCloseoutCustomerName(external)) return external;
+  if (external && /\s/.test(external) && !weakCloseoutCustomerName(external)) return external;
   return '';
 }
 function uniqueCloseoutPayments(rows = []) {
@@ -849,7 +849,7 @@ function uniqueCloseoutPayments(rows = []) {
     const merged = { ...old, ...payment };
     if (oldName && !newName) merged.customer = oldName;
     if (newName) merged.customer = newName;
-    ['phone', 'email', 'vehicle', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId', 'externalReferenceId', 'externalCustomerReference'].forEach(field => {
+    ['phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId', 'externalReferenceId', 'externalCustomerReference'].forEach(field => {
       if (!merged[field] && old[field]) merged[field] = old[field];
     });
     byKey.set(key, merged);
@@ -864,6 +864,10 @@ function closeoutPaymentCustomerName(data, payment = {}, recurringRows = allRecu
   if (!recurring) {
     const cloverCustomerId = String(payment.cloverCustomerId || payment.customerId || '').trim();
     if (cloverCustomerId) recurring = recurringRows.find(row => String(row.cloverCustomerId || '') === cloverCustomerId);
+  }
+  if (!recurring) {
+    const externalCustomer = String(payment.externalCustomerReference || '').trim();
+    if (externalCustomer) recurring = recurringRows.find(row => String(row.cloverCustomerId || '') === externalCustomer || normKey(row.customer) === normKey(externalCustomer));
   }
   if (!recurring && payment.paymentRequestId) {
     const request = (data.paymentRequests || []).find(row => row.id === payment.paymentRequestId);
@@ -3361,7 +3365,7 @@ function mergePaymentRecord(existing, incoming) {
   const merged = { ...existing, ...incoming };
   if (weakIncomingName && !weakExistingName) merged.customer = existing.customer;
   if (!weakIncomingName && weakExistingName) merged.customer = incoming.customer;
-  ['phone', 'email', 'vehicle', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId', 'externalReferenceId', 'externalCustomerReference'].forEach(key => {
+  ['phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId', 'externalReferenceId', 'externalCustomerReference'].forEach(key => {
     if (!merged[key] && existing[key]) merged[key] = existing[key];
   });
   return merged;
@@ -4609,11 +4613,27 @@ function isPaymentNotFoundError(err) {
   const message = String(err && err.message || err || '').toLowerCase();
   return /payment not found|resource_missing|not found|valid source or token|source or token|saved-card token|saved card token/.test(message);
 }
+function recurringPaymentIdentity(data, row = {}, payload = {}) {
+  const customer = row.customer || payload.customer || '';
+  const vehicle = reportVehicleFor(data, customer, row.vehicleId || payload.vehicleId || '');
+  const vehicleName = vehicle.id ? vehicleNameFromParts(vehicle) : (row.vehicle || payload.vehicle || '');
+  const tag = vehicle.plate || vehicle.stock || row.licensePlate || row.plate || payload.licensePlate || payload.plate || '';
+  return {
+    vehicleId: vehicle.id || row.vehicleId || payload.vehicleId || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || row.vin || payload.vin || '',
+    licensePlate: tag,
+    plate: tag,
+    tempTag: vehicle.tempTag || row.tempTag || payload.tempTag || '',
+    tracker: vehicle.tracker || row.tracker || payload.tracker || ''
+  };
+}
 function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
   const stamp = new Date().toISOString();
   const message = String(err && err.message || err || 'Payment was not found in Clover.');
   const amount = Number(payload.amount || row.amount || 0);
   const status = 'Payment not found - check Clover';
+  const identity = recurringPaymentIdentity(data, row, payload);
   const payment = {
     id: 'payment-not-found-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
     date: new Date().toLocaleString('en-US'),
@@ -4625,7 +4645,9 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
     source: options.source || 'WheelsonAuto payment check',
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     recurringPaymentId: row.id || '',
-    cloverCustomerId: row.cloverCustomerId || ''
+    cloverCustomerId: row.cloverCustomerId || '',
+    cloverSubscriptionId: row.cloverSubscriptionId || '',
+    ...identity
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   data.payments.unshift(payment);
@@ -4637,7 +4659,12 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
     amount,
     result: status,
     method: payment.method,
-    notes: payment.notes
+    notes: payment.notes,
+    vehicle: payment.vehicle,
+    vehicleId: payment.vehicleId,
+    vin: payment.vin,
+    plate: payment.plate,
+    tracker: payment.tracker
   });
   updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
     status,
@@ -4706,6 +4733,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
   }, req);
   const status = String(charge.status || charge.result || '').toLowerCase();
   const paid = status === 'paid' || status === 'succeeded' || status === 'success' || charge.paid === true || charge.captured === true;
+  const identity = recurringPaymentIdentity(data, recurring, payload);
   const payment = {
     id: 'clover-manual-charge-' + (charge.id || Date.now()),
     cloverPaymentId: charge.id || charge.charge || '',
@@ -4716,7 +4744,13 @@ async function chargeSavedRecurringCard(data, payload, req) {
     customer: recurring.customer,
     phone: recurring.phone || '',
     email: recurring.email || '',
-    vehicle: recurring.vehicle || '',
+    vehicle: identity.vehicle || recurring.vehicle || '',
+    vehicleId: identity.vehicleId || recurring.vehicleId || '',
+    vin: identity.vin || recurring.vin || '',
+    licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || '',
+    plate: identity.plate || recurring.plate || recurring.licensePlate || '',
+    tempTag: identity.tempTag || recurring.tempTag || '',
+    tracker: identity.tracker || recurring.tracker || '',
     method: 'Clover saved card',
     amount,
     status: paid ? 'Paid' : (charge.status || charge.result || 'Submitted'),
@@ -4738,6 +4772,11 @@ async function chargeSavedRecurringCard(data, payload, req) {
     result: payment.status,
     method: payment.method,
     notes: payment.notes,
+    vehicle: payment.vehicle,
+    vehicleId: payment.vehicleId,
+    vin: payment.vin,
+    plate: payment.plate,
+    tracker: payment.tracker,
     cloverPaymentId: payment.cloverPaymentId,
     recurringPaymentId: payment.recurringPaymentId
   });

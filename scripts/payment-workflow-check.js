@@ -155,6 +155,9 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
   'recurringPaymentId',
   'customer',
   'vehicleId',
+  'vin',
+  'licensePlate',
+  'tracker',
   'paymentAttempts',
   'Payment not found'
 ].forEach(text => requireText('Saved-card/manual charge backend', server, text));
