@@ -285,10 +285,18 @@ assertIncludes('Documents surface', documents + app + server, [
   'Documents & receipts'
 ]);
 
-const marketing = finalFunctionSlice(app, 'Marketing');
+const marketing = finalFunctionSlice(app, 'Marketing') + finalFunctionSlice(app, 'marketingLeadCommandItems') + finalFunctionSlice(app, 'marketingFollowupBoard') + app.slice(app.indexOf('var __woaMarketingFollowupBase=Marketing;'), app.indexOf('function ifleetFunctionCoverageItems'));
 assertIncludes('Marketing surface', marketing, [
+  'marketingLeadCommandItems',
+  'marketingFollowupBoard',
   'Marketing command',
+  'Lead follow-up command',
+  'Manual-live marketing',
+  'marketing-followup-board',
+  'marketing-lead-card',
+  'Send approval + contract/autopay setup',
   'Lead board',
+  'Search follow-up by customer, phone, email, car, source, status, or next step',
   'Search leads by customer, phone, email, car, source, or status',
   'Website tools',
   'Message queue',
