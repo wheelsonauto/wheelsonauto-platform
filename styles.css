@@ -3825,12 +3825,22 @@ body.fast-tab-switch .admin-shell .section{
   background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(24,27,31,.93));
   border-color:rgba(240,211,148,.20);
 }
+.api-provider-launch-queue{
+  background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(24,27,31,.94));
+  border-color:rgba(240,211,148,.22);
+}
 .api-operational-grid{
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
   gap:10px;
 }
-.api-operational-card{
+.api-provider-launch-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.api-operational-card,
+.api-provider-launch-card{
   min-width:0;
   padding:12px;
   border:1px solid rgba(255,255,255,.09);
@@ -3840,7 +3850,8 @@ body.fast-tab-switch .admin-shell .section{
   box-shadow:0 14px 28px rgba(0,0,0,.16);
   transition:transform .16s ease,border-color .16s ease,background .16s ease;
 }
-.api-operational-card:hover{
+.api-operational-card:hover,
+.api-provider-launch-card:hover{
   transform:translateY(-1px);
   border-color:rgba(240,211,148,.30);
   background:rgba(240,211,148,.08);
@@ -3849,10 +3860,16 @@ body.fast-tab-switch .admin-shell .section{
 .api-operational-card.blue{border-left:3px solid #58a6ff}
 .api-operational-card.warn{border-left:3px solid #f0d394}
 .api-operational-card.bad{border-left:3px solid #ff705c}
-.api-operational-card strong{
+.api-provider-launch-card.good{border-left:3px solid #7ee787}
+.api-provider-launch-card.blue{border-left:3px solid #58a6ff}
+.api-provider-launch-card.warn{border-left:3px solid #f0d394}
+.api-provider-launch-card.bad{border-left:3px solid #ff705c}
+.api-operational-card strong,
+.api-provider-launch-card strong{
   color:#f7df9b;
 }
-.api-operational-card p{
+.api-operational-card p,
+.api-provider-launch-card p{
   margin:8px 0;
   color:#d9e3eb;
   font-size:13px;
@@ -4167,6 +4184,7 @@ body.fast-tab-switch .admin-shell .section{
   .dispute-recovery-stats,
   .dispute-recovery-grid,
   .api-operational-grid,
+  .api-provider-launch-grid,
   .service-inspection-grid,
   .company-launch-grid,
   .notification-command-grid,
@@ -4178,6 +4196,7 @@ body.fast-tab-switch .admin-shell .section{
   .dispute-recovery-stats,
   .dispute-recovery-grid,
   .api-operational-grid,
+  .api-provider-launch-grid,
   .service-inspection-grid,
   .company-launch-grid,
   .notification-command-grid,
