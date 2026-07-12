@@ -23,6 +23,8 @@ Completed in this build pass:
 - API provider setup now keeps one Dispatch task synced per incomplete provider and auto-closes that task once credentials, endpoint, live-test plan, and live-test result are recorded as connected.
 - Customer portal messages now triage money/card/autopay/toll/account requests as admin-review items with customer, vehicle, VIN/tag, payment amount, next charge, and approval context.
 - Customer portal message history now hides internal Star drafts, AI plans, notifications, and internal logs so customer logins only show customer-submitted messages and actual staff replies.
+- Mechanic Claims & Issues now filters out toll, Clover dispute, payment, reimbursement, and recovery records so mechanics only see vehicle issue work with VIN/tag/proof context.
+- Main app and server-rendered pages now use a fresh asset version (`platform-20260712-deep-tighten-1`) so new UI/role fixes do not get stuck behind stale browser cache after deploy.
 
 Checks passed at this checkpoint:
 
