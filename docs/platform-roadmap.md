@@ -19,6 +19,10 @@ Completed in this build pass:
 - Star QA and the deep report now surface API provider readiness so outside systems stay visible until credentials, endpoint, live test, and last result are recorded.
 - Clover disputes can now recover customer/vehicle evidence from claim text containing a customer name, VIN, tag, or saved reference when Clover does not provide a useful payment/customer ID.
 - Star direct smoke checks now prove the owner off-switch works and saved-card charge requests cannot be approved/sent as normal AI replies without the proper money-action workflow.
+- Marketing leads now have local search so lead/customer/vehicle/source/status filtering works inside the lead board instead of opening a separate search flow.
+- API provider setup now keeps one Dispatch task synced per incomplete provider and auto-closes that task once credentials, endpoint, live-test plan, and live-test result are recorded as connected.
+- Customer portal messages now triage money/card/autopay/toll/account requests as admin-review items with customer, vehicle, VIN/tag, payment amount, next charge, and approval context.
+- Customer portal message history now hides internal Star drafts, AI plans, notifications, and internal logs so customer logins only show customer-submitted messages and actual staff replies.
 
 Checks passed at this checkpoint:
 
