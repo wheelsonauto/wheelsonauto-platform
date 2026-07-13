@@ -1607,9 +1607,28 @@ if(!renderQueued)queueRender();
 // report, readiness board, and cross-system queue on each navigation click.
 var __woaPerformanceRenderMemo=null;
 var __woaPerformanceRecurringRosterBase=recurringRoster;
+function buildPerformanceRecurringRoster(){
+  var seen={},rows=[];
+  (cloverMembers()||[]).forEach(function(m){
+    var id=m.id||('clover-member-'+rows.length);
+    if(seen[id])return;
+    seen[id]=true;
+    rows.push(Object.assign({},m,{id:id,sourceType:'clover-member',tone:statusTone(m.status),amount:Number(m.amount||m.subtotal||0)}))
+  });
+  (db.recurringPayments||[]).forEach(function(p){
+    var id=p.id||('local-rec-'+rows.length);
+    if(seen[id])return;
+    seen[id]=true;
+    rows.push(Object.assign({},p,{id:id,sourceType:String(p.status||'').toLowerCase()==='active'?'local-active':'local-attention',plan:p.plan||p.amount,tone:p.tone||statusTone(p.status),amount:Number(p.amount||0)}))
+  });
+  rows.forEach(function(r){r.__woaSortRank=sortStatus(r)});
+  rows.sort(function(a,b){return a.__woaSortRank-b.__woaSortRank||String(a.customer||'').localeCompare(String(b.customer||''))});
+  rows.forEach(function(r){delete r.__woaSortRank});
+  return rows
+}
 recurringRoster=function(){
-  if(!__woaPerformanceRenderMemo)return __woaPerformanceRecurringRosterBase();
-  if(!__woaPerformanceRenderMemo.recurringRoster)__woaPerformanceRenderMemo.recurringRoster=__woaPerformanceRecurringRosterBase();
+  if(!__woaPerformanceRenderMemo)return buildPerformanceRecurringRoster();
+  if(!__woaPerformanceRenderMemo.recurringRoster)__woaPerformanceRenderMemo.recurringRoster=buildPerformanceRecurringRoster();
   return __woaPerformanceRenderMemo.recurringRoster
 };
 var __woaPerformanceMaintenanceBase=customerMaintenanceJobs;
@@ -1630,6 +1649,43 @@ paymentCustomerRecords=function(roster,mode){
   var key='customerRecords'+String(mode||'All');
   if(!__woaPerformanceRenderMemo[key])__woaPerformanceRenderMemo[key]=__woaPerformanceCustomerRecordsBase(roster,mode);
   return __woaPerformanceRenderMemo[key]
+};
+function performanceMemoLookup(bucket,key,compute){
+  if(!__woaPerformanceRenderMemo)return compute();
+  var map=__woaPerformanceRenderMemo[bucket]||(__woaPerformanceRenderMemo[bucket]={});
+  if(Object.prototype.hasOwnProperty.call(map,key))return map[key];
+  map[key]=compute();
+  return map[key]
+}
+var __woaPerformanceTodayPaymentsBase=todayPaymentsForRecurring;
+todayPaymentsForRecurring=function(r){
+  var key=String(r&&r.id||normName(r&&r.customer)||'unknown');
+  return performanceMemoLookup('todayPayments',key,function(){return __woaPerformanceTodayPaymentsBase(r)})
+};
+var __woaPerformanceFailureCountBase=todayFailureCount;
+todayFailureCount=function(r){
+  var key=String(r&&r.id||normName(r&&r.customer)||'unknown');
+  return performanceMemoLookup('failureCounts',key,function(){return __woaPerformanceFailureCountBase(r)})
+};
+var __woaPerformanceLatestPaymentBase=latestPaymentFor;
+latestPaymentFor=function(name){
+  var key=normName(name)||'unknown';
+  return performanceMemoLookup('latestPayments',key,function(){return __woaPerformanceLatestPaymentBase(name)})
+};
+var __woaPerformanceCustomerByNameBase=findCustomerByName;
+findCustomerByName=function(name){
+  var key=normName(name)||'unknown';
+  return performanceMemoLookup('customersByName',key,function(){return __woaPerformanceCustomerByNameBase(name)})
+};
+var __woaPerformanceContractByCustomerBase=findContractByCustomer;
+findContractByCustomer=function(name){
+  var key=normName(name)||'unknown';
+  return performanceMemoLookup('contractsByName',key,function(){return __woaPerformanceContractByCustomerBase(name)})
+};
+var __woaPerformanceVehicleByCustomerBase=findVehicleByCustomer;
+findVehicleByCustomer=function(name){
+  var key=normName(name)||'unknown';
+  return performanceMemoLookup('vehiclesByName',key,function(){return __woaPerformanceVehicleByCustomerBase(name)})
 };
 if(typeof fastMessageRows==='function'){
   var __woaPerformanceMessageRowsBase=fastMessageRows;
