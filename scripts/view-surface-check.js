@@ -838,6 +838,7 @@ assertStringsInclude('Mobile quickbar labels', quickbar, ['Dashboard', 'Payments
 assertExcludes('Mobile quickbar raw letter labels', quickbar, ["['Dashboard','D']", "['Payments','P']", "['Mechanic Portal','M']"]);
 
 const nav = finalFunctionSlice(app, 'navForRole');
+assertIncludes('Frontend staff status helper', app, ['function staffStatusActive(staff)', 'disabled|removed|closed|inactive']);
 assertIncludes('Role navigation', nav, [
   "if(r==='mechanic')return['Mechanic Portal','Maintenance','Fleet','Claims & Issues']",
   "if(r==='manager')return['Manager Portal','Today','Customers','Applications','Operations','Fleet','Dispatch','Maintenance','Documents','Tolls','Insurance','Claims & Issues','Messages','Reports']"
