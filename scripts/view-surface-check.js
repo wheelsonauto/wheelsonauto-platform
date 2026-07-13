@@ -679,6 +679,14 @@ assertIncludes('Star readiness panel', starReadiness + app, [
   'Safe auto-send',
   'Star is inside the app'
 ]);
+assertIncludes('Star OpenAI setup card', app + starReadiness, [
+  'star-openai-setup-card',
+  'OpenAI Responses API connected',
+  'OPENAI_API_KEY or WOA_OPENAI_API_KEY',
+  'WOA_AI_MODEL',
+  'Default model: gpt-5.5',
+  'Test does not send texts, charge cards, or change accounts'
+]);
 assertIncludes('Star system auditor', starAuditor + app + css, [
   'Star system auditor',
   'bugs, weak links, API blockers',

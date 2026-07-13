@@ -41,7 +41,7 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.WOA_OPENAI_API_KEY || '';
 const OPENAI_BASE_URL = (process.env.WOA_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-5.6' : '');
+const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-5.5' : '');
 const WOA_AI_REASONING_EFFORT = ['minimal', 'low', 'medium', 'high'].includes(String(process.env.WOA_AI_REASONING_EFFORT || process.env.OPENAI_REASONING_EFFORT || '').toLowerCase()) ? String(process.env.WOA_AI_REASONING_EFFORT || process.env.OPENAI_REASONING_EFFORT).toLowerCase() : 'medium';
 const WOA_AI_TIMEOUT_MS = Math.max(3000, Number(process.env.WOA_AI_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS || 15000));
 const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
