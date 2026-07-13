@@ -44,6 +44,7 @@ const dailyCloseout = finalFunctionSlice('dailyCloseout');
 const paymentCloseout = finalFunctionSlice('paymentCloseoutBoard');
 const customerFileVehicleOptions = finalFunctionSlice('customerFileVehicleOptions');
 const paymentTransactionCard = finalFunctionSlice('paymentTransactionCard');
+const recentPayments = finalFunctionSlice('recentPayments');
 const transactionCustomerName = finalFunctionSlice('transactionCustomerName');
 const transactionPossibleMatches = finalFunctionSlice('transactionPossibleMatches');
 const transactionCandidateNote = finalFunctionSlice('transactionCandidateNote');
@@ -54,6 +55,14 @@ const paymentTruthQueueBoard = finalFunctionSlice('paymentTruthQueueBoard');
 if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout || !paymentTruthQueueRows || !paymentTruthQueueBoard) {
   fail('Missing core payment workflow functions.');
 }
+
+if (!recentPayments) fail('Missing bounded newest-first transaction helper.');
+[
+  'uniquePayments(rows)',
+  '.sort(',
+  '.slice(0,Number(limit||250))'
+].forEach(text => requireText('Recent transaction performance helper', recentPayments, text));
+requireText('Payments transaction tab', app, 'recentPayments(db.payments||[],250)');
 
 [
   'chargeable',
