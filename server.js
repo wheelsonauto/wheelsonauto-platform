@@ -3182,6 +3182,148 @@ function ifleetFunctionCoverageRows(data = {}) {
   add('api_provider_layer', 'API provider layer', 'API-ready', (data.apiProviders || []).length, apiProviderReview, 'API Roadmap', '', 'Clover, SMS/email, EZPass, insurance, background, tracker, accounting, marketing, and billing providers must record credentials, endpoint, live-test date, and result before they are called connected.');
   return rows;
 }
+function launchReadinessRows(data = {}) {
+  const coverage = ifleetFunctionCoverageRows(data);
+  const byKey = key => coverage.find(row => row.key === key) || { gapCount: 0, count: 0, tone: 'good', status: 'Covered', view: 'Dashboard', tab: '', detail: '' };
+  const payment = byKey('autopay_closeout');
+  const customer = byKey('customer_operating_file');
+  const fleet = byKey('fleet_assignment');
+  const claims = byKey('claims_disputes');
+  const tolls = byKey('tolls_violations');
+  const messages = byKey('messaging_star');
+  const api = byKey('api_provider_layer');
+  const roles = byKey('role_portals');
+  const portal = byKey('customer_portal');
+  const rows = [
+    {
+      key: 'payments_autopay_lock',
+      title: 'Payments/autopay lock',
+      view: 'Payments',
+      tab: 'Today',
+      count: payment.gapCount,
+      gapCount: payment.gapCount,
+      detail: 'Every active customer must show chargeable, card linked, setup needed, payment not found, pending today, failed once, failed twice, paid, paid outside app, removed, or history in the same way across Dashboard, Payments, Reports, Messages, and Star.',
+      fix: 'Open Payments / Today, clear setup/not-found/failure rows, then run closeout and Star audit checks.'
+    },
+    {
+      key: 'customer_fleet_truth',
+      title: 'Customer + fleet truth',
+      view: 'Payments',
+      tab: 'Active',
+      count: Number(customer.gapCount || 0) + Number(fleet.gapCount || 0),
+      gapCount: Number(customer.gapCount || 0) + Number(fleet.gapCount || 0),
+      detail: 'Customer files must connect contact, vehicle, VIN, tag/plate, old temp, tracker, schedule, maintenance, claims, messages, documents, and history without unmatched records unless truly unknown.',
+      fix: 'Open the customer file or Operations / Fleet, pick the correct vehicle by VIN/tag/tracker, and save once so all modules update.'
+    },
+    {
+      key: 'defense_packets',
+      title: 'Defense packets',
+      view: 'Claims & Issues',
+      tab: 'Open',
+      count: claims.gapCount,
+      gapCount: claims.gapCount,
+      detail: 'Claims, disputes, chargebacks, tolls, tickets, and reimbursements need customer/payment match, vehicle, VIN/tag, tracker, proof, amount, deadline, and follow-up.',
+      fix: 'Open Claims & Issues, attach proof/reference/customer/payment IDs, and mark recovered, owed, disputed, or closed.'
+    },
+    {
+      key: 'recovery_ledger',
+      title: 'Recovery ledger',
+      view: 'Claims & Issues',
+      tab: 'Open',
+      count: tolls.gapCount,
+      gapCount: tolls.gapCount,
+      detail: 'Tolls, violations, damage, reimbursements, and disputes must show owed, paid, recovered, still open, payment link status, and who to contact.',
+      fix: 'Match by plate/VIN/customer, send or draft the payment link, and log paid outside app or recovered proof.'
+    },
+    {
+      key: 'messages_star_rules',
+      title: 'Messages + Star rules',
+      view: 'Messages',
+      tab: 'Star',
+      count: messages.gapCount,
+      gapCount: messages.gapCount,
+      detail: 'SMS/email inbox, templates, queue, provider fallback, Star drafts, approval rules, receipts, card links, and customer context must be honest and usable before provider APIs are trusted.',
+      fix: 'Open Messages / Star and Setup, clear pending Star approvals, connect or leave providers in draft mode, and keep money/account actions admin-approved.'
+    },
+    {
+      key: 'api_handoff',
+      title: 'API handoff',
+      view: 'API Roadmap',
+      tab: '',
+      count: api.gapCount,
+      gapCount: api.gapCount,
+      detail: 'Clover, SMS/email, EZPass, insurance, background, tracker/location, accounting, marketing, billing, and franchise APIs need env keys, endpoints, webhook proof, live test date/result, matching rules, and fallback.',
+      fix: 'Open API Roadmap, complete each provider checklist, run controlled live tests, and keep manual workflows active until matching is proven.'
+    },
+    {
+      key: 'roles_portals',
+      title: 'Roles + portals',
+      view: 'Settings',
+      tab: '',
+      count: Number(roles.gapCount || 0) + Number(portal.gapCount || 0),
+      gapCount: Number(roles.gapCount || 0) + Number(portal.gapCount || 0),
+      detail: 'Admin, manager, mechanic, and customer portals must have scoped navigation, working logout/reset, no role leaks, and customer-only data access.',
+      fix: 'Open Settings, create or repair manager/mechanic/customer logins, disable test accounts, and confirm role-scoped state.'
+    }
+  ];
+  return rows.map(row => ({
+    ...row,
+    tone: row.gapCount ? 'warn' : 'good',
+    status: row.gapCount ? 'Review' : 'Ready'
+  }));
+}
+function syncLaunchReadinessDispatchTasks(data = {}) {
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const now = new Date().toISOString();
+  const rows = launchReadinessRows(data);
+  const changed = [];
+  rows.forEach(row => {
+    const taskId = 'task-launch-readiness-' + normKey(row.key || row.title || 'module').slice(0, 80);
+    let task = data.tasks.find(item => item.id === taskId);
+    const hasGap = Number(row.gapCount || 0) > 0;
+    const notes = [
+      'Source: backend launch readiness',
+      'Area: ' + row.title,
+      'Gap count: ' + Number(row.gapCount || 0),
+      'Status: ' + row.status,
+      'Requirement: ' + row.detail,
+      'Fix: ' + row.fix,
+      'Open workflow: ' + (row.view || 'Dashboard') + (row.tab ? ' / ' + row.tab : '')
+    ].filter(Boolean).join('\n');
+    if (!hasGap) {
+      if (task && !/done|closed|complete/i.test(String(task.status || 'Open'))) {
+        Object.assign(task, {
+          status: 'Done',
+          doneAt: now,
+          updatedAt: now,
+          notes: notes + '\n\nAuto-closed because this launch readiness area no longer has backend gaps.'
+        });
+        changed.push(task);
+      }
+      return;
+    }
+    const patch = {
+      id: taskId,
+      title: 'Launch readiness: ' + row.title,
+      type: 'Launch readiness',
+      customer: row.title,
+      vehicle: row.view || 'WheelsonAuto',
+      due: now.slice(0, 10),
+      status: 'Open',
+      owner: 'Owner',
+      notes,
+      updatedAt: now,
+      createdAt: task && task.createdAt || now
+    };
+    if (task) Object.assign(task, patch);
+    else {
+      task = patch;
+      data.tasks.unshift(task);
+    }
+    changed.push(task);
+  });
+  return { rows, tasks: changed };
+}
 function syncIfleetCoverageDispatchTasks(data = {}) {
   data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
   const now = new Date().toISOString();
@@ -4724,6 +4866,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
     route('GET', '/api/reports/deep.csv', 'Role-scoped deep CSV export'),
     route('GET', '/api/system/health', 'Role-scoped Star/system health snapshot'),
+    route('POST', '/api/system/launch-readiness/tasks', 'Launch readiness Dispatch task sync'),
     route('POST', '/api/verification/document', 'Staff document proof verification'),
     route('POST', '/api/verification/paid-outside', 'Owner paid-outside payment verification'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
@@ -8541,6 +8684,25 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/system/health' && req.method === 'GET') {
       const data = await readData();
       return json(res, 200, systemHealthSnapshot(data, user));
+    }
+    if (url.pathname === '/api/system/launch-readiness/tasks' && req.method === 'POST') {
+      if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts cannot create launch readiness tasks.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const result = syncLaunchReadinessDispatchTasks(scoped);
+      if (!isOwnerUser(user)) {
+        data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+        result.tasks.forEach(task => {
+          const existing = data.tasks.find(item => item.id === task.id);
+          const patch = { ...task, organizationId: userOrganizationId(user) };
+          if (existing) Object.assign(existing, patch, { createdAt: existing.createdAt || patch.createdAt });
+          else data.tasks.unshift(patch);
+        });
+      }
+      appendAuditLog(data, user, 'Launch readiness tasks synced', [(result.tasks || []).length + ' task(s)', (result.rows || []).filter(row => Number(row.gapCount || 0) > 0).length + ' readiness gap(s)']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, tasks: result.tasks || [], readiness: result.rows || [] });
     }
     if (url.pathname === '/api/system/ifleet-coverage/tasks' && req.method === 'POST') {
       if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts cannot create system coverage tasks.' });

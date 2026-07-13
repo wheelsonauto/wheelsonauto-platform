@@ -1551,8 +1551,18 @@ function launchReadinessSummaryItems(){
 function launchReadinessSummaryBoard(compact){
   if(roleName()==='mechanic')return'';
   var items=launchReadinessSummaryItems(),review=items.filter(function(i){return i.tone!=='good'}).length,ready=items.length-review;
-  return '<section class="card section launch-readiness-summary" data-limit="'+(compact?7:7)+'"><div class="section-head"><div><h2>Launch readiness</h2><p>Owner-level summary of the core system: money, customer/fleet truth, disputes, recovery, communications, API handoff, and roles.</p></div><div class="star-command-stats"><span class="warn">'+review+' review</span><span class="good">'+ready+' ready</span></div></div>'+localSearch('Search launch readiness by payment, customer, fleet, defense, recovery, messages, Star, API, roles, or portal')+'<div class="role-command-grid launch-readiness-grid">'+items.map(function(i){return '<div class="role-command-card launch-readiness-card '+esc(i.tone)+'"><div class="role-command-top"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div>'+badge(i.count,i.tone)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button></div></div>'}).join('')+'</div><div class="notice">This board is a compass, not a duplicate workspace. It points to the source workflow that must be cleared before API/provider work is treated as finished.</div></section>'
+  return '<section class="card section launch-readiness-summary" data-limit="'+(compact?7:7)+'"><div class="section-head"><div><h2>Launch readiness</h2><p>Owner-level summary of the core system: money, customer/fleet truth, disputes, recovery, communications, API handoff, and roles.</p></div><div class="actions"><button class="btn gold" data-action="sync-launch-readiness-tasks">Sync tasks</button></div><div class="star-command-stats"><span class="warn">'+review+' review</span><span class="good">'+ready+' ready</span></div></div>'+localSearch('Search launch readiness by payment, customer, fleet, defense, recovery, messages, Star, API, roles, or portal')+'<div class="role-command-grid launch-readiness-grid">'+items.map(function(i){return '<div class="role-command-card launch-readiness-card '+esc(i.tone)+'"><div class="role-command-top"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div>'+badge(i.count,i.tone)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button></div></div>'}).join('')+'</div><div class="notice">This board is a compass, not a duplicate workspace. It points to the source workflow that must be cleared before API/provider work is treated as finished. Sync tasks writes real Dispatch work orders and auto-closes them when backend checks are clean.</div></section>'
 }
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action="sync-launch-readiness-tasks"]');if(!b)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+  b.disabled=true;b.classList.add('is-loading');
+  var result=await post('/api/system/launch-readiness/tasks',{});
+  b.disabled=false;b.classList.remove('is-loading');
+  if(result.ok){await refreshData(true);view='Dispatch';tab='';Dispatch();notify('Synced '+((result.tasks||[]).length)+' launch readiness task'+(((result.tasks||[]).length)===1?'':'s'))}
+  else notify(result.error||'Launch readiness tasks did not sync')
+},true);
 var __woaDashboardLaunchReadinessBase=Dashboard;
 Dashboard=function(){
   __woaDashboardLaunchReadinessBase();
