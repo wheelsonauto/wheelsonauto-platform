@@ -1627,6 +1627,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const vehicleIdentityGaps = vehicleIdentityGapRows(scoped);
   const closeoutSignoffGap = dailyCloseoutSignoffGap(scoped, today);
   const serviceIdentityGaps = serviceIdentityGapRows(scoped);
+  const claimEvidenceGaps = claimEvidenceGapRows(scoped);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -1655,6 +1656,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.length ? 'Review' : 'Clean', 'Star QA', vehicleIdentityGaps.length ? 'Fleet records missing VIN/tag/tracker: ' + vehicleIdentityGaps.map(row => row.vehicle + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Fleet VIN, tag/plate, and tracker identity is complete');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.needsSignoff ? 'Review' : 'Clean', 'Star QA', closeoutSignoffGap.needsSignoff ? 'Today has money/work activity but no owner closeout signoff: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + ', pending Star approvals ' + closeoutSignoffGap.pendingStarApprovals : 'Daily closeout is signed or there is no closeout activity requiring signoff');
   addReportRow(rows, 'Star QA', today, 'All service', '', '', '', '', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.length ? 'Review' : 'Clean', 'Star QA', serviceIdentityGaps.length ? 'Open service/inspection jobs missing mechanic-ready identity: ' + serviceIdentityGaps.map(row => row.vehicle + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Open service jobs have customer, vehicle, VIN/tag, tracker, and cycle context');
+  addReportRow(rows, 'Star QA', today, 'All claims', '', '', '', '', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.length ? 'Review' : 'Clean', 'Star QA', claimEvidenceGaps.length ? 'Open claims/tolls/disputes missing customer, vehicle, amount, proof/reference, or follow-up: ' + claimEvidenceGaps.map(row => row.customer + ' ' + row.type + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Open claims, tolls, violations, disputes, and reimbursements have evidence context');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'Review' : 'Clean', 'Star QA', 'Customers need card setup or card-on-file repair');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
@@ -1705,6 +1707,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const vehicleIdentityGaps = vehicleIdentityGapRows(scoped);
   const closeoutSignoffGap = dailyCloseoutSignoffGap(scoped, today);
   const serviceIdentityGaps = serviceIdentityGapRows(scoped);
+  const claimEvidenceGaps = claimEvidenceGapRows(scoped);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
@@ -1757,6 +1760,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(7.5, 'vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.length ? (vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Fleet', 'Every active fleet car needs VIN, current tag/plate, and tracker so customers, service, claims, tolls, messages, and reports match the right car.');
   issue(7.75, 'daily_closeout_signoff', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.tone, 'Reports', 'Summary', 'Today has payment/work activity and needs owner signoff: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + '.');
   issue(7.9, 'service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.length ? (serviceIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Service', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.');
+  issue(7.95, 'claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.length ? (claimEvidenceGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Claims & Issues', '', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.');
   issue(8, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
   issue(8, 'document_expiration', 'Document expiration', documentExpirationReview.length, documentExpirationReview.length ? (documentExpirationReview.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Documents', '', 'Insurance, background, license, registration, and proof documents should be renewed before expiration.');
   issue(8, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
@@ -3010,6 +3014,38 @@ function serviceIdentityGapRows(data = {}) {
       status: job.status || 'Open',
       missing,
       tone: missing.some(item => /vehicle link|VIN|tag\/plate|customer/.test(item)) ? 'bad' : (missing.length ? 'warn' : 'good')
+    };
+  }).filter(row => row.missing.length);
+}
+function claimEvidenceGapRows(data = {}) {
+  return (Array.isArray(data.claims) ? data.claims : []).filter(claim => {
+    const status = String(claim.status || '').toLowerCase();
+    return !/(paid|closed|complete|resolved|cancel|removed)/.test(status);
+  }).map(claim => {
+    const customer = claim.customer || claim.name || '';
+    const vehicle = reportVehicleFor(data, customer, claim.vehicleId);
+    const vehicleText = vehicle.id ? vehicleNameFromParts(vehicle) : String(claim.vehicle || '').trim();
+    const vin = vehicle.vin || claim.vin || '';
+    const tag = vehicle.plate || vehicle.stock || claim.plate || claim.licensePlate || claim.reference || '';
+    const typeText = String([claim.type, claim.source, claim.provider, claim.notes].filter(Boolean).join(' '));
+    const proof = String(claim.proofUrl || claim.evidence || claim.documentUrl || claim.url || claim.receiptUrl || '').trim();
+    const recovery = /toll|violation|ticket|damage|claim|dispute|chargeback|reimbursement|ezpass/i.test(typeText);
+    const missing = [];
+    if (weakClaimCustomer(customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match') missing.push('customer match');
+    if (!vehicle.id && !(vehicleText || vin || tag)) missing.push('vehicle link');
+    if (!vin && !tag) missing.push('VIN/tag');
+    if (recovery && !Number(claim.amount || 0)) missing.push('amount');
+    if (recovery && !proof && !String(claim.externalId || claim.caseId || claim.disputeId || '').trim()) missing.push('proof/reference');
+    if (/dispute|chargeback|claim/i.test(typeText) && !recordDateKey(claim.deadline || claim.nextFollowUp || claim.due || '')) missing.push('deadline/follow-up');
+    return {
+      id: claim.id || '',
+      customer: customer || 'Unmatched',
+      vehicle: vehicleText || 'Unlinked claim vehicle',
+      type: claim.type || claim.source || 'Claim',
+      amount: Number(claim.amount || 0),
+      status: claim.status || 'Open',
+      missing,
+      tone: missing.some(item => /customer match|vehicle link|VIN\/tag|proof\/reference/.test(item)) ? 'bad' : (missing.length ? 'warn' : 'good')
     };
   }).filter(row => row.missing.length);
 }
@@ -4550,6 +4586,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const vehicleIdentityGaps = vehicleIdentityGapRows(scoped);
   const closeoutSignoffGap = dailyCloseoutSignoffGap(scoped, today);
   const serviceIdentityGaps = serviceIdentityGapRows(scoped);
+  const claimEvidenceGaps = claimEvidenceGapRows(scoped);
   const verificationItems = closeoutVerificationItems(scoped);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -4581,6 +4618,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Every active fleet car needs VIN, current tag/plate, and tracker before service, claims, tolls, messages, Star, and reports can be trusted.', 'Operations', 'Fleet'),
     truthCheck('daily_closeout_signoff', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.tone === 'bad' ? 'critical' : 'warning', 'Today has payment/work activity and needs owner signoff before the day is trusted: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + '.', 'Reports', 'Summary'),
     truthCheck('service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.', 'Operations', 'Service'),
+    truthCheck('claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.', 'Claims & Issues'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
     truthCheck('open_payment_requests', 'Open payment requests', openPaymentRequests.length, 'warning', 'Hosted checkout links are still open and should be followed up, closed, or collected before final closeout.', 'Payments', 'Today'),
