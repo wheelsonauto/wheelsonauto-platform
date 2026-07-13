@@ -81,7 +81,15 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 ].forEach(text => requireText('Star rule guardrails', aiRules, text));
 
 [
-  "['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement'].includes(safe.actionType)",
+  'const sensitiveActions =',
+  'charge_saved_card',
+  'change_autopay_date',
+  'send_claim_link',
+  'paid_outside_review',
+  'send_receipt',
+  'send_account_statement',
+  'contract_esign_request',
+  'sensitiveActions.includes(safe.actionType)',
   'safe.canAutoSend = !!safe.canAutoSend && !safe.approvalRequired && !safe.needsHuman'
 ].forEach(text => requireText('Star sanitizer guardrails', sanitize, text));
 
@@ -100,7 +108,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'provider: \'openai\'',
   'provider: \'rules\'',
   'providerError',
-  'Never promise a charge, refund, autopay change, cancellation, removal, toll charge, or saved-card action has happened unless an admin approved it.',
+  'Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it.',
   'requiresAdminApproval',
   'saved-card charge',
   'autopay date/time/frequency change',
