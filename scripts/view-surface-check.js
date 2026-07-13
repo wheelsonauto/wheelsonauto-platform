@@ -515,6 +515,8 @@ assertIncludes('Manager portal surface', managerPortal, [
 ]);
 
 const messages = finalFunctionSlice(app, 'Messages');
+const communicationCommandItems = finalFunctionSlice(app, 'communicationCommandItems');
+const communicationCommandBoard = finalFunctionSlice(app, 'communicationCommandBoard');
 assertIncludes('Messages and Star surface', messages, [
   'Inbox',
   'Star',
@@ -532,6 +534,19 @@ assertIncludes('Messages and Star surface', messages, [
   'starAiLane',
   'Search customer, phone, email, VIN, tag, payment, or text',
   'Approval'
+]);
+assertIncludes('Communication command board', messages + communicationCommandItems + communicationCommandBoard + app + css, [
+  'Communication command',
+  'Texts, emails, Star approvals, portal requests, failed payments, service reminders, receipts, and customer replies',
+  'fastMessageQueueRows',
+  'starQaPendingApprovalRows',
+  'customerPortalRequestItems',
+  'fastMessageThreads',
+  'roleCommandCard',
+  'Provider setup remains honest',
+  'Search communication command by customer',
+  'communication-command-board',
+  'communication-command-grid'
 ]);
 assertIncludes('Message queue payment truth layer', app, [
   'messageQueueVehicleContext',
