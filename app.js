@@ -844,6 +844,50 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function ifleetNextCommandItems(){
+  var launch=(typeof ifleetLaunchProofItems==='function'?ifleetLaunchProofItems():[]).map(function(i,idx){return{source:'Launch proof',title:i.title,tone:i.tone,count:i.count,detail:i.proof,fix:i.manual,view:i.view,tab:i.tab,index:idx}});
+  var audit=(typeof starSystemAuditItems==='function'?starSystemAuditItems():[]).map(function(i){return{source:i.source||'Star audit',title:i.title,tone:i.tone,count:i.count,detail:i.detail,fix:i.fix,view:i.view,tab:i.tab}});
+  var provider=(typeof apiProviderLaunchItems==='function'?apiProviderLaunchItems():[]).filter(function(i){return i.tone==='bad'||i.tone==='warn'}).map(function(i){return{source:'API provider',title:i.title,tone:i.tone,count:i.count,detail:i.next,fix:i.match,view:'API Roadmap',tab:'',providerId:i.id}});
+  var queue=(typeof operationsQueue==='function'?operationsQueue():[]).map(function(i){return{source:'Operations queue',title:i.title,tone:i.tone||'warn',count:i.kind||'Work',detail:i.detail,fix:'Open '+(i.view||'Dashboard')+' and finish the source record.',view:i.view||'Dashboard',tab:i.tab||''}});
+  var items=launch.concat(audit).concat(provider).concat(queue).filter(function(i){return i&&i.tone!=='good'}),seen={};
+  items=items.filter(function(i){var key=[i.source,i.title,i.view,i.tab].join('|');if(seen[key])return false;seen[key]=true;return true});
+  return items.sort(function(a,b){var w={bad:0,warn:1,blue:2,good:3};return(w[a.tone]||2)-(w[b.tone]||2)||String(a.source).localeCompare(String(b.source))||String(a.title).localeCompare(String(b.title))}).slice(0,10)
+}
+function ifleetNextTaskTitle(item){return 'iFleet tighten: '+(item&&item.title||'System workflow')}
+function ifleetNextTaskExists(item){var title=ifleetNextTaskTitle(item);return(db.tasks||[]).some(function(t){var s=String(t.status||'Open').toLowerCase();return String(t.title||'')===title&&s!=='done'&&s.indexOf('closed')<0})}
+function ifleetNextTaskPayload(item){
+  return{id:'task-ifleet-next-'+Date.now()+'-'+Math.random().toString(16).slice(2,6),title:ifleetNextTaskTitle(item),type:'iFleet tightening',customer:item.title||'System workflow',vehicle:item.view||'WheelsonAuto',due:todayKey(),status:'Open',owner:'Owner',notes:['Source: '+(item.source||'iFleet command'),'Issue: '+(item.detail||'Review needed'),'Fix: '+(item.fix||'Open the source workflow and finish the data/action.'),'Open workflow: '+(item.view||'Dashboard')+(item.tab?' / '+item.tab:'')].join('\n')}
+}
+function ifleetNextCommandBoard(){
+  var items=ifleetNextCommandItems(),bad=items.filter(function(i){return i.tone==='bad'}).length,warn=items.filter(function(i){return i.tone==='warn'}).length,blue=items.filter(function(i){return i.tone==='blue'}).length;
+  return '<section class="card section ifleet-next-board" data-limit="10"><div class="section-head"><div><h2>Next build command</h2><p>iFleet-level functions, Star audit risks, provider setup, and operations gaps that need tightening before API work.</p></div><div class="star-command-stats"><span class="bad">'+bad+' critical</span><span class="warn">'+warn+' review</span><span class="blue">'+blue+' setup</span></div></div>'+localSearch('Search next build by payment, customer, VIN, tracker, Star, toll, claim, API, portal, role, report')+'<div class="ifleet-next-grid">'+(items.length?items.map(function(i,idx){return '<div class="ifleet-next-card '+esc(i.tone)+'"><div class="item-row"><strong>'+esc(i.title)+'</strong>'+badge(i.count,i.tone)+'</div><span>'+esc(i.source||'iFleet command')+'</span><p>'+esc(i.detail||'Review this workflow.')+'</p><small>'+esc(i.fix||'Open the workflow and complete the source record.')+'</small><div class="actions"><button class="btn primary" data-view="'+esc(i.view||'Dashboard')+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button><button class="btn" data-action="create-ifleet-next-task" data-index="'+idx+'">Task</button></div></div>'}).join(''):'<div class="item">The visible launch-proof board is clean right now. Keep checking payments, fleet, closeout, messages, and API setup after each live change.</div>')+'</div><div class="notice">This board does not invent new fake tools. Each card opens the real source workflow or creates a Dispatch task that can be completed.</div></section>'
+}
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(a==='create-ifleet-next-task'){
+  e.preventDefault();e.stopImmediatePropagation();
+  if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+  var item=ifleetNextCommandItems()[Number(b.dataset.index||0)];if(!item){notify('iFleet command item was not found');return}
+  if(ifleetNextTaskExists(item)){view='Dispatch';tab='';Dispatch();notify('iFleet tightening task already exists');return}
+  b.disabled=true;b.classList.add('is-loading');
+  var saved=await post('/api/tasks',ifleetNextTaskPayload(item));
+  b.disabled=false;b.classList.remove('is-loading');
+  if(saved.ok){await refreshData(true);view='Dispatch';tab='';Dispatch();notify('iFleet tightening task added to Dispatch')}else notify(saved.error||'iFleet tightening task did not save')
+  }
+},true);
+var __woaDashboardIfleetNextBase=Dashboard;
+Dashboard=function(){
+  __woaDashboardIfleetNextBase();
+  var main=document.querySelector('.main.view-dashboard'),anchor=main&&main.querySelector('.today-focus');
+  if(main&&!main.querySelector('.ifleet-next-board')){
+    var wrap=document.createElement('div');
+    wrap.innerHTML=ifleetNextCommandBoard();
+    if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);
+    else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    hydrateLocalSearches();
+    applySectionLimits();
+  }
+}
+if(view==='Dashboard')queueRender();
 function messageCommandPanel(){
   var status=messagingStatus(),rows=fastMessageRows(500),stats=fastMessageStats(rows),threads=fastMessageThreads(240),queue=fastMessageQueueRows(),drafts=fastStarAiDrafts(180),starNeeds=drafts.filter(function(m){var p=m.aiPlan||{};return p.approvalRequired||p.needsHuman}).length,provider=status.configured?'Live SMS':(status.enabled?'SMS draft mode':'Messaging off'),emailMode=status.emailConfigured?'Live email':(status.emailEnabled?'Email draft mode':'Email off'),latest=threads[0]&&threads[0].last||{},latestCustomer=threads[0]&&threads[0].customer||'No open thread';
   var cards=[
