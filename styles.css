@@ -4901,6 +4901,22 @@ body.fast-tab-switch .admin-shell .section{
   }
 }
 
+.return-prep-command-board{
+  background:linear-gradient(145deg,rgba(10,12,15,.99),rgba(25,28,25,.96));
+  border-color:rgba(240,211,148,.24);
+}
+.return-prep-grid .role-command-card{
+  min-height:0;
+}
+@media(max-width:720px){
+  .return-prep-command-board .section-head{
+    gap:10px;
+  }
+  .return-prep-grid{
+    grid-template-columns:1fr;
+  }
+}
+
 .star-system-auditor{
   position:relative;
   overflow:hidden;
