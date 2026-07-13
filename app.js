@@ -1536,3 +1536,52 @@ starSystemAuditItems=function(){
   return items.concat(base).slice(0,12)
 };
 if(view==='API Roadmap'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
+function launchReadinessSummaryItems(){
+  var roster=recurringRoster(),todayRows=roster.filter(function(r){return dueOrTouchedToday(r)}),paymentRisk=todayRows.filter(function(r){var k=paymentState(r).key;return k==='retry'||k==='contact'||k==='notfound'||k==='setup'}).length,truthQueue=(typeof paymentTruthQueueItems==='function'?paymentTruthQueueItems():[]),defense=claimDefensePacketRows().filter(function(r){return r.missing.length}),recovery=reimbursementLedgerRows().filter(function(r){return r.status==='Needs match'||r.open>0}),comm=communicationRuleRows().filter(function(r){return /Draft|fallback|off/i.test(r.channel+' '+r.star)}),api=apiHandoffChecklistRows().filter(function(r){return r.tone==='bad'||r.tone==='warn'}),portalGaps=(typeof missingCustomerPortalRecords==='function'?missingCustomerPortalRecords():[]),staff=db.staffAccounts||[],managerCount=staff.filter(function(s){return String(s.role||'').toLowerCase()==='manager'&&staffStatusActive(s)}).length,mechanicCount=staff.filter(function(s){return String(s.role||'').toLowerCase()==='mechanic'&&staffStatusActive(s)}).length,roleIssues=portalGaps.length+(!managerCount?1:0)+(!mechanicCount?1:0);
+  return [
+    {title:'Payments/autopay lock',tone:paymentRisk?'warn':'good',count:paymentRisk,detail:paymentRisk?'Due/setup/failed/not-found payment rows need review.':'Payment statuses are mapped into closeout and today dues.',view:'Payments',tab:'Today'},
+    {title:'Customer + fleet truth',tone:truthQueue.length?'warn':'good',count:truthQueue.length,detail:truthQueue.length?'Customer, vehicle, VIN/tag, tracker, or portal truth needs tightening.':'Customer files and fleet truth are connected enough for current records.',view:'Payments',tab:'Active'},
+    {title:'Defense packets',tone:defense.length?'warn':'good',count:defense.length,detail:defense.length?'Claims/disputes/tolls missing proof, match, VIN/tag, amount, or follow-up.':'Open defense packets look ready or clear.',view:'Claims & Issues',tab:'Open'},
+    {title:'Recovery ledger',tone:recovery.length?'warn':'good',count:recovery.length,detail:recovery.length?'Open owed or unmatched recovery rows need collection/review.':'Recovery ledger has no open match/owed blocker surfaced.',view:'Claims & Issues',tab:'Open'},
+    {title:'Messages + Star rules',tone:comm.length?'warn':'good',count:comm.length,detail:comm.length?'Some communication paths are draft/fallback until provider setup.':'Communication rules are mapped and provider-ready where configured.',view:'Messages',tab:'Setup'},
+    {title:'API handoff',tone:api.length?'warn':'good',count:api.length,detail:api.length?'Provider handoff rows still need proof/live-test/setup.':'API handoff checklist is clean for current provider records.',view:'API Roadmap',tab:''},
+    {title:'Roles + portals',tone:roleIssues?'warn':'good',count:roleIssues,detail:roleIssues?'Customer portal or staff role coverage needs review in Settings.':'Role portals and access checks are passing current verification.',view:'Settings',tab:''}
+  ]
+}
+function launchReadinessSummaryBoard(compact){
+  if(roleName()==='mechanic')return'';
+  var items=launchReadinessSummaryItems(),review=items.filter(function(i){return i.tone!=='good'}).length,ready=items.length-review;
+  return '<section class="card section launch-readiness-summary" data-limit="'+(compact?7:7)+'"><div class="section-head"><div><h2>Launch readiness</h2><p>Owner-level summary of the core system: money, customer/fleet truth, disputes, recovery, communications, API handoff, and roles.</p></div><div class="star-command-stats"><span class="warn">'+review+' review</span><span class="good">'+ready+' ready</span></div></div>'+localSearch('Search launch readiness by payment, customer, fleet, defense, recovery, messages, Star, API, roles, or portal')+'<div class="role-command-grid launch-readiness-grid">'+items.map(function(i){return '<div class="role-command-card launch-readiness-card '+esc(i.tone)+'"><div class="role-command-top"><div><strong>'+esc(i.title)+'</strong><small>'+esc(i.detail)+'</small></div>'+badge(i.count,i.tone)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(i.view)+'" '+(i.tab?'data-tab="'+esc(i.tab)+'"':'')+'>Open</button></div></div>'}).join('')+'</div><div class="notice">This board is a compass, not a duplicate workspace. It points to the source workflow that must be cleared before API/provider work is treated as finished.</div></section>'
+}
+var __woaDashboardLaunchReadinessBase=Dashboard;
+Dashboard=function(){
+  __woaDashboardLaunchReadinessBase();
+  var main=document.querySelector('.main.view-dashboard'),anchor=main&&main.querySelector('.dashboard-tabs,.dashboard-focus-tabs,.payment-truth-queue,.closeout-board');
+  if(main&&!main.querySelector('.launch-readiness-summary')){
+    var wrap=document.createElement('div');wrap.innerHTML=launchReadinessSummaryBoard(true);
+    if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+  }
+};
+var __woaReportsLaunchReadinessBase=Reports;
+Reports=function(){
+  __woaReportsLaunchReadinessBase();
+  if(view==='Reports'){
+    var main=document.querySelector('.main.view-reports'),anchor=main&&main.querySelector('.report-closeout-command,.executive-report-board,.launch-readiness-summary');
+    if(main&&!main.querySelector('.launch-readiness-summary')){
+      var wrap=document.createElement('div');wrap.innerHTML=launchReadinessSummaryBoard(false);
+      if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('beforebegin',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+    }
+  }
+};
+var __woaReportCsvRowsLaunchReadinessBase=reportCsvRows;
+reportCsvRows=function(){
+  var rows=__woaReportCsvRowsLaunchReadinessBase().filter(function(row,idx){return idx===0||row[0]!=='Launch readiness'});
+  launchReadinessSummaryItems().forEach(function(i){reportRow(rows,'Launch readiness',todayKey(),'WheelsonAuto platform','','','','',i.title,i.count,i.tone==='good'?'Ready':'Review','Owner summary',i.detail+' | Open '+i.view+(i.tab?' / '+i.tab:''))});
+  return rows
+};
+var __woaStarSystemAuditLaunchReadinessBase=starSystemAuditItems;
+starSystemAuditItems=function(){
+  var base=__woaStarSystemAuditLaunchReadinessBase(),review=launchReadinessSummaryItems().filter(function(i){return i.tone!=='good'}).slice(0,3).map(function(i){return{source:'Launch readiness',title:i.title,tone:i.tone,count:i.count,detail:i.detail,fix:'Open the linked source workflow and clear it before calling the platform final.',view:i.view,tab:i.tab}});
+  return review.concat(base).slice(0,12)
+};
+if(view==='Dashboard'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
