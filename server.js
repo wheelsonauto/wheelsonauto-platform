@@ -51,6 +51,8 @@ const WOA_AI_REPLY_DRAFTS = process.env.WOA_AI_REPLY_DRAFTS !== '0';
 const WOA_EMAIL_ENABLED = process.env.WOA_EMAIL_ENABLED !== '0';
 const WOA_EMAIL_PROVIDER = String(process.env.WOA_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || 'not_configured').toLowerCase();
 const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '';
+const WOA_EMAIL_REPLY_TO = process.env.WOA_EMAIL_REPLY_TO || process.env.EMAIL_REPLY_TO || '';
+const WOA_EMAIL_OWNER_NOTIFY = process.env.WOA_EMAIL_OWNER_NOTIFY || process.env.EMAIL_OWNER_NOTIFY || '';
 const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
@@ -640,6 +642,8 @@ function publicMessagingStatus(data = {}) {
     emailProvider,
     emailConfigured,
     emailFrom: emailConfigured ? 'stored in Render' : '',
+    emailReplyTo: WOA_EMAIL_REPLY_TO ? maskEmail(WOA_EMAIL_REPLY_TO) : '',
+    emailOwnerCopy: WOA_EMAIL_OWNER_NOTIFY ? maskEmail(WOA_EMAIL_OWNER_NOTIFY) : '',
     notificationEmail: settings.emailEnabled ? maskEmail(emailNotificationSettings(data).emailRecipients[0] || '') : '',
     notificationsEnabled: emailNotificationSettings(data).emailEnabled,
     emailMode: emailConfigured ? 'Email can send customer replies, receipts, approvals, documents, and follow-ups.' : 'Email channel is built in and will save drafts until an email provider is connected.',
@@ -848,11 +852,16 @@ async function sendProviderEmail(to, subject, body, meta = {}) {
   if (!settings.emailEnabled) return { sent: false, status: 'Email off', provider, channel: 'Email', message: 'Email messaging is turned off in WheelsonAuto settings or Render.' };
   if (!WOA_EMAIL_FROM) return { sent: false, status: 'Email draft', provider, channel: 'Email', message: 'Add WOA_EMAIL_FROM in Render before live email sending.' };
   const safeSubject = String(subject || 'WheelsonAuto message').trim().slice(0, 180) || 'WheelsonAuto message';
+  const recipient = String(to).trim();
+  const ownerCopy = meta.ownerCopy === false || !WOA_EMAIL_OWNER_NOTIFY || WOA_EMAIL_OWNER_NOTIFY.toLowerCase() === recipient.toLowerCase() ? '' : WOA_EMAIL_OWNER_NOTIFY;
   if (provider === 'resend' && RESEND_API_KEY) {
+    const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body };
+    if (WOA_EMAIL_REPLY_TO) emailPayload.reply_to = WOA_EMAIL_REPLY_TO;
+    if (ownerCopy) emailPayload.bcc = [ownerCopy];
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: WOA_EMAIL_FROM, to: [String(to).trim()], subject: safeSubject, text: body })
+      body: JSON.stringify(emailPayload)
     });
     const jsonBody = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(jsonBody.message || jsonBody.error || 'Resend email failed.');
@@ -863,8 +872,9 @@ async function sendProviderEmail(to, subject, body, meta = {}) {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + SENDGRID_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: String(to).trim() }] }],
+        personalizations: [{ to: [{ email: recipient }], bcc: ownerCopy ? [{ email: ownerCopy }] : undefined }],
         from: { email: WOA_EMAIL_FROM },
+        reply_to: WOA_EMAIL_REPLY_TO ? { email: WOA_EMAIL_REPLY_TO } : undefined,
         subject: safeSubject,
         content: [{ type: 'text/plain', value: body }]
       })
@@ -7557,6 +7567,7 @@ const server = http.createServer(async (req, res) => {
       const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
       let inboundRecord = null;
       let aiResult = null;
+      let ownerNotification = null;
       if (!exists) {
         inboundRecord = {
           id: 'msg-email-in-' + Date.now(),
@@ -7601,11 +7612,32 @@ const server = http.createServer(async (req, res) => {
             }
           }
         }
+        if (WOA_EMAIL_OWNER_NOTIFY && String(inbound.from || '').trim().toLowerCase() !== WOA_EMAIL_OWNER_NOTIFY.trim().toLowerCase()) {
+          try {
+            ownerNotification = await sendProviderEmail(
+              WOA_EMAIL_OWNER_NOTIFY,
+              'Customer email: ' + (inboundRecord.customer || inbound.from || 'WheelsonAuto customer'),
+              [
+                'A customer email arrived in WheelsonAuto.',
+                '',
+                'Customer: ' + (inboundRecord.customer || 'Unknown'),
+                'From: ' + (inbound.from || 'Unknown'),
+                'Subject: ' + (inboundRecord.subject || 'Incoming email'),
+                '',
+                inbound.body || '(No message body)'
+              ].join('\n'),
+              { ownerCopy: false, messagingSettings: { emailEnabled: settings.emailEnabled } }
+            );
+          } catch (err) {
+            ownerNotification = { sent: false, status: 'Owner notification failed', message: String(err && err.message || err) };
+          }
+          inboundRecord.ownerNotification = ownerNotification.sent ? 'Sent' : (ownerNotification.status || 'Failed');
+        }
         data.integrations = data.integrations || {};
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundChannel: 'Email', lastInboundFrom: maskEmail(inbound.from), lastError: '' };
         await writeData(data);
       }
-      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
+      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       if (CLOVER_WEBHOOK_SECRET && url.searchParams.get('secret') !== CLOVER_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== CLOVER_WEBHOOK_SECRET && req.headers['x-clover-webhook-secret'] !== CLOVER_WEBHOOK_SECRET) {

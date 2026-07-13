@@ -105,7 +105,11 @@ requireText('Twilio signed webhook check', verifyTwilioWebhook, 'x-twilio-signat
 requireText('Message-history contact fallback', messageContactCandidates, 'message history');
 requireText('Message-history contact phone', messageContactCandidates, 'row.phone || row.from || row.to');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
+requireText('Resend reply-to support', sendProviderEmail, 'emailPayload.reply_to');
+requireText('Resend owner-copy support', sendProviderEmail, 'emailPayload.bcc');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
+requireText('Public owner-copy email status', publicMessagingStatus, 'emailOwnerCopy');
+requireText('Inbound email owner notification', server, 'A customer email arrived in WheelsonAuto.');
 requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');
 requireText('Owner notification event filter', queueOwnerEmailNotification, 'settings.events.includes(event)');
 requireText('Daily closeout notification payload', server, 'dailyCloseoutNotificationPayload');
