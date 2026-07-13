@@ -54,6 +54,7 @@ const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '
 const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
+const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-final-22">';
@@ -619,6 +620,7 @@ function publicMessagingStatus(data = {}) {
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     webhookSecretConfigured: !!MESSAGING_WEBHOOK_SECRET,
+    emailWebhookSecretConfigured: !!(RESEND_WEBHOOK_SECRET || MESSAGING_WEBHOOK_SECRET),
     aiProvider: OPENAI_API_KEY && WOA_AI_MODEL ? 'openai' : 'rules',
     aiEnabled: settings.aiEnabled,
     aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
@@ -725,9 +727,87 @@ function parseIncomingEmail(provider, headers, payload) {
     to,
     subject: event.subject || body.subject || body.Subject || 'Incoming email',
     body: String(textBody || htmlBody || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
-    externalId: event.id || body.id || body.message_id || body.MessageID || body.sg_message_id || headers['x-message-id'] || '',
+    externalId: event.email_id || event.id || body.email_id || body.id || body.message_id || body.MessageID || body.sg_message_id || headers['x-message-id'] || '',
+    attachments: Array.isArray(event.attachments) ? event.attachments.slice(0, 20).map(item => ({
+      id: String(item && item.id || ''),
+      filename: String(item && item.filename || 'Attachment'),
+      contentType: String(item && (item.content_type || item.contentType) || ''),
+      size: Number(item && item.size || 0)
+    })) : [],
     rawType: body.type || body.event || 'email.received'
   };
+}
+async function hydrateIncomingEmail(provider, payload, inbound) {
+  const selectedProvider = String(provider || inbound.provider || WOA_EMAIL_PROVIDER || '').toLowerCase();
+  const event = payload && payload.data || {};
+  const emailId = String(event.email_id || inbound.externalId || '').trim();
+  if (selectedProvider !== 'resend' || !emailId || !RESEND_API_KEY || inbound.body) return inbound;
+  const response = await fetch('https://api.resend.com/emails/receiving/' + encodeURIComponent(emailId) + '?html_format=cid', {
+    headers: { Authorization: 'Bearer ' + RESEND_API_KEY }
+  });
+  const detail = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(detail.message || detail.error || 'Resend could not retrieve the received email body.');
+  const hydrated = parseIncomingEmail('resend', {}, {
+    type: payload && payload.type || 'email.received',
+    data: { ...event, ...detail, email_id: emailId }
+  });
+  return { ...inbound, ...hydrated, externalId: emailId, rawType: inbound.rawType || hydrated.rawType };
+}
+function webhookSecretMatches(url, headers) {
+  if (!MESSAGING_WEBHOOK_SECRET) return false;
+  return url.searchParams.get('secret') === MESSAGING_WEBHOOK_SECRET || headers['x-woa-webhook-secret'] === MESSAGING_WEBHOOK_SECRET;
+}
+function secureWebhookValueMatch(actual, expected) {
+  const left = Buffer.from(String(actual || ''));
+  const right = Buffer.from(String(expected || ''));
+  return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
+}
+function verifyResendWebhook(rawBody, headers) {
+  if (!RESEND_WEBHOOK_SECRET) return false;
+  const id = String(headers['svix-id'] || '');
+  const timestamp = String(headers['svix-timestamp'] || '');
+  const signatures = String(headers['svix-signature'] || '').split(/\s+/).filter(Boolean);
+  const unixSeconds = Number(timestamp);
+  if (!id || !unixSeconds || !signatures.length || Math.abs(Date.now() / 1000 - unixSeconds) > 300) return false;
+  let key;
+  try {
+    key = RESEND_WEBHOOK_SECRET.startsWith('whsec_')
+      ? Buffer.from(RESEND_WEBHOOK_SECRET.slice(6), 'base64')
+      : Buffer.from(RESEND_WEBHOOK_SECRET, 'utf8');
+  } catch {
+    return false;
+  }
+  const expected = crypto.createHmac('sha256', key).update(id + '.' + timestamp + '.' + rawBody).digest('base64');
+  return signatures.some(signature => {
+    const value = signature.startsWith('v1,') ? signature.slice(3) : signature;
+    return secureWebhookValueMatch(value, expected);
+  });
+}
+function twilioWebhookUrl(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || 'https';
+  const host = forwardedHost || req.headers.host || new URL(PUBLIC_BASE_URL).host;
+  return protocol + '://' + host + req.url;
+}
+function verifyTwilioWebhook(req, payload) {
+  const signature = String(req.headers['x-twilio-signature'] || '');
+  if (!signature || !TWILIO_AUTH_TOKEN) return false;
+  const signed = Object.keys(payload || {}).sort().reduce((value, key) => value + key + String(payload[key] == null ? '' : payload[key]), twilioWebhookUrl(req));
+  const expected = crypto.createHmac('sha1', TWILIO_AUTH_TOKEN).update(signed).digest('base64');
+  return secureWebhookValueMatch(signature, expected);
+}
+function messagingWebhookAuthorized(req, url, payload, provider) {
+  if (webhookSecretMatches(url, req.headers)) return true;
+  if (provider === 'twilio' && verifyTwilioWebhook(req, payload)) return true;
+  if (MESSAGING_WEBHOOK_SECRET) return false;
+  return !['twilio', 'telnyx'].includes(provider);
+}
+function emailWebhookAuthorized(req, url, rawBody, provider) {
+  if (webhookSecretMatches(url, req.headers)) return true;
+  if (provider === 'resend' && verifyResendWebhook(rawBody, req.headers)) return true;
+  if (MESSAGING_WEBHOOK_SECRET || RESEND_WEBHOOK_SECRET) return false;
+  return !['resend', 'sendgrid'].includes(provider);
 }
 async function sendProviderSms(to, body, meta = {}) {
   const provider = MESSAGING_PROVIDER;
@@ -7386,13 +7466,12 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/webhooks/messages' && req.method === 'POST') {
-      if (MESSAGING_WEBHOOK_SECRET && url.searchParams.get('secret') !== MESSAGING_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== MESSAGING_WEBHOOK_SECRET) {
-        return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
-      }
       const rawBody = await readBody(req);
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
-      const inbound = parseIncomingMessage(url.searchParams.get('provider'), req.headers, payload);
+      const provider = String(url.searchParams.get('provider') || MESSAGING_PROVIDER || '').toLowerCase();
+      if (!messagingWebhookAuthorized(req, url, payload, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      const inbound = parseIncomingMessage(provider, req.headers, payload);
       const data = await readData();
       const contact = findMessageContact(data, { phone: inbound.from });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -7466,13 +7545,12 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
     if (url.pathname === '/api/webhooks/email' && req.method === 'POST') {
-      if (MESSAGING_WEBHOOK_SECRET && url.searchParams.get('secret') !== MESSAGING_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== MESSAGING_WEBHOOK_SECRET) {
-        return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
-      }
       const rawBody = await readBody(req);
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
-      const inbound = parseIncomingEmail(url.searchParams.get('provider'), req.headers, payload);
+      const provider = String(url.searchParams.get('provider') || WOA_EMAIL_PROVIDER || '').toLowerCase();
+      if (!emailWebhookAuthorized(req, url, rawBody, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      const inbound = await hydrateIncomingEmail(provider, payload, parseIncomingEmail(provider, req.headers, payload));
       const data = await readData();
       const contact = findMessageContact(data, { email: inbound.from });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -7495,6 +7573,7 @@ const server = http.createServer(async (req, res) => {
           status: 'Received',
           tone: 'blue',
           body: inbound.body,
+          attachments: inbound.attachments || [],
           provider: inbound.provider,
           source: 'Email webhook',
           contactSource: contact.source || ''
@@ -9280,6 +9359,9 @@ module.exports = {
   repairDataIds,
   repairVehicleSheetLinkConflicts,
   publicMessagingStatus,
+  hydrateIncomingEmail,
+  verifyResendWebhook,
+  verifyTwilioWebhook,
   parseIncomingEmail,
   parseIncomingMessage
 };

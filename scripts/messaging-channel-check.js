@@ -45,6 +45,9 @@ const messagesView = finalFunctionSlice(app, 'Messages');
 const messageTemplateDefaults = finalFunctionSlice(app, 'messageTemplateDefaults');
 const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
 const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
+const hydrateIncomingEmail = finalFunctionSlice(server, 'hydrateIncomingEmail');
+const verifyResendWebhook = finalFunctionSlice(server, 'verifyResendWebhook');
+const verifyTwilioWebhook = finalFunctionSlice(server, 'verifyTwilioWebhook');
 const approveAiMessage = finalFunctionSlice(server, 'approveAiMessage');
 const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus');
 const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotification');
@@ -55,7 +58,7 @@ const createAiMessageDraft = finalFunctionSlice(server, 'createAiMessageDraft');
 const notificationCommandBoard = finalFunctionSlice(app, 'notificationCommandBoard');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !parseIncomingEmail || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging notification status', messagingStatus, 'notificationEmail');
@@ -84,6 +87,7 @@ requireText('Server notification test route', server, "/api/notifications/email/
 requireText('Server daily closeout notification route', server, "/api/notifications/daily-closeout");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
 requireText('Server public webhook secret status', publicMessagingStatus, 'webhookSecretConfigured');
+requireText('Server public email webhook secret status', publicMessagingStatus, 'emailWebhookSecretConfigured');
 requireText('Server public notification status', publicMessagingStatus, 'notificationsEnabled');
 requireText('Customer portal message route', server, "/customer/message");
 requireText('Customer portal receipt request route', server, "/customer/receipt-request");
@@ -95,6 +99,9 @@ requireText('Customer portal statement document staff queue', server, "status: '
 requireText('Customer portal message notification event', server, 'customer_message');
 requireText('Staff password reset notification event', server + app, 'staff_password_reset');
 requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
+requireText('Resend inbound body retrieval', hydrateIncomingEmail, 'api.resend.com/emails/receiving/');
+requireText('Resend signed webhook check', verifyResendWebhook, 'svix-signature');
+requireText('Twilio signed webhook check', verifyTwilioWebhook, 'x-twilio-signature');
 requireText('Message-history contact fallback', messageContactCandidates, 'message history');
 requireText('Message-history contact phone', messageContactCandidates, 'row.phone || row.from || row.to');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');

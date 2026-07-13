@@ -2,6 +2,7 @@ const { Readable } = require('node:stream');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
@@ -120,10 +121,31 @@ async function main() {
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
   process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
   process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
+  process.env.RESEND_API_KEY = 'direct-resend-key';
+  process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
   delete require.cache[require.resolve('../server.js')];
-  const { server } = require('../server.js');
+  const { server, hydrateIncomingEmail, parseIncomingEmail, verifyResendWebhook } = require('../server.js');
 
   try {
+    const resendPayload = JSON.stringify({ type: 'email.received', data: { email_id: 'direct-resend-email', from: 'Direct Customer <direct-customer@example.com>', to: ['office@wheelsonauto.com'], subject: 'Resend body retrieval' } });
+    const resendTimestamp = String(Math.floor(Date.now() / 1000));
+    const resendId = 'direct-resend-webhook';
+    const resendSignature = crypto.createHmac('sha256', Buffer.from('direct-resend-webhook-key')).update(resendId + '.' + resendTimestamp + '.' + resendPayload).digest('base64');
+    assert(verifyResendWebhook(resendPayload, { 'svix-id': resendId, 'svix-timestamp': resendTimestamp, 'svix-signature': 'v1,' + resendSignature }), 'Valid Resend webhook signature should pass.');
+    assert(!verifyResendWebhook(resendPayload + 'x', { 'svix-id': resendId, 'svix-timestamp': resendTimestamp, 'svix-signature': 'v1,' + resendSignature }), 'Modified Resend webhook payload should fail signature verification.');
+    const originalFetch = global.fetch;
+    global.fetch = async url => ({
+      ok: String(url).includes('/emails/receiving/direct-resend-email'),
+      async json() {
+        return { id: 'direct-resend-email', from: 'Direct Customer <direct-customer@example.com>', to: ['office@wheelsonauto.com'], subject: 'Resend body retrieval', text: 'This is the full inbound email body.', attachments: [{ id: 'direct-attachment', filename: 'proof.pdf', content_type: 'application/pdf', size: 42 }] };
+      }
+    });
+    const parsedResend = parseIncomingEmail('resend', {}, JSON.parse(resendPayload));
+    const hydratedResend = await hydrateIncomingEmail('resend', JSON.parse(resendPayload), parsedResend);
+    global.fetch = originalFetch;
+    assert(hydratedResend.externalId === 'direct-resend-email' && hydratedResend.body === 'This is the full inbound email body.', 'Resend inbound email should retrieve the full message body.');
+    assert(hydratedResend.attachments.length === 1 && hydratedResend.attachments[0].filename === 'proof.pdf', 'Resend inbound email should keep attachment metadata.');
+
     const loginPage = await request(server, 'GET', '/login');
     assert(loginPage.status === 200, 'Login page did not load.');
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
