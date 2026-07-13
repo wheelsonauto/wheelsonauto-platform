@@ -852,6 +852,32 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function claimPacketWeakCustomer(v){v=String(v||'').trim();return !v||/^(unknown|unassigned|unmatched|unmatched customer|clover dispute|clover payment|customer)$/i.test(v)}
+function claimDefensePacketRows(sourceClaims){
+  var claims=(sourceClaims||db.claims||[]).filter(function(c){var text=String([c.type,c.source,c.provider,c.agency,c.notes,c.customerMatchStatus].filter(Boolean).join(' '));return disputeClaimOpen(c)&&/(toll|ezpass|e-zpass|violation|ticket|damage|claim|dispute|chargeback|reimbursement|refund|clover)/i.test(text)});
+  return claims.map(function(c){
+    var candidate=(c.matchCandidates&&c.matchCandidates[0])||{},customer=!claimPacketWeakCustomer(c.customer)?c.customer:(candidate.customer||''),profile=existingCustomerProfile(customer),vehicle=findVehicle(c.vehicleId)||exportVehicleForName(customer,c.vehicleId)||findVehicle(profile.vehicleId)||{},vehicleText=vehicle.id?vehicleName(vehicle):(c.vehicle||candidate.vehicle||profile.vehicle||''),vin=vehicle.vin||c.vin||candidate.vin||profile.vin||'',tag=vehicle.plate||vehicle.stock||c.plate||c.licensePlate||c.reference||candidate.plate||profile.plate||profile.licensePlate||'',tracker=vehicle.tracker||c.tracker||candidate.tracker||profile.tracker||'',ids=[c.externalId,c.caseId,c.disputeId,c.paymentId,c.cloverPaymentId,c.paymentRequestId,c.reference,candidate.reference].filter(Boolean).join(' | '),contact=[profile.phone||candidate.phone,profile.email||candidate.email].filter(Boolean).join(' / '),type=c.type||c.source||'Recovery item',isDispute=/dispute|chargeback|clover|refund/i.test(String([type,c.provider,c.source,c.notes].filter(Boolean).join(' '))),proof=claimHasProof(c),missing=[];
+    if(claimPacketWeakCustomer(customer)||String(c.customerMatchStatus||'')==='Needs payment/customer match')missing.push('customer/payment match');
+    if(isDispute&&!ids)missing.push('Clover/payment ID');
+    if(!vehicle.id&&!vehicleText)missing.push('vehicle link');
+    if(!vin&&!tag)missing.push('VIN/tag');
+    if(!tracker)missing.push('tracker');
+    if(!Number(c.amount||0))missing.push('amount');
+    if(!proof&&!ids)missing.push('proof/reference');
+    if(isDispute&&!dateKeyFrom(c.deadline||c.nextFollowUp||c.due||''))missing.push('deadline/follow-up');
+    if(customer&&!contact)missing.push('phone/email');
+    var ready=!missing.length,status=ready?'Ready packet':(missing.indexOf('customer/payment match')>=0?'Match first':(missing.indexOf('proof/reference')>=0?'Proof needed':'Needs review')),tone=ready?'good':(status==='Match first'?'bad':'warn'),actions='<button class="btn primary" data-action="open-claim" data-id="'+esc(c.id)+'">Open</button>';
+    if(isOwner()&&String(c.customerMatchStatus||'')==='Needs payment/customer match'&&candidate.customer)actions+=' <button class="btn gold" data-action="apply-claim-match" data-id="'+esc(c.id)+'" data-index="0">Use match</button>';
+    if(isOwner()&&ready&&Number(c.amount||0)>0)actions+=' <button class="btn gold" data-action="send-claim-link" data-id="'+esc(c.id)+'">Send link</button>';
+    if(customer)actions+=customerFileButton(customer,'File')+textCustomerButton(customer,'Text');
+    return{claim:c,customer:customer||candidate.customer||'Unmatched customer',type:type,status:status,tone:tone,missing:missing,vehicle:vehicleText||'No vehicle linked',vin:vin,tag:tag,tracker:tracker,ids:ids,contact:contact,proof:proof,amount:Number(c.amount||0),deadline:c.deadline||c.nextFollowUp||c.createdAt||'',actions:actions}
+  }).sort(function(a,b){var w={bad:0,warn:1,blue:2,good:3};return(w[a.tone]||2)-(w[b.tone]||2)||b.amount-a.amount||String(a.customer).localeCompare(String(b.customer))})
+}
+function claimDefensePacketBoard(compact){
+  if(roleName()==='mechanic')return'';
+  var rows=claimDefensePacketRows(),shown=rows.slice(0,compact?6:12),match=rows.filter(function(r){return r.status==='Match first'}).length,proof=rows.filter(function(r){return r.missing.indexOf('proof/reference')>=0}).length,ready=rows.filter(function(r){return r.status==='Ready packet'}).length,deadline=rows.filter(function(r){return r.missing.indexOf('deadline/follow-up')>=0}).length;
+  return '<section class="card section claim-defense-packet-board" data-limit="'+(compact?6:12)+'"><div class="section-head"><div><h2>Defense packet</h2><p>One packet per toll, claim, reimbursement, Clover dispute, or chargeback: customer, payment ID, vehicle, VIN/tag, tracker, proof, amount, and follow-up.</p></div><div class="star-command-stats"><span class="bad">'+match+' match</span><span class="warn">'+proof+' proof</span><span class="blue">'+deadline+' deadline</span><span class="good">'+ready+' ready</span></div></div>'+localSearch('Search defense packets by customer, Clover ID, payment ID, VIN, tag, tracker, proof, amount, or deadline')+'<div class="role-command-grid claim-defense-packet-grid">'+(shown.length?shown.map(function(r){var detail=[r.type,money(r.amount),r.vehicle,r.vin?'VIN '+r.vin:'VIN missing',r.tag?'Tag '+r.tag:'Tag missing',r.tracker?'Tracker '+r.tracker:'Tracker missing',r.ids?'ID '+r.ids:'No payment/case ID'].filter(Boolean).join(' | '),missing=r.missing.length?'Missing: '+r.missing.join(', '):'Ready for owner review';return '<div class="role-command-card claim-defense-packet-card '+esc(r.tone)+'"><div class="role-command-top"><div><strong>'+esc(r.customer)+'</strong><small>'+esc(detail)+'</small></div>'+badge(r.status,r.tone)+'</div><div class="muted">'+esc(missing)+'</div><div class="muted">Proof: '+esc(r.proof?'saved':'needed')+' | Follow-up: '+esc(r.deadline||'not set')+(r.contact?' | '+esc(r.contact):'')+'</div><div class="actions">'+r.actions+'</div></div>'}).join(''):'<div class="item">No open toll, claim, reimbursement, dispute, or chargeback packets need review right now.</div>')+'</div><div class="notice">This is the dispute-proof checklist before APIs: no claim, toll, chargeback, receipt, or recovery message should move unless this packet is matched and traceable.</div></section>'
+}
 function latestSystemReadiness(){
   try{return JSON.parse(localStorage.getItem('woa-system-readiness')||'null')||null}catch(e){return null}
 }
@@ -1338,3 +1364,35 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+var __woaClaimsDefensePacketTrueFinalBase=ClaimsIssues;
+ClaimsIssues=function(){
+  __woaClaimsDefensePacketTrueFinalBase();
+  var main=document.querySelector('.main.view-claims-issues'),anchor=main&&main.querySelector('.dispute-recovery-board,.compact-claims-board');
+  if(main&&!main.querySelector('.claim-defense-packet-board')){
+    var wrap=document.createElement('div');wrap.innerHTML=claimDefensePacketBoard(false);
+    if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('beforebegin',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+  }
+};
+var __woaReportsDefensePacketTrueFinalBase=Reports;
+Reports=function(){
+  __woaReportsDefensePacketTrueFinalBase();
+  if(view==='Reports'&&(tab==='Risk'||tab==='Accounting')){
+    var main=document.querySelector('.main.view-reports'),anchor=main&&main.querySelector('.dispute-identity-resolver,.accounting-control,.customer-risk-report');
+    if(main&&!main.querySelector('.claim-defense-packet-board')){
+      var wrap=document.createElement('div');wrap.innerHTML=claimDefensePacketBoard(true);
+      if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('beforebegin',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+    }
+  }
+};
+var __woaReportCsvRowsDefensePacketTrueFinalBase=reportCsvRows;
+reportCsvRows=function(){
+  var rows=__woaReportCsvRowsDefensePacketTrueFinalBase().filter(function(row,idx){return idx===0||row[0]!=='Defense packets'});
+  claimDefensePacketRows().forEach(function(r){reportRow(rows,'Defense packets',r.deadline,r.customer,r.vehicle,r.vin,r.tag,r.tracker,r.type,r.amount,r.status,'Claims/disputes/tolls',csvNote([r.ids?'Case/payment '+r.ids:'No case/payment ID',r.proof?'Proof saved':'Proof needed',r.contact,'Missing '+(r.missing.join('/')||'none')]))});
+  return rows
+};
+var __woaStarSystemAuditDefenseTrueFinalBase=starSystemAuditItems;
+starSystemAuditItems=function(){
+  var base=__woaStarSystemAuditDefenseTrueFinalBase(),packets=claimDefensePacketRows().filter(function(r){return r.missing.length}).slice(0,4).map(function(r){return{source:'Defense packet',title:r.customer+' - '+r.type,tone:r.tone,count:r.missing.length,detail:'Missing '+r.missing.join(', ')+' | '+money(r.amount)+' | '+r.vehicle+(r.vin?' | VIN '+r.vin:''),fix:'Open Claims & Issues, finish the defense packet, then send recovery/dispute/customer follow-up only after owner approval.',view:'Claims & Issues',tab:'Open'}});
+  return packets.concat(base).slice(0,12)
+};
+if(view==='Claims & Issues'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
