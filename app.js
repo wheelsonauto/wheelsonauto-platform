@@ -2164,6 +2164,55 @@ function MaintenanceFocused(){
 }
 Maintenance=MaintenanceFocused;
 
+function companyStaffCount(org,staff){
+  return (staff||[]).filter(function(person){
+    return (person.organizationId||'org-wheelsonauto')===org.id&&String(person.status||'Active').toLowerCase()!=='disabled'
+  }).length
+}
+
+function companyExternalReady(org){
+  return /external ready/i.test(String(org.tenantReadiness||''))&&/per-company/i.test(String(org.apiKeyMode||''))&&/active|connected/i.test(String(org.billingStatus||''))
+}
+
+function companyOverviewRow(org,staff){
+  var assigned=companyStaffCount(org,staff),fleet=Number(org.fleetCount||((org.id==='org-wheelsonauto')?(db.vehicles||[]).length:0)),status=String(org.status||'Active'),ready=status.toLowerCase()==='active'&&assigned>0;
+  return '<div class="company-overview-row"><div class="company-overview-name"><strong>'+esc(org.name||'Company')+'</strong><small>'+esc(org.type||'Store')+' | '+esc(org.plan||'Internal account')+'</small></div><div class="company-overview-facts"><span><b>'+fleet+'</b> fleet</span><span><b>'+assigned+'</b> staff</span>'+badge(ready?'Operational':'Needs setup',ready?'good':'warn')+'</div><div class="actions"><button class="btn" data-action="open-org" data-id="'+esc(org.id)+'">Edit</button><button class="btn gold" data-action="new-staff" data-id="'+esc(org.id)+'">Add staff</button></div></div>'
+}
+
+function companyReadinessItem(label,value,detail,tone){
+  return '<div class="company-readiness-item '+esc(tone||'warn')+'"><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong><small>'+esc(detail)+'</small></div>'
+}
+
+function OrganizationsFocused(){
+  var accounts=orgs(),staff=db.staffAccounts||[],active=accounts.filter(function(org){return String(org.status||'Active').toLowerCase()==='active'}),activeStaff=staff.filter(function(person){return String(person.status||'Active').toLowerCase()!=='disabled'}),ready=accounts.filter(function(org){return String(org.status||'Active').toLowerCase()==='active'&&companyStaffCount(org,staff)>0}),selected=['Overview','Accounts','Staff','Readiness'].indexOf(tab)>=0?tab:'Overview';
+  var body=fastWorkspaceTabs([['Overview','Overview'],['Accounts','Accounts',accounts.length],['Staff','Staff',activeStaff.length],['Readiness','Readiness']],selected,'staff-tabs company-tabs');
+  if(selected==='Overview'){
+    var attention=[];
+    accounts.forEach(function(org){
+      var assigned=companyStaffCount(org,staff),fleet=Number(org.fleetCount||((org.id==='org-wheelsonauto')?(db.vehicles||[]).length:0)),status=String(org.status||'Active').toLowerCase();
+      if(status!=='active')attention.push(['Company paused',org.name+' is '+(org.status||'not active')+'.','open-org',org.id]);
+      if(!assigned)attention.push(['Staff needed',org.name+' has no active manager or mechanic login.','new-staff',org.id]);
+      if(!fleet)attention.push(['Fleet count missing',org.name+' needs a fleet count before reports are useful.','open-org',org.id])
+    });
+    body+='<div class="grid stats company-summary-stats">'+stat('Companies',accounts.length,'Store and client records')+stat('Active',active.length,'Can operate')+stat('Staff',activeStaff.length,'Assigned logins')+stat('Ready',ready.length,'Active with staff')+'</div>';
+    body+='<div class="companies-overview-grid"><section class="card section company-control-panel"><div class="section-head"><div><h2>Company control</h2><p>One row per company with the only actions needed day to day.</p></div><button class="btn primary" data-action="new-org">Add company</button></div><div class="company-overview-list">'+accounts.map(function(org){return companyOverviewRow(org,staff)}).join('')+'</div></section><section class="card section company-attention-panel"><div class="section-head"><div><h2>Setup attention</h2><p>Only items that need action.</p></div><button class="btn" data-tab="Readiness">Readiness</button></div><div class="company-attention-list">'+(attention.length?attention.slice(0,5).map(function(item){return '<div class="company-attention-row"><div><strong>'+esc(item[0])+'</strong><small>'+esc(item[1])+'</small></div><button class="btn" data-action="'+esc(item[2])+'" data-id="'+esc(item[3])+'">Fix</button></div>'}).join(''):'<div class="company-clear-state"><strong>Internal account setup is clear</strong><small>Provider keys and subscription billing stay in the Readiness tab.</small></div>')+'</div></section></div>'
+  }
+  if(selected==='Accounts'){
+    var accountRows=accounts.map(function(org){var assigned=companyStaffCount(org,staff),fleet=Number(org.fleetCount||((org.id==='org-wheelsonauto')?(db.vehicles||[]).length:0));return['<strong>'+esc(org.name||'Company')+'</strong><div class="muted">'+esc(org.type||'Store')+'</div>',badge(org.status||'Active',String(org.status||'').toLowerCase()==='active'?'good':'warn'),esc(org.plan||'Internal'),esc(org.primaryAdmin||'Not assigned'),esc(fleet),esc(assigned),'<button class="btn" data-action="open-org" data-id="'+esc(org.id)+'">Edit</button>']});
+    body+='<section class="card section company-accounts-panel" data-limit="24"><div class="section-head"><div><h2>Company accounts</h2><p>Edit company identity, plan, status, fleet count, billing mode, and data scope.</p></div><button class="btn primary" data-action="new-org">Add company</button></div>'+localSearch('Search company, type, plan, admin, status, or staff')+table(['Company','Status','Plan','Primary admin','Fleet','Staff','Action'],accountRows)+'</section>'
+  }
+  if(selected==='Staff'){
+    var staffRows=staff.map(function(person){var org=companyById(person.organizationId||'org-wheelsonauto');return['<strong>'+esc(person.name||person.username||'Staff account')+'</strong><div class="muted">'+esc(person.username||'')+'</div>',esc(person.role||'Staff'),esc(org&&org.name||'WheelsonAuto'),badge(person.status||'Active',String(person.status||'Active').toLowerCase()==='disabled'?'bad':'good'),esc(person.access||((person.role||'Staff')+' access')),'<button class="btn" data-action="open-staff" data-id="'+esc(person.id)+'">Edit</button>']});
+    body+='<section class="card section company-staff-panel" data-limit="24"><div class="section-head"><div><h2>Staff by company</h2><p>Managers and mechanics stay assigned to one company and only see their permitted workspace.</p></div><div class="actions"><button class="btn primary" data-action="new-staff" data-id="'+esc(accounts[0]&&accounts[0].id||'org-wheelsonauto')+'">Add staff</button><button class="btn" data-view="Settings">Account settings</button></div></div>'+localSearch('Search staff name, username, role, company, status, or access')+(staffRows.length?table(['Staff','Role','Company','Status','Access','Action'],staffRows):'<div class="item">No staff accounts are saved yet.</div>')+'</section>'
+  }
+  if(selected==='Readiness'){
+    var externalReady=accounts.filter(companyExternalReady).length,withoutStaff=accounts.filter(function(org){return !companyStaffCount(org,staff)}).length,subscriber=accounts.filter(function(org){return /subscription|subscriber|client/i.test(String([org.type,org.plan].filter(Boolean).join(' ')))}).length;
+    body+='<section class="card section company-readiness-panel"><div class="section-head"><div><h2>Franchise readiness</h2><p>Internal stores work now. Outside subscriber accounts stay locked until the three provider requirements are complete.</p></div><button class="btn gold" data-view="API Roadmap">API roadmap</button></div><div class="company-readiness-grid">'+companyReadinessItem('Staff scoping',withoutStaff?withoutStaff+' need staff':'Ready','Managers and mechanics are tied to their assigned company.',withoutStaff?'warn':'good')+companyReadinessItem('Owner view',active.length+' active','Owner reporting remains global across company accounts.','good')+companyReadinessItem('Data storage','Shared now','Internal-safe; outside subscribers need isolated storage.','warn')+companyReadinessItem('Per-company keys',externalReady+'/'+accounts.length,'Clover, SMS, email, toll, tracker, and accounting keys must be isolated.',externalReady===accounts.length?'good':'warn')+companyReadinessItem('Billing / SaaS',subscriber?subscriber+' planned':'Locked','Subscription billing must be connected before outside clients launch.','bad')+'</div><div class="company-readiness-footer"><div><strong>Current rule</strong><small>Use Companies for WheelsonAuto locations now. Do not activate outside subscribers until storage, provider keys, billing, audit logs, and live tenant tests are complete.</small></div><div class="actions"><button class="btn" data-tab="Accounts">Company accounts</button><button class="btn" data-view="Settings">Staff settings</button></div></div></section>'
+  }
+  shell('Companies','Company accounts, staff access, and franchise readiness without repeated panels.',body,'')
+}
+Organizations=OrganizationsFocused;
+
 var __woaTrackerNameCleanBase=trackerName;
 trackerName=function(v){
   var value=String(__woaTrackerNameCleanBase(v)||'').trim();

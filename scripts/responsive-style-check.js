@@ -55,6 +55,10 @@ requireText('Mobile manager tab grid', '.admin-shell .view-manager-portal>.staff
 requireText('Mobile summary card grid', '.admin-shell .view-payments>.stats,');
 requireText('Dark mobile table rows', 'background:#151b21!important');
 requireText('Compact desktop Reports flow', '.admin-shell .view-reports{');
+requireText('Focused Companies workspace', 'Companies is a focused workspace: one selected job, no stacked readiness walls.');
+requireText('Companies phone tab grid', '.view-companies>.company-tabs{');
+requireText('Companies compact overview', '.companies-overview-grid{');
+requireText('Solid mobile modal footer', 'background:#111820!important');
 requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
 requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', '#111820', 'border-color:rgba(240,184,58,.42)', '!important']);
