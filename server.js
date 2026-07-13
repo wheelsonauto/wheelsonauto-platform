@@ -40,6 +40,9 @@ const SMS_BRIDGE_SECRET = process.env.WOA_SMS_BRIDGE_SECRET || MESSAGING_WEBHOOK
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
+const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY || '';
+const TELNYX_MESSAGING_PROFILE_ID = process.env.TELNYX_MESSAGING_PROFILE_ID || '';
+const TELNYX_MESSAGING_PROFILE_NAME = process.env.TELNYX_MESSAGING_PROFILE_NAME || 'WheelsonAuto Messaging';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.WOA_OPENAI_API_KEY || '';
 const OPENAI_BASE_URL = (process.env.WOA_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
 const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-5.5' : '');
@@ -60,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-final-23">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-final-24">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -628,21 +631,25 @@ function publicMessagingStatus(data = {}) {
     enabled: settings.enabled,
     configured,
     fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
-    voiceMode: 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
+    voiceMode: provider === 'telnyx'
+      ? 'Telnyx handles the platform inbox. Keep the T-Mobile number unchanged until the Telnyx test line passes and the final port is approved.'
+      : 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
     ownerMirrorLive: !!(configured && MESSAGING_OWNER_NOTIFY_NUMBER),
     ownerReplyBridge: MESSAGING_OWNER_NOTIFY_NUMBER ? 'Phone replies use a stable 6-character conversation code so they stay matched to the right customer.' : 'Add the owner mobile number to mirror customer texts and enable safe phone replies.',
     smsScamGuard: 'Potential scams are labeled, held from Star auto-reply, and require staff review. Phone replies cannot run money or account actions.',
-    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages' + (provider === 'twilio' ? '?provider=twilio' : ''),
+    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages' + (provider === 'twilio' || provider === 'telnyx' ? '?provider=' + provider : ''),
     smsWebhookConnected: saved.smsWebhookConnected === true,
     smsPollingConnected: saved.smsPollingConnected === true,
     smsInboundConnected: saved.smsWebhookConnected === true || saved.smsPollingConnected === true,
     smsInboundMode: saved.smsWebhookConnected === true ? 'webhook' : (saved.smsPollingConnected === true ? 'secure sync' : ''),
     smsPollingIntervalMs: TWILIO_INBOUND_POLL_MS,
-    smsWebhookStatus: saved.smsWebhookStatus || (provider === 'twilio' && configured ? 'Connect inbound SMS' : 'Provider setup needed'),
+    smsWebhookStatus: saved.smsWebhookStatus || ((provider === 'twilio' || provider === 'telnyx') && configured ? 'Connect inbound SMS' : 'Provider setup needed'),
     smsWebhookConfiguredAt: saved.smsWebhookConfiguredAt || '',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
-    webhookSecretConfigured: !!MESSAGING_WEBHOOK_SECRET,
+    webhookSecretConfigured: !!(MESSAGING_WEBHOOK_SECRET || (provider === 'telnyx' && TELNYX_PUBLIC_KEY)),
+    telnyxSignatureReady: provider === 'telnyx' && !!TELNYX_PUBLIC_KEY,
+    telnyxProfileId: provider === 'telnyx' && (saved.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID) ? 'stored securely' : '',
     emailWebhookSecretConfigured: !!(RESEND_WEBHOOK_SECRET || MESSAGING_WEBHOOK_SECRET),
     aiProvider: OPENAI_API_KEY && WOA_AI_MODEL ? 'openai' : 'rules',
     aiEnabled: settings.aiEnabled,
@@ -922,10 +929,38 @@ function verifyTwilioWebhook(req, payload) {
   const expected = crypto.createHmac('sha1', TWILIO_AUTH_TOKEN).update(signed).digest('base64');
   return secureWebhookValueMatch(signature, expected);
 }
-function messagingWebhookAuthorized(req, url, payload, provider) {
+function telnyxPublicKeyObject(publicKey = TELNYX_PUBLIC_KEY) {
+  const value = String(publicKey || '').trim();
+  if (!value) return null;
+  try {
+    if (value.includes('BEGIN PUBLIC KEY')) return crypto.createPublicKey(value);
+    const raw = /^[a-f0-9]{64}$/i.test(value) ? Buffer.from(value, 'hex') : Buffer.from(value, 'base64');
+    if (raw.length === 32) {
+      const ed25519SpkiPrefix = Buffer.from('302a300506032b6570032100', 'hex');
+      return crypto.createPublicKey({ key: Buffer.concat([ed25519SpkiPrefix, raw]), format: 'der', type: 'spki' });
+    }
+    return crypto.createPublicKey({ key: raw, format: 'der', type: 'spki' });
+  } catch {
+    return null;
+  }
+}
+function verifyTelnyxWebhook(rawBody, headers, publicKey = TELNYX_PUBLIC_KEY) {
+  const signature = String(headers && headers['telnyx-signature-ed25519'] || '');
+  const timestamp = String(headers && headers['telnyx-timestamp'] || '');
+  const unixSeconds = Number(timestamp);
+  const key = telnyxPublicKeyObject(publicKey);
+  if (!signature || !unixSeconds || !key || Math.abs(Date.now() / 1000 - unixSeconds) > 300) return false;
+  try {
+    return crypto.verify(null, Buffer.from(timestamp + '|' + String(rawBody || ''), 'utf8'), key, Buffer.from(signature, 'base64'));
+  } catch {
+    return false;
+  }
+}
+function messagingWebhookAuthorized(req, url, rawBody, payload, provider) {
   if (webhookSecretMatches(url, req.headers)) return true;
   if (provider === 'twilio' && verifyTwilioWebhook(req, payload)) return true;
-  if (MESSAGING_WEBHOOK_SECRET) return false;
+  if (provider === 'telnyx' && verifyTelnyxWebhook(rawBody, req.headers)) return true;
+  if (MESSAGING_WEBHOOK_SECRET || (provider === 'telnyx' && TELNYX_PUBLIC_KEY)) return false;
   return !['twilio', 'telnyx'].includes(provider);
 }
 function emailWebhookAuthorized(req, url, rawBody, provider) {
@@ -954,14 +989,27 @@ async function sendProviderSms(to, body, meta = {}) {
     return { sent: true, status: jsonBody.status || 'Sent', provider: 'twilio', externalId: jsonBody.sid || '', response: jsonBody };
   }
   if (provider === 'telnyx' && TELNYX_API_KEY) {
+    const telnyxPayload = {
+      from: cleanPhone(MESSAGING_FROM_NUMBER),
+      to: cleanPhone(to),
+      text: body,
+      auto_detect: true,
+      encoding: 'auto',
+      webhook_url: PUBLIC_BASE_URL + '/api/webhooks/messages?provider=telnyx',
+      use_profile_webhooks: true
+    };
+    const profileId = String(meta.messagingProfileId || TELNYX_MESSAGING_PROFILE_ID || '').trim();
+    if (profileId) telnyxPayload.messaging_profile_id = profileId;
     const response = await fetch('https://api.telnyx.com/v2/messages', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TELNYX_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: MESSAGING_FROM_NUMBER, to: cleanPhone(to), text: body, messaging_profile_id: process.env.TELNYX_MESSAGING_PROFILE_ID || undefined })
+      body: JSON.stringify(telnyxPayload)
     });
     const jsonBody = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error((jsonBody.errors && jsonBody.errors[0] && jsonBody.errors[0].detail) || jsonBody.message || 'Telnyx message failed.');
-    return { sent: true, status: (jsonBody.data && jsonBody.data.record_type) || 'Queued', provider: 'telnyx', externalId: jsonBody.data && jsonBody.data.id || '', response: jsonBody };
+    const telnyxData = jsonBody.data || {};
+    const destination = Array.isArray(telnyxData.to) ? telnyxData.to[0] || {} : {};
+    return { sent: true, status: destination.status || telnyxData.status || 'Queued', provider: 'telnyx', externalId: telnyxData.id || '', response: jsonBody };
   }
   return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
 }
@@ -1041,6 +1089,132 @@ async function autoConfigureTwilioSmsWebhook() {
       lastError: data.integrations.messaging.smsPollingConnected ? '' : error
     });
     appendAuditLog(data, systemUser, 'Automatic Twilio inbox connection failed', [error]);
+    await protectConcurrentLocalWrites(data);
+    await writeData(data);
+    throw err;
+  }
+}
+async function telnyxApiRequest(fetchImpl, apiKey, pathname, options = {}) {
+  const response = await fetchImpl('https://api.telnyx.com/v2' + pathname, {
+    ...options,
+    headers: {
+      Authorization: 'Bearer ' + apiKey,
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body.errors && body.errors[0] && (body.errors[0].detail || body.errors[0].title);
+    const error = new Error(detail || body.message || 'Telnyx setup request failed.');
+    error.statusCode = response.status || 502;
+    error.response = body;
+    throw error;
+  }
+  return body;
+}
+async function configureTelnyxMessagingProfile(options = {}) {
+  const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
+  const phoneNumber = cleanPhone(options.phoneNumber || MESSAGING_FROM_NUMBER || '');
+  const publicKey = String(options.publicKey || TELNYX_PUBLIC_KEY || '').trim();
+  const fetchImpl = options.fetchImpl || fetch;
+  const webhookUrl = String(options.webhookUrl || (PUBLIC_BASE_URL + '/api/webhooks/messages?provider=telnyx')).trim();
+  let profileId = String(options.profileId || TELNYX_MESSAGING_PROFILE_ID || '').trim();
+  if (!apiKey || !phoneKey(phoneNumber)) {
+    const error = new Error('Telnyx API key and Telnyx SMS number must be saved in Render first.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!publicKey || !telnyxPublicKeyObject(publicKey)) {
+    const error = new Error('Add the Telnyx public key in Render so inbound messages can be verified securely.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!profileId) {
+    const profilesBody = await telnyxApiRequest(fetchImpl, apiKey, '/messaging_profiles?page[size]=250');
+    const profiles = Array.isArray(profilesBody.data) ? profilesBody.data : [];
+    const existing = profiles.find(item => String(item && item.name || '').toLowerCase() === TELNYX_MESSAGING_PROFILE_NAME.toLowerCase());
+    profileId = String(existing && existing.id || '');
+  }
+  const profileSettings = {
+    name: TELNYX_MESSAGING_PROFILE_NAME,
+    webhook_url: webhookUrl,
+    webhook_api_version: '2',
+    smart_encoding: true,
+    whitelisted_destinations: ['US']
+  };
+  if (!profileId) {
+    const created = await telnyxApiRequest(fetchImpl, apiKey, '/messaging_profiles', { method: 'POST', body: JSON.stringify(profileSettings) });
+    profileId = String(created.data && created.data.id || '');
+  } else {
+    await telnyxApiRequest(fetchImpl, apiKey, '/messaging_profiles/' + encodeURIComponent(profileId), { method: 'PATCH', body: JSON.stringify(profileSettings) });
+  }
+  if (!profileId) throw new Error('Telnyx did not return a messaging profile ID.');
+  const numberBody = await telnyxApiRequest(fetchImpl, apiKey, '/phone_numbers?filter[phone_number]=' + encodeURIComponent(phoneNumber) + '&page[size]=50');
+  const numbers = Array.isArray(numberBody.data) ? numberBody.data : [];
+  const number = numbers.find(item => phoneKey(item && item.phone_number) === phoneKey(phoneNumber));
+  if (!number || !number.id) {
+    const error = new Error('Telnyx did not return this SMS number. Buy a temporary Telnyx test number before connecting the inbox.');
+    error.statusCode = 404;
+    throw error;
+  }
+  let assigned = String(number.messaging_profile_id || '') === profileId;
+  if (!assigned) {
+    try {
+      await telnyxApiRequest(fetchImpl, apiKey, '/messaging_profiles/' + encodeURIComponent(profileId) + '/phone_numbers', {
+        method: 'POST',
+        body: JSON.stringify({ phone_number_id: number.id })
+      });
+      assigned = true;
+    } catch (err) {
+      const message = String(err && err.message || '').toLowerCase();
+      if (!/already|assigned|associated/.test(message)) throw err;
+      assigned = true;
+    }
+  }
+  return {
+    connected: true,
+    provider: 'telnyx',
+    phoneNumber: maskPhone(number.phone_number || phoneNumber),
+    phoneNumberId: number.id,
+    messagingProfileId: profileId,
+    webhookUrl,
+    smsMethod: 'POST',
+    signedWebhooks: true,
+    assigned
+  };
+}
+async function autoConfigureTelnyxMessagingProfile() {
+  if (MESSAGING_PROVIDER !== 'telnyx' || !TELNYX_API_KEY || !TELNYX_PUBLIC_KEY || !MESSAGING_FROM_NUMBER) {
+    return { connected: false, skipped: true, status: 'Telnyx is not fully configured in Render.' };
+  }
+  await writeDataQueue.catch(() => {});
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  data.integrations.messaging = data.integrations.messaging || {};
+  const saved = data.integrations.messaging;
+  const systemUser = { name: 'WheelsonAuto system', role: 'Owner', organizationId: MAIN_ORG_ID, companyName: 'WheelsonAuto' };
+  try {
+    const result = await configureTelnyxMessagingProfile({ profileId: saved.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID });
+    data.integrations.messaging = { ...saved, ...publicMessagingStatus(data) };
+    Object.assign(data.integrations.messaging, {
+      telnyxMessagingProfileId: result.messagingProfileId,
+      smsWebhookConnected: true,
+      smsPollingConnected: false,
+      smsWebhookStatus: 'Telnyx inbound SMS connected',
+      smsWebhookConfiguredAt: new Date().toISOString(),
+      smsWebhookLastAttemptAt: new Date().toISOString(),
+      smsWebhookLastError: '',
+      lastError: ''
+    });
+    appendAuditLog(data, systemUser, 'Telnyx inbox connected automatically', [result.phoneNumber, result.webhookUrl, 'Signed webhooks']);
+    await protectConcurrentLocalWrites(data);
+    await writeData(data);
+    return result;
+  } catch (err) {
+    const error = String(err && err.message || err);
+    data.integrations.messaging = { ...saved, ...publicMessagingStatus(data), smsWebhookConnected: false, smsWebhookStatus: 'Telnyx inbound SMS needs attention', smsWebhookLastAttemptAt: new Date().toISOString(), smsWebhookLastError: error, lastError: error };
+    appendAuditLog(data, systemUser, 'Automatic Telnyx inbox connection failed', [error]);
     await protectConcurrentLocalWrites(data);
     await writeData(data);
     throw err;
@@ -5531,6 +5705,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/messages/ai-health', 'Owner Star AI provider health test'),
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
     route('POST', '/api/integrations/twilio/configure', 'Owner connects Twilio inbound SMS webhook'),
+    route('POST', '/api/integrations/telnyx/configure', 'Owner connects Telnyx signed inbound SMS webhook'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
@@ -7857,6 +8032,148 @@ async function attachCloverCheckout(data, request) {
   return checkout;
 }
 
+function telnyxWebhookEventType(payload = {}) {
+  return String(payload && payload.data && payload.data.event_type || payload.event_type || payload.type || '').toLowerCase();
+}
+function telnyxDeliveryStatus(payload = {}) {
+  const message = payload && payload.data && payload.data.payload || payload.payload || {};
+  const destination = Array.isArray(message.to) ? message.to[0] || {} : {};
+  return String(destination.status || message.delivery_status || message.status || '').toLowerCase();
+}
+function applyTelnyxDeliveryEvent(data, payload = {}) {
+  const message = payload && payload.data && payload.data.payload || payload.payload || {};
+  const externalId = String(message.id || '');
+  const record = externalId && (data.messages || []).find(item => String(item.externalId || '') === externalId);
+  const providerStatus = telnyxDeliveryStatus(payload) || telnyxWebhookEventType(payload).replace(/^message\./, '');
+  if (!record) return { matched: false, externalId, providerStatus };
+  const failed = /failed|rejected|expired|timeout|undelivered/.test(providerStatus);
+  const delivered = providerStatus === 'delivered';
+  const uncertain = /unconfirmed|dlr_timeout/.test(providerStatus);
+  record.provider = 'telnyx';
+  record.providerStatus = providerStatus || 'updated';
+  record.deliveryUpdatedAt = new Date().toISOString();
+  record.status = delivered ? 'Delivered' : (failed ? 'Failed' : (uncertain ? 'Delivery unconfirmed' : 'Sent'));
+  record.tone = delivered ? 'good' : (failed ? 'bad' : (uncertain ? 'warn' : 'blue'));
+  if (delivered) record.deliveredAt = record.deliveryUpdatedAt;
+  if (failed) record.failedAt = record.deliveryUpdatedAt;
+  if (Array.isArray(message.errors) && message.errors.length) record.providerErrors = message.errors.slice(0, 10);
+  if (message.cost) record.providerCost = message.cost;
+  return { matched: true, messageId: record.id, externalId, providerStatus: record.providerStatus, status: record.status };
+}
+async function processMessagingWebhookEvent(provider, headers, payload) {
+  const data = await readData();
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  if (provider === 'telnyx' && telnyxWebhookEventType(payload) !== 'message.received') {
+    const delivery = applyTelnyxDeliveryEvent(data, payload);
+    data.integrations = data.integrations || {};
+    data.integrations.messaging = {
+      ...(data.integrations.messaging || {}),
+      ...publicMessagingStatus(data),
+      lastDeliveryUpdateAt: new Date().toISOString(),
+      lastDeliveryStatus: delivery.providerStatus || '',
+      lastError: ''
+    };
+    if (delivery.matched) {
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+    }
+    return { ok: true, received: false, delivery };
+  }
+  const inbound = parseIncomingMessage(provider, headers, payload);
+  const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
+  if (exists) return { ok: true, received: false, duplicate: true };
+  if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(inbound.from) === phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER)) {
+    const ownerBridge = await handleOwnerSmsBridge(data, inbound);
+    data.integrations = data.integrations || {};
+    data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOwnerPhoneReplyAt: new Date().toISOString(), lastError: ownerBridge.error || '' };
+    await protectConcurrentLocalWrites(data);
+    await writeData(data);
+    return { ok: true, received: true, ownerBridge };
+  }
+  const contact = findMessageContact(data, { phone: inbound.from });
+  let aiResult = null;
+  let ownerMirror = null;
+  const scam = smsScamAssessment(inbound.body);
+  const context = aiFindCustomerContext(data, { customer: contact.name, phone: inbound.from }, { role: 'Owner', organizationId: MAIN_ORG_ID });
+  const messageFields = messageContextFields(context, { customer: contact.name, phone: inbound.from });
+  const inboundRecord = {
+    id: 'msg-in-' + Date.now(),
+    externalId: inbound.externalId,
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer: contact.name || inbound.from || 'Unknown texter',
+    organizationId: messageFields.organizationId || MAIN_ORG_ID,
+    phone: inbound.from,
+    to: inbound.to,
+    direction: 'Inbound',
+    channel: 'SMS',
+    template: scam.suspicious ? 'Potential scam' : 'Customer reply',
+    subject: 'Incoming text',
+    status: scam.suspicious ? 'Potential scam' : 'Received',
+    tone: scam.suspicious ? 'bad' : 'blue',
+    body: inbound.body,
+    provider: inbound.provider,
+    source: 'SMS webhook',
+    contactSource: contact.source || '',
+    needsHuman: scam.suspicious,
+    scamReasons: scam.reasons,
+    customerId: messageFields.customerId,
+    contractId: messageFields.contractId,
+    recurringPaymentId: messageFields.recurringPaymentId,
+    vehicleId: messageFields.vehicleId,
+    vehicle: messageFields.vehicle,
+    vin: messageFields.vin,
+    licensePlate: messageFields.licensePlate,
+    plate: messageFields.plate,
+    tracker: messageFields.tracker
+  };
+  data.messages.unshift(inboundRecord);
+  const settings = messageSettings(data);
+  rememberSmsBridgeThread(data, { ...inboundRecord, direction: 'Inbound' });
+  if (!scam.suspicious && settings.aiEnabled && settings.aiDrafts && inbound.body) {
+    aiResult = await createAiMessageDraft(data, {
+      messageId: inboundRecord.id,
+      externalId: inbound.externalId || inboundRecord.id,
+      customer: inboundRecord.customer,
+      phone: inbound.from,
+      body: inbound.body
+    }, { sourceMessageId: inbound.externalId || inboundRecord.id });
+    const plan = aiResult.plan || {};
+    if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.phone) {
+      try {
+        const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
+        aiResult.sent = approved.sent;
+      } catch (err) {
+        aiResult.draft.status = 'Auto-send failed';
+        aiResult.draft.tone = 'warn';
+        aiResult.draft.error = String(err && err.message || err);
+      }
+    }
+  }
+  if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER) !== phoneKey(inbound.from)) {
+    ownerMirror = await sendOwnerSmsMirror(data, { ...inboundRecord, direction: 'Inbound', scam }, settings);
+  }
+  data.integrations = data.integrations || {};
+  data.integrations.messaging = {
+    ...(data.integrations.messaging || {}),
+    ...publicMessagingStatus(data),
+    lastInboundAt: new Date().toISOString(),
+    lastInboundFrom: maskPhone(inbound.from),
+    lastScamAt: scam.suspicious ? new Date().toISOString() : (data.integrations.messaging && data.integrations.messaging.lastScamAt || ''),
+    lastError: ownerMirror && ownerMirror.error || ''
+  };
+  await protectConcurrentLocalWrites(data);
+  await writeData(data);
+  return {
+    ok: true,
+    received: true,
+    customer: contact.name || '',
+    scam: scam.suspicious ? { status: 'Potential scam', reasons: scam.reasons } : null,
+    ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null,
+    ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
@@ -7969,103 +8286,12 @@ const server = http.createServer(async (req, res) => {
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
       const provider = String(url.searchParams.get('provider') || MESSAGING_PROVIDER || '').toLowerCase();
-      if (!messagingWebhookAuthorized(req, url, payload, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
-      const inbound = parseIncomingMessage(provider, req.headers, payload);
-      const data = await readData();
-      data.messages = Array.isArray(data.messages) ? data.messages : [];
-      const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
-      if (exists) return json(res, 200, { ok: true, received: false, duplicate: true });
-      if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(inbound.from) === phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER)) {
-        const ownerBridge = await handleOwnerSmsBridge(data, inbound);
-        data.integrations = data.integrations || {};
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOwnerPhoneReplyAt: new Date().toISOString(), lastError: ownerBridge.error || '' };
-        await writeData(data);
-        return json(res, 200, { ok: true, received: true, ownerBridge });
+      if (!messagingWebhookAuthorized(req, url, rawBody, payload, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      if (provider === 'telnyx') {
+        setImmediate(() => processMessagingWebhookEvent(provider, req.headers, payload).catch(err => console.error('Telnyx webhook processing failed:', err && err.message || err)));
+        return json(res, 200, { ok: true, queued: true });
       }
-      const contact = findMessageContact(data, { phone: inbound.from });
-      let inboundRecord = null;
-      let aiResult = null;
-      let ownerMirror = null;
-      const scam = smsScamAssessment(inbound.body);
-      if (!exists) {
-        const context = aiFindCustomerContext(data, { customer: contact.name, phone: inbound.from }, { role: 'Owner', organizationId: MAIN_ORG_ID });
-        const messageFields = messageContextFields(context, { customer: contact.name, phone: inbound.from });
-        inboundRecord = {
-          id: 'msg-in-' + Date.now(),
-          externalId: inbound.externalId,
-          date: new Date().toLocaleString('en-US'),
-          createdAt: new Date().toISOString(),
-          customer: contact.name || inbound.from || 'Unknown texter',
-          organizationId: messageFields.organizationId || MAIN_ORG_ID,
-          phone: inbound.from,
-          to: inbound.to,
-          direction: 'Inbound',
-          channel: 'SMS',
-          template: scam.suspicious ? 'Potential scam' : 'Customer reply',
-          subject: 'Incoming text',
-          status: scam.suspicious ? 'Potential scam' : 'Received',
-          tone: scam.suspicious ? 'bad' : 'blue',
-          body: inbound.body,
-          provider: inbound.provider,
-          source: 'SMS webhook',
-          contactSource: contact.source || '',
-          needsHuman: scam.suspicious,
-          scamReasons: scam.reasons,
-          customerId: messageFields.customerId,
-          contractId: messageFields.contractId,
-          recurringPaymentId: messageFields.recurringPaymentId,
-          vehicleId: messageFields.vehicleId,
-          vehicle: messageFields.vehicle,
-          vin: messageFields.vin,
-          licensePlate: messageFields.licensePlate,
-          plate: messageFields.plate,
-          tracker: messageFields.tracker
-        };
-        data.messages.unshift(inboundRecord);
-        const settings = messageSettings(data);
-        rememberSmsBridgeThread(data, { ...inboundRecord, direction: 'Inbound' });
-        if (!scam.suspicious && settings.aiEnabled && settings.aiDrafts && inbound.body) {
-          aiResult = await createAiMessageDraft(data, {
-            messageId: inboundRecord.id,
-            externalId: inbound.externalId || inboundRecord.id,
-            customer: inboundRecord.customer,
-            phone: inbound.from,
-            body: inbound.body
-          }, { sourceMessageId: inbound.externalId || inboundRecord.id });
-          const plan = aiResult.plan || {};
-          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.phone) {
-            try {
-              const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
-              aiResult.sent = approved.sent;
-            } catch (err) {
-              aiResult.draft.status = 'Auto-send failed';
-              aiResult.draft.tone = 'warn';
-              aiResult.draft.error = String(err && err.message || err);
-            }
-          }
-        }
-        if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER) !== phoneKey(inbound.from)) {
-          ownerMirror = await sendOwnerSmsMirror(data, { ...inboundRecord, direction: 'Inbound', scam }, settings);
-        }
-        data.integrations = data.integrations || {};
-        data.integrations.messaging = {
-          ...(data.integrations.messaging || {}),
-          ...publicMessagingStatus(data),
-          lastInboundAt: new Date().toISOString(),
-          lastInboundFrom: maskPhone(inbound.from),
-          lastScamAt: scam.suspicious ? new Date().toISOString() : (data.integrations.messaging && data.integrations.messaging.lastScamAt || ''),
-          lastError: ownerMirror && ownerMirror.error || ''
-        };
-        await writeData(data);
-      }
-      return json(res, 200, {
-        ok: true,
-        received: !exists,
-        customer: contact.name || '',
-        scam: scam.suspicious ? { status: 'Potential scam', reasons: scam.reasons } : null,
-        ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null,
-        ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null
-      });
+      return json(res, 200, await processMessagingWebhookEvent(provider, req.headers, payload));
     }
     if (url.pathname === '/api/webhooks/email' && req.method === 'POST') {
       const rawBody = await readBody(req);
@@ -9162,6 +9388,34 @@ const server = http.createServer(async (req, res) => {
         return json(res, Number(err && err.statusCode || 502), { ok: false, error, messaging: publicMessagingStatus(data) });
       }
     }
+    if (url.pathname === '/api/integrations/telnyx/configure' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can connect the Telnyx inbox.' });
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.messaging = data.integrations.messaging || {};
+      try {
+        const result = await configureTelnyxMessagingProfile({ profileId: data.integrations.messaging.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID });
+        data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
+        Object.assign(data.integrations.messaging, {
+          telnyxMessagingProfileId: result.messagingProfileId,
+          smsWebhookConnected: true,
+          smsPollingConnected: false,
+          smsWebhookStatus: 'Telnyx inbound SMS connected',
+          smsWebhookConfiguredAt: new Date().toISOString(),
+          smsWebhookLastError: '',
+          lastError: ''
+        });
+        appendAuditLog(data, user, 'Telnyx inbox connected', [result.phoneNumber, result.webhookUrl, 'Signed webhooks']);
+        await writeData(data);
+        return json(res, 200, { ok: true, result, messaging: publicMessagingStatus(data) });
+      } catch (err) {
+        const error = String(err && err.message || err);
+        data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data), smsWebhookConnected: false, smsWebhookStatus: 'Telnyx inbound SMS needs attention', smsWebhookLastAttemptAt: new Date().toISOString(), smsWebhookLastError: error, lastError: error };
+        appendAuditLog(data, user, 'Telnyx inbox connection failed', [error]);
+        await writeData(data);
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error, messaging: publicMessagingStatus(data) });
+      }
+    }
     if (url.pathname === '/api/notifications/email/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change email notification settings.' });
       const payload = JSON.parse(await readBody(req) || '{}');
@@ -9930,6 +10184,9 @@ if (require.main === module) {
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
       .catch(err => console.error('Twilio inbox auto-connect failed:', err && err.message || err)), 250);
+    setTimeout(() => autoConfigureTelnyxMessagingProfile()
+      .then(result => console.log(result && result.skipped ? 'Telnyx inbox auto-connect skipped.' : 'Telnyx inbound SMS connected.'))
+      .catch(err => console.error('Telnyx inbox auto-connect failed:', err && err.message || err)), 500);
     setTimeout(() => syncTwilioInboundMessages()
       .then(result => console.log(result && result.skipped ? 'Twilio inbound SMS secure sync skipped.' : 'Twilio inbound SMS secure sync active.'))
       .catch(err => console.error('Twilio inbound SMS secure sync failed:', err && err.message || err)), 1500);
@@ -9953,8 +10210,10 @@ module.exports = {
   hydrateIncomingEmail,
   verifyResendWebhook,
   verifyTwilioWebhook,
+  verifyTelnyxWebhook,
   parseIncomingEmail,
   parseIncomingMessage,
+  sendProviderSms,
   smsScamAssessment,
   smsSensitiveActionAssessment,
   smsBridgeCode,
@@ -9963,6 +10222,10 @@ module.exports = {
   ownerSmsMirrorBody,
   configureTwilioSmsWebhook,
   autoConfigureTwilioSmsWebhook,
+  configureTelnyxMessagingProfile,
+  autoConfigureTelnyxMessagingProfile,
+  applyTelnyxDeliveryEvent,
+  processMessagingWebhookEvent,
   listTwilioInboundMessages,
   deliverPolledTwilioMessage,
   syncTwilioInboundMessages,
