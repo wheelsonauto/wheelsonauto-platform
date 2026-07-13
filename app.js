@@ -1487,3 +1487,52 @@ starSystemAuditItems=function(){
   return items.concat(base).slice(0,12)
 };
 if(view==='Messages'||view==='Reports')queueRender();
+function apiHandoffDataMap(id){
+  var map={
+    'clover-core':'customers, payments, transactions, recurring roster, closeout, disputes',
+    'clover-ecommerce':'card setup, saved-card token, manual charges, receipts, card status',
+    'clover-webhooks':'payment webhooks, dispute webhooks, transaction reconciliation, auto-sync',
+    'sms-phone':'customer texts, message inbox, Star drafts, payment reminders, setup links',
+    'email':'customer emails, owner alerts, closeout emails, reset help, receipts',
+    'ezpass':'plates, tolls, violations, customer match, recovery ledger, payment links',
+    'insurance':'customer proof, insurance expiration, verification inbox, risk reports',
+    'background-checks':'applications, customer file, approval handoff, verification documents',
+    'tracker-gps':'vehicle tracker name, location, last ping, fleet risk, service context',
+    'accounting':'payments, paid outside app, closeout, repairs, claims, recovery ledger',
+    'marketing':'website leads, applications, source tracking, follow-up messages',
+    'multi-company-billing':'companies, staff scope, subscription status, per-company provider keys'
+  };
+  return map[id]||'customer, vehicle, payment, report, or provider-specific platform records'
+}
+function apiHandoffChecklistRows(){
+  return apiProviderLaunchItems().map(function(i){
+    var missing=(i.missing||[]).slice(),ready=i.tone==='good'&&!missing.length,fallback=/sms|email/i.test(i.id)?'Drafts save in Messages until provider is live':(/ezpass|insurance|background|tracker|accounting|marketing|billing/i.test(i.id)?'Manual workflow stays active until API proves matching and reports':'Manual sync/controlled action stays active until live test passes'),proof=['env keys saved in Render/provider record','endpoint or webhook route saved','controlled live test plan saved','last test date saved','last test result saved','matching/report impact reviewed'].filter(function(_,idx){return idx>=5||missing.indexOf(['envKeys','endpoint','liveTest','lastTestAt','lastTestResult'][idx])>=0});
+    return{id:i.id,title:i.title,status:i.status,tone:ready?'good':(i.tone==='bad'?'bad':'warn'),owner:i.owner||'Owner',data:apiHandoffDataMap(i.id),fallback:fallback,proof:proof.length?proof:['ready for owner approval'],next:i.next,view:i.view,count:i.count,missing:missing}
+  }).sort(function(a,b){var w={bad:0,warn:1,good:2,blue:3};return(w[a.tone]||1)-(w[b.tone]||1)||String(a.title).localeCompare(String(b.title))})
+}
+function apiHandoffChecklistBoard(compact){
+  if(!isOwner())return'';
+  var rows=apiHandoffChecklistRows(),shown=rows.slice(0,compact?8:14),blocked=rows.filter(function(r){return r.tone==='bad'||r.tone==='warn'}).length,ready=rows.filter(function(r){return r.tone==='good'}).length;
+  return '<section class="card section api-handoff-checklist" data-limit="'+(compact?8:14)+'"><div class="section-head"><div><h2>API handoff checklist</h2><p>Before any provider goes live: confirm the data it touches, fallback workflow, env keys, endpoint/webhook, live test, last result, and owner approval path.</p></div><div class="star-command-stats"><span class="warn">'+blocked+' setup</span><span class="good">'+ready+' ready</span></div></div>'+localSearch('Search API handoff by provider, data, fallback, env keys, webhook, live test, matching, accounting, SMS, EZPass, tracker, or Clover')+'<div class="role-command-grid api-handoff-grid">'+shown.map(function(r){return '<div class="role-command-card api-handoff-card '+esc(r.tone)+'"><div class="role-command-top"><div><strong>'+esc(r.title)+'</strong><small>'+esc(r.data)+'</small></div>'+badge(r.status,r.tone)+'</div><div class="muted"><b>Fallback:</b> '+esc(r.fallback)+'</div><div class="muted"><b>Proof needed:</b> '+esc(r.proof.join(', '))+'</div><div class="muted"><b>Next:</b> '+esc(r.next)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(r.view)+'">Open workflow</button><button class="btn gold" data-action="open-api-provider" data-id="'+esc(r.id)+'">Provider</button><button class="btn" data-action="create-api-task" data-id="'+esc(r.id)+'">Task</button></div></div>'}).join('')+'</div><div class="notice">This keeps API work safe: no provider is trusted just because a key exists. It must pass matching, role, report, fallback, and live-test proof first.</div></section>'
+}
+var __woaApiRoadmapHandoffBase=ApiRoadmap;
+ApiRoadmap=function(){
+  __woaApiRoadmapHandoffBase();
+  var main=document.querySelector('.main.view-api-roadmap'),queue=main&&main.querySelector('.api-provider-launch-queue,.api-operational-board');
+  if(main&&!main.querySelector('.api-handoff-checklist')){
+    var wrap=document.createElement('div');wrap.innerHTML=apiHandoffChecklistBoard(false);
+    if(wrap.firstElementChild){if(queue)queue.insertAdjacentElement('afterend',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+  }
+};
+var __woaReportCsvRowsApiHandoffBase=reportCsvRows;
+reportCsvRows=function(){
+  var rows=__woaReportCsvRowsApiHandoffBase().filter(function(row,idx){return idx===0||row[0]!=='API handoff checklist'});
+  apiHandoffChecklistRows().forEach(function(r){reportRow(rows,'API handoff checklist',todayKey(),'WheelsonAuto platform','','','','',r.title,r.missing.length,r.status,'API Roadmap',csvNote(['Data '+r.data,'Fallback '+r.fallback,'Proof '+r.proof.join('/'),'Next '+r.next]))});
+  return rows
+};
+var __woaStarSystemAuditApiHandoffBase=starSystemAuditItems;
+starSystemAuditItems=function(){
+  var base=__woaStarSystemAuditApiHandoffBase(),items=apiHandoffChecklistRows().filter(function(r){return r.tone==='bad'||r.tone==='warn'}).slice(0,4).map(function(r){return{source:'API handoff',title:r.title,tone:r.tone,count:r.missing.length||'Setup',detail:'Touches '+r.data+' | Proof needed: '+r.proof.join(', '),fix:'Open API Roadmap, finish provider checklist, run controlled live test, then save last result before marking connected.',view:'API Roadmap',tab:''}});
+  return items.concat(base).slice(0,12)
+};
+if(view==='API Roadmap'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
