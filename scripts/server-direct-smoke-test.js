@@ -322,6 +322,7 @@ async function main() {
     assert(conflictHealth.status === 200 && conflictHealth.json && Array.isArray(conflictHealth.json.issues), 'System health should return JSON after assignment conflict save. Got ' + conflictHealth.status + ': ' + String(conflictHealth.text || '').slice(0, 220));
     assert(conflictHealth.json.issues.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System health should flag vehicle assignment conflicts and route to Operations / Assigned.');
     const conflictReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
+    assert(conflictReadiness.status === 200 && conflictReadiness.json, 'System readiness should return JSON after assignment conflict save. Got ' + conflictReadiness.status + ': ' + String(conflictReadiness.text || '').slice(0, 220));
     assert(conflictReadiness.json.truthChecks.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System readiness should flag vehicle assignment conflicts and route to Operations / Assigned.');
     const conflictReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(conflictReport.text.includes('Vehicle assignment conflicts') && conflictReport.text.includes('DIRECTCONFLICTVIN'), 'Deep report should include vehicle assignment conflict QA and fleet evidence.');

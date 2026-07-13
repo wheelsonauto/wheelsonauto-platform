@@ -1631,6 +1631,8 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const companyScopeGaps = companyScopeGapRows(scoped);
   const ifleetCoverageRows = ifleetFunctionCoverageRows(scoped);
   const ifleetCoverageGaps = ifleetCoverageRows.filter(row => row.gapCount > 0);
+  const launchReadiness = launchReadinessRows(scoped);
+  const launchReadinessGaps = launchReadiness.filter(row => row.gapCount > 0);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -4938,6 +4940,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const companyScopeGaps = companyScopeGapRows(scoped);
   const ifleetCoverageRows = ifleetFunctionCoverageRows(scoped);
   const ifleetCoverageGaps = ifleetCoverageRows.filter(row => row.gapCount > 0);
+  const launchReadiness = launchReadinessRows(scoped);
+  const launchReadinessGaps = launchReadiness.filter(row => row.gapCount > 0);
   const verificationItems = closeoutVerificationItems(scoped);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -4971,6 +4975,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.', 'Operations', 'Service'),
     truthCheck('claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.', 'Claims & Issues'),
     truthCheck('company_scope', 'Company scope', companyScopeGaps.length, companyScopeGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'When more than one company/store exists, fleet, customers, payments, messages, service, claims, staff, and portal records must be scoped to a saved company before franchise/subscription use.', 'Companies'),
+    truthCheck('launch_readiness', 'Launch readiness', launchReadinessGaps.length, launchReadinessGaps.some(row => /payment|customer|fleet|defense|recovery/i.test(String(row.key || row.title || ''))) ? 'critical' : 'warning', 'Owner launch readiness must be clean across payments, customer/fleet truth, defense packets, recovery ledger, Messages/Star, API handoff, and role portals before provider/API work is treated as final.', 'Dashboard'),
     truthCheck('ifleet_function_coverage', 'iFleet function coverage', ifleetCoverageGaps.length, ifleetCoverageGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Every iFleet-style module we talked about must have a real WheelsonAuto workflow, connected data, role access, reports, and honest API/provider status before the platform is considered final.', 'Dashboard'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
@@ -5001,6 +5006,14 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     routes,
     records,
     truthChecks,
+    launchReadiness,
+    launchReadinessGaps,
+    ifleetCoverage: ifleetCoverageRows,
+    ifleetCoverageGaps,
+    stopCondition: {
+      clear: dataCriticalIssues.length === 0 && launchReadinessGaps.length === 0 && ifleetCoverageGaps.filter(row => row.tone === 'bad').length === 0,
+      rule: 'Stop only when checks pass, major buttons work, data connections are verified, role access is correct, desktop/phone layouts are clean, duplicate/confusing windows are removed, and payment/customer/fleet truth stays connected.'
+    },
     autoSync: autoSyncStatus,
     autopay: woaAutopayStatus
   };
