@@ -844,6 +844,30 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function messageCommandPanel(){
+  var status=messagingStatus(),rows=fastMessageRows(500),stats=fastMessageStats(rows),threads=fastMessageThreads(240),queue=fastMessageQueueRows(),drafts=fastStarAiDrafts(180),starNeeds=drafts.filter(function(m){var p=m.aiPlan||{};return p.approvalRequired||p.needsHuman}).length,provider=status.configured?'Live SMS':(status.enabled?'SMS draft mode':'Messaging off'),emailMode=status.emailConfigured?'Live email':(status.emailEnabled?'Email draft mode':'Email off'),latest=threads[0]&&threads[0].last||{},latestCustomer=threads[0]&&threads[0].customer||'No open thread';
+  var cards=[
+    {label:'Inbox',value:threads.length,detail:stats.inbound+' customer reply / inbound item(s)',tone:threads.length?'blue':'good',tab:'Inbox'},
+    {label:'Follow-up',value:queue.length,detail:'Failed payments, card setup, maintenance, claims, portal, and open links',tone:queue.some(function(q){return q.tone==='bad'})?'bad':queue.length?'warn':'good',tab:'Queue'},
+    {label:'Star review',value:starNeeds,detail:starNeeds?'Drafts/actions waiting for admin review':'No sensitive Star approvals waiting',tone:starNeeds?'warn':'good',tab:'Star'},
+    {label:'Providers',value:status.configured||status.emailConfigured?'Ready':'Setup',detail:provider+' / '+emailMode,tone:status.configured||status.emailConfigured?'good':'warn',tab:'Setup'}
+  ];
+  return '<section class="card section message-command-panel no-auto-search"><div class="message-command-top"><div><h2>Message command</h2><p>Real SMS/email inbox workflow: open the thread, reply here, ask Star, or save a draft when providers are not live.</p></div><div class="actions"><button class="btn primary" data-action="compose-message" data-id="new">New text/email</button><button class="btn gold" data-tab="Star">Ask Star</button><button class="btn" data-tab="Setup">Setup</button></div></div><div class="message-command-grid">'+cards.map(function(c){return '<button class="message-command-card '+esc(c.tone)+'" data-tab="'+esc(c.tab)+'"><span>'+esc(c.label)+'</span><strong>'+esc(c.value)+'</strong><small>'+esc(c.detail)+'</small></button>'}).join('')+'</div><div class="message-command-current"><div><strong>Latest thread</strong><span>'+esc(latestCustomer)+'</span><small>'+esc([latest.date||shortDate(latest.createdAt),latest.channel||'',latest.status||latest.direction||''].filter(Boolean).join(' - ')||'No recent customer thread selected')+'</small></div><div><strong>Provider mode</strong><span>'+esc(provider)+'</span><small>'+esc(status.configured?'Texts send through the connected provider.':'Texts save as drafts until hosted SMS is connected; calls stay on T-Mobile.')+'</small></div><div><strong>Email mode</strong><span>'+esc(emailMode)+'</span><small>'+esc(status.emailConfigured?'Emails can send live through the configured provider.':'Emails save as drafts until Resend/SendGrid is connected.')+'</small></div></div></section>'
+}
+var __woaMessagesCommandPanelBase=Messages;
+Messages=function(){
+  __woaMessagesCommandPanelBase();
+  if(view==='Messages'){
+    var main=document.querySelector('.main.view-messages'),stats=main&&main.querySelector('.compact-message-stats,.tabs.message-tabs,.message-status-strip,.message-inbox-layout,.message-board');
+    if(main&&!main.querySelector('.message-command-panel')){
+      var wrap=document.createElement('div');
+      wrap.innerHTML=messageCommandPanel();
+      if(stats)stats.insertAdjacentElement('beforebegin',wrap.firstElementChild);
+      else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);
+    }
+  }
+}
+if(view==='Messages')queueRender();
 function safeRenderErrorText(err){
   var raw='';
   try{raw=String((err&&(err.message||err.reason&&err.reason.message))||err||'Display error')}catch(e){raw='Display error'}
