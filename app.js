@@ -888,6 +888,54 @@ Dashboard=function(){
   }
 }
 if(view==='Dashboard')queueRender();
+function customerVehicleTextGaps(){
+  var fleetNames={};
+  (db.vehicles||[]).forEach(function(v){var key=normName(vehicleName(v));if(key)fleetNames[key]=true});
+  var rows=[];
+  function add(source,row,name,vehicle){
+    name=String(name||'').trim();vehicle=String(vehicle||'').trim();
+    if(!name||!vehicle)return;
+    if(row&&row.vehicleId)return;
+    if(fleetNames[normName(vehicle)]&&normName(vehicle)!==normName(name))return;
+    rows.push({source:source,id:row&&row.id||'',customer:name,vehicle:vehicle,tone:normName(vehicle)===normName(name)?'bad':'warn'});
+  }
+  (db.customers||[]).forEach(function(c){add('Customer',c,c.name||c.customer,c.vehicle)});
+  (db.contracts||[]).forEach(function(c){if(String(c.status||'').toLowerCase().indexOf('removed')<0)add('Customer file',c,c.customer,c.vehicle)});
+  (db.recurringPayments||[]).forEach(function(r){var s=String(r.status||'').toLowerCase();if(s.indexOf('removed')<0&&s.indexOf('history')<0)add('Autopay',r,r.customer,r.vehicle)});
+  var seen={};
+  return rows.filter(function(r){var key=normName(r.source+' '+r.customer+' '+r.vehicle);if(seen[key])return false;seen[key]=true;return true}).slice(0,12)
+}
+var __woaPaymentTruthVehicleTextBase=paymentTruthQueueRows;
+paymentTruthQueueRows=function(){
+  var rows=__woaPaymentTruthVehicleTextBase();
+  customerVehicleTextGaps().forEach(function(g){
+    rows.push({tone:g.tone,type:'Customer vehicle text',title:g.customer,detail:g.source+' vehicle text is "'+g.vehicle+'", but that is not linked to a real fleet vehicle. Open the file and choose the correct car by VIN/tag/tracker.',action:customerFileButton(g.customer,'Fix file')+'<button class="btn" data-view="Operations" data-tab="Fleet">Fleet</button>'})
+  });
+  return rows
+}
+var __woaStarHealthVehicleTextBase=starSystemHealthPanelFresh;
+starSystemHealthPanelFresh=function(){
+  var html=__woaStarHealthVehicleTextBase(),gaps=customerVehicleTextGaps();
+  if(!gaps.length)return html;
+  var extra='<button class="item" data-view="Payments" data-tab="Active"><strong>'+esc(gaps.length)+'</strong><span>Customer vehicle text</span><small>Customer records have vehicle text that is not a linked fleet car. Fix these before assignment, service, claims, messages, or Star can trust the file.</small><i class="'+(gaps.some(function(g){return g.tone==='bad'})?'bad':'warn')+'"></i></button>';
+  return html.replace('<div class="star-summary-grid">','<div class="star-summary-grid">'+extra)
+}
+var __woaStarExportVehicleTextBase=starSystemHealthExport;
+starSystemHealthExport=function(rows,roster){
+  __woaStarExportVehicleTextBase(rows,roster);
+  var gaps=customerVehicleTextGaps();
+  reportRow(rows,'Star QA',todayKey(),'All customers','','','','','Customer vehicle text',gaps.length,gaps.length?'Review':'Clean','Star QA',gaps.length?'Customer records where vehicle text does not match a linked fleet vehicle: '+gaps.map(function(g){return g.customer+' -> '+g.vehicle}).join(' | '):'Customer vehicle text matches linked fleet records')
+}
+var __woaLaunchProofVehicleTextBase=ifleetLaunchProofItems;
+ifleetLaunchProofItems=function(){
+  var gaps=customerVehicleTextGaps();
+  return __woaLaunchProofVehicleTextBase().map(function(i){
+    if(i.title==='Customer/fleet truth'&&gaps.length){
+      return Object.assign({},i,{tone:'warn',count:Number(i.count||0)+gaps.length,proof:i.proof+' Also clear customer records where vehicle text is not a linked fleet car.'})
+    }
+    return i
+  })
+}
 function messageCommandPanel(){
   var status=messagingStatus(),rows=fastMessageRows(500),stats=fastMessageStats(rows),threads=fastMessageThreads(240),queue=fastMessageQueueRows(),drafts=fastStarAiDrafts(180),starNeeds=drafts.filter(function(m){var p=m.aiPlan||{};return p.approvalRequired||p.needsHuman}).length,provider=status.configured?'Live SMS':(status.enabled?'SMS draft mode':'Messaging off'),emailMode=status.emailConfigured?'Live email':(status.emailEnabled?'Email draft mode':'Email off'),latest=threads[0]&&threads[0].last||{},latestCustomer=threads[0]&&threads[0].customer||'No open thread';
   var cards=[

@@ -727,6 +727,7 @@ const customerPortalCommandBoard = finalFunctionSlice(app, 'customerPortalComman
 const customerPortalButton = finalFunctionSlice(app, 'customerPortalButton');
 const paymentCustomerPortalCard = finalFunctionSlice(app, 'paymentCustomerCard');
 const recurringCardActionButtons = finalFunctionSlice(app, 'cardActionButtons');
+const customerVehicleTextGaps = finalFunctionSlice(app, 'customerVehicleTextGaps');
 assertIncludes('Settings customer portal accounts', settings, ['Customer portal logins', 'new-customer-login', '/customer/login']);
 assertIncludes('Customer portal command board', customerPortalCommandBoard + settings + app + css, ['Customer portal command', 'Login ready', 'Needs password', 'Active gaps', 'Reset requested', 'Card setup links', 'Portal messages', 'Proof uploads', 'Disabled logins', 'Customer portal access is scoped', 'customer-portal-command-board', 'customer-portal-command-grid', 'customer-portal-command-card']);
 assertIncludes('Settings staff password help', settings + server, ['Staff accounts', 'Reset requested', 'staff_password_reset', '/forgot', 'Reset staff access']);
@@ -753,6 +754,7 @@ assertIncludes('Customer portal account form', customerLoginForm, ['customerLogi
 assertIncludes('Customer portal action helper', customerPortalButton, ['open-customer-login', 'new-customer-login', 'data-name']);
 assertIncludes('Payment customer portal card actions', paymentCustomerPortalCard, ['customerPortalButton', 'Portal']);
 assertIncludes('Recurring customer portal card actions', recurringCardActionButtons, ['customerPortalButton', 'Portal']);
+assertIncludes('Customer vehicle text truth layer', customerVehicleTextGaps + app, ['Customer vehicle text', 'not linked to a real fleet vehicle', 'Open the file and choose the correct car by VIN/tag/tracker', 'Customer records where vehicle text does not match a linked fleet vehicle']);
 
 const staffServiceCard = finalFunctionSlice(app, 'staffServiceCard');
 const staffClaimCard = finalFunctionSlice(app, 'staffClaimCard');
