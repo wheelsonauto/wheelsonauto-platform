@@ -436,6 +436,7 @@ function ownerSmoke() {
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
     ['Operations service', 'Operations', 'Service', ['Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Claims, tolls & issues', 'staff-card-board']],
+    ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Inspection command', 'Service route', 'Open service work'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star system auditor', 'Customer portal requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Customer portal requests', 'Follow-up queue', 'Search portal requests'], true],

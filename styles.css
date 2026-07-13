@@ -3991,6 +3991,42 @@ body.fast-tab-switch .admin-shell .section{
   font-weight:950;
   line-height:1;
 }
+.service-route-board{
+  background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(23,29,27,.93));
+  border-color:rgba(240,211,148,.22);
+}
+.service-route-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
+.service-route-card{
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+  box-shadow:0 14px 28px rgba(0,0,0,.16);
+  transition:transform .16s ease,border-color .16s ease,background .16s ease;
+}
+.service-route-card:hover{
+  transform:translateY(-1px);
+  border-color:rgba(240,211,148,.30);
+  background:rgba(240,211,148,.08);
+}
+.service-route-card.bad{border-left:3px solid #ff705c}
+.service-route-card.warn{border-left:3px solid #f0d394}
+.service-route-card.blue{border-left:3px solid #58a6ff}
+.service-route-card.good{border-left:3px solid #7ee787}
+.service-route-card strong{
+  color:#f7df9b;
+}
+.service-route-card .muted{
+  color:#c8d2dc;
+  line-height:1.35;
+  overflow-wrap:anywhere;
+}
 .company-launch-board{
   background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(30,27,22,.93));
   border-color:rgba(240,211,148,.20);
@@ -4344,6 +4380,7 @@ body.fast-tab-switch .admin-shell .section{
   .api-operational-grid,
   .api-provider-launch-grid,
   .service-inspection-grid,
+  .service-route-grid,
   .company-launch-grid,
   .notification-command-grid,
   .customer-portal-command-grid,
@@ -4360,6 +4397,7 @@ body.fast-tab-switch .admin-shell .section{
   .api-operational-grid,
   .api-provider-launch-grid,
   .service-inspection-grid,
+  .service-route-grid,
   .company-launch-grid,
   .notification-command-grid,
   .customer-portal-command-grid,

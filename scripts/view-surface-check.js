@@ -425,12 +425,15 @@ assertIncludes('Operations surface', operations, [
 
 const maintenance = finalFunctionSlice(app, 'Maintenance');
 const serviceInspectionBoard = finalFunctionSlice(app, 'serviceInspectionBoard');
+const serviceRouteItems = finalFunctionSlice(app, 'serviceRouteItems');
+const serviceRouteBoard = finalFunctionSlice(app, 'serviceRouteBoard');
 assertIncludes('Maintenance surface', maintenance, [
   'Open',
   'Overdue',
   'Monthly',
   'Completed',
   'staffServiceCard',
+  'serviceRouteBoard',
   'Search service by customer, VIN, tag, tracker, issue'
 ]);
 assertIncludes('Service inspection command board', serviceInspectionBoard + maintenance + css, [
@@ -446,6 +449,22 @@ assertIncludes('Service inspection command board', serviceInspectionBoard + main
   'service-inspection-board',
   'service-inspection-grid',
   'service-inspection-card'
+]);
+assertIncludes('Service route board', serviceRouteItems + serviceRouteBoard + maintenance + css, [
+  'Service route',
+  'Next shop work in order',
+  'overdue',
+  'due today',
+  'monthly/oil cycle',
+  'vehicleIdentityLine',
+  'complete-maintenance',
+  'open-maintenance',
+  'open-vehicle',
+  'customerFileButton',
+  'Search service route by customer',
+  'service-route-board',
+  'service-route-grid',
+  'service-route-card'
 ]);
 
 const fleet = finalFunctionSlice(app, 'Fleet');

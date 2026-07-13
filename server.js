@@ -1224,7 +1224,16 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const statementRequestRows = starApprovalRows.filter(item => item.action === 'send_account_statement');
   const verificationItems = closeoutVerificationItems(data);
   const assignmentConflicts = assignmentConflictRows(data);
-  const auditEvents = (data.auditLogs || []).filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
+  const auditSource = (data.auditLogs || []).slice().sort((a, b) => String(b.at || b.date || b.createdAt || '').localeCompare(String(a.at || a.date || a.createdAt || '')));
+  const sensitiveAuditMatch = row => /password help|customer portal|star ai|message|staff|card|autopay|closeout/i.test(String([row.action, row.details, row.source].filter(Boolean).join(' ')));
+  let auditEvents = auditSource.filter(row => recordDateKey(row.at || row.date || row.createdAt) === dateKeyValue).slice(0, 12);
+  if (!auditEvents.some(sensitiveAuditMatch)) {
+    const recentSensitive = auditSource.filter(sensitiveAuditMatch).slice(0, 12);
+    recentSensitive.forEach(row => {
+      if (!auditEvents.some(existing => String(existing.id || existing.at || existing.action || '') === String(row.id || row.at || row.action || ''))) auditEvents.push(row);
+    });
+    auditEvents = auditEvents.slice(0, 12);
+  }
   const auditRows = auditEvents.map(row => ({
     at: row.at || row.date || row.createdAt || '',
     action: row.action || 'Audit',
