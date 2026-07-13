@@ -169,7 +169,7 @@ if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[k
 if (!/organizationId:\s*userOrganizationId\(user\)/.test(server)) {
   fail('Staff write merges should stamp incoming rows to the signed-in company.');
 }
-if (!/changed:\s*changes\.length > 0/.test(server) || !/changes \}/.test(server)) {
+if (!/changed:\s*changes\.length > 0/.test(server) || !/changes,\s*version:\s*await dataVersion\(\)/.test(server)) {
   fail('State save route should return changed status and change details.');
 }
 ['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/tasks', '/api/account/password'].forEach(route => {

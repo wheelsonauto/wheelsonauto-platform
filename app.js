@@ -2,6 +2,7 @@ var fallbackData={vehicles:[],applications:[],customers:[],contracts:[],payments
 var isPublic=!!window.__PUBLIC_MODE__;var currentUser=window.__CURRENT_USER__||{name:'Owner admin',role:'Owner',homeView:'Dashboard',access:'Full platform access'};var db=normalize(window.__SERVER_DATA__||fallbackData);var nav=navForRole();var view=isPublic?'Apply':(currentUser.homeView||nav[0]||'Dashboard');var tab='Board';var dashboardTab='Dues';var activeMessageThreadKey=localStorage.getItem('woa-active-message-thread')||'';var pendingThreadReplyDraft=null;var stages=['New','Docs needed','Approved','Contract'];var root=document.getElementById('root');var LIVE_REFRESH_MS=5000;var API_AUTO_SYNC_MS=60000;var syncInFlight=false;var lastApiAutoSync=Number(localStorage.getItem('woa-last-api-auto-sync')||0);var lastDataFingerprint=JSON.stringify(db);
 
 function normalize(d){d=Object.assign({},fallbackData,d||{});d.integrations=Object.assign({},fallbackData.integrations,d.integrations||{});d.integrations.clover=Object.assign({},fallbackData.integrations.clover,d.integrations.clover||{});d.integrations.shopify=Object.assign({},fallbackData.integrations.shopify,d.integrations.shopify||{});d.integrations.messaging=Object.assign({},fallbackData.integrations.messaging,d.integrations.messaging||{});d.vehicles=(d.vehicles||[]).map(function(v,i){var p=(v.name||'').split(' ');v.id=v.id||'veh-'+i;v.year=v.year||p[0]||'';v.make=v.make||p[1]||'';v.model=v.model||p.slice(2).join(' ')||'';v.price=v.price||((v.rate||229)*110);v.mileage=v.mileage||v.odometer||0;v.stock=v.stock||v.plate||('STK-'+(i+1));v.status=v.status==='Available'?'Ready':(v.status||'Ready');return v});d.applications=(d.applications||[]).map(function(a,i){var st=a.stage||a.status||'New';if(st==='Needs review')st='New';if(st==='Docs requested')st='Docs needed';a.id=a.id||'app-'+i;a.name=a.name||a.customer||'Applicant';a.stage=st;a.status=st;a.down=Number(a.down==null?0:a.down);a.income=Number(a.income)||0;a.score=a.score||estimate(a.income,a.down);a.submittedAt=a.submittedAt||a.date||'Today';return a});return d}
+function renderClock(){return typeof performance!=='undefined'&&performance&&typeof performance.now==='function'?performance.now():Date.now()}
 function ensureCustomerFile(name){name=String(name||'').trim();if(!name)return null;db.contracts=db.contracts||[];db.customers=db.customers||[];var key=normName(name);var existing=db.contracts.find(function(c){return normName(c.customer)===key});if(existing)return existing;var cust=findCustomerByName(name)||{};var rec=findRecurringByCustomer(name)||{};var car=findVehicleByCustomer(name)||findVehicle(cust.vehicleId||rec.vehicleId)||(db.vehicles||[]).find(function(v){return normName(vehicleName(v))===normName(cust.vehicle||rec.vehicle)});var vehicle=car?vehicleName(car):(cust.vehicle||rec.vehicle||rec.plan||'No vehicle linked');var amount=Number(cust.weeklyAmount||cust.amount||rec.amount||rec.weeklyAmount||0);var status=String(rec.status||cust.status||'Active');if(status.toLowerCase().indexOf('removed')>=0)status='Removed';else if(status.toLowerCase().indexOf('setup')>=0||status.toLowerCase().indexOf('waiting')>=0)status='Pending';else status='Active';var file={id:'con-'+Date.now(),customer:name,vehicle:vehicle,vehicleId:car&&car.id||cust.vehicleId||rec.vehicleId||'',balance:Number(cust.balance||rec.balance||0),weekly:amount,autopay:rec.status||cust.autopay||'WheelsonAuto file created from payment/customer record',paymentProvider:rec.provider||'Clover',status:status,phone:cust.phone||rec.phone||'',email:cust.email||rec.email||'',notes:[cust.notes,rec.notes,'Customer file created automatically so this customer can be managed from WheelsonAuto.'].filter(Boolean).join('\n'),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};db.contracts.unshift(file);var customerPatch={name:name,phone:file.phone,email:file.email,vehicle:vehicle,vehicleId:file.vehicleId,weeklyAmount:amount,licensePlate:car&&car.plate||car&&car.stock||cust.licensePlate||rec.licensePlate||'',plate:car&&car.plate||car&&car.stock||cust.plate||rec.plate||'',vin:car&&car.vin||cust.vin||rec.vin||'',tempTag:car&&car.tempTag||cust.tempTag||rec.tempTag||'',tracker:car&&car.tracker||cust.tracker||rec.tracker||'',source:cust.source||'WheelsonAuto recovered file'};var savedCust=findCustomerByName(name);if(savedCust)Object.assign(savedCust,customerPatch);else db.customers.unshift(Object.assign({id:'cus-'+Date.now()},customerPatch));if(car&&!normName(car.currentCustomer)&&status!=='Removed'){car.currentCustomer=name;car.status='Rented';car.manuallyEditedAt=new Date().toISOString()}if(rec&&rec.id)updateRecurringState(rec.id,{vehicle:vehicle,vehicleId:file.vehicleId,vin:customerPatch.vin,licensePlate:customerPatch.licensePlate,plate:customerPatch.plate,tempTag:customerPatch.tempTag,tracker:customerPatch.tracker});return file}
 function esc(v){return String(v==null?'':v).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('"').join('&quot;')}function money(n){return '$'+Number(n||0).toLocaleString()}function paymentLinkAgeHours(r){var raw=r&&(r.createdAt||r.date||r.updatedAt)||'',d=raw?new Date(raw):null;if(!d||isNaN(d.getTime()))return 0;return Math.max(0,Math.floor((Date.now()-d.getTime())/3600000))}function paymentLinkAgeLabel(r){var h=paymentLinkAgeHours(r);if(h>=48)return Math.floor(h/24)+' days open';if(h>=24)return'1 day open';if(h>=1)return h+' hour'+(h===1?'':'s')+' open';return'New link'}function stalePaymentLinks(rows){return(rows||[]).filter(function(r){return paymentLinkAgeHours(r)>=24})}function val(id){return document.getElementById(id)?document.getElementById(id).value:''}function now(){return new Date().toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}function estimate(income,down){var s=45;if(income>=2500)s+=20;if(income>=4000)s+=10;if(down>=1000)s+=15;if(down>=2000)s+=10;return Math.min(98,s)}function vehicleName(v){return [v.year,v.make,v.model].filter(Boolean).join(' ')||v.name||'Vehicle'}function isInventoryVehicle(v){var s=String(v.status||'').toLowerCase();return !normName(v.currentCustomer)&&s!=='rented'&&s!=='removed'}
 function tone(s){if(['Active','Approved','Ready','Paid','Received','Submitted','Connected'].indexOf(s)>=0)return'good';if(['Docs needed','Due','Scheduled','Setup needed','Review','Pending pickup','New'].indexOf(s)>=0)return'warn';if(['Failed','Failed retry','Not connected','Maintenance'].indexOf(s)>=0)return'bad';return'blue'}function badge(s,t){return '<span class="tag '+(t||tone(s))+'">'+esc(s)+'</span>'}function notify(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2400)}function csvCell(v){return '"'+String(v==null?'':v).split('"').join('""')+'"'}function downloadReportCsvLegacy(){var rows=[["Section","Date","Customer","Vehicle","Type","Amount","Status","Notes"]];(db.payments||[]).forEach(function(p){rows.push(['Payment',p.date||'',p.customer||'',p.vehicle||'',p.method||p.type||'Payment',p.amount||0,p.status||'',p.notes||p.source||''])});(db.claims||[]).forEach(function(c){rows.push(['Claim / issue',c.createdAt||c.nextFollowUp||'',c.customer||'',c.vehicle||'',c.type||'Issue',c.amount||0,c.status||'',[c.notes,c.reference||c.plate,c.provider||c.agency,c.externalId||c.caseId||c.disputeId,c.deadline?'Deadline '+c.deadline:'',c.responsibility?'Responsible '+c.responsibility:'',c.evidence?'Evidence '+c.evidence:''].filter(Boolean).join(' | ')])});(db.maintenance||[]).forEach(function(m){rows.push(['Maintenance',m.completedAt||m.due||m.nextDue||'',m.customer||'',m.vehicle||'',m.type||'Maintenance',m.cost||0,m.status||'',m.issue||m.notes||''])});(db.vehicles||[]).forEach(function(v){rows.push(['Fleet','',v.currentCustomer||'',vehicleName(v),'Vehicle',v.rate||v.price||0,v.status||'',[(v.plate||v.stock||''),(v.tempTag?'Old temp '+v.tempTag:''),(v.tracker?'Tracker '+v.tracker:'')].filter(Boolean).join(' | ')])});(db.applications||[]).forEach(function(a){rows.push(['Application',a.submittedAt||'',a.name||'',a.vehicle||'','Application',a.down||0,a.stage||a.status||'',a.notes||a.phone||''])});var csv=rows.map(function(r){return r.map(csvCell).join(',')}).join('\\n');var blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='wheelsonauto-report-'+todayKey()+'.csv';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);notify('Report CSV downloaded')}
@@ -1826,12 +1827,16 @@ function render(){
   if(!window.__woaBootReady)return;
   if(view==='Apply')return Apply();
   if(nav.indexOf(view)<0)view=currentUser.homeView||nav[0]||'Dashboard';
+  var renderStarted=renderClock();
   __woaPerformanceRenderMemo={};
   try{
     ({'Dashboard':Dashboard,'Today':Today,'Applications':Applications,'Operations':Operations,'Fleet':Fleet,'Contracts':Contracts,'Customers':Contracts,'Payments':Payments,'Dispatch':Dispatch,'Maintenance':Maintenance,'Documents':Documents,'Tolls':Tolls,'Insurance':Insurance,'Marketing':Marketing,'Claims & Issues':ClaimsIssues,'Mechanic Portal':MechanicPortal,'Manager Portal':ManagerPortal,'Messages':Messages,'Reports':Reports,'Utilities':Utilities,'Companies':Organizations,'API Roadmap':ApiRoadmap,'Website':Website,'Settings':Settings}[view]||Dashboard)();
     scrubRoleUi()
   }finally{
-    __woaPerformanceRenderMemo=null
+    __woaPerformanceRenderMemo=null;
+    var metric={view:view,tab:tab,ms:Math.round((renderClock()-renderStarted)*10)/10,at:new Date().toISOString()};
+    window.__woaLastRenderMetric=metric;
+    window.__woaRenderMetrics=(window.__woaRenderMetrics||[]).concat(metric).slice(-30)
   }
 }
 
@@ -1954,10 +1959,36 @@ openContract=function(id){
 // A customer file already updates its linked customer, vehicle, autopay, and
 // service rows before saving. Avoid a second full reconciliation and download.
 var __woaStateSaveInFlight=false;
+var __woaLastDataVersion=window.__SERVER_DATA_VERSION__||'';
 var __woaRefreshOutsideSaveBase=refreshData;
 refreshData=async function(silent){
   if(__woaStateSaveInFlight)return false;
-  return __woaRefreshOutsideSaveBase(silent)
+  if(isPublic)return false;
+  try{
+    if(silent){
+      var versionResponse=await fetch('/api/state/version',{headers:{'Accept':'application/json'},cache:'no-store'});
+      if(versionResponse.ok){
+        var versionPayload=await versionResponse.json(),nextVersion=String(versionPayload.version||'');
+        if(nextVersion&&nextVersion===__woaLastDataVersion)return true;
+        if(nextVersion)__woaLastDataVersion=nextVersion
+      }
+    }
+    var response=await fetch('/api/state',{headers:{'Accept':'application/json'},cache:'no-store'});
+    if(!response.ok)return false;
+    var fresh=normalize(await response.json()),fingerprint=JSON.stringify(fresh);
+    if(fingerprint===lastDataFingerprint){
+      if(!silent)notify('Already up to date');
+      return true
+    }
+    db=fresh;
+    lastDataFingerprint=fingerprint;
+    var active=document.activeElement,editing=active&&/INPUT|TEXTAREA|SELECT/.test(active.tagName);
+    if(!silent){render();notify('Dashboard refreshed')}
+    else if(!editing)queueRender();
+    return true
+  }catch(error){
+    return false
+  }
 };
 save=async function(){
   var payload='';
@@ -1965,12 +1996,33 @@ save=async function(){
   try{
     payload=JSON.stringify(db);
     var response=await fetch('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:payload});
-    if(response.ok)lastDataFingerprint=payload;
+    if(response.ok){
+      lastDataFingerprint=payload;
+      try{var result=await response.json();if(result.version)__woaLastDataVersion=String(result.version)}catch(ignore){}
+    }
     return response.ok
   }catch(error){
     localStorage.setItem('woa-platform-backup',payload||JSON.stringify(db));
     return false
   }finally{
     __woaStateSaveInFlight=false
+  }
+};
+
+// Measure the runtime render assignment that is active after all progressive
+// feature layers load. Keep the latest samples available for browser smoke tests.
+var __woaMeasuredRenderBase=render;
+render=function(){
+  if(!window.__woaBootReady)return;
+  var renderStarted=renderClock(),previousMemo=__woaPerformanceRenderMemo;
+  __woaPerformanceRenderMemo={};
+  try{
+    return __woaMeasuredRenderBase()
+  }finally{
+    __woaPerformanceRenderMemo=previousMemo;
+    var metric={view:view,tab:tab,ms:Math.round((renderClock()-renderStarted)*10)/10,at:new Date().toISOString()};
+    window.__woaLastRenderMetric=metric;
+    window.__woaRenderMetrics=(window.__woaRenderMetrics||[]).concat(metric).slice(-30);
+    if(document.documentElement&&document.documentElement.setAttribute)document.documentElement.setAttribute('data-woa-render-metric',JSON.stringify(metric))
   }
 };

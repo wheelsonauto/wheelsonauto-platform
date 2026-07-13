@@ -56,7 +56,7 @@ const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-fast-tabs-6">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-state-poll-9">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -427,6 +427,14 @@ async function readData() {
     } catch {
       return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], integrations: { clover: {}, shopify: {} } };
     }
+  }
+}
+async function dataVersion() {
+  try {
+    const stat = await fs.stat(DATA_FILE);
+    return Math.trunc(stat.mtimeMs) + '-' + stat.size;
+  } catch {
+    return 'missing';
   }
 }
 let writeDataQueue = Promise.resolve();
@@ -4755,6 +4763,7 @@ customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
 };
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
+  const serverDataVersion = await dataVersion();
   const clientData = publicMode ? {
     vehicles: (data.vehicles || []).filter(v => ['Ready', 'Available', 'Coming soon', 'Pending application'].includes(v.status)),
     business: data.business || { name: 'WheelsonAuto', website: 'wheelsonauto.com' },
@@ -4775,7 +4784,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
   }
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
   const currentUser = publicMode ? null : (user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
-  const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
+  const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__SERVER_DATA_VERSION__=' + JSON.stringify(serverDataVersion) + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
 async function staticFile(res, pathname) {
@@ -8402,6 +8411,7 @@ const server = http.createServer(async (req, res) => {
     const user = sessionUser(req);
     if (!user) return send(res, 200, loginPage());
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
+    if (url.pathname === '/api/state/version' && req.method === 'GET') return json(res, 200, { ok: true, version: await dataVersion() });
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = JSON.parse(await readBody(req) || '{}');
@@ -8412,7 +8422,7 @@ const server = http.createServer(async (req, res) => {
       await queueStateChangeNotifications(current, nextState, user);
       if (changes.length) appendAuditLog(nextState, user, 'Platform state saved', changes);
       await writeData(nextState);
-      return json(res, 200, { ok: true, changed: changes.length > 0, changes });
+      return json(res, 200, { ok: true, changed: changes.length > 0, changes, version: await dataVersion() });
     }
     if (url.pathname === '/api/messages/status' && req.method === 'GET') {
       const data = await readData();
