@@ -1442,3 +1442,48 @@ starSystemAuditItems=function(){
   return review.concat(base).slice(0,12)
 };
 if(view==='Claims & Issues'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
+function communicationRuleRows(){
+  var s=messagingStatus(),sms=s.configured?'Live SMS':'Draft until SMS API',email=s.emailConfigured?'Live email':'Draft until email API',star=s.aiEnabled?(s.aiConfigured?'Star provider live':'Star rules fallback'):'Star off';
+  return [
+    {title:'Payment due today',trigger:'Customer is due today and not paid/failed yet',channel:sms,tone:s.configured?'good':'warn',star:star,approval:'Safe reminder can be drafted; charge still admin-only',view:'Payments',tab:'Today'},
+    {title:'Failed once / retry',trigger:'Saved-card charge failed once and retry is pending',channel:sms,tone:'warn',star:star,approval:'Draft reminder; do not remove or edit autopay without admin',view:'Messages',tab:'Queue'},
+    {title:'Failed twice / contact',trigger:'Second failure or contact-needed payment state',channel:sms,tone:'bad',star:star,approval:'Human review before stronger message or account action',view:'Payments',tab:'Today'},
+    {title:'Card setup or change',trigger:'Open card setup/change link or card not chargeable',channel:sms,tone:s.configured?'good':'warn',star:star,approval:'Safe link can be drafted; card removal/change needs admin',view:'Messages',tab:'Queue'},
+    {title:'Maintenance reminder',trigger:'Monthly inspection, oil cycle, or open service due',channel:sms,tone:s.configured?'good':'blue',star:star,approval:'Manager/admin can send service reminder; mechanic has no messages',view:'Maintenance',tab:'Open'},
+    {title:'Toll / claim recovery',trigger:'Recovery ledger row is owed, unmatched, or proof-needed',channel:sms,tone:'warn',star:star,approval:'Admin confirms recovery link, toll/claim charge, dispute, or receipt',view:'Claims & Issues',tab:'Open'},
+    {title:'Application approved',trigger:'Applicant moves to approved and needs contract/autopay setup',channel:sms,tone:s.configured?'good':'blue',star:star,approval:'Draft approval and next steps; contract/e-sign remains staff-confirmed',view:'Applications',tab:'Approved'},
+    {title:'Daily closeout',trigger:'End-of-day money, failed, pending, paid-outside, and open-link review',channel:email,tone:s.emailConfigured?'good':'warn',star:star,approval:'Owner signs off before closeout email is sent',view:'Reports',tab:'Summary'},
+    {title:'Customer portal inbound',trigger:'Customer sends message, proof, receipt request, issue, or card request',channel:[sms,email].join(' / '),tone:s.configured||s.emailConfigured?'good':'warn',star:star,approval:'Star drafts reply; money/card/removal actions require admin',view:'Messages',tab:'Inbox'}
+  ]
+}
+function communicationRulesBoard(){
+  if(roleName()==='mechanic')return'';
+  var rows=communicationRuleRows(),live=rows.filter(function(r){return /Live/.test(r.channel)}).length,review=rows.filter(function(r){return /admin|Human|Owner/i.test(r.approval)}).length;
+  return '<section class="card section communication-rules-board" data-limit="9"><div class="section-head"><div><h2>Communication rules</h2><p>What Star, SMS, email, manager, and admin are allowed to do for payments, service, claims, applications, closeout, and portal messages.</p></div><div class="star-command-stats"><span class="good">'+live+' live</span><span class="warn">'+review+' approval</span></div></div>'+localSearch('Search communication rules by payment, failure, card, maintenance, toll, claim, application, closeout, portal, SMS, email, or Star')+'<div class="role-command-grid communication-rules-grid">'+rows.map(function(r){return '<div class="role-command-card communication-rule-card '+esc(r.tone)+'"><div class="role-command-top"><div><strong>'+esc(r.title)+'</strong><small>'+esc(r.trigger)+'</small></div>'+badge(r.channel,r.tone)+'</div><div class="muted">'+esc(r.star+' | '+r.approval)+'</div><div class="actions"><button class="btn primary" data-view="'+esc(r.view)+'" '+(r.tab?'data-tab="'+esc(r.tab)+'"':'')+'>Open</button><button class="btn" data-view="Messages" data-tab="Setup">Setup</button></div></div>'}).join('')+'</div><div class="notice">Provider setup stays honest: if SMS/email is not connected, messages save as drafts/history. Star can draft and organize, but money, cards, disputes, removals, refunds, receipts, and closeout signoff stay admin-confirmed.</div></section>'
+}
+var __woaMessagesCommunicationRulesBase=Messages;
+Messages=function(){
+  __woaMessagesCommunicationRulesBase();
+  if(view==='Messages'&&(tab==='Setup'||tab==='Star'||tab==='Queue')){
+    var main=document.querySelector('.main.view-messages'),anchor=main&&main.querySelector('.message-setup,.star-system-auditor,.message-board,.message-status-strip');
+    if(main&&!main.querySelector('.communication-rules-board')){
+      var wrap=document.createElement('div');wrap.innerHTML=communicationRulesBoard();
+      if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+    }
+  }
+};
+var __woaReportCsvRowsCommunicationRulesBase=reportCsvRows;
+reportCsvRows=function(){
+  var rows=__woaReportCsvRowsCommunicationRulesBase().filter(function(row,idx){return idx===0||row[0]!=='Communication rules'});
+  communicationRuleRows().forEach(function(r){reportRow(rows,'Communication rules',todayKey(),'WheelsonAuto platform','','','','',r.title,0,r.channel,'Messages/Star',csvNote([r.trigger,r.star,r.approval,'Open '+r.view+(r.tab?' / '+r.tab:'')]))});
+  return rows
+};
+var __woaStarSystemAuditCommunicationRulesBase=starSystemAuditItems;
+starSystemAuditItems=function(){
+  var base=__woaStarSystemAuditCommunicationRulesBase(),s=messagingStatus(),items=[];
+  if(!s.configured)items.push({source:'Communication rules',title:'SMS provider setup',tone:'warn',count:'Draft',detail:'SMS rules are mapped but outbound/inbound texts save as drafts until hosted SMS is connected.',fix:'Open Messages / Setup, add hosted SMS provider keys/webhook in Render, then live test inbound and outbound texting.',view:'Messages',tab:'Setup'});
+  if(!s.emailConfigured)items.push({source:'Communication rules',title:'Email provider setup',tone:'warn',count:'Draft',detail:'Email rules are mapped but closeouts/receipts/notifications save as drafts until Resend or SendGrid is connected.',fix:'Open Messages / Setup, add email sender/provider keys in Render, then send a safe test.',view:'Messages',tab:'Setup'});
+  if(!s.aiConfigured)items.push({source:'Communication rules',title:'Star provider setup',tone:'warn',count:'Fallback',detail:'Star rules fallback is available, but provider-backed replies need the OpenAI key and health test.',fix:'Open Messages / Setup and test the Star provider before relying on live customer replies.',view:'Messages',tab:'Setup'});
+  return items.concat(base).slice(0,12)
+};
+if(view==='Messages'||view==='Reports')queueRender();
