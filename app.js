@@ -1396,3 +1396,49 @@ starSystemAuditItems=function(){
   return packets.concat(base).slice(0,12)
 };
 if(view==='Claims & Issues'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
+function reimbursementLedgerRows(){
+  return (db.claims||[]).filter(function(c){var text=String([c.type,c.source,c.provider,c.agency,c.notes,c.status].filter(Boolean).join(' '));return /(toll|ezpass|e-zpass|violation|ticket|damage|claim|dispute|chargeback|reimbursement|refund|clover|recovery)/i.test(text)||Number(c.amount||c.paidAmount||0)>0}).map(function(c){
+    var packet=claimDefensePacketRows([c])[0]||{},customer=packet.customer||c.customer||'Unmatched customer',profile=existingCustomerProfile(customer),vehicle=findVehicle(c.vehicleId)||exportVehicleForName(customer,c.vehicleId)||{},vehicleText=vehicle.id?vehicleName(vehicle):(packet.vehicle||c.vehicle||profile.vehicle||'No vehicle linked'),vin=vehicle.vin||packet.vin||c.vin||profile.vin||'',tag=vehicle.plate||vehicle.stock||packet.tag||c.plate||c.reference||profile.plate||profile.licensePlate||'',tracker=vehicle.tracker||packet.tracker||c.tracker||profile.tracker||'',amount=Number(c.amount||0),paid=Number(c.paidAmount||c.recoveredAmount||(/paid|closed|resolved/i.test(String(c.status||''))?amount:0)||0),open=Math.max(0,amount-paid),status=String(c.status||'Open'),needsMatch=(packet.missing||[]).indexOf('customer/payment match')>=0||claimPacketWeakCustomer(customer),paidStatus=/paid|closed|resolved|complete/i.test(status),tone=needsMatch?'bad':(open>0&&!paidStatus?'warn':'good'),label=needsMatch?'Needs match':(open>0&&!paidStatus?'Owed':'Recovered'),actions='<button class="btn primary" data-action="open-claim" data-id="'+esc(c.id)+'">Open</button>';
+    if(isOwner()&&needsMatch&&c.matchCandidates&&c.matchCandidates[0]&&c.matchCandidates[0].customer)actions+=' <button class="btn gold" data-action="apply-claim-match" data-id="'+esc(c.id)+'" data-index="0">Use match</button>';
+    if(isOwner()&&!needsMatch&&open>0){actions+=' <button class="btn gold" data-action="send-claim-link" data-id="'+esc(c.id)+'">Send link</button><button class="btn" data-action="mark-claim-paid" data-id="'+esc(c.id)+'">Mark paid</button>'}
+    if(customer&&!claimPacketWeakCustomer(customer))actions+=customerFileButton(customer,'File')+textCustomerButton(customer,'Text');
+    return{claim:c,customer:customer,type:c.type||c.source||'Recovery',status:label,tone:tone,amount:amount,paid:paid,open:open,vehicle:vehicleText,vin:vin,tag:tag,tracker:tracker,followUp:c.nextFollowUp||c.deadline||c.createdAt||'',source:c.source||c.provider||c.agency||'Manual',actions:actions}
+  }).sort(function(a,b){var w={bad:0,warn:1,good:2,blue:3};return(w[a.tone]||2)-(w[b.tone]||2)||b.open-a.open||String(a.customer).localeCompare(String(b.customer))})
+}
+function reimbursementLedgerBoard(compact){
+  if(!isOwner())return'';
+  var rows=reimbursementLedgerRows(),shown=rows.slice(0,compact?8:14),owed=rows.reduce(function(s,r){return s+r.open},0),paid=rows.reduce(function(s,r){return s+r.paid},0),match=rows.filter(function(r){return r.status==='Needs match'}).length,openRows=rows.filter(function(r){return r.open>0}).length;
+  return '<section class="card section reimbursement-ledger-board" data-limit="'+(compact?8:14)+'"><div class="section-head"><div><h2>Recovery ledger</h2><p>Tolls, violations, damage, reimbursements, disputes, and chargebacks matched to customer, vehicle, VIN/tag, amount, paid, and still owed.</p></div><div class="star-command-stats"><span class="warn">'+money(owed)+' owed</span><span class="good">'+money(paid)+' recovered</span><span class="bad">'+match+' match</span><span class="blue">'+openRows+' open</span></div></div>'+localSearch('Search recovery ledger by customer, VIN, tag, tracker, toll, violation, damage, claim, amount, paid, owed, or follow-up')+'<div class="role-command-grid reimbursement-ledger-grid">'+(shown.length?shown.map(function(r){var detail=[r.type,r.vehicle,r.vin?'VIN '+r.vin:'VIN missing',r.tag?'Tag '+r.tag:'Tag missing',r.tracker?'Tracker '+r.tracker:'Tracker missing',r.source].filter(Boolean).join(' | ');return '<div class="role-command-card reimbursement-ledger-card '+esc(r.tone)+'"><div class="role-command-top"><div><strong>'+esc(r.customer)+'</strong><small>'+esc(detail)+'</small></div>'+badge(r.status,r.tone)+'</div><div class="muted">Amount '+esc(money(r.amount))+' | Paid '+esc(money(r.paid))+' | Still owed '+esc(money(r.open))+' | Follow-up '+esc(r.followUp||'not set')+'</div><div class="actions">'+r.actions+'</div></div>'}).join(''):'<div class="item">No recovery, reimbursement, toll, claim, or dispute ledger rows are saved yet.</div>')+'</div><div class="notice">Manual-live now, accounting/EZPass/Clover dispute APIs later: the ledger keeps every recovery dollar traceable before any provider sync is trusted.</div></section>'
+}
+var __woaClaimsReimbursementLedgerBase=ClaimsIssues;
+ClaimsIssues=function(){
+  __woaClaimsReimbursementLedgerBase();
+  var main=document.querySelector('.main.view-claims-issues'),anchor=main&&main.querySelector('.claim-defense-packet-board,.compact-claims-board');
+  if(main&&!main.querySelector('.reimbursement-ledger-board')){
+    var wrap=document.createElement('div');wrap.innerHTML=reimbursementLedgerBoard(false);
+    if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+  }
+};
+var __woaReportsReimbursementLedgerBase=Reports;
+Reports=function(){
+  __woaReportsReimbursementLedgerBase();
+  if(view==='Reports'&&(tab==='Accounting'||tab==='Risk')){
+    var main=document.querySelector('.main.view-reports'),anchor=main&&main.querySelector('.claim-defense-packet-board,.accounting-control,.car-profitability-board');
+    if(main&&!main.querySelector('.reimbursement-ledger-board')){
+      var wrap=document.createElement('div');wrap.innerHTML=reimbursementLedgerBoard(true);
+      if(wrap.firstElementChild){if(anchor)anchor.insertAdjacentElement('afterend',wrap.firstElementChild);else main.insertAdjacentElement('afterbegin',wrap.firstElementChild);hydrateLocalSearches()}
+    }
+  }
+};
+var __woaReportCsvRowsReimbursementLedgerBase=reportCsvRows;
+reportCsvRows=function(){
+  var rows=__woaReportCsvRowsReimbursementLedgerBase().filter(function(row,idx){return idx===0||row[0]!=='Recovery ledger'});
+  reimbursementLedgerRows().forEach(function(r){reportRow(rows,'Recovery ledger',r.followUp,r.customer,r.vehicle,r.vin,r.tag,r.tracker,r.type,r.open,r.status,r.source,csvNote(['Original '+money(r.amount),'Paid '+money(r.paid),'Still owed '+money(r.open),r.claim&&r.claim.id?'Claim '+r.claim.id:'']))});
+  return rows
+};
+var __woaStarSystemAuditReimbursementBase=starSystemAuditItems;
+starSystemAuditItems=function(){
+  var base=__woaStarSystemAuditReimbursementBase(),review=reimbursementLedgerRows().filter(function(r){return r.status==='Needs match'||r.open>0}).slice(0,4).map(function(r){return{source:'Recovery ledger',title:r.customer+' - '+r.type,tone:r.status==='Needs match'?'bad':'warn',count:money(r.open),detail:r.status+' | '+r.vehicle+' | '+(r.vin?'VIN '+r.vin:'VIN missing')+' | '+(r.tag?'Tag '+r.tag:'Tag missing'),fix:'Open Claims & Issues, match the customer/vehicle if needed, then send recovery link or mark paid after owner review.',view:'Claims & Issues',tab:'Open'}});
+  return review.concat(base).slice(0,12)
+};
+if(view==='Claims & Issues'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
