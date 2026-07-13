@@ -441,7 +441,7 @@ function ownerSmoke() {
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star system auditor', 'Customer portal requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Customer portal requests', 'Follow-up queue', 'Search portal requests'], true],
     ['Documents', 'Documents', undefined, ['Documents', 'Customer portal requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
-    ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
+    ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Toll follow-up route', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
     ['Tolls match review', 'Tolls', 'Match review', ['Tolls', 'Match review tolls and violations', 'Search tolls by customer', 'Provider setup'], true],
     ['Marketing', 'Marketing', undefined, ['Marketing command', 'Lead follow-up command', 'Lead board', 'Search follow-up by customer', 'Search leads by customer'], true],
     ['API roadmap launch proof', 'API Roadmap', undefined, ['API Roadmap', 'Launch proof board', 'Payment/autopay lock', 'API operating bridge', 'Provider launch queue'], true],
