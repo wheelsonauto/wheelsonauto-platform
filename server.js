@@ -63,6 +63,7 @@ const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-final-23">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
+const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
 const WEBHOOK_AUTO_SYNC_DELAY_MS = Math.max(1000, Number(process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS || 5000));
 const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
@@ -84,6 +85,15 @@ const woaAutopayStatus = {
   lastFinishedAt: '',
   lastError: '',
   lastResult: null
+};
+const twilioInboundPollStatus = {
+  inFlight: false,
+  lastCheckedAt: '',
+  lastDeliveredAt: '',
+  lastError: '',
+  lastResult: null,
+  lastPersistedAt: 0,
+  lastLoggedAt: 0
 };
 const loginFailureBuckets = new Map();
 const LOGIN_THROTTLE_LIMIT = Math.max(3, Number(process.env.WOA_LOGIN_THROTTLE_LIMIT || 6));
@@ -625,6 +635,10 @@ function publicMessagingStatus(data = {}) {
     smsScamGuard: 'Potential scams are labeled, held from Star auto-reply, and require staff review. Phone replies cannot run money or account actions.',
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages' + (provider === 'twilio' ? '?provider=twilio' : ''),
     smsWebhookConnected: saved.smsWebhookConnected === true,
+    smsPollingConnected: saved.smsPollingConnected === true,
+    smsInboundConnected: saved.smsWebhookConnected === true || saved.smsPollingConnected === true,
+    smsInboundMode: saved.smsWebhookConnected === true ? 'webhook' : (saved.smsPollingConnected === true ? 'secure sync' : ''),
+    smsPollingIntervalMs: TWILIO_INBOUND_POLL_MS,
     smsWebhookStatus: saved.smsWebhookStatus || (provider === 'twilio' && configured ? 'Connect inbound SMS' : 'Provider setup needed'),
     smsWebhookConfiguredAt: saved.smsWebhookConfiguredAt || '',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
@@ -1003,11 +1017,13 @@ async function autoConfigureTwilioSmsWebhook() {
   const systemUser = { name: 'WheelsonAuto system', role: 'Owner', organizationId: MAIN_ORG_ID, companyName: 'WheelsonAuto' };
   try {
     const result = await configureTwilioSmsWebhook();
+    data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
     Object.assign(data.integrations.messaging, {
       smsWebhookConnected: true,
       smsWebhookStatus: 'Inbound SMS connected',
       smsWebhookConfiguredAt: new Date().toISOString(),
       smsWebhookLastAttemptAt: new Date().toISOString(),
+      smsWebhookLastError: '',
       lastError: ''
     });
     appendAuditLog(data, systemUser, 'Twilio inbox connected automatically', [result.phoneNumber || 'Hosted SMS number', result.webhookUrl, result.smsMethod]);
@@ -1016,16 +1032,129 @@ async function autoConfigureTwilioSmsWebhook() {
     return result;
   } catch (err) {
     const error = String(err && err.message || err);
+    data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
     Object.assign(data.integrations.messaging, {
       smsWebhookConnected: false,
-      smsWebhookStatus: 'Inbound SMS needs attention',
+      smsWebhookStatus: data.integrations.messaging.smsPollingConnected ? 'Inbound SMS connected by secure sync' : 'Inbound SMS needs attention',
       smsWebhookLastAttemptAt: new Date().toISOString(),
-      lastError: error
+      smsWebhookLastError: error,
+      lastError: data.integrations.messaging.smsPollingConnected ? '' : error
     });
     appendAuditLog(data, systemUser, 'Automatic Twilio inbox connection failed', [error]);
     await protectConcurrentLocalWrites(data);
     await writeData(data);
     throw err;
+  }
+}
+async function listTwilioInboundMessages(options = {}) {
+  const accountSid = String(options.accountSid || TWILIO_ACCOUNT_SID || '').trim();
+  const authToken = String(options.authToken || TWILIO_AUTH_TOKEN || '').trim();
+  const phoneNumber = cleanPhone(options.phoneNumber || MESSAGING_FROM_NUMBER || '');
+  const fetchImpl = options.fetchImpl || fetch;
+  if (!accountSid || !authToken || !phoneKey(phoneNumber)) {
+    const error = new Error('Twilio account, auth token, and hosted SMS number must be saved in Render first.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const auth = Buffer.from(accountSid + ':' + authToken).toString('base64');
+  const params = new URLSearchParams({ To: phoneNumber, PageSize: String(Math.min(100, Math.max(1, Number(options.pageSize || 50)))) });
+  const response = await fetchImpl('https://api.twilio.com/2010-04-01/Accounts/' + encodeURIComponent(accountSid) + '/Messages.json?' + params, {
+    headers: { Authorization: 'Basic ' + auth }
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || 'Twilio could not read inbound messages.');
+  return (Array.isArray(body.messages) ? body.messages : []).filter(message => {
+    return String(message && message.direction || '').toLowerCase() === 'inbound'
+      && phoneKey(message && message.to) === phoneKey(phoneNumber)
+      && !!(message && message.sid);
+  });
+}
+function twilioSignatureForPayload(webhookUrl, payload, authToken = TWILIO_AUTH_TOKEN) {
+  const signed = Object.keys(payload || {}).sort().reduce((value, key) => value + key + String(payload[key] == null ? '' : payload[key]), webhookUrl);
+  return crypto.createHmac('sha1', authToken).update(signed).digest('base64');
+}
+async function deliverPolledTwilioMessage(message, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const webhookUrl = String(options.webhookUrl || (PUBLIC_BASE_URL + '/api/webhooks/messages?provider=twilio')).trim();
+  const payload = {
+    From: cleanPhone(message.from || ''),
+    To: cleanPhone(message.to || MESSAGING_FROM_NUMBER || ''),
+    Body: String(message.body || ''),
+    MessageSid: String(message.sid || ''),
+    SmsSid: String(message.sid || ''),
+    NumMedia: String(message.num_media || '0')
+  };
+  const response = await fetchImpl(webhookUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'X-Twilio-Signature': twilioSignatureForPayload(webhookUrl, payload, options.authToken || TWILIO_AUTH_TOKEN)
+    },
+    body: new URLSearchParams(payload)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || 'WheelsonAuto could not accept the synced Twilio message.');
+  return body;
+}
+async function persistTwilioPollingStatus(result, error = '') {
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  const current = data.integrations.messaging || {};
+  data.integrations.messaging = { ...current, ...publicMessagingStatus(data) };
+  Object.assign(data.integrations.messaging, {
+    smsPollingConnected: !error,
+    smsInboundConnected: !error || current.smsWebhookConnected === true,
+    smsInboundMode: current.smsWebhookConnected === true ? 'webhook' : (!error ? 'secure sync' : ''),
+    smsPollingStatus: error ? 'Secure sync needs attention' : 'Five-second secure sync active',
+    smsPollingLastCheckedAt: new Date().toISOString(),
+    smsPollingLastDeliveredAt: result && result.delivered ? new Date().toISOString() : (current.smsPollingLastDeliveredAt || ''),
+    smsPollingLastCount: Number(result && result.delivered || 0),
+    smsWebhookStatus: current.smsWebhookConnected === true ? 'Inbound SMS connected' : (!error ? 'Inbound SMS connected by secure sync' : 'Inbound SMS needs attention'),
+    lastError: current.smsWebhookConnected === true ? '' : error
+  });
+  await protectConcurrentLocalWrites(data);
+  await writeData(data);
+  twilioInboundPollStatus.lastPersistedAt = Date.now();
+}
+async function syncTwilioInboundMessages(options = {}) {
+  if (twilioInboundPollStatus.inFlight) return { skipped: true, reason: 'Twilio inbound sync already running.' };
+  const configured = String(options.provider || MESSAGING_PROVIDER) === 'twilio'
+    && !!(options.accountSid || TWILIO_ACCOUNT_SID)
+    && !!(options.authToken || TWILIO_AUTH_TOKEN)
+    && !!phoneKey(options.phoneNumber || MESSAGING_FROM_NUMBER);
+  if (!configured) return { skipped: true, reason: 'Twilio is not fully configured.' };
+  twilioInboundPollStatus.inFlight = true;
+  try {
+    const messages = await listTwilioInboundMessages(options);
+    const data = options.data || await readData();
+    const existing = new Set((data.messages || []).map(item => String(item && item.externalId || '')).filter(Boolean));
+    const pending = messages
+      .filter(message => !existing.has(String(message.sid || '')))
+      .sort((a, b) => new Date(a.date_sent || a.date_created || 0) - new Date(b.date_sent || b.date_created || 0))
+      .slice(0, 25);
+    const deliver = options.deliver || (message => deliverPolledTwilioMessage(message, options));
+    let delivered = 0;
+    for (const message of pending) {
+      const response = await deliver(message);
+      if (!response || response.received !== false || response.duplicate) delivered += response && response.duplicate ? 0 : 1;
+    }
+    const result = { checked: messages.length, pending: pending.length, delivered };
+    twilioInboundPollStatus.lastCheckedAt = new Date().toISOString();
+    twilioInboundPollStatus.lastDeliveredAt = delivered ? twilioInboundPollStatus.lastCheckedAt : twilioInboundPollStatus.lastDeliveredAt;
+    twilioInboundPollStatus.lastError = '';
+    twilioInboundPollStatus.lastResult = result;
+    const shouldPersist = options.persist !== false && (!(((data.integrations || {}).messaging || {}).smsPollingConnected) || delivered > 0 || Date.now() - twilioInboundPollStatus.lastPersistedAt >= 5 * 60 * 1000);
+    if (shouldPersist) await persistTwilioPollingStatus(result);
+    return result;
+  } catch (err) {
+    const error = String(err && err.message || err);
+    twilioInboundPollStatus.lastCheckedAt = new Date().toISOString();
+    twilioInboundPollStatus.lastError = error;
+    twilioInboundPollStatus.lastResult = null;
+    if (options.persist !== false && Date.now() - twilioInboundPollStatus.lastPersistedAt >= 60 * 1000) await persistTwilioPollingStatus(null, error);
+    throw err;
+  } finally {
+    twilioInboundPollStatus.inFlight = false;
   }
 }
 async function sendOwnerSmsMirror(data, payload = {}, settings = messageSettings(data)) {
@@ -9007,10 +9136,12 @@ const server = http.createServer(async (req, res) => {
       data.integrations.messaging = data.integrations.messaging || {};
       try {
         const result = await configureTwilioSmsWebhook();
+        data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
         Object.assign(data.integrations.messaging, {
           smsWebhookConnected: true,
           smsWebhookStatus: 'Inbound SMS connected',
           smsWebhookConfiguredAt: new Date().toISOString(),
+          smsWebhookLastError: '',
           lastError: ''
         });
         appendAuditLog(data, user, 'Twilio inbox connected', [result.phoneNumber || 'Hosted SMS number', result.webhookUrl, result.smsMethod]);
@@ -9018,11 +9149,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, result, messaging: publicMessagingStatus(data) });
       } catch (err) {
         const error = String(err && err.message || err);
+        data.integrations.messaging = { ...data.integrations.messaging, ...publicMessagingStatus(data) };
         Object.assign(data.integrations.messaging, {
           smsWebhookConnected: false,
-          smsWebhookStatus: 'Inbound SMS needs attention',
+          smsWebhookStatus: data.integrations.messaging.smsPollingConnected ? 'Inbound SMS connected by secure sync' : 'Inbound SMS needs attention',
           smsWebhookLastAttemptAt: new Date().toISOString(),
-          lastError: error
+          smsWebhookLastError: error,
+          lastError: data.integrations.messaging.smsPollingConnected ? '' : error
         });
         appendAuditLog(data, user, 'Twilio inbox connection failed', [error]);
         await writeData(data);
@@ -9797,6 +9930,15 @@ if (require.main === module) {
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
       .catch(err => console.error('Twilio inbox auto-connect failed:', err && err.message || err)), 250);
+    setTimeout(() => syncTwilioInboundMessages()
+      .then(result => console.log(result && result.skipped ? 'Twilio inbound SMS secure sync skipped.' : 'Twilio inbound SMS secure sync active.'))
+      .catch(err => console.error('Twilio inbound SMS secure sync failed:', err && err.message || err)), 1500);
+    setInterval(() => syncTwilioInboundMessages()
+      .catch(err => {
+        if (Date.now() - twilioInboundPollStatus.lastLoggedAt < 60 * 1000) return;
+        twilioInboundPollStatus.lastLoggedAt = Date.now();
+        console.error('Twilio inbound SMS secure sync failed:', err && err.message || err);
+      }), TWILIO_INBOUND_POLL_MS);
     setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
     setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
     setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
@@ -9820,5 +9962,9 @@ module.exports = {
   resolveOwnerSmsBridge,
   ownerSmsMirrorBody,
   configureTwilioSmsWebhook,
-  autoConfigureTwilioSmsWebhook
+  autoConfigureTwilioSmsWebhook,
+  listTwilioInboundMessages,
+  deliverPolledTwilioMessage,
+  syncTwilioInboundMessages,
+  twilioSignatureForPayload
 };
