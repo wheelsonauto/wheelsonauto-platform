@@ -1601,3 +1601,182 @@ if(typeof __woaMessagesCommunicationBase==='function'){MessagesFast=__woaMessage
 if(typeof __woaReportsReadinessBase==='function'){ReportsFast=__woaReportsReadinessBase;Reports=ReportsFast}
 window.__woaBootReady=true;
 if(!renderQueued)queueRender();
+
+// Keep navigation work proportional to the visible tab. The earlier feature
+// layers remain available, but these focused workspaces avoid building every
+// report, readiness board, and cross-system queue on each navigation click.
+var __woaPerformanceRenderMemo=null;
+var __woaPerformanceRecurringRosterBase=recurringRoster;
+recurringRoster=function(){
+  if(!__woaPerformanceRenderMemo)return __woaPerformanceRecurringRosterBase();
+  if(!__woaPerformanceRenderMemo.recurringRoster)__woaPerformanceRenderMemo.recurringRoster=__woaPerformanceRecurringRosterBase();
+  return __woaPerformanceRenderMemo.recurringRoster
+};
+var __woaPerformanceMaintenanceBase=customerMaintenanceJobs;
+customerMaintenanceJobs=function(){
+  if(!__woaPerformanceRenderMemo)return __woaPerformanceMaintenanceBase();
+  if(!__woaPerformanceRenderMemo.customerMaintenance)__woaPerformanceRenderMemo.customerMaintenance=__woaPerformanceMaintenanceBase();
+  return __woaPerformanceRenderMemo.customerMaintenance
+};
+var __woaPerformanceApiProvidersBase=apiProviders;
+apiProviders=function(){
+  if(!__woaPerformanceRenderMemo)return __woaPerformanceApiProvidersBase();
+  if(!__woaPerformanceRenderMemo.apiProviders)__woaPerformanceRenderMemo.apiProviders=__woaPerformanceApiProvidersBase();
+  return __woaPerformanceRenderMemo.apiProviders
+};
+var __woaPerformanceCustomerRecordsBase=paymentCustomerRecords;
+paymentCustomerRecords=function(roster,mode){
+  if(!__woaPerformanceRenderMemo)return __woaPerformanceCustomerRecordsBase(roster,mode);
+  var key='customerRecords'+String(mode||'All');
+  if(!__woaPerformanceRenderMemo[key])__woaPerformanceRenderMemo[key]=__woaPerformanceCustomerRecordsBase(roster,mode);
+  return __woaPerformanceRenderMemo[key]
+};
+if(typeof fastMessageRows==='function'){
+  var __woaPerformanceMessageRowsBase=fastMessageRows;
+  fastMessageRows=function(limit){
+    if(!__woaPerformanceRenderMemo)return __woaPerformanceMessageRowsBase(limit);
+    var key='messageRows'+String(limit||0);
+    if(!__woaPerformanceRenderMemo[key])__woaPerformanceRenderMemo[key]=__woaPerformanceMessageRowsBase(limit);
+    return __woaPerformanceRenderMemo[key]
+  }
+}
+if(typeof fastMessageThreads==='function'){
+  var __woaPerformanceMessageThreadsBase=fastMessageThreads;
+  fastMessageThreads=function(limit){
+    if(!__woaPerformanceRenderMemo)return __woaPerformanceMessageThreadsBase(limit);
+    var key='messageThreads'+String(limit||0);
+    if(!__woaPerformanceRenderMemo[key])__woaPerformanceRenderMemo[key]=__woaPerformanceMessageThreadsBase(limit);
+    return __woaPerformanceRenderMemo[key]
+  }
+}
+if(typeof fastStarAiDrafts==='function'){
+  var __woaPerformanceStarDraftsBase=fastStarAiDrafts;
+  fastStarAiDrafts=function(limit){
+    if(!__woaPerformanceRenderMemo)return __woaPerformanceStarDraftsBase(limit);
+    var key='starDrafts'+String(limit||0);
+    if(!__woaPerformanceRenderMemo[key])__woaPerformanceRenderMemo[key]=__woaPerformanceStarDraftsBase(limit);
+    return __woaPerformanceRenderMemo[key]
+  }
+}
+
+function fastWorkspaceTabs(items,selected,extraClass){
+  return '<div class="tabs '+esc(extraClass||'')+'">'+items.map(function(x){return '<button class="'+(selected===x[0]?'active':'')+'" data-tab="'+esc(x[0])+'">'+esc(x[1])+(x[2]==null?'':' '+esc(x[2]))+'</button>'}).join('')+'</div>'
+}
+
+function PaymentsFocused(){
+  var selected=['Active','Today','History','Transactions'].indexOf(tab)>=0?tab:'Active',roster=recurringRoster();
+  var tabs=fastWorkspaceTabs([['Active','Active'],['Today','Today'],['History','History'],['Transactions','Transactions']],selected,'payment-tabs');
+  var actionBar='<div class="payment-action-bar"><div><strong>Payment actions</strong><small>Sync, restore an existing customer, or add autopay.</small></div><div class="actions"><button class="btn" data-action="sync-all">Sync</button><button class="btn" data-action="reactivate-customer">Existing customer</button><button class="btn primary" data-action="new-autopay">Add autopay</button></div></div>';
+  var body=actionBar+tabs+'<div class="payments-main-flow">';
+  if(selected==='Active'){
+    var active=roster.filter(function(r){return String(r.status||'').toLowerCase()==='active'}),named=roster.filter(function(r){return r.customer&&r.customer!=='Clover recurring customer'}).length,gap=Math.max(0,activeRecurringCount()-named);
+    if(gap)body+='<div class="notice payment-gap-note">Clover shows '+activeRecurringCount()+' active customers. '+gap+' still need names pulled from recurring details.</div>';
+    body+=paymentCardSection('Active recurring customers','Customer, card status, vehicle, VIN, tag, tracker, schedule, and payment actions.','Search active customers, VIN, tag, tracker',active.map(paymentRecurringCard),'<button class="btn" data-action="sync-recurring">Sync recurring</button><button class="btn primary" data-action="new-autopay">Add autopay</button>')
+  }
+  if(selected==='Today'){
+    var todayRows=roster.filter(function(r){return dueOrTouchedToday(r)});
+    body+=paymentCloseoutBoard(roster)+paymentCardSection('Today action list','Pending, paid, failed, not-found, setup, and contact work for today.','Search today dues, failures, setup, VIN, tag',todayRows.map(paymentRecurringCard),'<button class="btn" data-action="sync-all">Sync</button><button class="btn primary" data-action="new-autopay">Add autopay</button>')
+  }
+  if(selected==='History'){
+    var historyRecords=paymentCustomerRecords(roster,'History');
+    body+=paymentCardSection('Customer history','Removed, inactive, setup, and previous customers remain chargeable when a valid saved card exists.','Search history customers, VIN, tag, tracker',historyRecords.map(function(x){return paymentCustomerCard(x,roster,'History')}),'<button class="btn" data-action="sync-customers">Sync customers</button><button class="btn" data-action="sync-recurring">Sync recurring</button>')
+  }
+  if(selected==='Transactions'){
+    var transactions=uniquePayments(db.payments||[]);
+    body+=paymentCardSection('Transactions','Clover and manual payment history with matched customer names and file shortcuts.','Search transactions, customer, amount, status',transactions.map(function(p){return paymentTransactionCard(p,roster)}),'<button class="btn" data-action="sync-all">Sync</button><button class="btn" data-action="sync-payments">Payments only</button>')
+  }
+  body+='</div>';
+  shell('Payments & Customers','Customers, autopay, charges, closeout, and transactions.',body,'<button class="btn" data-action="sync-all">Sync</button><button class="btn primary" data-action="new-autopay">Add autopay</button>')
+}
+
+function OperationsFocused(){
+  var cars=db.vehicles||[],inventory=cars.filter(isInventoryVehicle),assigned=cars.filter(function(v){var s=String(v.status||'').toLowerCase();return s!=='removed'&&!isInventoryVehicle(v)}),allJobs=db.maintenance||[],openJobs=allJobs.filter(function(m){return isOpenMaintenance(m)&&isCustomerMaintenance(m)}),openClaims=(db.claims||[]).filter(function(c){var s=String(c.status||'Open').toLowerCase();return s.indexOf('paid')<0&&s.indexOf('closed')<0}),selected=['Fleet','Assigned','Service','Claims'].indexOf(tab)>=0?tab:'Fleet',limit=compactLimit();
+  var body=fastWorkspaceTabs([['Fleet','Fleet',inventory.length],['Assigned','Assigned',assigned.length],['Service','Service',openJobs.length],['Claims','Claims',openClaims.length]],selected,'staff-tabs');
+  if(selected==='Fleet')body+='<section class="card section compact-fleet-board staff-card-board" data-limit="'+limit+'"><div class="section-head"><div><h2>Available fleet</h2><p>Ready and in-lot cars, searchable by vehicle, VIN, tag, or tracker.</p></div><button class="btn primary" data-action="new-vehicle">Add vehicle</button></div>'+localSearch('Search fleet, VIN, tag, tracker')+staffCardGrid(inventory.map(function(v){return staffFleetCard(v,false)}),'No available cars are showing right now.')+'</section>';
+  if(selected==='Assigned')body+='<section class="card section compact-fleet-board staff-card-board" data-limit="'+limit+'"><div class="section-head"><div><h2>Assigned cars</h2><p>Customer, contact, vehicle identity, mileage, and tracker in one card.</p></div><button class="btn" data-view="Payments" data-tab="Active">Customers</button></div>'+localSearch('Search customer, vehicle, VIN, tag, tracker')+staffCardGrid(assigned.map(function(v){return staffFleetCard(v,true)}),'No assigned cars are linked yet.')+'</section>';
+  if(selected==='Service')body+='<section class="card section compact-service-board staff-card-board" data-limit="'+limit+'"><div class="section-head"><div><h2>Service work</h2><p>Open customer vehicle jobs only.</p></div><button class="btn primary" data-action="new-maintenance">Add job</button></div>'+localSearch('Search service by customer, VIN, tag, tracker, issue')+staffCardGrid(openJobs.map(staffServiceCard),'No open service records right now.')+(openJobs.length>limit?'<div class="notice portal-note">Showing '+limit+' of '+openJobs.length+' service jobs. Search brings matching records to this list.</div>':'')+'</section>';
+  if(selected==='Claims')body+='<section class="card section compact-claims-board staff-card-board" data-limit="'+limit+'"><div class="section-head"><div><h2>Claims, tolls & issues</h2><p>Open recovery and vehicle issues.</p></div><button class="btn primary" data-action="new-claim">Add issue</button></div>'+localSearch('Search claims, customer, VIN, tag, reference')+staffCardGrid(openClaims.map(staffClaimCard),'No claims or issues yet.')+(openClaims.length>limit?'<div class="notice portal-note">Showing '+limit+' of '+openClaims.length+' issues. Search filters the full visible list.</div>':'')+'</section>';
+  shell('Operations','Fleet, assigned cars, service, and claims without repeated overview panels.',body,'<button class="btn primary" data-action="new-vehicle">Add vehicle</button><button class="btn" data-action="new-maintenance">Add service</button><button class="btn" data-action="new-claim">Add issue</button>')
+}
+
+function SettingsFocused(){
+  var selected=['Connections','Staff','CustomerLogins','Security','Website'].indexOf(tab)>=0?tab:'Connections',cl=(db.integrations&&db.integrations.clover)||{},sh=(db.integrations&&db.integrations.shopify)||{};
+  var body=fastWorkspaceTabs([['Connections','Connections'],['Staff','Staff'],['CustomerLogins','Customer logins'],['Security','Security'],['Website','Website']],selected,'settings-tabs');
+  if(selected==='Connections'){
+    body+=systemHealthPanel()+'<section class="card section"><div class="section-head"><div><h2>Clover connection</h2><p>Credentials stay in Render environment variables; sync and tests run from here.</p></div>'+badge(cl.connected?'Connected':'Setup needed',cl.connected?'good':'warn')+'</div><div class="form"><div class="field"><label>Environment</label><select id="cloverEnvironment"><option value="sandbox" '+(cl.environment==='sandbox'?'selected':'')+'>Sandbox</option><option value="production" '+(cl.environment==='production'?'selected':'')+'>Production</option></select></div><div class="field"><label>Merchant ID</label><input id="cloverMerchant" value="'+esc(cl.merchantId||'')+'"></div><div class="field span2"><label>Access token</label><input id="cloverToken" type="password" placeholder="Only enter when replacing the saved token"></div><div class="span2 actions"><button class="btn primary" data-action="save-clover">Save Clover settings</button><button class="btn" data-action="sync-customers">Customers</button><button class="btn" data-action="sync-payments">Payments</button><button class="btn" data-action="sync-recurring">Recurring</button><button class="btn gold" data-action="check-hosted-checkout">Hosted checkout</button><button class="btn danger" data-action="check-saved-card-api">Saved-card API</button></div></div><div class="item"><div class="muted">Customer sync: '+esc(cl.lastCustomerSyncAt||'Not run yet')+'</div><div class="muted">Payment sync: '+esc(cl.lastPaymentSyncAt||'Not run yet')+'</div><div class="muted">Recurring sync: '+esc(cl.lastRecurringPlanSyncAt||'Not run yet')+'</div>'+(cl.lastRecurringPlanSyncError?'<div class="muted">Sync note: '+esc(cl.lastRecurringPlanSyncError)+'</div>':'')+'</div></section>'
+  }
+  if(selected==='Staff'){
+    var staffRows=(db.staffAccounts||[]).map(function(s){var co=companyById(s.organizationId),reset=String(s.passwordResetStatus||'').toLowerCase()==='requested';return[esc(s.name),esc(s.role),esc(s.username||s.email||''),esc(co&&co.name||'WheelsonAuto'),esc(s.phone||''),badge(s.status||'Active',String(s.status||'').toLowerCase()==='disabled'?'bad':'good'),reset?badge('Reset requested','warn'):badge(s.passwordUpdatedAt?'Password set':'Needs password',s.passwordUpdatedAt?'good':'warn'),'<button class="btn" data-action="open-staff" data-id="'+esc(s.id)+'">Edit</button>']});
+    body+='<section class="card section"><div class="section-head"><div><h2>Staff accounts</h2><p>Create controlled manager and mechanic access.</p></div><button class="btn primary" data-action="new-staff">Add account</button></div>'+(staffRows.length?table(['Name','Role','Username','Company','Phone','Status','Access','Action'],staffRows):'<div class="item">No manager or mechanic accounts yet.</div>')+'</section>'
+  }
+  if(selected==='CustomerLogins'){
+    var portals=db.customerAccounts||[],portalRows=portals.map(function(c){var reset=String(c.passwordResetStatus||'').toLowerCase()==='requested',ready=customerPortalLoginReady(c);return[esc(c.name||c.customer||''),esc(c.username||c.email||''),esc(c.phone||''),esc(c.email||''),badge(c.status||'Active',String(c.status||'').toLowerCase()==='disabled'?'bad':'good'),reset?badge('Reset requested','warn'):badge(ready?'Login ready':'Needs password',ready?'good':'warn'),'<button class="btn" data-action="open-customer-login" data-id="'+esc(c.id)+'">Edit</button>']});
+    var missing=missingCustomerPortalRecords();
+    body+='<section class="card section"><div class="section-head"><div><h2>Customer portal logins</h2><p>'+missing.length+' active customer(s) still need portal access.</p></div><div class="actions"><button class="btn" data-action="create-missing-customer-logins">Create missing drafts</button><button class="btn primary" data-action="new-customer-login">Add login</button></div></div><div class="notice">Customer link: '+esc((window.location&&window.location.origin)||'https://wheelsonauto-platform.onrender.com')+'/customer/login</div>'+(portalRows.length?table(['Customer','Username','Phone','Email','Status','Access','Action'],portalRows):'<div class="item">No customer portal logins yet.</div>')+'</section>'
+  }
+  if(selected==='Security')body+=roleAccessMatrix()+auditTrailPanel();
+  if(selected==='Website')body+='<section class="card section"><div class="section-head"><div><h2>Website connection</h2><p>Public store and application path.</p></div><button class="btn" data-view="Website">Open website tools</button></div><div class="form"><div class="field"><label>Store</label><input id="shopifyStore" value="'+esc(sh.store||'wheelsonauto.com')+'"></div><div class="field"><label>Apply path</label><input id="shopifyPath" value="'+esc(sh.embedPath||'/apply')+'"></div><div class="span2 actions"><button class="btn primary" data-action="save-shopify">Save website settings</button></div></div></section>';
+  shell('Settings','Connections and account controls load one section at a time.',body,'')
+}
+
+function ApiRoadmapFocused(){
+  var selected=['Providers','Readiness','Rollout','Requirements'].indexOf(tab)>=0?tab:'Providers',providers=apiProviders(),connected=providers.filter(function(p){return apiStatusTone(p.status)==='good'}).length,testing=providers.filter(function(p){return apiStatusTone(p.status)==='blue'}).length,needed=providers.filter(function(p){return apiStatusTone(p.status)==='warn'}).length;
+  var body='<div class="grid stats compact-api-stats">'+stat('Connected',connected,'Live and tested')+stat('Testing / ready',testing,'Credentials or proof in progress')+stat('Provider needed',needed,'Outside setup still required')+stat('Total systems',providers.length,'Tracked integrations')+'</div>'+fastWorkspaceTabs([['Providers','Providers'],['Readiness','Readiness'],['Rollout','Rollout'],['Requirements','Requirements']],selected,'api-tabs');
+  if(selected==='Providers'){
+    var rows=providers.map(function(p){return['<strong>'+esc(p.name)+'</strong><div class="muted">'+esc(p.group||'API')+'</div>',badge(p.status||'API needed',apiStatusTone(p.status)),esc(p.owner||'Owner'),esc(p.endpoint||'Endpoint not set'),esc(p.lastTestResult||p.lastTestAt||'No live test recorded'),'<button class="btn primary" data-action="open-api-provider" data-id="'+esc(p.id)+'">Setup</button> <button class="btn" data-action="create-api-task" data-id="'+esc(p.id)+'">Task</button>']});
+    body+='<section class="card section api-provider-focused" data-limit="16"><div class="section-head"><div><h2>Provider checklist</h2><p>Credentials, endpoint, owner, and live-test result for every outside system.</p></div><button class="btn primary" data-action="new-api-provider">Add API system</button></div>'+localSearch('Search Clover, SMS, email, EZPass, tracker, insurance, accounting')+table(['System','Status','Owner','Endpoint','Last test','Action'],rows)+'</section>'
+  }
+  if(selected==='Readiness')body+=systemHealthPanel()+apiReadinessBoard();
+  if(selected==='Rollout')body+=platformBlueprint()+apiRolloutBoard();
+  if(selected==='Requirements')body+=apiDependencyMatrix();
+  shell('API Roadmap','Provider setup without loading every roadmap board at once.',body,'<button class="btn primary" data-action="new-api-provider">Add API system</button><button class="btn gold" data-action="check-system-readiness">Check readiness</button>')
+}
+
+function compactPortalRequestSummary(){
+  if(roleName()==='mechanic')return'';
+  var cards=(db.cardSetupRequests||[]).filter(function(r){return !/complete|saved|closed|deleted|expired|cancel/i.test(String(r.status||'Open'))}).length,links=(db.paymentRequests||[]).filter(function(r){return !/paid|closed|cancel|expired/i.test(String(r.status||'Open'))}).length;
+  return '<section class="card section compact-message-intake"><div class="section-head"><div><h2>Customer requests</h2><p>'+cards+' card setup and '+links+' payment link request(s) remain open.</p></div><button class="btn" data-tab="Queue">Open queue</button></div></section>'
+}
+if(typeof customerPortalRequestsBoard==='function')customerPortalRequestsBoard=compactPortalRequestSummary;
+
+function ReportsFocused(){
+  var selected=['Summary','Closeout','Accounting','Risk','Pipeline'].indexOf(tab)>=0?tab:'Summary',payments=db.payments||[],cars=db.vehicles||[],jobs=db.maintenance||[],apps=db.applications||[];
+  var body=fastWorkspaceTabs([['Summary','Summary'],['Closeout','Closeout'],['Accounting','Accounting'],['Risk','Risk'],['Pipeline','Pipeline']],selected,'report-tabs');
+  if(selected==='Summary'){
+    var roster=recurringRoster(),todayRows=roster.filter(function(r){return dueOrTouchedToday(r)}),collectedToday=collectedAmountForDate(todayKey()),possibleToday=todayRows.reduce(function(s,r){return s+Number(r.amount||0)},0),failed=todayRows.filter(function(r){var key=paymentState(r).key;return key==='retry'||key==='contact'||key==='notfound'}).length,ready=cars.filter(isInventoryVehicle).length,openJobs=jobs.filter(function(m){return isOpenMaintenance(m)&&isCustomerMaintenance(m)}).length;
+    body+='<div class="grid stats">'+stat('Collected today',money(collectedToday),'Paid transactions')+stat('Expected today',money(possibleToday),todayRows.length+' due or touched')+stat('Payment attention',failed,'Retry, failed twice, or not found')+stat('Ready fleet',ready,'Available vehicles')+'</div><section class="card section"><div class="section-head"><div><h2>Owner snapshot</h2><p>'+openJobs+' open service job(s), '+apps.length+' application record(s), and '+payments.length+' payment record(s) are currently loaded.</p></div><div class="actions"><button class="btn primary" data-tab="Closeout">Daily closeout</button><button class="btn" data-view="Payments" data-tab="Today">Today payments</button><button class="btn" data-view="Operations" data-tab="Service">Service</button></div></div></section>'
+  }
+  if(selected==='Closeout')body+=dailyCloseout();
+  if(selected==='Accounting')body+=accountingControlPanel()+carProfitabilityPanel();
+  if(selected==='Risk'){
+    var riskRoster=recurringRoster(),failedRows=riskRoster.filter(function(r){return todayFailureCount(r)>0||/fail|not found/i.test(String(r.status||''))}).slice(0,24).map(function(r){return[esc(r.customer||'Unknown'),esc(enrichedVehicleForRecurring(r)),money(r.amount||0),retryStatus(r),esc(recurringDateText(r)||'Not set')]});
+    body+='<section class="card section"><div class="section-head"><div><h2>Payment risk</h2><p>Failed, retrying, and payment-not-found customers.</p></div><button class="btn" data-view="Payments" data-tab="Today">Open payments</button></div>'+(failedRows.length?table(['Customer','Vehicle','Amount','Status','Next charge'],failedRows):'<div class="item">No current payment failures are tracked.</div>')+'</section>'
+  }
+  if(selected==='Pipeline'){
+    var appRows=apps.slice(0,30).map(function(a){return[esc(a.name||a.customer||''),esc(a.phone||''),esc(a.vehicle||''),money(a.down||0),badge(a.stage||a.status||'New',statusTone(a.stage||a.status||'New'))]});
+    body+='<section class="card section"><div class="section-head"><div><h2>Application pipeline</h2><p>Current applicants and selected vehicles.</p></div><button class="btn" data-view="Applications">Open applications</button></div>'+(appRows.length?table(['Applicant','Phone','Vehicle','Down','Stage'],appRows):'<div class="item">No applications in the pipeline.</div>')+'</section>'
+  }
+  shell('Reports','Owner reporting loads only the report you select.',body,'<button class="btn primary" data-action="export-reports">Export CSV</button>')
+}
+
+Payments=PaymentsFocused;
+Operations=OperationsFocused;
+Settings=SettingsFocused;
+ApiRoadmap=ApiRoadmapFocused;
+ReportsFast=ReportsFocused;
+Reports=ReportsFocused;
+
+function render(){
+  if(!window.__woaBootReady)return;
+  if(view==='Apply')return Apply();
+  if(nav.indexOf(view)<0)view=currentUser.homeView||nav[0]||'Dashboard';
+  var handler=({'Dashboard':Dashboard,'Today':Today,'Applications':Applications,'Operations':Operations,'Fleet':Fleet,'Contracts':Contracts,'Customers':Contracts,'Payments':Payments,'Dispatch':Dispatch,'Maintenance':Maintenance,'Documents':Documents,'Tolls':Tolls,'Insurance':Insurance,'Marketing':Marketing,'Claims & Issues':ClaimsIssues,'Mechanic Portal':MechanicPortal,'Manager Portal':ManagerPortal,'Messages':Messages,'Reports':Reports,'Utilities':Utilities,'Companies':Organizations,'API Roadmap':ApiRoadmap,'Website':Website,'Settings':Settings}[view]||Dashboard);
+  __woaPerformanceRenderMemo={};
+  try{handler();scrubRoleUi()}finally{__woaPerformanceRenderMemo=null}
+}
+
+document.addEventListener('click',function(e){
+  var button=e.target.closest('button[data-view]');
+  if(!button||button.dataset.view===view)return;
+  requestAnimationFrame(function(){requestAnimationFrame(function(){window.scrollTo(0,0)})})
+},true);

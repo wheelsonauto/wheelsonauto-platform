@@ -430,28 +430,28 @@ function ownerSmoke() {
   assertNo('Owner dashboard', html(context), ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
   [
-    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Data truth queue', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
-    ['Payments today', 'Payments', 'Today', ['Payments & Customers', 'Data truth queue', 'Daily closeout', 'Today action list', 'payment-command', 'customer-pay-list']],
+    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
+    ['Payments today', 'Payments', 'Today', ['Payments & Customers', 'Today action list', 'payment-command', 'customer-pay-list']],
     ['Payments history', 'Payments', 'History', ['Customer history', 'customer-pay-list']],
     ['Payments transactions', 'Payments', 'Transactions', ['Transactions', 'transaction-card', 'customer-pay-list']],
-    ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Lifecycle command', 'Available fleet', 'staff-card-board']],
-    ['Operations service', 'Operations', 'Service', ['Operations', 'Lifecycle command', 'Service work', 'staff-card-board']],
-    ['Operations claims', 'Operations', 'Claims', ['Operations', 'Lifecycle command', 'Claims, tolls & issues', 'staff-card-board']],
+    ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
+    ['Operations service', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board']],
+    ['Operations claims', 'Operations', 'Claims', ['Operations', 'Claims, tolls & issues', 'staff-card-board']],
     ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Inspection command', 'Service route', 'Open service work'], true],
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
-    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star AI control', 'Customer portal requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
-    ['Messages queue', 'Messages', 'Queue', ['Messages', 'Customer portal requests', 'Follow-up queue', 'Search portal requests'], true],
-    ['Documents', 'Documents', undefined, ['Documents', 'Customer portal requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
+    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star AI control', 'Customer requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
+    ['Messages queue', 'Messages', 'Queue', ['Messages', 'Customer requests', 'Follow-up queue'], true],
+    ['Documents', 'Documents', undefined, ['Documents', 'Customer requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Toll follow-up route', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
     ['Tolls match review', 'Tolls', 'Match review', ['Tolls', 'Match review tolls and violations', 'Search tolls by customer', 'Provider setup'], true],
     ['Marketing', 'Marketing', undefined, ['Marketing command', 'Lead follow-up command', 'Lead board', 'Search follow-up by customer', 'Search leads by customer'], true],
-    ['API roadmap launch proof', 'API Roadmap', undefined, ['API Roadmap', 'Launch proof board', 'Payment/autopay lock', 'API operating bridge', 'Provider launch queue'], true],
+    ['API roadmap providers', 'API Roadmap', undefined, ['API Roadmap', 'Provider checklist', 'Total systems', 'Setup'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
-    ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Customer intake', 'Daily closeout', 'Executive snapshot'], false],
+    ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Owner snapshot', 'Daily closeout'], false],
     ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Accounting control', 'Car profitability & recovery'], false],
-    ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Dispute identity resolver', 'Customer risk report', 'Failed / retry payments'], false]
+    ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Payment risk'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
@@ -474,7 +474,7 @@ function managerSmoke() {
     ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
     ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
-    ['Manager reports', 'Reports', 'Summary', ['Reports', 'Executive snapshot'], false],
+    ['Manager reports', 'Reports', 'Summary', ['Reports', 'Owner snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'Approval handoff', 'table-wrap'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);

@@ -59,7 +59,7 @@ function assertStringsInclude(label, source, required) {
 
 function renderViews() {
   const render = finalFunctionSlice(app, 'render');
-  const match = render.match(/\(\{([^}]+)\}\[view\]\|\|Dashboard\)\(\)/);
+  const match = render.match(/\(\{([^}]+)\}\[view\]\|\|Dashboard\)(?:\(\)|;)/);
   if (!match) fail('Could not find render view map.');
   const views = new Map();
   for (const item of match[1].matchAll(/'([^']+)'\s*:\s*([A-Za-z_$][\w$]*)/g)) {

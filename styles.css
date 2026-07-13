@@ -5261,3 +5261,23 @@ body.fast-tab-switch .admin-shell .section{
 .dashboard-intake-grid span{color:#aaa39a;font-size:12px}
 @keyframes woaBootSlide{from{transform:translateX(-55%)}to{transform:translateX(195%)}}
 @media(max-width:700px){.app-boot-shell{min-height:100dvh}.dashboard-intake-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Focused workspace tabs stay compact inside the older multi-column page grids. */
+@media(min-width:921px){
+  .view-api-roadmap>.api-tabs,
+  .view-settings>.settings-tabs,
+  .view-reports>.report-tabs{
+    grid-column:1/-1!important;
+    align-self:start;
+    height:max-content;
+    min-height:0;
+    margin-bottom:0;
+  }
+  #root .admin-shell .view-api-roadmap>section.api-provider-focused,
+  #root .admin-shell .view-api-roadmap>section.api-dependency-matrix,
+  #root .admin-shell .view-settings>.settings-tabs~section,
+  #root .admin-shell .view-reports>.report-tabs~section,
+  #root .admin-shell .view-reports>.report-tabs~.stats{
+    grid-column:1/-1!important;
+  }
+}
