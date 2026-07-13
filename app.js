@@ -844,6 +844,39 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function safeRenderErrorText(err){
+  var raw='';
+  try{raw=String((err&&(err.message||err.reason&&err.reason.message))||err||'Display error')}catch(e){raw='Display error'}
+  return raw.slice(0,240)
+}
+function safeRenderEscape(v){
+  return String(v==null?'':v).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})
+}
+function safeRenderNavButtons(){
+  var allowed=(nav&&nav.length?nav:['Dashboard','Payments','Operations','Messages','Reports','Settings']).filter(function(n){return n!=='Apply'}).slice(0,10);
+  return allowed.map(function(n){return '<button data-view="'+safeRenderEscape(n)+'" class="'+(view===n?'active':'')+'"><span>'+safeRenderEscape(n==='Payments'&&isOwner&&isOwner()?'Payments & Customers':n)+'</span></button>'}).join('')
+}
+function safeRenderRecovery(err,failedView,failedTab){
+  var msg=safeRenderErrorText(err),stamp=new Date().toISOString(),role=safeRenderEscape((currentUser&&currentUser.role)||'Staff'),name=safeRenderEscape((currentUser&&(currentUser.name||currentUser.username||currentUser.email))||'WheelsonAuto');
+  window.__woaLastUiError={at:stamp,view:failedView||view,tab:failedTab||tab,message:msg};
+  try{
+    root.innerHTML='<div class="app admin-shell render-recovery-shell"><aside class="sidebar"><a class="brand brand-link" href="https://www.wheelsonauto.com/"><img class="admin-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=160" alt="WheelsonAuto logo"><div><b>WheelsonAuto</b><span>Command center</span></div></a><div class="nav">'+safeRenderNavButtons()+'</div><div class="side-note"><b>'+role+' account</b><br>'+name+'<br>Display recovery is active.<br>Your saved business data was not changed.</div></aside><main class="main view-recovery"><div class="topbar compact-title"><h1>Tab recovery</h1><div class="account-actions"><button class="btn" data-action="refresh-data">Refresh data</button><a class="btn danger" href="/logout">Log out</a></div></div><section class="card section render-recovery-panel"><div class="section-head"><div><h2>This tab hit a display error</h2><p>The app caught it before the screen froze. Use a shortcut below while the error is recorded for repair.</p></div>'+badge('Recovered','warn')+'</div><div class="render-recovery-detail"><strong>Where it happened</strong><span>'+safeRenderEscape(failedView||view||'Unknown')+(failedTab?' / '+safeRenderEscape(failedTab):'')+'</span></div><div class="render-recovery-detail"><strong>What the browser reported</strong><code>'+safeRenderEscape(msg)+'</code></div><div class="render-recovery-actions"><button class="btn primary" data-view="Dashboard">Dashboard</button><button class="btn gold" data-view="Payments" data-tab="Active">Payments</button><button class="btn gold" data-view="Operations" data-tab="Fleet">Operations</button><button class="btn" data-view="Messages" data-tab="Inbox">Messages inbox</button><button class="btn" data-view="Reports">Reports</button><button class="btn" data-action="refresh-data">Refresh data</button></div><div class="notice">If this appears again, stay on this screen and the last error will remain available as <code>window.__woaLastUiError</code> for the repair pass.</div></section></main>'+mobileQuickbar()+'</div>';
+    scrubRoleUi();
+  }catch(e){
+    root.innerHTML='<div class="app admin-shell render-recovery-shell"><main class="main view-recovery"><section class="card section render-recovery-panel"><h1>Tab recovery</h1><p>The app caught a display error before it froze.</p><div class="render-recovery-detail"><strong>Error</strong><code>'+safeRenderEscape(msg)+'</code></div><div class="render-recovery-actions"><button class="btn primary" data-view="Dashboard">Dashboard</button><button class="btn" data-action="refresh-data">Refresh data</button><a class="btn danger" href="/logout">Log out</a></div></section></main></div>'
+  }
+}
+var __woaSafeRenderBase=render;
+render=function(){
+  try{return __woaSafeRenderBase()}
+  catch(err){safeRenderRecovery(err,view,tab)}
+};
+window.addEventListener('error',function(e){
+  window.__woaLastUiError={at:new Date().toISOString(),view:view,tab:tab,message:safeRenderErrorText(e.error||e.message)};
+});
+window.addEventListener('unhandledrejection',function(e){
+  window.__woaLastUiError={at:new Date().toISOString(),view:view,tab:tab,message:safeRenderErrorText(e.reason||e)};
+});
 function insertStarSystemAuditor(){
   if(view!=='Messages'||tab!=='Star')return;
   var main=document.querySelector('.main.view-messages'),anchor=main&&main.querySelector('.star-readiness-panel,.star-command-center,.star-qa-manager,.star-ai-panel');
