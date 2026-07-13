@@ -148,6 +148,10 @@ async function main() {
     assert(!tamperedOwnerRead.json && tamperedOwnerRead.text.includes('WheelsonAuto Portal'), 'Tampered staff session cookie should not authenticate API access.');
     const ownerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(ownerState.status === 200 && ownerState.json, 'Owner could not read state.');
+    const initialStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
+    assert(initialStateVersion.status === 200 && initialStateVersion.json && initialStateVersion.json.version, 'State version endpoint should return a lightweight authenticated version.');
+    const unchangedStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
+    assert(unchangedStateVersion.json.version === initialStateVersion.json.version, 'State version should remain stable while business data is unchanged.');
 
     const duplicateState = JSON.parse(JSON.stringify(ownerState.json));
     duplicateState.vehicles = duplicateState.vehicles || [];
@@ -197,7 +201,10 @@ async function main() {
       { id: 'claim-direct-unmatched-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'missing-payment-id', amount: 55, status: 'Open' }
     );
     const duplicateWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateState });
-    assert(duplicateWrite.status === 200 && duplicateWrite.json.ok, 'Owner state write failed.');
+    assert(duplicateWrite.status === 200 && duplicateWrite.json.ok && duplicateWrite.json.version, 'Owner state write failed or did not return the saved state version.');
+    const savedStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
+    assert(savedStateVersion.json.version === duplicateWrite.json.version, 'State version endpoint should match the version returned by the completed save.');
+    assert(savedStateVersion.json.version !== initialStateVersion.json.version, 'State version should change immediately after a real save.');
     const duplicateRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const duplicateRows = (duplicateRead.json.vehicles || []).filter(vehicle => String(vehicle.name || '').startsWith('Direct Duplicate'));
     assert(duplicateRows.length === 2, 'Duplicate ID repair should preserve both rows.');

@@ -172,6 +172,9 @@ if (!/organizationId:\s*userOrganizationId\(user\)/.test(server)) {
 if (!/changed:\s*changes\.length > 0/.test(server) || !/changes,\s*version:\s*await dataVersion\(\)/.test(server)) {
   fail('State save route should return changed status and change details.');
 }
+if (!/protectConcurrentLocalWrites\(nextState,\s*\{\s*preferIncoming:\s*true,\s*preserveLatestIntegrations:\s*true\s*\}\)/.test(server)) {
+  fail('State saves should preserve concurrent background sync rows and the newest integration state.');
+}
 ['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/tasks', '/api/account/password'].forEach(route => {
   const index = server.indexOf("url.pathname === '" + route + "'");
   if (index < 0) fail('Could not find direct-save route: ' + route);

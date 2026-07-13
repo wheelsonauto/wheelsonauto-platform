@@ -5788,13 +5788,14 @@ function upsertById(list, incoming) {
   return next;
 }
 function mergeById(preferred, fallback) {
-  const merged = [];
-  const seen = new Set();
-  [...(Array.isArray(preferred) ? preferred : []), ...(Array.isArray(fallback) ? fallback : [])].forEach(item => {
-    const id = item && item.id;
+  const merged = (Array.isArray(preferred) ? preferred : []).filter(Boolean);
+  const seen = new Set(merged.map(item => item && item.id).filter(Boolean));
+  (Array.isArray(fallback) ? fallback : []).forEach(item => {
+    if (!item) return;
+    const id = item.id;
     if (id && seen.has(id)) return;
     if (id) seen.add(id);
-    if (item) merged.push(item);
+    merged.push(item);
   });
   return merged;
 }
@@ -5802,11 +5803,12 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   await writeDataQueue.catch(() => {});
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
   });
   data.customers = preferIncoming ? upsertById(data.customers, latest.customers) : upsertById(latest.customers, data.customers);
   data.payments = preferIncoming ? upsertById(data.payments, latest.payments) : upsertById(latest.payments, data.payments);
+  if (options.preserveLatestIntegrations) data.integrations = latest.integrations || data.integrations || {};
   return data;
 }
 async function syncCloverIntoData(data, options = {}) {
@@ -8421,6 +8423,7 @@ const server = http.createServer(async (req, res) => {
       const changes = auditChangedSections(current, nextState);
       await queueStateChangeNotifications(current, nextState, user);
       if (changes.length) appendAuditLog(nextState, user, 'Platform state saved', changes);
+      await protectConcurrentLocalWrites(nextState, { preferIncoming: true, preserveLatestIntegrations: true });
       await writeData(nextState);
       return json(res, 200, { ok: true, changed: changes.length > 0, changes, version: await dataVersion() });
     }
