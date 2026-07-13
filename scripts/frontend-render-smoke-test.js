@@ -426,7 +426,8 @@ function ownerSmoke() {
     vehicleId: 'veh-003',
     cloverPaymentId: 'smoke-clover-receipt'
   });
-  assertCompactBoard('Owner dashboard', html(context), ['Dashboard', 'Portal intake & verification', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
+  assertCompactBoard('Owner dashboard', html(context), ['Dashboard', 'Customer intake', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
+  assertNo('Owner dashboard', html(context), ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Data truth queue', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
@@ -439,7 +440,7 @@ function ownerSmoke() {
     ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Inspection command', 'Service route', 'Open service work'], true],
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
-    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star system auditor', 'Customer portal requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
+    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star AI control', 'Customer portal requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Customer portal requests', 'Follow-up queue', 'Search portal requests'], true],
     ['Documents', 'Documents', undefined, ['Documents', 'Customer portal requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Toll follow-up route', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
@@ -448,7 +449,7 @@ function ownerSmoke() {
     ['API roadmap launch proof', 'API Roadmap', undefined, ['API Roadmap', 'Launch proof board', 'Payment/autopay lock', 'API operating bridge', 'Provider launch queue'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
-    ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Portal intake & verification', 'Daily closeout', 'Executive snapshot'], false],
+    ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Customer intake', 'Daily closeout', 'Executive snapshot'], false],
     ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Accounting control', 'Car profitability & recovery'], false],
     ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Dispute identity resolver', 'Customer risk report', 'Failed / retry payments'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {

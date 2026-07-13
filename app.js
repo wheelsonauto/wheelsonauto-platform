@@ -307,7 +307,7 @@ function vehicleRecordKey(v){return String(v&&v.id||'')}
 function matchVehicleFromRecord(r){if(!r)return null;var id=String(r.vehicleId||'').trim(),vin=String(r.vin||'').trim().toLowerCase(),plate=String(r.plate||r.licensePlate||r.tag||'').trim().toLowerCase(),name=normName(r.vehicle||'');if(id&&findVehicle(id))return findVehicle(id);if(vin){var vinMatches=(db.vehicles||[]).filter(function(v){return String(v.vin||'').trim().toLowerCase()===vin});if(vinMatches.length===1)return vinMatches[0]}if(plate){var plateMatches=(db.vehicles||[]).filter(function(v){return String(v.plate||v.stock||'').trim().toLowerCase()===plate});if(plateMatches.length===1)return plateMatches[0]}if(name){var nameMatches=(db.vehicles||[]).filter(function(v){return normName(vehicleName(v))===name||normName(v.name)===name});if(nameMatches.length===1)return nameMatches[0]}return null}
 function linkSourceRows(){var rows=[];(db.contracts||[]).forEach(function(c){if(c.customer&&activeLinkStatus(c.status))rows.push({priority:1,customer:c.customer,record:c,updated:c.updatedAt||c.createdAt||'',source:'customer file'})});(db.customers||[]).forEach(function(c){if(c.name&&activeLinkStatus(c.status||c.stage))rows.push({priority:2,customer:c.name,record:c,updated:c.updatedAt||c.createdAt||'',source:'customer record'})});recurringRoster().forEach(function(r){if(r.customer&&activeLinkStatus(r.status))rows.push({priority:3,customer:r.customer,record:r,updated:r.updatedAt||r.createdAt||r.cardSavedAt||'',source:'autopay'})});return rows}
 function reconcileFleetCustomerLinks(){if(isPublic)return false;var claims={};linkSourceRows().forEach(function(row){var v=matchVehicleFromRecord(row.record);if(!v)return;var key=vehicleRecordKey(v),old=claims[key];if(!old||row.priority<old.priority||row.priority===old.priority&&String(row.updated||'')>String(old.updated||''))claims[key]=Object.assign({vehicle:v},row)});var changed=false;Object.keys(claims).forEach(function(k){var x=claims[k],v=x.vehicle,old=v.currentCustomer||'',name=x.customer;if(!name)return;if(normName(old)!==normName(name)){softReconcileVehicleCustomer(v,name);changed=true}else{attachVehicleToCustomerRecords(name,v);(db.maintenance||[]).forEach(function(m){if(m.vehicleId===v.id||normName(m.vehicle)===normName(vehicleName(v))){if(m.customer!==name){m.customer=name;changed=true}m.vehicleId=v.id;m.vehicle=vehicleName(v)}})}if(String(v.status||'').toLowerCase()==='ready'){v.status='Rented';changed=true}});return changed}
-setTimeout(async function(){if(!isPublic&&reconcileFleetCustomerLinks()){await save();render();notify('Customer, fleet, payments, and service links repaired')}},1200);
+function reconcileFleetCustomerLinksOnDemand(){return !isPublic&&reconcileFleetCustomerLinks()}
 
 function vehicleSearchText(v){return [v&&v.id,vehicleName(v||{}),v&&v.name,v&&v.year,v&&v.make,v&&v.model,v&&v.vin,v&&v.plate,v&&v.stock,v&&v.tempTag,v&&v.tracker,v&&v.currentCustomer,v&&v.status].filter(Boolean).join(' ').toLowerCase()}
 function polishCustomerFileVehicleCopy(){var search=document.getElementById('fileVehicleSearch');if(search){search.placeholder='Search any car by year, model, VIN, tag, tracker, or customer...';var small=search.parentElement&&search.parentElement.querySelector('small');if(small)small.textContent='Choose the exact car. Saving transfers it from the previous customer and syncs fleet, payments, and service.'}var sel=document.getElementById('fileVehicleId');if(sel){var small2=sel.parentElement&&sel.parentElement.querySelector('small');if(small2)small2.textContent='All active cars are searchable here so old assignments can be transferred correctly.'}}
@@ -1576,3 +1576,28 @@ starSystemAuditItems=function(){
   return review.concat(base).slice(0,12)
 };
 if(view==='Dashboard'||view==='Reports'||(view==='Messages'&&tab==='Star'))queueRender();
+
+// Keep first paint small. The full script is assembled from progressive feature
+// layers, so boot only after every layer is registered and collapse duplicate
+// command/readiness wrappers back to their focused workspaces.
+function render(){
+  if(!window.__woaBootReady)return;
+  if(view==='Apply')return Apply();
+  if(nav.indexOf(view)<0)view=currentUser.homeView||nav[0]||'Dashboard';
+  ({'Dashboard':Dashboard,'Today':Today,'Applications':Applications,'Operations':Operations,'Fleet':Fleet,'Contracts':Contracts,'Customers':Contracts,'Payments':Payments,'Dispatch':Dispatch,'Maintenance':Maintenance,'Documents':Documents,'Tolls':Tolls,'Insurance':Insurance,'Marketing':Marketing,'Claims & Issues':ClaimsIssues,'Mechanic Portal':MechanicPortal,'Manager Portal':ManagerPortal,'Messages':Messages,'Reports':Reports,'Utilities':Utilities,'Companies':Organizations,'API Roadmap':ApiRoadmap,'Website':Website,'Settings':Settings}[view]||Dashboard)();
+  scrubRoleUi()
+}
+function portalVerificationCommandBoard(){
+  if(roleName()==='mechanic')return'';
+  var messages=(db.messages||[]),cards=(db.cardSetupRequests||[]),links=(db.paymentRequests||[]),docs=(db.documents||[]),jobs=(db.maintenance||[]),claims=(db.claims||[]);
+  var inbound=messages.filter(function(m){return /inbound|received|customer/i.test(String([m.direction,m.status,m.channel].filter(Boolean).join(' ')))}).length;
+  var cardOpen=cards.filter(function(r){return !/complete|saved|closed|deleted|expired|cancel/i.test(String(r.status||'Open'))}).length;
+  var linkOpen=links.filter(function(r){return !/paid|closed|cancel|expired/i.test(String(r.status||'Open'))}).length;
+  var review=docs.filter(function(d){return /review|pending|needs/i.test(String(d.status||''))}).length+jobs.filter(function(m){return /customer portal/i.test(String([m.source,m.notes].filter(Boolean).join(' ')))&&isOpenMaintenance(m)}).length+claims.filter(function(c){return /customer portal/i.test(String([c.source,c.notes].filter(Boolean).join(' ')))&&disputeClaimOpen(c)}).length;
+  return '<section class="card section portal-verification-command dashboard-intake-summary no-auto-search"><div class="section-head"><div><h2>Customer intake</h2><p>New replies, card setup, payment links, and proof/service review.</p></div><div class="actions"><button class="btn primary" data-view="Messages" data-tab="Inbox">Open inbox</button><button class="btn" data-view="Documents">Review proof</button></div></div><div class="dashboard-intake-grid"><button data-view="Messages" data-tab="Inbox"><strong>'+inbound+'</strong><span>Replies</span></button><button data-view="Messages" data-tab="Queue"><strong>'+cardOpen+'</strong><span>Card setup</span></button><button data-view="Messages" data-tab="Queue"><strong>'+linkOpen+'</strong><span>Open links</span></button><button data-view="Documents"><strong>'+review+'</strong><span>Needs review</span></button></div></section>'
+}
+if(typeof __woaDashboardStarCommandBase==='function')Dashboard=__woaDashboardStarCommandBase;
+if(typeof __woaMessagesCommunicationBase==='function'){MessagesFast=__woaMessagesCommunicationBase;Messages=MessagesFast}
+if(typeof __woaReportsReadinessBase==='function'){ReportsFast=__woaReportsReadinessBase;Reports=ReportsFast}
+window.__woaBootReady=true;
+if(!renderQueued)queueRender();
