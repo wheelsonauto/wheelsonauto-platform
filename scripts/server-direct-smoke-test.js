@@ -191,7 +191,11 @@ async function main() {
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-draft-portal', customer: 'Direct Draft Portal Customer', phone: '3135550188', email: 'direct-draft-portal@example.com', vehicle: 'Direct Draft Portal Car', amount: 77, status: 'Active' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-missing-portal-draft', customer: 'Direct Missing Portal Draft Customer', phone: '3135550189', email: 'direct-missing-portal@example.com', vehicle: 'Direct Missing Portal Draft Car', amount: 79, status: 'Active' });
     duplicateState.customerAccounts.unshift({ id: 'direct-draft-portal-login', name: 'Direct Draft Portal Customer', customer: 'Direct Draft Portal Customer', username: 'direct-draft-portal', phone: '3135550188', email: 'direct-draft-portal@example.com', status: 'Active', recurringPaymentId: 'rec-direct-draft-portal' });
-    duplicateState.maintenance.unshift({ id: 'mnt-direct-autopay-file-open', vehicleId: 'veh-direct-autopay-file', vehicle: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tracker: 'TRK-AUTO', customer: 'Previous Direct Service Customer', type: 'Monthly inspection', issue: 'Open inspection should follow reassigned vehicle', due: '2026-07-20', status: 'Scheduled' });
+    duplicateState.maintenance.unshift(
+      { id: 'mnt-direct-autopay-file-open', vehicleId: 'veh-direct-autopay-file', vehicle: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tracker: 'TRK-AUTO', customer: 'Previous Direct Service Customer', type: 'Monthly inspection', issue: 'Open inspection should follow reassigned vehicle', due: '2026-07-20', status: 'Scheduled' },
+      { id: 'mnt-direct-exact-copy-a', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', customer: 'Direct Dispute Customer', type: 'Monthly inspection / oil change', issue: 'Exact duplicate repair test', due: '2026-07-29', nextDue: '2026-07-29', status: 'Scheduled' },
+      { id: 'mnt-direct-exact-copy-b', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', customer: 'Direct Dispute Customer', type: 'Monthly inspection / oil change', issue: 'Exact duplicate repair test', due: '2026-07-29', nextDue: '2026-07-29', status: 'Scheduled' }
+    );
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
@@ -209,6 +213,11 @@ async function main() {
     const duplicateRows = (duplicateRead.json.vehicles || []).filter(vehicle => String(vehicle.name || '').startsWith('Direct Duplicate'));
     assert(duplicateRows.length === 2, 'Duplicate ID repair should preserve both rows.');
     assert(new Set(duplicateRows.map(vehicle => vehicle.id)).size === 2, 'Duplicate ID repair should make unique vehicle IDs.');
+    const duplicateMaintenance = (duplicateRead.json.maintenance || []).filter(row => String(row.id || '').startsWith('mnt-direct-exact-copy-'));
+    assert(duplicateMaintenance.length === 2, 'Exact duplicate service repair should preserve both history rows.');
+    assert(duplicateMaintenance.filter(row => row.status === 'Scheduled').length === 1, 'Exactly one duplicate service row should remain active.');
+    const archivedMaintenance = duplicateMaintenance.find(row => row.status === 'Duplicate');
+    assert(archivedMaintenance && archivedMaintenance.duplicateOf, 'The copied service row should be archived and linked to the active record.');
     const repairedDispute = (duplicateRead.json.claims || []).find(claim => claim.id === 'claim-direct-dispute');
     assert(repairedDispute && repairedDispute.customer === 'Direct Dispute Customer', 'Clover dispute should pick up the customer name from the linked payment.');
     assert(repairedDispute.customerMatchSource === 'Payment record', 'Clover dispute should record the payment-match source.');

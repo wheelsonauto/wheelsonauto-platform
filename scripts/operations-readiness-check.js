@@ -100,6 +100,9 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
 
 [
   'Search service by customer, VIN, tag, tracker, issue',
+  'Search exact vehicle',
+  'mVehicleSearch',
+  'detailedVehicleOptionLabel',
   'Service work',
   'Maintenance',
   'complete-maintenance',
@@ -119,6 +122,8 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'Completed this month',
   'service-inspection-board'
 ].forEach(text => requireText('Maintenance/service surface', maintenance + staffServiceCard + vehicleIdentityLine + app, text));
+
+['repairDuplicateOpenMaintenance', 'Archived exact duplicate service row'].forEach(text => requireText('Maintenance duplicate preservation', server, text));
 
 [
   'isMonthlyMaintenance',

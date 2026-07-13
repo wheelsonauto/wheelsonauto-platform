@@ -56,7 +56,7 @@ const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-state-poll-9">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-performance-13">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -356,9 +356,47 @@ function ensureBaseOrganization(data) {
   });
   return data;
 }
+function repairDuplicateOpenMaintenance(data) {
+  data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  const seen = new Map();
+  let repaired = 0;
+  data.maintenance.forEach(row => {
+    if (!row) return;
+    const status = String(row.status || 'Scheduled').toLowerCase();
+    if (/complete|fixed|closed|cancel|removed|duplicate|archive|history/.test(status)) return;
+    const vehicle = normKey(row.vehicleId || row.vin || row.vehicle);
+    const type = normKey(row.type || row.issue);
+    const due = String(row.due || row.nextDue || '').trim();
+    const issue = normKey(row.issue || row.notes);
+    const customer = normKey(row.customer);
+    if (!vehicle || !type || !due) return;
+    const key = [vehicle, type, due, issue, customer].join('|');
+    const keeper = seen.get(key);
+    if (!keeper) {
+      seen.set(key, row);
+      return;
+    }
+    row.previousStatus = row.previousStatus || row.status || 'Scheduled';
+    row.status = 'Duplicate';
+    row.tone = 'blue';
+    row.duplicateOf = keeper.id || '';
+    row.archivedAt = row.archivedAt || new Date().toISOString();
+    if (!String(row.notes || '').includes('Archived exact duplicate service row')) {
+      row.notes = [row.notes, 'Archived exact duplicate service row; active work remains on ' + (keeper.id || 'the current service record') + '.'].filter(Boolean).join('\n');
+    }
+    repaired += 1;
+  });
+  if (repaired) {
+    data.systemRepairs = data.systemRepairs || {};
+    data.systemRepairs.duplicateMaintenanceRepairAt = new Date().toISOString();
+    data.systemRepairs.duplicateMaintenanceRepairCount = (data.systemRepairs.duplicateMaintenanceRepairCount || 0) + repaired;
+  }
+  return repaired;
+}
 function repairDataIds(data) {
   repairDuplicateVehicleIds(data);
   repairDuplicateRecordIds(data, 'contracts');
+  repairDuplicateOpenMaintenance(data);
   ensureBaseOrganization(data);
   repairVehicleSheetLinkConflicts(data);
   resolveClaimCustomerLinks(data);

@@ -237,7 +237,7 @@ function renderView(context, view, tab, dashboardTab) {
 }
 
 function assertHealthy(label, output, required = []) {
-  assert(output.length > 600, label + ' rendered too little HTML.');
+  assert(output.length > 600, label + ' rendered too little HTML (' + output.length + ' characters): ' + output.slice(0, 180));
   assert(!/\bundefined\b/.test(output), label + ' rendered "undefined".');
   assert(!/\bNaN\b/.test(output), label + ' rendered "NaN".');
   assert(!/\[object Object\]/.test(output), label + ' rendered an object string.');
