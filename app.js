@@ -1097,9 +1097,9 @@ function apiProviderLaunchItems(){
   var providers=apiProviders(),ops=apiOperationalItems(),byId={};
   providers.forEach(function(p){byId[p.id]=p});
   return ops.map(function(i){
-    var p=byId[i.id]||{},status=p.status||'API needed',tone=apiStatusTone(status),missing=['envKeys','endpoint','liveTest','lastTestResult'].filter(function(k){return !String(p[k]||'').trim()}),next='Record provider details and live test result';
+    var p=byId[i.id]||{},status=p.status||'API needed',tone=apiStatusTone(status),missing=['envKeys','endpoint','liveTest','lastTestAt','lastTestResult'].filter(function(k){return !String(p[k]||'').trim()}),next='Record provider details, live test date, and result';
     if(/needed|provider/i.test(status))next='Choose provider, collect credentials, and keep manual workflow active';
-    else if(/testing/i.test(status))next=missing.indexOf('lastTestResult')>=0?'Run controlled live test and save result':'Review result, then decide if connected';
+    else if(/testing/i.test(status))next=(missing.indexOf('lastTestAt')>=0||missing.indexOf('lastTestResult')>=0)?'Run controlled live test and save date + result':'Review result, then decide if connected';
     else if(/connected/i.test(status)&&missing.length)next='Connected label is blocked until '+missing.join(', ')+' is saved';
     else if(/ready|architecture/i.test(status))next='Ready for API build after owner approves provider and scope';
     return{id:i.id,title:i.title,name:p.name||i.id,status:status,tone:missing.length&&/connected/i.test(status)?'bad':tone,count:i.count,owner:p.owner||'Owner',group:p.group||'API',view:i.view,works:i.live,api:i.api,match:i.needs,next:next,missing:missing,env:p.envKeys||'',endpoint:p.endpoint||'',test:p.liveTest||'',last:p.lastTestResult||p.lastTestAt||''}
