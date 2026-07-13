@@ -4602,6 +4602,11 @@ body.fast-tab-switch .admin-shell .section{
   flex-wrap:wrap;
   gap:7px;
 }
+.role-command-card .actions small{
+  flex:1 1 100%;
+  color:#c8d2dc;
+  line-height:1.35;
+}
 .view-manager-portal .role-command-board,
 .view-mechanic-portal .role-command-board{
   margin-top:12px;
