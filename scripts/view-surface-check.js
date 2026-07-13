@@ -236,6 +236,21 @@ assertIncludes('Daily closeout notes surface', app + server, [
   'auditEvents'
 ]);
 
+const reportCloseoutCommandItems = finalFunctionSlice(app, 'reportCloseoutCommandItems');
+const reportCloseoutCommandBoard = finalFunctionSlice(app, 'reportCloseoutCommandBoard');
+assertIncludes('Reports owner closeout command', reportCloseoutCommandItems + reportCloseoutCommandBoard + app + css, [
+  'Owner closeout command',
+  'End-of-day accounting, money gaps, failed payments, open links, Star approvals, proof, tolls, claims, service, and fleet conflicts',
+  'closeoutSnapshot',
+  'transactionCustomerName',
+  'tollClaims',
+  'customerMaintenanceJobs',
+  'roleCommandCard',
+  'Search closeout by money',
+  'report-closeout-command',
+  'report-closeout-grid'
+]);
+
 assertIncludes('Communications report export surface', app + server, [
   'safeReportText',
   'communicationReportRows',
