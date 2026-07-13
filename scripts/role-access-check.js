@@ -137,6 +137,7 @@ assertIncludes('Mechanic message blocked actions', strings(actionAllowed), [
   'approve-star-ai'
 ]);
 if (!/roleName\(\)==='mechanic'&&mechanicMessageBlocked/.test(actionAllowed)) fail('Mechanic message block is not enforced in actionAllowed.');
+if (!/open-contract/.test(actionAllowed) || !/open-contract-for-name/.test(actionAllowed)) fail('Mechanic customer-file shortcuts are not blocked.');
 if (!/\(roleName\(\)==='mechanic'\|\|roleName\(\)==='manager'\)&&moneyBlocked/.test(actionAllowed)) fail('Mechanic/manager money block is not enforced in actionAllowed.');
 if (!/roleName\(\)==='mechanic'\)return''/.test(textCustomerButton)) fail('Mechanic text buttons are not suppressed.');
 assertIncludes('Manager command board', managerCommandBoard, ['Manager command queue', 'No Clover keys or payment controls', 'manager-command-board']);

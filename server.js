@@ -56,7 +56,7 @@ const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-performance-13">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-final-18">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
@@ -163,7 +163,8 @@ function findVehicleForImportRow(data, row) {
   return vehicles.find(vehicle => String(vehicle && vehicle.sourceRow || '') === bySourceRow) || null;
 }
 function trackerName(row = {}) {
-  return String(row.tracker || row.gps || row.trackingDevice || row.gpsDevice || row.device || '').trim();
+  const value = String(row.tracker || row.gps || row.trackingDevice || row.gpsDevice || row.device || '').trim();
+  return /^(none|n\/?a|not connected|not saved|unknown|-+)$/i.test(value) ? '' : value;
 }
 function importRowVehiclePatch(row, vehicle) {
   const weekly = moneyNumber(row && (row.weeklyAmount || row.weeklyAmountRaw));
@@ -2780,7 +2781,9 @@ function fillBlank(target, patch, fields) {
   return changed;
 }
 function rowProfile(row = {}) {
-  const vehicle = String(row.vehicle || row.name || '').trim();
+  const looksLikeVehicle = String(row.id || '').startsWith('veh-')
+    || !!(row.vin || row.plate || row.stock || row.year || row.make || row.model || row.makeModel);
+  const vehicle = String(row.vehicle || (looksLikeVehicle ? row.name : '') || '').trim();
   const plate = String(row.licensePlate || row.plate || row.stock || '').trim();
   return {
     customer: row.customer || row.name || '',
@@ -3452,6 +3455,22 @@ function enrichLinkedProfiles(data) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const customerRows = [
+    ...data.customers,
+    ...data.contracts,
+    ...data.recurringPayments,
+    ...data.integrations.clover.recurringPlanMembers
+  ];
+  customerRows.forEach(row => {
+    const customer = String(row.customer || row.name || '').trim();
+    const vehicle = String(row.vehicle || '').trim();
+    const hasVehicleIdentity = !!(row.vehicleId || row.vin || row.licensePlate || row.plate);
+    if (!hasVehicleIdentity && customer && vehicle && softNameMatch(customer, vehicle)) {
+      row.previousVehicle = row.previousVehicle || vehicle;
+      row.vehicle = '';
+      row.vehicleLinkStatus = 'Needs vehicle match';
+    }
+  });
   const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data);
   const profiles = [];
   data.customers.forEach(row => profiles.push(rowProfile(row)));
@@ -4672,8 +4691,8 @@ function customerPortalState(data, account) {
   const cardSetupRequests = (scopedData.cardSetupRequests || []).filter(row => isOpenCardSetupRequest(row) && customerPortalRecordMatches(row, identity, 'cardSetup')).slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
   const primaryRecurring = recurringPayments[0] || context.recurring || {};
-  const namedVehicle = (scopedData.vehicles || []).find(row => [primaryRecurring.vehicle, customers[0] && customers[0].vehicle, contracts[0] && contracts[0].vehicle, context.vehicleName].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || {};
-  const primaryVehicle = vehicles[0] || namedVehicle || context.vehicle || {};
+  const namedVehicle = (scopedData.vehicles || []).find(row => [primaryRecurring.vehicle, customers[0] && customers[0].vehicle, contracts[0] && contracts[0].vehicle, context.vehicleName].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || null;
+  const primaryVehicle = vehicles[0] || namedVehicle || (context.vehicle && context.vehicle.id ? context.vehicle : {});
   return {
     account: safeCustomerAccount(account),
     summary: aiContextSummary({ ...context, recurring: primaryRecurring, vehicle: primaryVehicle }),
@@ -4771,9 +4790,12 @@ function customerPortalHtml(account, state) {
   const summary = state.summary || {};
   const amount = recurring.amount || recurring.weeklyAmount || state.customer.weeklyAmount || vehicle.rate || 0;
   const paymentStatus = recurring.status || summary.paymentStatus || 'Not scheduled';
-  const vehicleTitle = summary.vehicle || vehicleNameFromParts(vehicle) || 'Vehicle not linked yet';
-  const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || '';
   const customerName = account.name || account.customer || summary.customer || 'Customer';
+  const summaryVehicle = String(summary.vehicle || '').trim();
+  const vehicleTitle = summaryVehicle && !weakValue('vehicle', summaryVehicle) && !softNameMatch(customerName, summaryVehicle)
+    ? summaryVehicle
+    : (vehicle.id ? vehicleNameFromParts(vehicle) : 'Vehicle not linked yet');
+  const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || '';
   const portalMessageForm = '<form method="POST" action="/customer/message" class="customer-message-form"><label>Message WheelsonAuto<textarea name="body" maxlength="1200" placeholder="Type a payment, service, card, toll, or account question..."></textarea></label><button class="btn primary" type="submit">Send message</button><small>Messages arrive in the WheelsonAuto inbox for admin/manager follow-up.</small></form>';
   const portalPaidOutsideForm = '<form method="POST" action="/customer/paid-outside" class="customer-message-form customer-paid-outside-form"><label>Report payment made outside app<input name="amount" type="number" step="0.01" min="0" value="' + escapeHtml(amount || '') + '"></label><label>Method<select name="method"><option>Cash</option><option>Zelle</option><option>Cash App</option><option>Money order</option><option>Clover terminal</option><option>Other</option></select></label><label>Payment date<input name="paidDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Receipt photo link, screenshot note, or who accepted it"></label><label>Note / proof placeholder<textarea name="note" maxlength="1200" placeholder="Receipt number, who accepted it, screenshot note, or any proof detail..."></textarea></label><button class="btn primary" type="submit">Report payment</button><small>This alerts WheelsonAuto to verify before marking the account paid.</small></form>';
   const portalServiceForm = '<form method="POST" action="/customer/service-request" class="customer-message-form customer-service-form"><label>Request service<select name="type"><option>Monthly inspection / oil change</option><option>Repair issue</option><option>Tire / brake concern</option><option>Warning light</option><option>Other service request</option></select></label><label>Preferred date<input name="preferredDate" type="date"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Photo link, dashboard light photo note, or where proof was sent"></label><label>Notes<textarea name="notes" maxlength="1200" placeholder="Tell us what is going on with the vehicle..."></textarea></label><button class="btn primary" type="submit">Send service request</button><small>This creates a WheelsonAuto service item connected to your vehicle and customer file.</small></form>';

@@ -50,6 +50,11 @@ requireText('Mobile quickbar fixed position', 'position:fixed');
 requireText('Mobile quickbar safe-area padding', 'safe-area-inset-bottom');
 requireText('Mobile quickbar labels', '.quickbar button span');
 requireText('Mobile tabs wrap guard', 'Mobile tab fit guard: section tabs wrap instead of clipping off-screen.');
+requireText('Mobile Operations tab grid', '.admin-shell .view-operations>.staff-tabs');
+requireText('Mobile manager tab grid', '.admin-shell .view-manager-portal>.staff-tabs');
+requireText('Mobile summary card grid', '.admin-shell .view-payments>.stats,');
+requireText('Dark mobile table rows', 'background:#151b21!important');
+requireText('Compact desktop Reports flow', '.admin-shell .view-reports{');
 requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
 requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', '#111820', 'border-color:rgba(240,184,58,.42)', '!important']);

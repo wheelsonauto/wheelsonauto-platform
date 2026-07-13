@@ -492,6 +492,10 @@ async function main() {
     assert(customerLogin.json.account.loginReady === true, 'Customer login API should mark password-backed accounts as login ready.');
     assert(!customerLogin.json.account.passwordHash && !customerLogin.json.account.passwordSalt, 'Customer login API should not expose password secrets.');
     assert(customerLogin.json.account.contractId || customerLogin.json.account.customerId || customerLogin.json.account.vehicleId || customerLogin.json.account.recurringPaymentId, 'Customer login should auto-link to an existing customer file, vehicle, contract, or autopay record.');
+    const cleanPortalLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer123!' } });
+    const cleanPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(cleanPortalLogin.cookie) });
+    assert(cleanPortalState.status === 200 && cleanPortalState.json.ok, 'Customer portal state should load immediately after login creation.');
+    assert(String(cleanPortalState.json.portal.summary.vehicle || '').trim().toLowerCase() !== 'alicia brown', 'A missing vehicle must not inherit the customer name as a fake car title.');
 
     const duplicateCustomerLogin = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,

@@ -1105,6 +1105,76 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
 }
 
+/* Customer self-service uses the same premium dark/gold system as staff. */
+.customer-portal{
+  background:#090a0c;
+  color:#eee6d8;
+}
+.customer-summary-grid article,
+.customer-panel{
+  background:#151618;
+  border:1px solid rgba(200,169,107,.28);
+  border-radius:8px;
+  box-shadow:0 14px 34px rgba(0,0,0,.24);
+}
+.customer-summary-grid span{color:#c8a96b}
+.customer-summary-grid strong,
+.customer-panel h2,
+.customer-detail strong,
+.customer-row strong{color:#f5ead4}
+.customer-summary-grid small,
+.customer-detail span,
+.customer-row small,
+.customer-row p,
+.customer-empty,
+.customer-message-form small{color:#aaa39a}
+.customer-row,
+.customer-empty,
+.customer-next-actions .customer-detail{
+  background:#101113;
+  border-color:rgba(200,169,107,.22);
+  border-radius:8px;
+}
+.customer-message-form label{color:#eee6d8}
+.customer-message-form input,
+.customer-message-form select,
+.customer-message-form textarea{
+  width:100%;
+  min-width:0;
+  border:1px solid rgba(200,169,107,.32);
+  border-radius:8px;
+  background:#0d0e10;
+  color:#f4ead2;
+}
+.customer-message-form textarea{background:#0d0e10;color:#f4ead2}
+.customer-card-form{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:10px 14px;align-items:center;margin-top:4px}
+.customer-card-form small{display:block;min-width:0;line-height:1.45}
+@media(max-width:900px){
+  .customer-portal{background:#090a0c}
+  .customer-card-form{grid-template-columns:1fr}
+  .customer-card-form .btn{width:100%;justify-content:center}
+}
+@media(max-width:760px){
+  .admin-shell .quickbar{
+    display:flex!important;
+    gap:6px;
+    overflow-x:auto;
+    overflow-y:hidden;
+    scroll-snap-type:x proximity;
+    scrollbar-width:none;
+  }
+  .admin-shell .quickbar button{
+    flex:0 0 72px;
+    width:72px;
+    min-width:72px!important;
+    scroll-snap-align:start;
+  }
+  .admin-shell .quickbar button span{
+    max-width:68px;
+    text-overflow:clip;
+  }
+}
+
 /* Payments is one command page: summary first, tab content below */
 @media(min-width:921px){
   .view-payments{
@@ -5262,8 +5332,48 @@ body.fast-tab-switch .admin-shell .section{
 @keyframes woaBootSlide{from{transform:translateX(-55%)}to{transform:translateX(195%)}}
 @media(max-width:700px){.app-boot-shell{min-height:100dvh}.dashboard-intake-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+@media(max-width:760px){
+  .admin-shell .view-operations>.staff-tabs{
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    grid-auto-flow:row!important;
+    grid-auto-columns:auto!important;
+  }
+  .admin-shell .view-manager-portal>.staff-tabs{
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    grid-auto-flow:row!important;
+    grid-auto-columns:auto!important;
+  }
+  .admin-shell .view-payments>.stats,
+  .admin-shell .view-reports>.stats,
+  .admin-shell .view-claims-issues>.stats{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    overflow:visible!important;
+  }
+  .admin-shell .view-payments>.stats .stat,
+  .admin-shell .view-reports>.stats .stat,
+  .admin-shell .view-claims-issues>.stats .stat{
+    min-width:0!important;
+  }
+  .admin-shell .table tr{
+    background:#151b21!important;
+    border-color:rgba(240,184,58,.20)!important;
+    box-shadow:0 8px 18px rgba(0,0,0,.18)!important;
+  }
+}
+
 /* Focused workspace tabs stay compact inside the older multi-column page grids. */
 @media(min-width:921px){
+  .admin-shell .view-reports{
+    display:block!important;
+  }
+  .admin-shell .view-reports>.topbar,
+  .admin-shell .view-reports>.report-tabs,
+  .admin-shell .view-reports>.stats,
+  .admin-shell .view-reports>section{
+    width:100%;
+    margin-bottom:12px!important;
+  }
   .view-api-roadmap>.api-tabs,
   .view-settings>.settings-tabs,
   .view-reports>.report-tabs{

@@ -415,6 +415,12 @@ async function mechanicInteractionSmoke() {
 
 function ownerSmoke() {
   const context = makeContext({ name: 'Owner Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  assert(context.isInventoryVehicle({ status: 'Ready', currentCustomer: '' }) === true, 'Ready unassigned cars should be available inventory.');
+  assert(context.isInventoryVehicle({ status: 'Pending application', currentCustomer: '' }) === false, 'Pending-application cars must not appear in available fleet or autopay pickers.');
+  assert(context.isInventoryVehicle({ status: 'Maintenance', currentCustomer: '' }) === false, 'Maintenance cars must not appear in available fleet or autopay pickers.');
+  assert(context.isInventoryVehicle({ status: 'Active contract', currentCustomer: '' }) === false, 'Unmatched active-contract cars must stay in review instead of available fleet.');
+  assert(context.Operations === context.OperationsTruthFocused, 'Operations must use the final mutually exclusive fleet categorization.');
+  assertHealthy('Operations prep/review truth split', renderView(context, 'Operations', 'Review'), ['Prep / review', 'Unassigned cars that need prep']);
   context.db.payments = context.db.payments || [];
   context.db.payments.unshift({
     id: 'smoke-paid-receipt',
@@ -426,8 +432,9 @@ function ownerSmoke() {
     vehicleId: 'veh-003',
     cloverPaymentId: 'smoke-clover-receipt'
   });
-  assertCompactBoard('Owner dashboard', html(context), ['Dashboard', 'Customer intake', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
-  assertNo('Owner dashboard', html(context), ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
+  const ownerDashboard = renderView(context, 'Dashboard', 'Board');
+  assertCompactBoard('Owner dashboard', ownerDashboard, ['Dashboard', 'Customer intake', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
+  assertNo('Owner dashboard', ownerDashboard, ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
@@ -437,7 +444,7 @@ function ownerSmoke() {
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
     ['Operations service', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Operations', 'Claims, tolls & issues', 'staff-card-board']],
-    ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Inspection command', 'Service route', 'Open service work'], true],
+    ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board'], true],
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star AI control', 'Customer requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
@@ -474,7 +481,7 @@ function managerSmoke() {
     ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
     ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
-    ['Manager reports', 'Reports', 'Summary', ['Reports', 'Owner snapshot'], false],
+    ['Manager reports', 'Reports', 'Summary', ['Reports', 'Operations snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'Approval handoff', 'table-wrap'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
@@ -482,12 +489,13 @@ function managerSmoke() {
     else assertHealthy(label, output, required);
     assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="new-toll"', 'data-action="new-toll-import"', 'data-action="send-claim-link"', 'data-action="save-clover"', 'data-view="Settings"']);
   });
+  assertNo('Manager portal duplicate queue', html(context), ['Manager command queue']);
 }
 
 function mechanicSmoke() {
   const context = makeContext({ name: 'Mechanic Smoke', role: 'Mechanic', homeView: 'Mechanic Portal', access: 'Mechanic access' });
   assertCompactBoard('Mechanic portal', html(context), ['Mechanic Portal', 'Priority work']);
-  assertNo('Mechanic portal', html(context), ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"']);
+  assertNo('Mechanic portal', html(context), ['Mechanic shop queue', 'data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"', 'data-action="open-contract"', 'data-action="open-contract-for-name"']);
 
   [
     ['Mechanic maintenance', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board']],
@@ -497,6 +505,7 @@ function mechanicSmoke() {
     const output = renderView(context, view, tab);
     assertCompactBoard(label, output, required);
     assertNo(label, output, ['data-view="Messages"', 'data-view="Payments"', 'data-action="compose-message"', 'data-action="record-charge"', 'data-action="send-pay-link"', 'data-action="send-claim-link"', 'class="money"', 'tolls & issues', 'Import tolls', 'Clover dispute']);
+    if (view === 'Maintenance') assertNo(label + ' duplicate work lists', output, ['Inspection command', 'Service route']);
   });
 
   const blocked = renderView(context, 'Messages', 'Inbox');
