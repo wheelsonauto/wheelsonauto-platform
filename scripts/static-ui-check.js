@@ -244,6 +244,7 @@ const criticalActionRequirements = [
   ['Staff account save flow', 'save-staff', ['/api/staff-accounts', 'await refreshData(true)', 'closeModal()', 'Settings()']],
   ['API provider save flow', 'save-api-provider', ['/api/api-providers', 'await refreshData(true)', 'closeModal()', 'ApiRoadmap()']],
   ['API task creation flow', 'create-api-task', ['/api/tasks', 'await refreshData(true)', 'closeModal()', 'Dispatch()']],
+  ['iFleet coverage task sync flow', 'sync-ifleet-coverage-tasks', ['/api/system/ifleet-coverage/tasks', 'await refreshData(true)', 'Dispatch()']],
   ['Launch proof task creation flow', 'create-launch-proof-task', ['/api/tasks', 'ifleetLaunchProofItems()', 'await refreshData(true)', 'Dispatch()']],
   ['Bulk launch proof task creation flow', 'create-all-launch-proof-tasks', ['/api/tasks', 'launchProofTaskExists', 'launchProofTaskPayload', 'await refreshData(true)', 'Dispatch()']],
   ['Star audit task creation flow', 'create-star-audit-task', ['/api/tasks', 'starSystemAuditItems()', 'starAuditTaskPayload', 'await refreshData(true)', 'Dispatch()']],

@@ -3182,6 +3182,58 @@ function ifleetFunctionCoverageRows(data = {}) {
   add('api_provider_layer', 'API provider layer', 'API-ready', (data.apiProviders || []).length, apiProviderReview, 'API Roadmap', '', 'Clover, SMS/email, EZPass, insurance, background, tracker, accounting, marketing, and billing providers must record credentials, endpoint, live-test date, and result before they are called connected.');
   return rows;
 }
+function syncIfleetCoverageDispatchTasks(data = {}) {
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const now = new Date().toISOString();
+  const rows = ifleetFunctionCoverageRows(data);
+  const changed = [];
+  rows.forEach(row => {
+    const taskId = 'task-ifleet-coverage-' + normKey(row.key || row.label || 'module').slice(0, 80);
+    let task = data.tasks.find(item => item.id === taskId);
+    const hasGap = Number(row.gapCount || 0) > 0;
+    const notes = [
+      'Source: backend iFleet function coverage',
+      'Module: ' + row.label,
+      'State: ' + row.state,
+      'Gap count: ' + Number(row.gapCount || 0),
+      'Status: ' + row.status,
+      'Fix: ' + row.detail,
+      'Open workflow: ' + (row.view || 'Dashboard') + (row.tab ? ' / ' + row.tab : '')
+    ].filter(Boolean).join('\n');
+    if (!hasGap) {
+      if (task && !/done|closed|complete/i.test(String(task.status || 'Open'))) {
+        Object.assign(task, {
+          status: 'Done',
+          doneAt: now,
+          updatedAt: now,
+          notes: notes + '\n\nAuto-closed because this iFleet module no longer has backend coverage gaps.'
+        });
+        changed.push(task);
+      }
+      return;
+    }
+    const patch = {
+      id: taskId,
+      title: 'iFleet coverage: ' + row.label,
+      type: 'iFleet coverage',
+      customer: row.label,
+      vehicle: row.view || 'WheelsonAuto',
+      due: now.slice(0, 10),
+      status: 'Open',
+      owner: 'Owner',
+      notes,
+      updatedAt: now,
+      createdAt: task && task.createdAt || now
+    };
+    if (task) Object.assign(task, patch);
+    else {
+      task = patch;
+      data.tasks.unshift(task);
+    }
+    changed.push(task);
+  });
+  return { rows, tasks: changed };
+}
 function enrichLinkedProfiles(data) {
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
@@ -8489,6 +8541,29 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/system/health' && req.method === 'GET') {
       const data = await readData();
       return json(res, 200, systemHealthSnapshot(data, user));
+    }
+    if (url.pathname === '/api/system/ifleet-coverage/tasks' && req.method === 'POST') {
+      if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts cannot create system coverage tasks.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const result = syncIfleetCoverageDispatchTasks(scoped);
+      if (!isOwnerUser(user)) {
+        data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+        const scopedTaskIds = new Set((result.tasks || []).map(task => task.id));
+        result.tasks.forEach(task => {
+          const existing = data.tasks.find(item => item.id === task.id);
+          const patch = { ...task, organizationId: userOrganizationId(user) };
+          if (existing) Object.assign(existing, patch, { createdAt: existing.createdAt || patch.createdAt });
+          else data.tasks.unshift(patch);
+        });
+        (data.tasks || []).forEach(task => {
+          if (scopedTaskIds.has(task.id) || !String(task.id || '').startsWith('task-ifleet-coverage-')) return;
+        });
+      }
+      appendAuditLog(data, user, 'iFleet coverage tasks synced', [(result.tasks || []).length + ' task(s)', (result.rows || []).filter(row => Number(row.gapCount || 0) > 0).length + ' module gap(s)']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, tasks: result.tasks || [], coverage: result.rows || [] });
     }
     if (url.pathname === '/api/reports/deep.csv' && req.method === 'GET') {
       const data = await readData();

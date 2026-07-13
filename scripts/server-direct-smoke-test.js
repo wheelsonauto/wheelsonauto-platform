@@ -677,6 +677,10 @@ async function main() {
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'messaging_webhook_secret' && row.status === 'Clean'), 'System readiness should include messaging webhook secret readiness.');
     assert(ownerReadiness.json.truthChecks.some(row => row.key === 'clover_webhook_secret' && row.status === 'Clean'), 'System readiness should include Clover webhook secret readiness.');
     assert(ownerReadiness.json.envChecks.some(row => row.key === 'WOA_SESSION_SECRET' && row.status === 'Missing'), 'System readiness should list missing WOA_SESSION_SECRET for stable signed cookies.');
+    const ifleetCoverageTasks = await request(server, 'POST', '/api/system/ifleet-coverage/tasks', { cookie: ownerCookie });
+    assert(ifleetCoverageTasks.status === 200 && ifleetCoverageTasks.json.ok && Array.isArray(ifleetCoverageTasks.json.coverage) && ifleetCoverageTasks.json.coverage.some(row => row.key === 'autopay_closeout') && ifleetCoverageTasks.json.tasks.some(task => task.id === 'task-ifleet-coverage-autopay_closeout' && task.title === 'iFleet coverage: Autopay + closeout'), 'Owner should be able to sync backend iFleet coverage gaps into stable Dispatch tasks.');
+    const ifleetCoverageState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((ifleetCoverageState.json.tasks || []).some(task => task.id === 'task-ifleet-coverage-autopay_closeout' && task.status === 'Open' && /backend iFleet function coverage/i.test(task.notes || '')), 'Synced iFleet coverage task should be saved in Dispatch with backend coverage notes.');
 
     const draftPortalLogins = await request(server, 'POST', '/api/customer-accounts/create-missing-drafts', { cookie: ownerCookie, json: {} });
     assert(draftPortalLogins.status === 200 && draftPortalLogins.json.ok, 'Owner could not create draft customer portal logins.');
@@ -694,6 +698,8 @@ async function main() {
     assert(mechanicHealth.status === 403, 'Mechanic should not be able to read the money/system health snapshot.');
     const mechanicReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: mechanicCookie });
     assert(mechanicReadiness.status === 403, 'Mechanic should not be able to read readiness truth checks.');
+    const mechanicCoverageTasks = await request(server, 'POST', '/api/system/ifleet-coverage/tasks', { cookie: mechanicCookie });
+    assert(mechanicCoverageTasks.status === 403, 'Mechanic should not be able to create system iFleet coverage tasks.');
     const staffLogout = await request(server, 'GET', '/logout', { cookie: managerCookie });
     assert(staffLogout.status === 302 && staffLogout.location === '/', 'Staff logout should redirect to the login shell.');
     assertSecureCookie(staffLogout.cookie, 'Staff/admin logout', { clear: true });
