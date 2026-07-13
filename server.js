@@ -36,6 +36,7 @@ const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
 const MESSAGING_OWNER_NOTIFY_NUMBER = process.env.WOA_MESSAGING_OWNER_NOTIFY_NUMBER || process.env.MESSAGING_OWNER_NOTIFY_NUMBER || '';
 const MESSAGING_WEBHOOK_SECRET = process.env.WOA_MESSAGING_WEBHOOK_SECRET || process.env.MESSAGING_WEBHOOK_SECRET || '';
+const SMS_BRIDGE_SECRET = process.env.WOA_SMS_BRIDGE_SECRET || MESSAGING_WEBHOOK_SECRET || process.env.TWILIO_AUTH_TOKEN || SESSION_SIGNING_SECRET;
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY || '';
@@ -619,6 +620,9 @@ function publicMessagingStatus(data = {}) {
     fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
     voiceMode: 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
+    ownerMirrorLive: !!(configured && MESSAGING_OWNER_NOTIFY_NUMBER),
+    ownerReplyBridge: MESSAGING_OWNER_NOTIFY_NUMBER ? 'Phone replies use a stable 6-character conversation code so they stay matched to the right customer.' : 'Add the owner mobile number to mirror customer texts and enable safe phone replies.',
+    smsScamGuard: 'Potential scams are labeled, held from Star auto-reply, and require staff review. Phone replies cannot run money or account actions.',
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     webhookSecretConfigured: !!MESSAGING_WEBHOOK_SECRET,
@@ -694,6 +698,106 @@ function cleanPhone(value) {
   if (digits.length === 10) return '+1' + digits;
   if (digits.length === 11 && digits[0] === '1') return '+' + digits;
   return String(value || '').trim();
+}
+function smsScamAssessment(value) {
+  const body = String(value || '').replace(/\s+/g, ' ').trim();
+  const checks = [
+    { reason: 'Requests a password, login, or security code', weight: 2, pattern: /\b(password|passcode|login credentials?|verification code|one[- ]time (?:code|password)|otp|2fa code)\b/i },
+    { reason: 'Requests sensitive identity or bank information', weight: 2, pattern: /\b(social security|ssn|routing number|bank account number|debit card number|credit card number|card security code|cvv)\b/i },
+    { reason: 'Requests gift cards, crypto, or a wire transfer', weight: 2, pattern: /\b(gift cards?|itunes cards?|steam cards?|bitcoin|crypto(?:currency)?|wallet address|wire transfer|western union|moneygram)\b/i },
+    { reason: 'Requests remote access or screen sharing', weight: 2, pattern: /\b(anydesk|teamviewer|remote desktop|screen shar(?:e|ing)|remote access)\b/i },
+    { reason: 'Contains a shortened or masked link', weight: 2, pattern: /(?:https?:\/\/)?(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|rb\.gy|is\.gd|cutt\.ly)\//i },
+    { reason: 'Uses urgent impersonation or account-pressure language', weight: 1, pattern: /\b(act now|immediately|urgent action|account (?:is )?(?:locked|suspended|disabled)|final warning|avoid arrest|warrant|irs|police department)\b/i },
+    { reason: 'Asks to bypass normal payment or verification steps', weight: 1, pattern: /\b(bypass|outside the app|do not tell|keep this secret|personal account|different number)\b/i }
+  ];
+  const matched = checks.filter(check => check.pattern.test(body));
+  const score = matched.reduce((sum, check) => sum + check.weight, 0);
+  return {
+    suspicious: matched.some(check => check.weight >= 2) || score >= 2,
+    score,
+    reasons: matched.map(check => check.reason),
+    preview: body.slice(0, 180)
+  };
+}
+function smsSensitiveActionAssessment(value) {
+  const body = String(value || '').replace(/\s+/g, ' ').trim();
+  const reasons = [];
+  if (/\b(charge|run|process)\b.{0,24}\b(card|payment|autopay)\b|\bcharge (?:him|her|them|customer)\b/i.test(body)) reasons.push('charge or payment action');
+  if (/\b(refund|reverse|void|dispute|chargeback)\b/i.test(body)) reasons.push('refund or dispute action');
+  if (/\b(change|edit|move|stop|cancel|remove|delete)\b.{0,28}\b(card|autopay|payment date|customer|account)\b/i.test(body)) reasons.push('account or autopay change');
+  if (/\b(password|passcode|verification code|one[- ]time code|otp|2fa)\b/i.test(body)) reasons.push('credential or verification content');
+  return { sensitive: reasons.length > 0, reasons };
+}
+function smsBridgeCode(phone) {
+  const normalized = phoneKey(phone);
+  if (!normalized) return '';
+  return crypto.createHmac('sha256', SMS_BRIDGE_SECRET).update('woa-sms-bridge.' + normalized).digest('hex').slice(0, 6).toUpperCase();
+}
+function smsBridgeStore(data) {
+  data.integrations = data.integrations || {};
+  data.integrations.messaging = data.integrations.messaging || {};
+  data.integrations.messaging.smsBridgeThreads = Array.isArray(data.integrations.messaging.smsBridgeThreads) ? data.integrations.messaging.smsBridgeThreads : [];
+  return data.integrations.messaging.smsBridgeThreads;
+}
+function rememberSmsBridgeThread(data, payload = {}) {
+  const phone = cleanPhone(payload.phone || payload.from || payload.to || '');
+  if (!phoneKey(phone) || phoneKey(phone) === phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER)) return null;
+  const code = smsBridgeCode(phone);
+  const threads = smsBridgeStore(data);
+  const now = new Date().toISOString();
+  let thread = threads.find(item => item.code === code || phoneKey(item.phone) === phoneKey(phone));
+  if (!thread) {
+    thread = { id: 'sms-bridge-' + code, code, phone, createdAt: now };
+    threads.unshift(thread);
+  }
+  Object.assign(thread, {
+    code,
+    phone,
+    customer: payload.customer || thread.customer || phone,
+    organizationId: payload.organizationId || thread.organizationId || MAIN_ORG_ID,
+    customerId: payload.customerId || thread.customerId || '',
+    contractId: payload.contractId || thread.contractId || '',
+    recurringPaymentId: payload.recurringPaymentId || thread.recurringPaymentId || '',
+    vehicleId: payload.vehicleId || thread.vehicleId || '',
+    vehicle: payload.vehicle || thread.vehicle || '',
+    vin: payload.vin || thread.vin || '',
+    licensePlate: payload.licensePlate || payload.plate || thread.licensePlate || '',
+    tracker: payload.tracker || thread.tracker || '',
+    lastActivityAt: now
+  });
+  if (String(payload.direction || '').toLowerCase() === 'inbound') thread.lastCustomerInboundAt = now;
+  data.integrations.messaging.smsBridgeThreads = threads
+    .filter(item => Date.now() - new Date(item.lastActivityAt || item.createdAt || 0).getTime() < 7 * 24 * 60 * 60 * 1000)
+    .slice(0, 250);
+  return thread;
+}
+function resolveOwnerSmsBridge(data, value, nowMs = Date.now()) {
+  const body = String(value || '').trim();
+  const threads = smsBridgeStore(data);
+  const codeMatch = body.match(/^#?([A-Z0-9]{6})(?:\s*[:,-]\s*|\s+)([\s\S]+)$/i);
+  if (codeMatch) {
+    const code = codeMatch[1].toUpperCase();
+    const thread = threads.find(item => String(item.code || '').toUpperCase() === code);
+    if (!thread) return { ok: false, error: 'Conversation code ' + code + ' was not found. Open WheelsonAuto Messages and reply there.' };
+    return { ok: true, code, thread, body: String(codeMatch[2] || '').trim(), usedCode: true };
+  }
+  const recentByPhone = new Map();
+  threads.forEach(thread => {
+    const at = new Date(thread.lastCustomerInboundAt || 0).getTime();
+    if (phoneKey(thread.phone) && at && nowMs - at <= 30 * 60 * 1000 && !recentByPhone.has(phoneKey(thread.phone))) recentByPhone.set(phoneKey(thread.phone), thread);
+  });
+  const recent = Array.from(recentByPhone.values());
+  if (recent.length === 1) return { ok: true, code: recent[0].code, thread: recent[0], body, usedCode: false };
+  if (!recent.length) return { ok: false, error: 'No recent customer thread is safe to assume. Reply with the 6-character code shown in the mirrored text, then your message.' };
+  return { ok: false, error: 'More than one customer text is active. Start your reply with the 6-character conversation code so it reaches the right person.' };
+}
+function ownerSmsMirrorBody(payload = {}, thread, scam = {}) {
+  const direction = String(payload.direction || 'Inbound').toLowerCase().startsWith('out') ? 'OUT' : 'IN';
+  const customer = String(payload.customer || thread && thread.customer || payload.phone || 'Customer').trim();
+  const phone = maskPhone(payload.phone || thread && thread.phone || '');
+  const warning = scam.suspicious ? 'POTENTIAL SCAM - DO NOT REPLY OR OPEN LINKS\n' : '';
+  const text = String(payload.body || '').replace(/\s+/g, ' ').trim().slice(0, 1100);
+  return warning + 'WOA [' + (thread && thread.code || '') + '] ' + direction + ' - ' + customer + (phone ? ' ' + phone : '') + '\n' + text + '\nReply: ' + (thread && thread.code || '') + ' your message';
 }
 function parseIncomingMessage(provider, headers, payload) {
   const body = payload || {};
@@ -843,6 +947,175 @@ async function sendProviderSms(to, body, meta = {}) {
     return { sent: true, status: (jsonBody.data && jsonBody.data.record_type) || 'Queued', provider: 'telnyx', externalId: jsonBody.data && jsonBody.data.id || '', response: jsonBody };
   }
   return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+}
+async function sendOwnerSmsMirror(data, payload = {}, settings = messageSettings(data)) {
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const customerPhone = cleanPhone(payload.phone || payload.from || payload.to || '');
+  if (!MESSAGING_OWNER_NOTIFY_NUMBER || !phoneKey(customerPhone) || phoneKey(customerPhone) === phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER)) {
+    return { sent: false, skipped: true, status: 'Owner mirror not configured' };
+  }
+  const thread = rememberSmsBridgeThread(data, { ...payload, phone: customerPhone });
+  if (!thread) return { sent: false, skipped: true, status: 'Customer phone missing' };
+  const scam = payload.scam || smsScamAssessment(payload.body || '');
+  const body = ownerSmsMirrorBody({ ...payload, phone: customerPhone }, thread, scam);
+  let result;
+  let error = '';
+  try {
+    result = await sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER, body, { customer: 'WheelsonAuto owner', ownerMirror: true, messagingSettings: settings });
+  } catch (err) {
+    error = String(err && err.message || err);
+    result = { sent: false, status: 'Mirror failed', provider: MESSAGING_PROVIDER || 'not_configured', message: error };
+  }
+  const record = {
+    id: 'msg-mirror-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
+    externalId: result.externalId || '',
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer: payload.customer || thread.customer || customerPhone,
+    organizationId: payload.organizationId || thread.organizationId || MAIN_ORG_ID,
+    phone: customerPhone,
+    customerPhone,
+    ownerPhone: MESSAGING_OWNER_NOTIFY_NUMBER,
+    to: MESSAGING_OWNER_NOTIFY_NUMBER,
+    direction: 'Owner mirror',
+    channel: 'SMS',
+    template: scam.suspicious ? 'Potential scam warning' : 'Owner notification',
+    subject: String(payload.direction || '').toLowerCase().startsWith('out') ? 'Outbound text mirrored to owner phone' : 'Customer text mirrored to owner phone',
+    status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
+    tone: scam.suspicious || error ? 'bad' : (result.sent ? 'good' : 'warn'),
+    body,
+    provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    source: 'WheelsonAuto phone mirror',
+    bridgeCode: thread.code,
+    scamReasons: scam.reasons || [],
+    hiddenFromInbox: true,
+    customerId: payload.customerId || thread.customerId || '',
+    contractId: payload.contractId || thread.contractId || '',
+    recurringPaymentId: payload.recurringPaymentId || thread.recurringPaymentId || '',
+    vehicleId: payload.vehicleId || thread.vehicleId || '',
+    vehicle: payload.vehicle || thread.vehicle || '',
+    vin: payload.vin || thread.vin || '',
+    licensePlate: payload.licensePlate || payload.plate || thread.licensePlate || '',
+    tracker: payload.tracker || thread.tracker || '',
+    error
+  };
+  data.messages.unshift(record);
+  return { ...result, record, bridgeCode: thread.code, error };
+}
+async function sendOwnerBridgeNotice(data, body, status = 'Owner bridge notice') {
+  if (!MESSAGING_OWNER_NOTIFY_NUMBER) return { sent: false, skipped: true };
+  let result;
+  try {
+    result = await sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER, body, { customer: 'WheelsonAuto owner', ownerBridgeNotice: true, messagingSettings: messageSettings(data) });
+  } catch (err) {
+    result = { sent: false, status: 'Notice failed', provider: MESSAGING_PROVIDER || 'not_configured', message: String(err && err.message || err) };
+  }
+  data.messages.unshift({
+    id: 'msg-owner-notice-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
+    externalId: result.externalId || '',
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer: 'WheelsonAuto owner',
+    phone: MESSAGING_OWNER_NOTIFY_NUMBER,
+    to: MESSAGING_OWNER_NOTIFY_NUMBER,
+    direction: 'System notice',
+    channel: 'SMS',
+    template: status,
+    subject: status,
+    status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
+    tone: result.sent ? 'warn' : 'bad',
+    body,
+    provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    source: 'WheelsonAuto owner phone bridge',
+    hiddenFromInbox: true
+  });
+  return result;
+}
+async function handleOwnerSmsBridge(data, inbound) {
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const receivedAt = new Date();
+  const ownerRecord = {
+    id: 'msg-owner-in-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
+    externalId: inbound.externalId || '',
+    date: receivedAt.toLocaleString('en-US'),
+    createdAt: receivedAt.toISOString(),
+    customer: 'WheelsonAuto owner',
+    phone: MESSAGING_OWNER_NOTIFY_NUMBER,
+    from: inbound.from,
+    to: inbound.to,
+    direction: 'Owner phone',
+    channel: 'SMS',
+    template: 'Owner phone reply',
+    subject: 'Owner phone bridge reply',
+    status: 'Received',
+    tone: 'blue',
+    body: inbound.body,
+    provider: inbound.provider,
+    source: 'WheelsonAuto owner phone bridge',
+    hiddenFromInbox: true
+  };
+  data.messages.unshift(ownerRecord);
+  const resolved = resolveOwnerSmsBridge(data, inbound.body);
+  if (!resolved.ok || !resolved.body) {
+    ownerRecord.status = 'Not routed';
+    ownerRecord.tone = 'warn';
+    ownerRecord.error = resolved.error || 'Reply text was empty.';
+    await sendOwnerBridgeNotice(data, 'WheelsonAuto did not send that reply. ' + ownerRecord.error, 'Owner reply not routed');
+    return { handled: true, sent: false, status: ownerRecord.status, error: ownerRecord.error };
+  }
+  const scam = smsScamAssessment(resolved.body);
+  const sensitive = smsSensitiveActionAssessment(resolved.body);
+  if (scam.suspicious || sensitive.sensitive) {
+    const reasons = scam.reasons.concat(sensitive.reasons);
+    ownerRecord.status = 'Blocked for app review';
+    ownerRecord.tone = 'bad';
+    ownerRecord.scamReasons = reasons;
+    await sendOwnerBridgeNotice(data, 'WheelsonAuto blocked that phone reply for safety. Review it inside the app. Reason: ' + reasons.join(', ') + '.', 'Owner reply blocked');
+    return { handled: true, sent: false, blocked: true, status: ownerRecord.status, reasons };
+  }
+  const thread = resolved.thread;
+  let result;
+  try {
+    result = await sendProviderSms(thread.phone, resolved.body, { customer: thread.customer, ownerPhoneBridge: true, messagingSettings: messageSettings(data) });
+  } catch (err) {
+    result = { sent: false, status: 'Failed', provider: MESSAGING_PROVIDER || 'not_configured', message: String(err && err.message || err) };
+  }
+  const sentRecord = {
+    id: 'msg-owner-out-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
+    externalId: result.externalId || '',
+    date: new Date().toLocaleString('en-US'),
+    createdAt: new Date().toISOString(),
+    customer: thread.customer || thread.phone,
+    organizationId: thread.organizationId || MAIN_ORG_ID,
+    phone: thread.phone,
+    to: thread.phone,
+    direction: 'Outbound',
+    channel: 'SMS',
+    template: 'Owner phone reply',
+    subject: 'Reply sent from owner phone',
+    status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
+    tone: result.sent ? 'good' : 'bad',
+    body: resolved.body,
+    provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    source: 'Owner phone bridge',
+    bridgeCode: thread.code,
+    customerId: thread.customerId || '',
+    contractId: thread.contractId || '',
+    recurringPaymentId: thread.recurringPaymentId || '',
+    vehicleId: thread.vehicleId || '',
+    vehicle: thread.vehicle || '',
+    vin: thread.vin || '',
+    licensePlate: thread.licensePlate || '',
+    tracker: thread.tracker || '',
+    error: result.sent ? '' : (result.message || '')
+  };
+  data.messages.unshift(sentRecord);
+  rememberSmsBridgeThread(data, { ...thread, direction: 'Outbound' });
+  ownerRecord.status = result.sent ? 'Routed to customer' : sentRecord.status;
+  ownerRecord.bridgeCode = thread.code;
+  ownerRecord.customer = thread.customer || thread.phone;
+  appendAuditLog(data, { name: 'Owner phone', role: 'Owner', organizationId: thread.organizationId || MAIN_ORG_ID }, result.sent ? 'Owner phone reply sent' : 'Owner phone reply saved', [thread.customer || thread.phone, thread.vehicle || thread.vin || 'No vehicle linked', sentRecord.status]);
+  return { handled: true, sent: !!result.sent, status: sentRecord.status, customer: thread.customer || '', bridgeCode: thread.code, message: sentRecord };
 }
 async function sendProviderEmail(to, subject, body, meta = {}) {
   const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
@@ -2824,7 +3097,13 @@ async function approveAiMessage(data, payload = {}) {
   draft.tone = sent.tone;
   draft.approvedAt = sent.aiApprovedAt;
   data.messages.unshift(sent);
-  return { sent, result, draft };
+  const ownerMirror = channel === 'SMS' ? await sendOwnerSmsMirror(data, {
+    ...sent,
+    direction: 'Outbound',
+    phone: sent.phone,
+    body: sent.body
+  }, settings) : null;
+  return { sent, result, draft, ownerMirror };
 }
 function emailKey(value) {
   return String(value || '').trim().toLowerCase();
@@ -7483,34 +7762,59 @@ const server = http.createServer(async (req, res) => {
       if (!messagingWebhookAuthorized(req, url, payload, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
       const inbound = parseIncomingMessage(provider, req.headers, payload);
       const data = await readData();
-      const contact = findMessageContact(data, { phone: inbound.from });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       const exists = inbound.externalId && data.messages.some(item => item.externalId === inbound.externalId);
+      if (exists) return json(res, 200, { ok: true, received: false, duplicate: true });
+      if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(inbound.from) === phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER)) {
+        const ownerBridge = await handleOwnerSmsBridge(data, inbound);
+        data.integrations = data.integrations || {};
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOwnerPhoneReplyAt: new Date().toISOString(), lastError: ownerBridge.error || '' };
+        await writeData(data);
+        return json(res, 200, { ok: true, received: true, ownerBridge });
+      }
+      const contact = findMessageContact(data, { phone: inbound.from });
       let inboundRecord = null;
       let aiResult = null;
+      let ownerMirror = null;
+      const scam = smsScamAssessment(inbound.body);
       if (!exists) {
+        const context = aiFindCustomerContext(data, { customer: contact.name, phone: inbound.from }, { role: 'Owner', organizationId: MAIN_ORG_ID });
+        const messageFields = messageContextFields(context, { customer: contact.name, phone: inbound.from });
         inboundRecord = {
           id: 'msg-in-' + Date.now(),
           externalId: inbound.externalId,
           date: new Date().toLocaleString('en-US'),
           createdAt: new Date().toISOString(),
           customer: contact.name || inbound.from || 'Unknown texter',
+          organizationId: messageFields.organizationId || MAIN_ORG_ID,
           phone: inbound.from,
           to: inbound.to,
           direction: 'Inbound',
           channel: 'SMS',
-          template: 'Customer reply',
+          template: scam.suspicious ? 'Potential scam' : 'Customer reply',
           subject: 'Incoming text',
-          status: 'Received',
-          tone: 'blue',
+          status: scam.suspicious ? 'Potential scam' : 'Received',
+          tone: scam.suspicious ? 'bad' : 'blue',
           body: inbound.body,
           provider: inbound.provider,
           source: 'SMS webhook',
-          contactSource: contact.source || ''
+          contactSource: contact.source || '',
+          needsHuman: scam.suspicious,
+          scamReasons: scam.reasons,
+          customerId: messageFields.customerId,
+          contractId: messageFields.contractId,
+          recurringPaymentId: messageFields.recurringPaymentId,
+          vehicleId: messageFields.vehicleId,
+          vehicle: messageFields.vehicle,
+          vin: messageFields.vin,
+          licensePlate: messageFields.licensePlate,
+          plate: messageFields.plate,
+          tracker: messageFields.tracker
         };
         data.messages.unshift(inboundRecord);
         const settings = messageSettings(data);
-        if (settings.aiEnabled && settings.aiDrafts && inbound.body) {
+        rememberSmsBridgeThread(data, { ...inboundRecord, direction: 'Inbound' });
+        if (!scam.suspicious && settings.aiEnabled && settings.aiDrafts && inbound.body) {
           aiResult = await createAiMessageDraft(data, {
             messageId: inboundRecord.id,
             externalId: inbound.externalId || inboundRecord.id,
@@ -7531,28 +7835,27 @@ const server = http.createServer(async (req, res) => {
           }
         }
         if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER) !== phoneKey(inbound.from)) {
-          data.messages.unshift({
-            id: 'msg-mirror-' + Date.now(),
-            date: new Date().toLocaleString('en-US'),
-            createdAt: new Date().toISOString(),
-            customer: contact.name || inbound.from || 'Unknown texter',
-            phone: MESSAGING_OWNER_NOTIFY_NUMBER,
-            direction: 'Owner mirror',
-            channel: 'SMS',
-            template: 'Owner notification',
-            subject: 'Customer text mirrored to owner phone',
-            status: 'Ready to send',
-            tone: 'warn',
-            body: 'WheelsonAuto text from ' + (contact.name || inbound.from || 'customer') + ': ' + inbound.body,
-            provider: MESSAGING_PROVIDER,
-            source: 'WheelsonAuto mirror'
-          });
+          ownerMirror = await sendOwnerSmsMirror(data, { ...inboundRecord, direction: 'Inbound', scam }, settings);
         }
         data.integrations = data.integrations || {};
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundFrom: maskPhone(inbound.from), lastError: '' };
+        data.integrations.messaging = {
+          ...(data.integrations.messaging || {}),
+          ...publicMessagingStatus(data),
+          lastInboundAt: new Date().toISOString(),
+          lastInboundFrom: maskPhone(inbound.from),
+          lastScamAt: scam.suspicious ? new Date().toISOString() : (data.integrations.messaging && data.integrations.messaging.lastScamAt || ''),
+          lastError: ownerMirror && ownerMirror.error || ''
+        };
         await writeData(data);
       }
-      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
+      return json(res, 200, {
+        ok: true,
+        received: !exists,
+        customer: contact.name || '',
+        scam: scam.suspicious ? { status: 'Potential scam', reasons: scam.reasons } : null,
+        ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null,
+        ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null
+      });
     }
     if (url.pathname === '/api/webhooks/email' && req.method === 'POST') {
       const rawBody = await readBody(req);
@@ -8752,10 +9055,11 @@ const server = http.createServer(async (req, res) => {
           claimId: payload.claimId || ''
         };
         data.messages.unshift(record);
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: '' };
+        const ownerMirror = channel === 'SMS' ? await sendOwnerSmsMirror(data, { ...record, direction: 'Outbound', phone, body }, settings) : null;
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: ownerMirror && ownerMirror.error || '' };
         appendAuditLog(data, user, result.sent ? 'Customer message sent' : 'Customer message drafted', [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
         await writeData(data);
-        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, warning: result.message || '' });
+        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
       } catch (err) {
         const record = {
           id: 'msg-out-failed-' + Date.now(),
@@ -9395,5 +9699,11 @@ module.exports = {
   verifyResendWebhook,
   verifyTwilioWebhook,
   parseIncomingEmail,
-  parseIncomingMessage
+  parseIncomingMessage,
+  smsScamAssessment,
+  smsSensitiveActionAssessment,
+  smsBridgeCode,
+  rememberSmsBridgeThread,
+  resolveOwnerSmsBridge,
+  ownerSmsMirrorBody
 };

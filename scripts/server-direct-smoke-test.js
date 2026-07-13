@@ -124,9 +124,35 @@ async function main() {
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
   delete require.cache[require.resolve('../server.js')];
-  const { server, hydrateIncomingEmail, parseIncomingEmail, verifyResendWebhook } = require('../server.js');
+  const {
+    server,
+    hydrateIncomingEmail,
+    parseIncomingEmail,
+    verifyResendWebhook,
+    smsScamAssessment,
+    smsSensitiveActionAssessment,
+    smsBridgeCode,
+    rememberSmsBridgeThread,
+    resolveOwnerSmsBridge,
+    ownerSmsMirrorBody
+  } = require('../server.js');
 
   try {
+    assert(smsScamAssessment('Send me your verification code using https://bit.ly/fake').suspicious, 'Credential and shortened-link SMS should be marked as a potential scam.');
+    assert(!smsScamAssessment('Hi, can I bring the car in for an oil change Tuesday?').suspicious, 'Normal customer service SMS should not be marked as a scam.');
+    assert(smsSensitiveActionAssessment('Charge the customer card and change autopay to Friday').sensitive, 'Owner phone money/account instructions should require app review.');
+    const bridgeData = {};
+    const bridgeThread = rememberSmsBridgeThread(bridgeData, { customer: 'Bridge Customer', phone: '3135550117', direction: 'Inbound', vehicle: '2018 Test Car', vin: 'BRIDGEVIN1' });
+    assert(bridgeThread && bridgeThread.code === smsBridgeCode('3135550117') && bridgeThread.code.length === 6, 'SMS bridge should create a stable 6-character conversation code.');
+    const codedBridgeReply = resolveOwnerSmsBridge(bridgeData, bridgeThread.code + ' Thanks, we will see you Tuesday.');
+    assert(codedBridgeReply.ok && codedBridgeReply.thread.phone === '+13135550117' && codedBridgeReply.body === 'Thanks, we will see you Tuesday.', 'Owner coded SMS reply should resolve to the right customer thread.');
+    const recentBridgeReply = resolveOwnerSmsBridge(bridgeData, 'I will call you shortly.');
+    assert(recentBridgeReply.ok && !recentBridgeReply.usedCode, 'A code-less owner reply should be allowed only for one unambiguous recent inbound customer.');
+    rememberSmsBridgeThread(bridgeData, { customer: 'Second Bridge Customer', phone: '3135550118', direction: 'Inbound' });
+    assert(!resolveOwnerSmsBridge(bridgeData, 'This reply is ambiguous.').ok, 'A code-less owner reply must be blocked when more than one customer thread is active.');
+    const mirrorPreview = ownerSmsMirrorBody({ customer: 'Bridge Customer', phone: '3135550117', direction: 'Inbound', body: 'Please send your OTP to bit.ly/fake' }, bridgeThread, smsScamAssessment('Please send your OTP to bit.ly/fake'));
+    assert(mirrorPreview.includes('POTENTIAL SCAM') && mirrorPreview.includes(bridgeThread.code), 'Owner mirror should visibly warn about potential scams and include the conversation code.');
+
     const resendPayload = JSON.stringify({ type: 'email.received', data: { email_id: 'direct-resend-email', from: 'Direct Customer <direct-customer@example.com>', to: ['office@wheelsonauto.com'], subject: 'Resend body retrieval' } });
     const resendTimestamp = String(Math.floor(Date.now() / 1000));
     const resendId = 'direct-resend-webhook';
