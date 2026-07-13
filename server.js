@@ -1629,6 +1629,8 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const serviceIdentityGaps = serviceIdentityGapRows(scoped);
   const claimEvidenceGaps = claimEvidenceGapRows(scoped);
   const companyScopeGaps = companyScopeGapRows(scoped);
+  const ifleetCoverageRows = ifleetFunctionCoverageRows(scoped);
+  const ifleetCoverageGaps = ifleetCoverageRows.filter(row => row.gapCount > 0);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -1659,6 +1661,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All service', '', '', '', '', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.length ? 'Review' : 'Clean', 'Star QA', serviceIdentityGaps.length ? 'Open service/inspection jobs missing mechanic-ready identity: ' + serviceIdentityGaps.map(row => row.vehicle + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Open service jobs have customer, vehicle, VIN/tag, tracker, and cycle context');
   addReportRow(rows, 'Star QA', today, 'All claims', '', '', '', '', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.length ? 'Review' : 'Clean', 'Star QA', claimEvidenceGaps.length ? 'Open claims/tolls/disputes missing customer, vehicle, amount, proof/reference, or follow-up: ' + claimEvidenceGaps.map(row => row.customer + ' ' + row.type + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Open claims, tolls, violations, disputes, and reimbursements have evidence context');
   addReportRow(rows, 'Star QA', today, 'All companies', '', '', '', '', 'Company scope', companyScopeGaps.length, companyScopeGaps.length ? 'Review' : 'Clean', 'Star QA', companyScopeGaps.length ? 'Multi-company records missing or using invalid company scope: ' + companyScopeGaps.map(row => row.collection + ' ' + (row.customer || row.vehicle || row.id || 'record')).slice(0, 12).join(' | ') : 'Multi-company records are scoped to saved company/store records');
+  addReportRow(rows, 'Star QA', today, 'All modules', '', '', '', '', 'iFleet function coverage', ifleetCoverageGaps.length, ifleetCoverageGaps.length ? (ifleetCoverageGaps.some(row => row.tone === 'bad') ? 'Review' : 'Open') : 'Clean', 'Star QA', ifleetCoverageGaps.length ? 'iFleet-style modules with gaps: ' + ifleetCoverageGaps.map(row => row.label + ' (' + row.gapCount + ')').slice(0, 12).join(' | ') : 'Payments, customers, fleet, inspections, tolls, claims, documents, portal, roles, franchise, reports, messages, Star, and API layer are represented in coverage checks');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'Review' : 'Clean', 'Star QA', 'Customers need card setup or card-on-file repair');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
@@ -1711,6 +1714,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const serviceIdentityGaps = serviceIdentityGapRows(scoped);
   const claimEvidenceGaps = claimEvidenceGapRows(scoped);
   const companyScopeGaps = companyScopeGapRows(scoped);
+  const ifleetCoverageRows = ifleetFunctionCoverageRows(scoped);
+  const ifleetCoverageGaps = ifleetCoverageRows.filter(row => row.gapCount > 0);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
@@ -1765,6 +1770,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(7.9, 'service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.length ? (serviceIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Service', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.');
   issue(7.95, 'claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.length ? (claimEvidenceGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Claims & Issues', '', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.');
   issue(7.98, 'company_scope', 'Company scope', companyScopeGaps.length, companyScopeGaps.length ? (companyScopeGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Companies', '', 'When more than one company/store exists, fleet, customers, payments, messages, service, claims, staff, and portal records must be scoped to a saved company before franchise/subscription use.');
+  issue(7.99, 'ifleet_function_coverage', 'iFleet function coverage', ifleetCoverageGaps.length, ifleetCoverageGaps.length ? (ifleetCoverageGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Dashboard', '', 'Payments, customers, fleet, inspections, tolls, claims, documents, portal, roles, franchise, reports, messages, Star, and API layer must each have a real workflow and matching data before API work is final.');
   issue(8, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
   issue(8, 'document_expiration', 'Document expiration', documentExpirationReview.length, documentExpirationReview.length ? (documentExpirationReview.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Documents', '', 'Insurance, background, license, registration, and proof documents should be renewed before expiration.');
   issue(8, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
@@ -3093,6 +3099,88 @@ function companyScopeGapRows(data = {}) {
     });
   });
   return rows.slice(0, 200);
+}
+function ifleetFunctionCoverageRows(data = {}) {
+  const recurring = allRecurringRows(data);
+  const payments = uniqueCloseoutPayments(data.payments || []);
+  const vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  const customers = Array.isArray(data.customers) ? data.customers : [];
+  const contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  const maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+  const claims = Array.isArray(data.claims) ? data.claims : [];
+  const applications = Array.isArray(data.applications) ? data.applications : [];
+  const messages = Array.isArray(data.messages) ? data.messages : [];
+  const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const docs = Array.isArray(data.documents) ? data.documents : [];
+  const orgs = Array.isArray(data.organizations) ? data.organizations : [];
+  const staff = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
+  const customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  const today = localDateKey();
+  const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
+  const paymentNotFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
+  const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
+  const staleAutopay = staleAutopayScheduleRows(data, today);
+  const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(data, payment, recurring) === 'Unmatched payment');
+  const activeCustomerNames = [...new Set([...(customers || []).map(row => row.name || row.customer), ...(contracts || []).map(row => row.customer || row.name), ...recurring.map(row => row.customer)].map(value => String(value || '').trim()).filter(Boolean))].filter(name => {
+    const recurringRow = recurring.find(row => normKey(row.customer) === normKey(name)) || {};
+    const customer = customers.find(row => normKey(row.name || row.customer) === normKey(name)) || {};
+    const contract = contracts.find(row => normKey(row.customer || row.name) === normKey(name)) || {};
+    return !/removed|returned|history|archived/i.test(String(contract.status || customer.status || recurringRow.status || 'Active'));
+  });
+  const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
+  const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const assignmentConflicts = assignmentConflictRows(data);
+  const customerVehicleTextGaps = customerVehicleTextGapRows(data);
+  const applicationHandoffGaps = applicationHandoffGapRows(data);
+  const documentExpirationReview = documentExpirationReviewRows(data, today);
+  const vehicleIdentityGaps = vehicleIdentityGapRows(data);
+  const closeoutSignoffGap = dailyCloseoutSignoffGap(data, today);
+  const serviceIdentityGaps = serviceIdentityGapRows(data);
+  const claimEvidenceGaps = claimEvidenceGapRows(data);
+  const companyScopeGaps = companyScopeGapRows(data);
+  const tollRecovery = tollViolationRecoveryRows(data);
+  const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
+  const pendingStarApprovals = pendingStarApprovalRows(data);
+  const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(data, name, 'insurance'));
+  const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(data, name, 'background'));
+  const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalLoginReady(customerPortalAccountForName(data, name)));
+  const apiProviderReview = apiProviderReviewRows(data);
+  const activeStaff = staff.filter(row => !/disabled|removed|closed/i.test(String(row.status || 'Active')));
+  const rows = [];
+  function add(key, label, state, count, gaps, view, tab, detail, critical = false) {
+    const gapCount = Array.isArray(gaps) ? gaps.length : Number(gaps || 0);
+    rows.push({
+      key,
+      label,
+      state,
+      count,
+      gapCount,
+      tone: gapCount ? (critical ? 'bad' : 'warn') : (/live/i.test(state) ? 'good' : 'blue'),
+      status: gapCount ? (critical ? 'Needs review' : 'Review') : 'Covered',
+      view,
+      tab: tab || '',
+      detail
+    });
+  }
+  add('applications_approvals', 'Applications + approvals', applications.length ? 'Live' : 'Manual-live', applications.length, applicationHandoffGaps, 'Applications', 'Approved', 'Applications can be reviewed, approved, denied, converted to customer/autopay handoff, and tracked through contract setup.');
+  add('customer_operating_file', 'Customer operating file', 'Live', activeCustomerNames.length, customerVehicleTextGaps.length + missingContact.length, 'Payments', 'Active', 'Customer files must connect contact info, vehicle, VIN/tag, tracker, payment schedule, messages, service, claims, and documents.', customerVehicleTextGaps.some(row => row.tone === 'bad'));
+  add('autopay_closeout', 'Autopay + closeout', 'Live', recurring.length, failedTwice.length + paymentNotFound.length + setupNeeded.length + staleAutopay.length + closeoutSignoffGap.needsSignoff, 'Payments', 'Today', 'Payments track due, paid, pending, failed once, failed twice, not found, setup needed, paid outside app, and owner closeout.');
+  add('fleet_assignment', 'Fleet assignment', 'Live', vehicles.length, assignmentConflicts.length + vehicleIdentityGaps.length + missingVehicle.length, 'Operations', 'Fleet', 'Fleet must keep ready/in-lot/assigned/returned cars tied to one customer with VIN, tag, tracker, and assignment truth.', assignmentConflicts.length > 0);
+  add('inspections_shop_work', 'Inspections + shop work', 'Live', maintenance.length, serviceIdentityGaps, 'Operations', 'Service', 'Monthly inspections, oil change cycles, mechanic notes, mileage, sign-off, and service history need full vehicle/customer identity.');
+  add('tolls_violations', 'Tolls + violations', 'Manual-live', tollRecovery.length, tollMatchReview, 'Claims & Issues', '', 'Tolls and violations can be imported manually, matched by plate/VIN/customer, turned into recovery claims, and sent as draft payment follow-up.');
+  add('claims_disputes', 'Claims + disputes', 'Manual-live', claims.length, claimEvidenceGaps, 'Claims & Issues', '', 'Damage, reimbursements, Clover disputes, chargebacks, proof, deadlines, and recovery status must stay tied to customer/payment/vehicle.');
+  add('documents_proof', 'Documents + proof', 'Live', docs.length, documentExpirationReview, 'Documents', '', 'Insurance, background, license, registration, receipts, proof, and customer-uploaded documents need verification and expiration review.');
+  add('insurance_background', 'Insurance/background', 'Manual-live', missingInsurance.length + missingBackground.length, missingInsurance.length + missingBackground.length, 'Insurance', '', 'Insurance and background proof are tracked now; provider APIs later can verify and update expiration automatically.');
+  add('messaging_star', 'Messaging + Star', 'Draft-live', messages.length, pendingStarApprovals, 'Messages', 'Star', 'SMS/email inbox, templates, Star drafts, setup fallback, approval rules, and customer context are wired; provider send is enabled only after setup.');
+  add('dispatch_work_orders', 'Dispatch/work orders', 'Live', tasks.length, 0, 'Dispatch', '', 'Dispatch tasks can hold tightening work, follow-ups, provider setup, service work, and manual API preparation.');
+  add('reports_accounting', 'Reports/accounting', 'Live', payments.length, unmatchedPayments.length + (closeoutSignoffGap.needsSignoff ? 1 : 0), 'Reports', 'Summary', 'Reports export closeout, transactions, customer/fleet truth, service, claims, tolls, paid outside app, profitability, and Star QA rows.', unmatchedPayments.length > 0);
+  add('role_portals', 'Role portals', 'Live', activeStaff.length, activeStaff.some(row => /manager/i.test(String(row.role || ''))) && activeStaff.some(row => /mechanic/i.test(String(row.role || ''))) ? 0 : 1, 'Settings', '', 'Owner, manager, mechanic, and customer-facing access are separated so each role sees only the tools it needs.');
+  add('customer_portal', 'Customer portal', 'Live foundation', customerAccounts.length, missingCustomerPortals, 'Settings', '', 'Customers can have login-ready portal accounts for their car, payment history, messages, receipts, proof, card changes, and service requests.');
+  add('marketing_leads', 'Marketing/leads', 'Manual-live', applications.length, 0, 'Marketing', '', 'Website applications and lead follow-up can be tracked now; marketing APIs can feed sources and conversion later.');
+  add('franchise_company', 'Franchise/company', 'Foundation', orgs.length || 1, companyScopeGaps, 'Companies', '', 'Company/store records and staff scoping exist now; outside subscription launch still needs isolated storage, billing, and per-company provider keys.', companyScopeGaps.some(row => row.tone === 'bad'));
+  add('api_provider_layer', 'API provider layer', 'API-ready', (data.apiProviders || []).length, apiProviderReview, 'API Roadmap', '', 'Clover, SMS/email, EZPass, insurance, background, tracker, accounting, marketing, and billing providers must record credentials, endpoint, live-test date, and result before they are called connected.');
+  return rows;
 }
 function enrichLinkedProfiles(data) {
   data.customers = Array.isArray(data.customers) ? data.customers : [];
@@ -4633,6 +4721,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const serviceIdentityGaps = serviceIdentityGapRows(scoped);
   const claimEvidenceGaps = claimEvidenceGapRows(scoped);
   const companyScopeGaps = companyScopeGapRows(scoped);
+  const ifleetCoverageRows = ifleetFunctionCoverageRows(scoped);
+  const ifleetCoverageGaps = ifleetCoverageRows.filter(row => row.gapCount > 0);
   const verificationItems = closeoutVerificationItems(scoped);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -4666,6 +4756,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.', 'Operations', 'Service'),
     truthCheck('claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.', 'Claims & Issues'),
     truthCheck('company_scope', 'Company scope', companyScopeGaps.length, companyScopeGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'When more than one company/store exists, fleet, customers, payments, messages, service, claims, staff, and portal records must be scoped to a saved company before franchise/subscription use.', 'Companies'),
+    truthCheck('ifleet_function_coverage', 'iFleet function coverage', ifleetCoverageGaps.length, ifleetCoverageGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Every iFleet-style module we talked about must have a real WheelsonAuto workflow, connected data, role access, reports, and honest API/provider status before the platform is considered final.', 'Dashboard'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
     truthCheck('open_payment_requests', 'Open payment requests', openPaymentRequests.length, 'warning', 'Hosted checkout links are still open and should be followed up, closed, or collected before final closeout.', 'Payments', 'Today'),
