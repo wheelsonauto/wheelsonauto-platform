@@ -844,6 +844,85 @@ Messages=function(){
   }
 }
 if(view==='Messages'&&tab==='Star')queueRender();
+function latestSystemReadiness(){
+  try{return JSON.parse(localStorage.getItem('woa-system-readiness')||'null')||null}catch(e){return null}
+}
+function readinessTaskItems(){
+  var ready=latestSystemReadiness(),rows=ready&&Array.isArray(ready.truthChecks)?ready.truthChecks:[];
+  return rows.filter(function(row){return Number(row.count||0)>0}).map(function(row){
+    var critical=String(row.severity||'').toLowerCase()==='critical';
+    return {
+      key:row.key||row.label||'readiness',
+      title:row.label||row.key||'Readiness check',
+      count:Number(row.count||0),
+      tone:critical?'bad':'warn',
+      view:row.view||'Dashboard',
+      tab:row.tab||'',
+      detail:row.detail||'Review this readiness item before closeout.',
+      status:row.status||'Needs review'
+    }
+  })
+}
+function readinessTaskTitle(item){return 'Readiness: '+(item&&item.title||'System check')}
+function readinessTaskExists(item){
+  var title=readinessTaskTitle(item);
+  return (db.tasks||[]).some(function(task){var state=String(task.status||'Open').toLowerCase();return String(task.title||'')===title&&state!=='done'&&state.indexOf('closed')<0})
+}
+function readinessTaskPayload(item){
+  return {
+    id:'task-readiness-'+Date.now()+'-'+Math.random().toString(16).slice(2,6),
+    title:readinessTaskTitle(item),
+    type:'Readiness check',
+    customer:item.title||'System readiness',
+    vehicle:item.view||'WheelsonAuto',
+    due:todayKey(),
+    status:'Open',
+    owner:'Owner',
+    notes:['Source: live System readiness check','Count: '+Number(item.count||0),'Status: '+(item.status||'Needs review'),'Fix: '+(item.detail||'Open the linked workflow and correct the source records.'),'Open workflow: '+(item.view||'Dashboard')+(item.tab?' / '+item.tab:'')].join('\n')
+  }
+}
+function readinessTaskBoard(){
+  var items=readinessTaskItems(),open=items.filter(function(item){return !readinessTaskExists(item)}),bad=items.filter(function(item){return item.tone==='bad'}).length,warn=items.filter(function(item){return item.tone==='warn'}).length;
+  return '<section class="card section readiness-task-board" data-limit="8"><div class="section-head"><div><h2>Dispatch from readiness</h2><p>Turn the live server truth check into real staff work orders.</p></div><div class="actions"><button class="btn gold" data-action="create-all-readiness-tasks">Create review tasks</button></div><div class="star-command-stats"><span class="bad">'+bad+' critical</span><span class="warn">'+warn+' review</span><span class="blue">'+open.length+' new</span></div></div>'+localSearch('Search readiness work by customer, payment, fleet, vehicle, Star, API, portal, toll, or report')+'<div class="role-command-grid">'+(items.length?items.map(function(item,idx){return '<div class="role-command-card '+esc(item.tone)+'"><div class="role-command-top"><div><strong>'+esc(item.title)+'</strong><small>'+esc(item.detail)+'</small></div>'+badge(item.count,item.tone)+'</div><div class="muted">'+esc([item.view,item.tab].filter(Boolean).join(' / ')||'Dashboard')+'</div><div class="actions"><button class="btn primary" data-view="'+esc(item.view||'Dashboard')+'" '+(item.tab?'data-tab="'+esc(item.tab)+'"':'')+'>Open</button><button class="btn" data-action="create-readiness-task" data-index="'+idx+'">'+(readinessTaskExists(item)?'Task exists':'Task')+'</button></div></div>'}).join(''):'<div class="item">No live readiness issues are open. Re-run Check readiness after data, payment, fleet, or API changes.</div>')+'</div></section>'
+}
+function hydrateReadinessTaskBoard(){
+  var title=document.getElementById('modalTitle'),body=document.getElementById('modalBody');
+  if(!title||!body||String(title.textContent||'')!=='System readiness check')return;
+  if(body.querySelector('.readiness-task-board'))return;
+  body.insertAdjacentHTML('afterbegin',readinessTaskBoard());
+  hydrateLocalSearches();
+}
+var __woaOpenModalReadinessTasksBase=openModal;
+openModal=function(title,body){
+  __woaOpenModalReadinessTasksBase(title,body);
+  hydrateReadinessTaskBoard();
+}
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action]');if(!b)return;
+  var a=b.dataset.action;
+  if(a==='create-readiness-task'){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+    var item=readinessTaskItems()[Number(b.dataset.index||0)];
+    if(!item){notify('Run Check readiness first');return}
+    if(readinessTaskExists(item)){view='Dispatch';tab='';Dispatch();closeModal();notify('Readiness task already exists');return}
+    b.disabled=true;b.classList.add('is-loading');
+    var saved=await post('/api/tasks',readinessTaskPayload(item));
+    b.disabled=false;b.classList.remove('is-loading');
+    if(saved.ok){await refreshData(true);view='Dispatch';tab='';Dispatch();closeModal();notify('Readiness task added to Dispatch')}else notify(saved.error||'Readiness task did not save')
+  }
+  if(a==='create-all-readiness-tasks'){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(!actionAllowed('new-task')){notify('This account cannot create Dispatch tasks');return}
+    var items=readinessTaskItems().filter(function(item){return !readinessTaskExists(item)});
+    if(!items.length){view='Dispatch';tab='';Dispatch();closeModal();notify('No new readiness tasks needed');return}
+    b.disabled=true;b.classList.add('is-loading');
+    var made=0,failed=0;
+    for(var i=0;i<items.length;i++){var saved=await post('/api/tasks',readinessTaskPayload(items[i]));if(saved.ok)made++;else failed++}
+    b.disabled=false;b.classList.remove('is-loading');
+    await refreshData(true);view='Dispatch';tab='';Dispatch();closeModal();notify('Created '+made+' readiness task'+(made===1?'':'s')+(failed?' / '+failed+' failed':''))
+  }
+},true);
 function ifleetNextCommandItems(){
   var launch=(typeof ifleetLaunchProofItems==='function'?ifleetLaunchProofItems():[]).map(function(i,idx){return{source:'Launch proof',title:i.title,tone:i.tone,count:i.count,detail:i.proof,fix:i.manual,view:i.view,tab:i.tab,index:idx}});
   var audit=(typeof starSystemAuditItems==='function'?starSystemAuditItems():[]).map(function(i){return{source:i.source||'Star audit',title:i.title,tone:i.tone,count:i.count,detail:i.detail,fix:i.fix,view:i.view,tab:i.tab}});
