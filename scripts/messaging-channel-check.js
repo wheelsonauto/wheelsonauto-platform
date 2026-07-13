@@ -75,6 +75,10 @@ requireText('Compose modal email option', openComposeMessage, '<option value="Em
 requireText('Messages view channel summary', messagesView, "stat('Channels'");
 requireText('Messages inbox layout', messagesView, 'message-inbox-layout');
 requireText('Messages conversation panel', app, 'messageConversationPanel');
+requireText('Email-only conversation phone guard', app, 'messagePhoneValue');
+requireText('Email-only conversation address', app, 'messageEmailValue');
+requireText('Mixed-date conversation sorting', app, 'messageTimeValue');
+requireText('Conversation full-text search', app, '<span hidden>'+"'+esc(searchText)+'"+'</span>');
 requireText('Insurance proof template', messageTemplateDefaults, 'Insurance proof request');
 requireText('Background verification template', messageTemplateDefaults, 'Background verification');
 requireText('Document received template', messageTemplateDefaults, 'Document received');
