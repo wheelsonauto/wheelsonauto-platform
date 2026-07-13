@@ -623,7 +623,10 @@ function publicMessagingStatus(data = {}) {
     ownerMirrorLive: !!(configured && MESSAGING_OWNER_NOTIFY_NUMBER),
     ownerReplyBridge: MESSAGING_OWNER_NOTIFY_NUMBER ? 'Phone replies use a stable 6-character conversation code so they stay matched to the right customer.' : 'Add the owner mobile number to mirror customer texts and enable safe phone replies.',
     smsScamGuard: 'Potential scams are labeled, held from Star auto-reply, and require staff review. Phone replies cannot run money or account actions.',
-    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages',
+    webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages' + (provider === 'twilio' ? '?provider=twilio' : ''),
+    smsWebhookConnected: saved.smsWebhookConnected === true,
+    smsWebhookStatus: saved.smsWebhookStatus || (provider === 'twilio' && configured ? 'Connect inbound SMS' : 'Provider setup needed'),
+    smsWebhookConfiguredAt: saved.smsWebhookConfiguredAt || '',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     webhookSecretConfigured: !!MESSAGING_WEBHOOK_SECRET,
     emailWebhookSecretConfigured: !!(RESEND_WEBHOOK_SECRET || MESSAGING_WEBHOOK_SECRET),
@@ -947,6 +950,47 @@ async function sendProviderSms(to, body, meta = {}) {
     return { sent: true, status: (jsonBody.data && jsonBody.data.record_type) || 'Queued', provider: 'telnyx', externalId: jsonBody.data && jsonBody.data.id || '', response: jsonBody };
   }
   return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+}
+async function configureTwilioSmsWebhook(options = {}) {
+  const accountSid = String(options.accountSid || TWILIO_ACCOUNT_SID || '').trim();
+  const authToken = String(options.authToken || TWILIO_AUTH_TOKEN || '').trim();
+  const phoneNumber = cleanPhone(options.phoneNumber || MESSAGING_FROM_NUMBER || '');
+  const fetchImpl = options.fetchImpl || fetch;
+  const webhookUrl = String(options.webhookUrl || (PUBLIC_BASE_URL + '/api/webhooks/messages?provider=twilio')).trim();
+  if (!accountSid || !authToken || !phoneKey(phoneNumber)) {
+    const error = new Error('Twilio account, auth token, and hosted SMS number must be saved in Render first.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const auth = Buffer.from(accountSid + ':' + authToken).toString('base64');
+  const base = 'https://api.twilio.com/2010-04-01/Accounts/' + encodeURIComponent(accountSid) + '/IncomingPhoneNumbers';
+  const listResponse = await fetchImpl(base + '.json?PhoneNumber=' + encodeURIComponent(phoneNumber) + '&PageSize=50', {
+    headers: { Authorization: 'Basic ' + auth }
+  });
+  const listBody = await listResponse.json().catch(() => ({}));
+  if (!listResponse.ok) throw new Error(listBody.message || 'Twilio could not list the hosted SMS number.');
+  const numbers = Array.isArray(listBody.incoming_phone_numbers) ? listBody.incoming_phone_numbers : [];
+  const number = numbers.find(item => phoneKey(item && item.phone_number) === phoneKey(phoneNumber));
+  if (!number || !number.sid) {
+    const error = new Error('Twilio did not return the hosted SMS number for this account.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const form = new URLSearchParams({ SmsUrl: webhookUrl, SmsMethod: 'POST' });
+  const updateResponse = await fetchImpl(base + '/' + encodeURIComponent(number.sid) + '.json', {
+    method: 'POST',
+    headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form
+  });
+  const updateBody = await updateResponse.json().catch(() => ({}));
+  if (!updateResponse.ok) throw new Error(updateBody.message || 'Twilio could not connect inbound SMS to WheelsonAuto.');
+  return {
+    connected: true,
+    provider: 'twilio',
+    phoneNumber: maskPhone(updateBody.phone_number || number.phone_number || phoneNumber),
+    webhookUrl: updateBody.sms_url || webhookUrl,
+    smsMethod: updateBody.sms_method || 'POST'
+  };
 }
 async function sendOwnerSmsMirror(data, payload = {}, settings = messageSettings(data)) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
@@ -5321,6 +5365,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
     route('POST', '/api/messages/ai-health', 'Owner Star AI provider health test'),
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
+    route('POST', '/api/integrations/twilio/configure', 'Owner connects Twilio inbound SMS webhook'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
@@ -8919,6 +8964,35 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, messaging: data.integrations.messaging });
     }
+    if (url.pathname === '/api/integrations/twilio/configure' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can connect the Twilio inbox.' });
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.messaging = data.integrations.messaging || {};
+      try {
+        const result = await configureTwilioSmsWebhook();
+        Object.assign(data.integrations.messaging, {
+          smsWebhookConnected: true,
+          smsWebhookStatus: 'Inbound SMS connected',
+          smsWebhookConfiguredAt: new Date().toISOString(),
+          lastError: ''
+        });
+        appendAuditLog(data, user, 'Twilio inbox connected', [result.phoneNumber || 'Hosted SMS number', result.webhookUrl, result.smsMethod]);
+        await writeData(data);
+        return json(res, 200, { ok: true, result, messaging: publicMessagingStatus(data) });
+      } catch (err) {
+        const error = String(err && err.message || err);
+        Object.assign(data.integrations.messaging, {
+          smsWebhookConnected: false,
+          smsWebhookStatus: 'Inbound SMS needs attention',
+          smsWebhookLastAttemptAt: new Date().toISOString(),
+          lastError: error
+        });
+        appendAuditLog(data, user, 'Twilio inbox connection failed', [error]);
+        await writeData(data);
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error, messaging: publicMessagingStatus(data) });
+      }
+    }
     if (url.pathname === '/api/notifications/email/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change email notification settings.' });
       const payload = JSON.parse(await readBody(req) || '{}');
@@ -9705,5 +9779,6 @@ module.exports = {
   smsBridgeCode,
   rememberSmsBridgeThread,
   resolveOwnerSmsBridge,
-  ownerSmsMirrorBody
+  ownerSmsMirrorBody,
+  configureTwilioSmsWebhook
 };

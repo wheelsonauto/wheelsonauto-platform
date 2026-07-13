@@ -134,7 +134,8 @@ async function main() {
     smsBridgeCode,
     rememberSmsBridgeThread,
     resolveOwnerSmsBridge,
-    ownerSmsMirrorBody
+    ownerSmsMirrorBody,
+    configureTwilioSmsWebhook
   } = require('../server.js');
 
   try {
@@ -152,6 +153,23 @@ async function main() {
     assert(!resolveOwnerSmsBridge(bridgeData, 'This reply is ambiguous.').ok, 'A code-less owner reply must be blocked when more than one customer thread is active.');
     const mirrorPreview = ownerSmsMirrorBody({ customer: 'Bridge Customer', phone: '3135550117', direction: 'Inbound', body: 'Please send your OTP to bit.ly/fake' }, bridgeThread, smsScamAssessment('Please send your OTP to bit.ly/fake'));
     assert(mirrorPreview.includes('POTENTIAL SCAM') && mirrorPreview.includes(bridgeThread.code), 'Owner mirror should visibly warn about potential scams and include the conversation code.');
+    const twilioCalls = [];
+    const twilioConfigured = await configureTwilioSmsWebhook({
+      accountSid: 'AC-direct-test',
+      authToken: 'direct-auth-token',
+      phoneNumber: '7372583742',
+      webhookUrl: 'https://wheelsonauto-platform.onrender.com/api/webhooks/messages?provider=twilio',
+      fetchImpl: async (url, options = {}) => {
+        twilioCalls.push({ url: String(url), options });
+        if (String(url).includes('.json?')) {
+          return { ok: true, async json() { return { incoming_phone_numbers: [{ sid: 'PN-direct-test', phone_number: '+17372583742' }] }; } };
+        }
+        return { ok: true, async json() { return { sid: 'PN-direct-test', phone_number: '+17372583742', sms_url: 'https://wheelsonauto-platform.onrender.com/api/webhooks/messages?provider=twilio', sms_method: 'POST' }; } };
+      }
+    });
+    assert(twilioConfigured.connected && twilioConfigured.provider === 'twilio', 'Twilio webhook setup should report a connected inbound SMS route.');
+    assert(twilioCalls.length === 2 && twilioCalls[0].url.includes('PhoneNumber=%2B17372583742'), 'Twilio webhook setup should locate the exact assigned number before updating it.');
+    assert(twilioCalls[1].options.method === 'POST' && String(twilioCalls[1].options.body).includes('SmsUrl='), 'Twilio webhook setup should POST the WheelsonAuto inbound URL to the assigned number.');
 
     const resendPayload = JSON.stringify({ type: 'email.received', data: { email_id: 'direct-resend-email', from: 'Direct Customer <direct-customer@example.com>', to: ['office@wheelsonauto.com'], subject: 'Resend body retrieval' } });
     const resendTimestamp = String(Math.floor(Date.now() / 1000));
@@ -191,6 +209,8 @@ async function main() {
     assert(throttledCustomerLogin.status === 429 && throttledCustomerLogin.text.includes('Too many failed login attempts') && String(throttledCustomerLogin.headers['Retry-After'] || '').length, 'Repeated bad customer login should be throttled with retry guidance.');
 
     const ownerCookie = await login(server, { pin: adminPin });
+    const missingTwilioSetup = await request(server, 'POST', '/api/integrations/twilio/configure', { cookie: ownerCookie, json: {} });
+    assert(missingTwilioSetup.status === 409 && /saved in Render/i.test(missingTwilioSetup.json.error || ''), 'Twilio setup route should clearly report missing Render credentials without faking a connection.');
     const tamperedOwnerCookie = ownerCookie.replace(/\.[^.]+$/, '.bad-signature');
     const tamperedOwnerRead = await request(server, 'GET', '/api/state', { cookie: tamperedOwnerCookie });
     assert(!tamperedOwnerRead.json && tamperedOwnerRead.text.includes('WheelsonAuto Portal'), 'Tampered staff session cookie should not authenticate API access.');

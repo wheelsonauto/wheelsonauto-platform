@@ -63,16 +63,19 @@ const rememberSmsBridgeThread = finalFunctionSlice(server, 'rememberSmsBridgeThr
 const resolveOwnerSmsBridge = finalFunctionSlice(server, 'resolveOwnerSmsBridge');
 const sendOwnerSmsMirror = finalFunctionSlice(server, 'sendOwnerSmsMirror');
 const handleOwnerSmsBridge = finalFunctionSlice(server, 'handleOwnerSmsBridge');
+const configureTwilioSmsWebhook = finalFunctionSlice(server, 'configureTwilioSmsWebhook');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
+requireText('Messaging inbound SMS status', messagingStatus, 'smsWebhookConnected');
 requireText('Messaging notification status', messagingStatus, 'notificationEmail');
 requireText('Message setup panel', messageSetupPanel, 'Email webhook');
 requireText('Message setup notification email', messageSetupPanel, 'notificationEmailTo');
 requireText('Message setup notification events', messageSetupPanel, 'notificationEventOptions');
 requireText('Message setup notification test', messageSetupPanel, 'send-email-notification-test');
+requireText('Message setup Twilio connection', app, 'configure-twilio-webhook');
 requireText('Notification command board', notificationCommandBoard + messagesView + app, 'Email notification command');
 requireText('Notification command owner email', notificationCommandBoard, 'Owner email');
 requireText('Notification command closeout', notificationCommandBoard, 'Daily closeout');
@@ -95,6 +98,7 @@ requireText('Star custom prompt action', app, 'star-ai-custom');
 requireText('Server email webhook route', server, "/api/webhooks/email");
 requireText('Server notification settings route', server, "/api/notifications/email/settings");
 requireText('Server notification test route', server, "/api/notifications/email/test");
+requireText('Server Twilio webhook setup route', server, "/api/integrations/twilio/configure");
 requireText('Server daily closeout notification route', server, "/api/notifications/daily-closeout");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
 requireText('Server public webhook secret status', publicMessagingStatus, 'webhookSecretConfigured');
@@ -116,6 +120,9 @@ requireText('Inbound email parser', parseIncomingEmail, 'parseEmailAddress');
 requireText('Resend inbound body retrieval', hydrateIncomingEmail, 'api.resend.com/emails/receiving/');
 requireText('Resend signed webhook check', verifyResendWebhook, 'svix-signature');
 requireText('Twilio signed webhook check', verifyTwilioWebhook, 'x-twilio-signature');
+requireText('Twilio assigned number lookup', configureTwilioSmsWebhook, 'IncomingPhoneNumbers');
+requireText('Twilio inbound SMS URL update', configureTwilioSmsWebhook, 'SmsUrl');
+requireText('Twilio owner-only setup action', app, 'configure-twilio-webhook');
 requireText('SMS scam credential protection', smsScamAssessment, 'verification code');
 requireText('SMS scam shortened-link protection', smsScamAssessment, 'tinyurl');
 requireText('Owner phone sensitive action protection', smsSensitiveActionAssessment, 'charge or payment action');
