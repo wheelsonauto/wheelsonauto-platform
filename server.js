@@ -992,6 +992,42 @@ async function configureTwilioSmsWebhook(options = {}) {
     smsMethod: updateBody.sms_method || 'POST'
   };
 }
+async function autoConfigureTwilioSmsWebhook() {
+  if (MESSAGING_PROVIDER !== 'twilio' || !TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !MESSAGING_FROM_NUMBER) {
+    return { connected: false, skipped: true, status: 'Twilio is not fully configured in Render.' };
+  }
+  await writeDataQueue.catch(() => {});
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  data.integrations.messaging = data.integrations.messaging || {};
+  const systemUser = { name: 'WheelsonAuto system', role: 'Owner', organizationId: MAIN_ORG_ID, companyName: 'WheelsonAuto' };
+  try {
+    const result = await configureTwilioSmsWebhook();
+    Object.assign(data.integrations.messaging, {
+      smsWebhookConnected: true,
+      smsWebhookStatus: 'Inbound SMS connected',
+      smsWebhookConfiguredAt: new Date().toISOString(),
+      smsWebhookLastAttemptAt: new Date().toISOString(),
+      lastError: ''
+    });
+    appendAuditLog(data, systemUser, 'Twilio inbox connected automatically', [result.phoneNumber || 'Hosted SMS number', result.webhookUrl, result.smsMethod]);
+    await protectConcurrentLocalWrites(data);
+    await writeData(data);
+    return result;
+  } catch (err) {
+    const error = String(err && err.message || err);
+    Object.assign(data.integrations.messaging, {
+      smsWebhookConnected: false,
+      smsWebhookStatus: 'Inbound SMS needs attention',
+      smsWebhookLastAttemptAt: new Date().toISOString(),
+      lastError: error
+    });
+    appendAuditLog(data, systemUser, 'Automatic Twilio inbox connection failed', [error]);
+    await protectConcurrentLocalWrites(data);
+    await writeData(data);
+    throw err;
+  }
+}
 async function sendOwnerSmsMirror(data, payload = {}, settings = messageSettings(data)) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const customerPhone = cleanPhone(payload.phone || payload.from || payload.to || '');
@@ -9758,6 +9794,9 @@ const server = http.createServer(async (req, res) => {
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
+    setTimeout(() => autoConfigureTwilioSmsWebhook()
+      .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
+      .catch(err => console.error('Twilio inbox auto-connect failed:', err && err.message || err)), 250);
     setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
     setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
     setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
@@ -9780,5 +9819,6 @@ module.exports = {
   rememberSmsBridgeThread,
   resolveOwnerSmsBridge,
   ownerSmsMirrorBody,
-  configureTwilioSmsWebhook
+  configureTwilioSmsWebhook,
+  autoConfigureTwilioSmsWebhook
 };
