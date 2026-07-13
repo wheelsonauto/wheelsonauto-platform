@@ -4607,6 +4607,14 @@ body.fast-tab-switch .admin-shell .section{
   color:#c8d2dc;
   line-height:1.35;
 }
+.ifleet-task-guidance{
+  margin-bottom:12px;
+}
+.ifleet-task-guidance div{
+  margin-top:6px;
+  color:#d6dde6;
+  line-height:1.35;
+}
 .view-manager-portal .role-command-board,
 .view-mechanic-portal .role-command-board{
   margin-top:12px;
