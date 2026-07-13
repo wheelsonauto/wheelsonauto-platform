@@ -5122,7 +5122,7 @@ function apiProviderReviewRows(data = {}) {
   return apiProviderRows(data).filter(provider => {
     const status = String(provider.status || 'API needed').toLowerCase();
     const connected = status.includes('connected');
-    const hasLiveReadyProof = ['envKeys', 'endpoint', 'liveTest', 'lastTestResult'].every(key => String(provider[key] || '').trim());
+    const hasLiveReadyProof = ['envKeys', 'endpoint', 'liveTest', 'lastTestAt', 'lastTestResult'].every(key => String(provider[key] || '').trim());
     if (connected) return !hasLiveReadyProof;
     if (status.includes('testing')) return !hasLiveReadyProof;
     return /needed|blocked|setup|draft|review|not connected|waiting|planned|provider/i.test(status);
@@ -5763,7 +5763,7 @@ function cleanApiProviderPayload(payload) {
 }
 function apiProviderReadyForLiveUse(provider = {}) {
   const connected = String(provider.status || '').toLowerCase() === 'connected';
-  const proofReady = ['envKeys', 'endpoint', 'liveTest', 'lastTestResult'].every(key => String(provider[key] || '').trim());
+  const proofReady = ['envKeys', 'endpoint', 'liveTest', 'lastTestAt', 'lastTestResult'].every(key => String(provider[key] || '').trim());
   return connected && proofReady;
 }
 function syncApiProviderDispatchTask(data = {}, provider = {}) {
@@ -5774,6 +5774,7 @@ function syncApiProviderDispatchTask(data = {}, provider = {}) {
     provider.envKeys ? 'Env keys: ' + provider.envKeys : 'Env keys still needed',
     provider.endpoint ? 'Endpoint: ' + provider.endpoint : 'Endpoint/route still needed',
     provider.liveTest ? 'Live test: ' + provider.liveTest : 'Live test plan still needed',
+    provider.lastTestAt ? 'Last test date: ' + provider.lastTestAt : 'Last live-test date still needed',
     provider.lastTestResult ? 'Last test: ' + provider.lastTestResult : 'Last live-test result still needed',
     provider.notes || ''
   ].filter(Boolean).join('\n');
@@ -8504,6 +8505,7 @@ const server = http.createServer(async (req, res) => {
           ['env keys', provider.envKeys],
           ['endpoint/route', provider.endpoint],
           ['live test plan', provider.liveTest],
+          ['last test date', provider.lastTestAt],
           ['last test result', provider.lastTestResult]
         ].filter(item => !String(item[1] || '').trim()).map(item => item[0]);
         if (missing.length) return json(res, 400, { ok: false, error: 'Connected API systems need ' + missing.join(', ') + ' before they can be marked connected.' });

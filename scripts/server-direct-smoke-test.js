@@ -1162,6 +1162,20 @@ async function main() {
       }
     });
     assert(fakeConnectedApi.status === 400 && /last test result/i.test(fakeConnectedApi.json.error || ''), 'Connected API providers should require a live-test result before saving.');
+    const fakeConnectedNoDateApi = await request(server, 'POST', '/api/api-providers', {
+      cookie: ownerCookie,
+      json: {
+        id: 'api-direct-fake-connected-no-date',
+        name: 'Direct Fake API No Date',
+        group: 'Risk',
+        status: 'Connected',
+        envKeys: 'DIRECT_FAKE_KEY',
+        endpoint: '/api/direct/fake',
+        liveTest: 'Run direct fake sync',
+        lastTestResult: 'Passed but missing date'
+      }
+    });
+    assert(fakeConnectedNoDateApi.status === 400 && /last test date/i.test(fakeConnectedNoDateApi.json.error || ''), 'Connected API providers should require a live-test date before saving.');
     const connectedApi = await request(server, 'POST', '/api/api-providers', {
       cookie: ownerCookie,
       json: {

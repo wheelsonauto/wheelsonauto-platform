@@ -592,6 +592,9 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
 	  'WOA_CLOVER_WEBHOOK_SECRET',
   '/api/api-providers',
   'lastTestResult',
+  'lastTestAt',
+  'last test date',
+  'Last live-test date still needed',
   'envKeys',
   'endpoint'
 ].forEach(text => requireText('Backend API provider readiness', server, text));
