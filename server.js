@@ -1625,6 +1625,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const applicationHandoffGaps = applicationHandoffGapRows(scoped);
   const documentExpirationReview = documentExpirationReviewRows(scoped, today);
   const vehicleIdentityGaps = vehicleIdentityGapRows(scoped);
+  const closeoutSignoffGap = dailyCloseoutSignoffGap(scoped, today);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -1651,6 +1652,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Application handoff', applicationHandoffGaps.length, applicationHandoffGaps.length ? 'Review' : 'Clean', 'Star QA', applicationHandoffGaps.length ? 'Approved/contract applicants missing handoff pieces: ' + applicationHandoffGaps.map(row => row.customer + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Approved applications have customer file, vehicle, autopay, portal, proof, and approval handoff ready');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Document expiration', documentExpirationReview.length, documentExpirationReview.length ? 'Review' : 'Clean', 'Star QA', documentExpirationReview.length ? 'Insurance/background/license/document proof expired or due within 30 days: ' + documentExpirationReview.map(row => row.customer + ' ' + row.type + ' ' + row.due).slice(0, 12).join(' | ') : 'No important customer documents are expired or due within 30 days');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.length ? 'Review' : 'Clean', 'Star QA', vehicleIdentityGaps.length ? 'Fleet records missing VIN/tag/tracker: ' + vehicleIdentityGaps.map(row => row.vehicle + ' missing ' + row.missing.join('/')).slice(0, 12).join(' | ') : 'Fleet VIN, tag/plate, and tracker identity is complete');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.needsSignoff ? 'Review' : 'Clean', 'Star QA', closeoutSignoffGap.needsSignoff ? 'Today has money/work activity but no owner closeout signoff: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + ', pending Star approvals ' + closeoutSignoffGap.pendingStarApprovals : 'Daily closeout is signed or there is no closeout activity requiring signoff');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'Review' : 'Clean', 'Star QA', 'Customers need card setup or card-on-file repair');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing VIN', missingVin.length, missingVin.length ? 'Review' : 'Clean', 'Star QA', 'Fleet records without VIN');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'Review' : 'Clean', 'Star QA', 'Autopay rows missing car/VIN/tag/tracker');
@@ -1699,6 +1701,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const applicationHandoffGaps = applicationHandoffGapRows(scoped);
   const documentExpirationReview = documentExpirationReviewRows(scoped, today);
   const vehicleIdentityGaps = vehicleIdentityGapRows(scoped);
+  const closeoutSignoffGap = dailyCloseoutSignoffGap(scoped, today);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
@@ -1749,6 +1752,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(6, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
   issue(7, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
   issue(7.5, 'vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.length ? (vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Fleet', 'Every active fleet car needs VIN, current tag/plate, and tracker so customers, service, claims, tolls, messages, and reports match the right car.');
+  issue(7.75, 'daily_closeout_signoff', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.tone, 'Reports', 'Summary', 'Today has payment/work activity and needs owner signoff: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + '.');
   issue(8, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
   issue(8, 'document_expiration', 'Document expiration', documentExpirationReview.length, documentExpirationReview.length ? (documentExpirationReview.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Documents', '', 'Insurance, background, license, registration, and proof documents should be renewed before expiration.');
   issue(8, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
@@ -2933,6 +2937,44 @@ function vehicleIdentityGapRows(data = {}) {
       tone: missing.includes('VIN') || missing.includes('tag/plate') ? 'bad' : 'warn'
     };
   });
+}
+function dailyCloseoutSignoffGap(data = {}, todayKeyValue = localDateKey()) {
+  const payload = dailyCloseoutNotificationPayload(data, todayKeyValue);
+  const summary = payload.summary || {};
+  const activityCount = Number(summary.pending || 0) +
+    Number(summary.paidTransactions || 0) +
+    Number(summary.transactions || 0) +
+    Number(summary.openPaymentRequests || 0) +
+    Number(summary.openCardSetupRequests || 0) +
+    Number(summary.pendingStarApprovals || 0) +
+    Number(summary.verificationItems || 0) +
+    Number(summary.vehicleAssignmentConflicts || 0) +
+    Number(summary.staleAutopaySchedules || 0) +
+    Number(summary.auditEvents || 0);
+  const moneyActivity = Number(summary.expected || 0) + Number(summary.collected || 0) + Number(summary.openPaymentRequestAmount || 0);
+  const needsSignoff = (activityCount > 0 || moneyActivity > 0) && !summary.signedOff;
+  return {
+    dateKey: todayKeyValue,
+    needsSignoff,
+    signedOff: !!summary.signedOff,
+    signedAt: summary.signedAt || '',
+    signedBy: summary.signedBy || '',
+    expected: Number(summary.expected || 0),
+    collected: Number(summary.collected || 0),
+    stillOpenAmount: Number(summary.stillOpenAmount || 0),
+    pending: Number(summary.pending || 0),
+    failedTwice: Number(summary.failedTwice || 0),
+    paymentNotFound: Number(summary.paymentNotFound || 0),
+    openPaymentRequests: Number(summary.openPaymentRequests || 0),
+    openCardSetupRequests: Number(summary.openCardSetupRequests || 0),
+    pendingStarApprovals: Number(summary.pendingStarApprovals || 0),
+    verificationItems: Number(summary.verificationItems || 0),
+    vehicleAssignmentConflicts: Number(summary.vehicleAssignmentConflicts || 0),
+    staleAutopaySchedules: Number(summary.staleAutopaySchedules || 0),
+    auditEvents: Number(summary.auditEvents || 0),
+    activityCount,
+    tone: needsSignoff ? (Number(summary.failedTwice || 0) || Number(summary.paymentNotFound || 0) || Number(summary.vehicleAssignmentConflicts || 0) ? 'bad' : 'warn') : 'good'
+  };
 }
 function enrichLinkedProfiles(data) {
   data.customers = Array.isArray(data.customers) ? data.customers : [];
@@ -4469,6 +4511,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const applicationHandoffGaps = applicationHandoffGapRows(scoped);
   const documentExpirationReview = documentExpirationReviewRows(scoped, today);
   const vehicleIdentityGaps = vehicleIdentityGapRows(scoped);
+  const closeoutSignoffGap = dailyCloseoutSignoffGap(scoped, today);
   const verificationItems = closeoutVerificationItems(scoped);
   const tollRecovery = tollViolationRecoveryRows(scoped);
   const tollRecoveryAmount = tollRecovery.reduce((sum, claim) => sum + Number(claim.amount || 0), 0);
@@ -4498,6 +4541,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('application_handoff', 'Application handoff', applicationHandoffGaps.length, applicationHandoffGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Approved/contract applicants must have approval message, customer file, vehicle link, autopay/card setup, portal login, insurance proof, and background proof before pickup.', 'Applications', 'Approved'),
     truthCheck('document_expiration', 'Document expiration', documentExpirationReview.length, documentExpirationReview.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Insurance, background, license, registration, and proof documents are expired or due within 30 days and need renewal follow-up.', 'Documents'),
     truthCheck('vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Every active fleet car needs VIN, current tag/plate, and tracker before service, claims, tolls, messages, Star, and reports can be trusted.', 'Operations', 'Fleet'),
+    truthCheck('daily_closeout_signoff', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.tone === 'bad' ? 'critical' : 'warning', 'Today has payment/work activity and needs owner signoff before the day is trusted: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + '.', 'Reports', 'Summary'),
     truthCheck('autopay_vehicle_link', 'Autopay vehicle link', missingVehicle.length, 'critical', 'Active autopay rows need vehicle, VIN, tag, and tracker context.', 'Payments', 'Active'),
     truthCheck('setup_needed', 'Setup needed', setupNeeded.length, 'warning', 'Customers need card setup or saved-card repair before autopay can run.', 'Payments', 'Today'),
     truthCheck('open_payment_requests', 'Open payment requests', openPaymentRequests.length, 'warning', 'Hosted checkout links are still open and should be followed up, closed, or collected before final closeout.', 'Payments', 'Today'),
