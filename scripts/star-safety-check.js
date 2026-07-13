@@ -108,6 +108,9 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'provider: \'openai\'',
   'provider: \'rules\'',
   'providerError',
+  'launch readiness gaps',
+  'iFleet coverage gaps',
+  'If readiness or coverage says a workflow is blocked',
   'Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it.',
   'requiresAdminApproval',
   'saved-card charge',
@@ -121,6 +124,10 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 
 [
   'systemHealthSnapshot',
+  'launchReadinessRows',
+  'ifleetFunctionCoverageRows',
+  'launchReadiness',
+  'ifleetCoverage',
   'nextActions',
   'systemHealth: aiSystemHealthForContext',
   'systemHealth: context.systemHealth',

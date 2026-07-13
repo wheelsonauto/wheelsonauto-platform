@@ -863,7 +863,7 @@ assertIncludes('Server email and Star backend', server, [
   'portal_login_help',
   'contract/e-sign send',
   'password reset',
-  'customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, and recent messages'
+  'customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps'
 ]);
 
 assertIncludes('Modal, mobile, and no-blur style surface', css, [

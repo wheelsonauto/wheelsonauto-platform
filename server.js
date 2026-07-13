@@ -1954,6 +1954,8 @@ function aiLatestPayment(data, context) {
 }
 function aiSystemHealthForContext(data, user = { role: 'Owner' }) {
   const health = systemHealthSnapshot(data, user);
+  const readiness = launchReadinessRows(data).filter(row => row.gapCount > 0).slice(0, 8);
+  const coverage = ifleetFunctionCoverageRows(data).filter(row => row.gapCount > 0).slice(0, 10);
   return {
     summary: health.summary,
     nextActions: (health.star && health.star.nextActions || []).map(row => ({
@@ -1963,6 +1965,24 @@ function aiSystemHealthForContext(data, user = { role: 'Owner' }) {
       tone: row.tone,
       view: row.view,
       tab: row.tab
+    })),
+    launchReadiness: readiness.map(row => ({
+      key: row.key,
+      title: row.title,
+      gapCount: row.gapCount,
+      status: row.status,
+      view: row.view,
+      tab: row.tab,
+      fix: row.fix
+    })),
+    ifleetCoverage: coverage.map(row => ({
+      key: row.key,
+      label: row.label,
+      gapCount: row.gapCount,
+      status: row.status,
+      view: row.view,
+      tab: row.tab,
+      detail: row.detail
     }))
   };
 }
@@ -2353,7 +2373,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   const input = [
     {
       role: 'developer',
-      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, and recent messages. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
+      content: 'You are Star AI, the built-in WheelsonAuto AI manager. Write concise, natural SMS replies that sound like a helpful human office assistant. Use the platform context only, including customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps. If readiness or coverage says a workflow is blocked, say it needs office review instead of pretending it is complete. Never promise a charge, refund, autopay change, cancellation, removal, toll charge, saved-card action, password reset, receipt, payoff, or contract/e-sign send has happened unless an admin approved it. Return only JSON with fields: reply, intent, actionType, approvalRequired, needsHuman, canAutoSend, confidence, tone, reasons.'
     },
     {
       role: 'user',
