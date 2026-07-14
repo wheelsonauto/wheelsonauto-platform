@@ -146,16 +146,28 @@ async function main() {
 
   try {
     const providerEvidenceState = {
-      integrations: { clover: { connected: true, lastCustomerSyncAt: '2026-07-14T12:00:00.000Z', lastPaymentSyncAt: '2026-07-14T12:01:00.000Z', recurringPlanMembers: [{ id: 'direct-provider-recurring' }], webhookEvents: [{ id: 'direct-provider-webhook', receivedAt: '2026-07-14T12:03:00.000Z' }] } },
-      recurringPayments: [{ id: 'direct-provider-recurring', customer: 'Direct Provider Customer', cloverPaymentSource: 'direct-provider-source', lastManualChargeAt: '2026-07-14T12:02:00.000Z' }],
+      integrations: {
+        clover: { connected: true, lastCustomerSyncAt: '2026-07-14T12:00:00.000Z', lastPaymentSyncAt: '2026-07-14T12:01:00.000Z', recurringPlanMembers: [{ id: 'direct-provider-recurring' }], webhookEvents: [{ id: 'direct-provider-webhook', receivedAt: '2026-07-14T12:03:00.000Z' }] },
+        wheelsonAutoAutopay: { enabled: true, intervalMs: 300000, lastFinishedAt: '2026-07-14T12:04:00.000Z', lastResult: { charged: 1, failed: 0, skipped: 0, errors: [] } }
+      },
+      recurringPayments: [{ id: 'direct-provider-recurring', customer: 'Direct Provider Customer', cloverCustomerId: 'direct-provider-customer', cloverPaymentSource: 'clv_direct_provider_source', cardSavedAt: '2026-07-14T11:59:00.000Z', autoChargeEnabled: true, lastManualChargeAt: '2026-07-14T12:02:00.000Z' }],
       payments: [{ id: 'direct-provider-payment', customer: 'Direct Provider Customer', status: 'Paid', source: 'Clover saved-card charge', createdAt: '2026-07-14T12:02:00.000Z' }]
     };
     const providerEvidence = new Map(apiProviderRows(providerEvidenceState).map(row => [row.id, row]));
     assert(providerEvidence.get('clover-core').status === 'Connected' && /customers and payments synced successfully/i.test(providerEvidence.get('clover-core').lastTestResult), 'Clover Core should be connected only when runtime customer/payment sync evidence exists.');
     assert(providerEvidence.get('clover-ecommerce').status === 'Connected' && /saved-card charge successfully/i.test(providerEvidence.get('clover-ecommerce').lastTestResult), 'Clover Ecommerce should be connected only after a successful WheelsonAuto saved-card charge.');
     assert(providerEvidence.get('clover-webhooks').status === 'Connected' && /webhook event/i.test(providerEvidence.get('clover-webhooks').lastTestResult), 'Clover webhooks should be connected only after a signed live event is recorded.');
+    assert(providerEvidence.get('woa-autopay').status === 'Connected' && /1 charged/.test(providerEvidence.get('woa-autopay').lastTestResult), 'WheelsonAuto Autopay should be connected only after a clean monitor run with a managed saved-card schedule.');
     const providerReviewIds = new Set(apiProviderReviewRows(providerEvidenceState).map(row => row.id));
-    assert(!providerReviewIds.has('clover-core') && !providerReviewIds.has('clover-ecommerce') && !providerReviewIds.has('clover-webhooks'), 'Evidence-backed Clover providers should not remain in the provider readiness warning count.');
+    assert(!providerReviewIds.has('clover-core') && !providerReviewIds.has('clover-ecommerce') && !providerReviewIds.has('clover-webhooks') && !providerReviewIds.has('woa-autopay'), 'Evidence-backed Clover and WheelsonAuto autopay providers should not remain in the provider readiness warning count.');
+    const providerCustomerFailureState = JSON.parse(JSON.stringify(providerEvidenceState));
+    providerCustomerFailureState.integrations.wheelsonAutoAutopay.lastResult = { charged: 0, failed: 1, notFound: 0, skipped: 0, errors: ['Direct Provider Customer: card declined'] };
+    const providerCustomerFailure = new Map(apiProviderRows(providerCustomerFailureState).map(row => [row.id, row]));
+    assert(providerCustomerFailure.get('woa-autopay').status === 'Connected' && /1 failed/.test(providerCustomerFailure.get('woa-autopay').lastTestResult), 'A customer decline should remain a customer follow-up outcome instead of falsely blocking the autopay engine.');
+    const providerFatalState = JSON.parse(JSON.stringify(providerEvidenceState));
+    providerFatalState.integrations.wheelsonAutoAutopay.fatalError = 'Autopay data store unavailable';
+    const providerFatal = new Map(apiProviderRows(providerFatalState).map(row => [row.id, row]));
+    assert(providerFatal.get('woa-autopay').status === 'Blocked - monitor error' && /data store unavailable/i.test(providerFatal.get('woa-autopay').lastTestResult), 'A monitor-level failure should block autopay readiness with the actual failure evidence.');
     assert(smsScamAssessment('Send me your verification code using https://bit.ly/fake').suspicious, 'Credential and shortened-link SMS should be marked as a potential scam.');
     assert(!smsScamAssessment('Hi, can I bring the car in for an oil change Tuesday?').suspicious, 'Normal customer service SMS should not be marked as a scam.');
     assert(smsSensitiveActionAssessment('Charge the customer card and change autopay to Friday').sensitive, 'Owner phone money/account instructions should require app review.');

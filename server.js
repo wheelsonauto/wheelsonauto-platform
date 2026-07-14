@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-41">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-42">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -89,6 +89,7 @@ const woaAutopayStatus = {
   lastStartedAt: '',
   lastFinishedAt: '',
   lastError: '',
+  fatalError: '',
   lastResult: null
 };
 const twilioInboundPollStatus = {
@@ -6458,6 +6459,16 @@ function defaultApiProviderRows(data = {}) {
 	      liveTest: 'Trigger Clover payment webhook and confirm payment history / dashboard auto-sync updates.'
 	    },
 	    {
+	      id: 'woa-autopay',
+	      name: 'WheelsonAuto Autopay',
+	      group: 'Money',
+	      status: 'Testing',
+	      owner: 'Owner',
+	      envKeys: 'WOA_AUTOPAY_MS, Clover Ecommerce saved-card setup',
+	      endpoint: '/api/woa-autopay/run, /api/woa-autopay/status',
+	      liveTest: 'Run the monitor with a managed saved-card customer and verify charged, failed, retry, skipped, and next-run results.'
+	    },
+	    {
 	      id: 'sms-phone',
 	      name: 'SMS / Business Phone',
 	      group: 'Comms',
@@ -6531,6 +6542,20 @@ function apiProviderTruthOverrides(data = {}) {
   const cloverWebhookResult = cloverWebhookLive
     ? cloverWebhookEvents.length + ' Clover webhook event(s) have been accepted by the signed callback route.'
     : (CLOVER_WEBHOOK_SECRET ? 'Clover webhook secret is stored; a signed live Clover event is still required.' : 'Clover webhook shared secret is not configured.');
+  const savedAutopay = data.integrations && data.integrations.wheelsonAutoAutopay || {};
+  const autopayEvidence = {
+    ...woaAutopayStatus,
+    ...savedAutopay,
+    lastResult: savedAutopay.lastResult || woaAutopayStatus.lastResult || null
+  };
+  const managedAutopayCount = recurring.filter(isWheelsonAutoManagedAutopay).length;
+  const autopayCustomerErrors = autopayEvidence.lastResult && Array.isArray(autopayEvidence.lastResult.errors) ? autopayEvidence.lastResult.errors : [];
+  const autopayFatalError = String(autopayEvidence.fatalError || '').trim();
+  const autopayRan = !!autopayEvidence.lastFinishedAt;
+  const autopayLive = !!(autopayRan && managedAutopayCount > 0 && !autopayFatalError);
+  const autopayResult = autopayRan
+    ? 'Autopay monitor completed: ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.charged || 0) + ' charged, ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.failed || 0) + ' failed, ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.notFound || 0) + ' payment not found, ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.skipped || 0) + ' skipped. ' + managedAutopayCount + ' managed saved-card schedule(s).' + (autopayCustomerErrors.length ? ' ' + autopayCustomerErrors.length + ' customer result(s) need review.' : '')
+    : 'Autopay monitor has not completed a production run since the current server started.';
   const smsResult = status.smsDeliveryLive
     ? 'Carrier delivery verified.'
     : (status.carrierRegistrationRequired
@@ -6557,6 +6582,11 @@ function apiProviderTruthOverrides(data = {}) {
       status: cloverWebhookLive ? 'Connected' : (CLOVER_WEBHOOK_SECRET ? 'Testing - live event needed' : 'Ready for credentials'),
       lastTestAt: latestCloverWebhook.receivedAt || latestCloverWebhook.createdAt || latestCloverWebhook.at || '',
       lastTestResult: cloverWebhookResult
+    },
+    'woa-autopay': {
+      status: autopayFatalError ? 'Blocked - monitor error' : (autopayLive ? 'Connected' : (autopayRan ? 'Testing - managed card needed' : 'Testing - run proof needed')),
+      lastTestAt: autopayEvidence.lastFinishedAt || '',
+      lastTestResult: autopayFatalError ? autopayResult + ' Monitor error: ' + autopayFatalError : autopayResult
     },
     'sms-phone': {
       status: status.smsDeliveryLive ? 'Connected' : (status.carrierRegistrationRequired ? 'Blocked - 10DLC approval' : (status.configured ? 'Testing - delivery pending' : 'Provider needed')),
@@ -8228,8 +8258,9 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.inFlight = true;
   woaAutopayStatus.lastStartedAt = new Date().toISOString();
   woaAutopayStatus.lastError = '';
+  woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, failed: 0, notFound: 0, skipped: 0, errors: [] };
   try {
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
@@ -8321,16 +8352,19 @@ async function runWheelsonAutoAutopay(options = {}) {
       intervalMs: WOA_AUTOPAY_MS,
       lastStartedAt: woaAutopayStatus.lastStartedAt,
       lastFinishedAt: new Date().toISOString(),
+      fatalError: '',
       lastResult: result
     };
     await writeData(data);
     woaAutopayStatus.lastFinishedAt = data.integrations.wheelsonAutoAutopay.lastFinishedAt;
     woaAutopayStatus.lastResult = result;
     woaAutopayStatus.lastError = result.errors[0] || '';
+    woaAutopayStatus.fatalError = '';
     return { ok: result.errors.length === 0, skipped: false, ...result, status: woaAutopayStatus };
   } catch (err) {
     woaAutopayStatus.lastFinishedAt = new Date().toISOString();
     woaAutopayStatus.lastError = String(err && err.message || err);
+    woaAutopayStatus.fatalError = woaAutopayStatus.lastError;
     woaAutopayStatus.lastResult = { dateKey, errors: [woaAutopayStatus.lastError] };
     return { ok: false, skipped: false, error: woaAutopayStatus.lastError, status: woaAutopayStatus };
   } finally {

@@ -18,12 +18,13 @@ Current live release status:
 - Alias-only readiness matching stays outside customer portal account matching, preserving strict customer login isolation.
 - Numeric payment amounts stored in legacy vehicle text are hidden across Dashboard, Payments, Closeout, Reports, and Messages until a real fleet vehicle is linked.
 - API Roadmap statuses now merge safe live server evidence: Clover Core requires successful customer/payment sync, Ecommerce requires a successful saved-card charge, and Clover webhooks require a received signed event.
+- WheelsonAuto Autopay now has its own evidence-backed provider row. A completed monitor run with a managed saved-card schedule proves the engine is connected; customer declines remain visible follow-up outcomes, while only a true monitor failure blocks engine readiness.
 - Resend, Telnyx, and Star continue to use their real outbound/inbound, carrier, and OpenAI health evidence; keys alone never mark a provider connected.
 - Telnyx signed inbound messaging is connected. Outbound SMS still requires the Telnyx account upgrade, service address and payment verification, 10DLC approval, and a successful live send.
 - Resend outbound and inbound email delivery are connected for platform notifications and replies.
 - Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
-- Release asset version is `platform-20260714-final-41`.
+- Release asset version is `platform-20260714-final-42`.
 
 Release checks:
 
