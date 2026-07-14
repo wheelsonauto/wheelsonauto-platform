@@ -2252,10 +2252,33 @@ render=function(){
   }
 };
 
+var __woaCarrierMessagingStatusBase=messagingStatus;
+messagingStatus=function(){
+  var status=__woaCarrierMessagingStatusBase(),saved=((db.integrations||{}).messaging||{});
+  status.carrierDeliveryVerified=!!saved.carrierDeliveryVerified;
+  status.carrierRegistrationRequired=!!saved.carrierRegistrationRequired;
+  status.carrierDeliveryStatus=saved.carrierDeliveryStatus||'';
+  status.carrierDeliveryErrorCode=saved.carrierDeliveryErrorCode||'';
+  status.carrierDeliveryError=saved.carrierDeliveryError||'';
+  return status
+};
+function smsDeliveryTruth(status){
+  if(!status.configured)return{label:'Hosted SMS needed',tone:'warn',detail:'Add the provider credentials and platform number in Render.'};
+  if(status.carrierRegistrationRequired)return{label:'10DLC approval needed',tone:'bad',detail:status.carrierDeliveryError||'Telnyx is configured, but carriers will reject outgoing texts until the number is attached to an approved 10DLC campaign.'};
+  if(status.carrierDeliveryVerified)return{label:'SMS delivery verified',tone:'good',detail:'The carrier confirmed a delivered message from the platform number.'};
+  return{label:'SMS configured - test pending',tone:'warn',detail:'Provider and inbound connection are configured. Do not treat SMS as live until a carrier delivery is confirmed.'}
+}
+var __woaCarrierMessageStatusStripBase=messageStatusStrip;
+messageStatusStrip=function(status){
+  var truth=smsDeliveryTruth(status),html=__woaCarrierMessageStatusStripBase(status);
+  return html.replace(status.configured?'Live SMS connected':'SMS setup needed',truth.label).replace(status.configured?'Texts send from '+(status.from||status.provider):'Calls stay on T-Mobile. Hosted SMS will bring replies into this portal.',truth.detail)
+};
 var __woaMessageSetupDeliveryBase=messageSetupPanel;
 messageSetupPanel=function(status){
-  var html=__woaMessageSetupDeliveryBase(status);
-  var carrierCard='<div class="item carrier-delivery-card"><strong>Carrier delivery results</strong><div>Automatic status check every 30 seconds</div><small>Queued is never treated as delivered. Failed carrier results and error codes stay attached to the conversation.</small><div class="actions"><button class="btn primary" data-action="refresh-sms-delivery">Refresh delivery</button></div></div>';
+  var truth=smsDeliveryTruth(status),html=__woaMessageSetupDeliveryBase(status);
+  html=html.replace(status.configured?'Live SMS connected':'Hosted SMS needed',truth.label);
+  if(status.configured)html=html.replace('Connected through '+status.provider,status.carrierDeliveryVerified?'Delivery verified through '+status.provider:(status.carrierRegistrationRequired?'Telnyx configured - 10DLC approval needed':'Provider configured - delivery test pending'));
+  var carrierCard='<div class="item carrier-delivery-card"><strong>Carrier delivery results</strong><div>'+esc(truth.label)+'</div><small>'+esc(truth.detail)+' Queued is never treated as delivered.</small><div class="actions"><button class="btn primary" data-action="refresh-sms-delivery">Refresh delivery</button></div></div>';
   return html.replace('<div class="item"><strong>Email</strong>',carrierCard+'<div class="item"><strong>Email</strong>')
 };
 

@@ -111,6 +111,10 @@ requireText('Server public notification status', publicMessagingStatus, 'notific
 requireText('Server public owner mirror status', publicMessagingStatus, 'ownerMirrorLive');
 requireText('Server public phone reply bridge status', publicMessagingStatus, 'ownerReplyBridge');
 requireText('Server public SMS scam guard status', publicMessagingStatus, 'smsScamGuard');
+requireText('Server carrier delivery truth', server, 'carrierDeliveryVerified');
+requireText('Server carrier registration truth', server, 'carrierRegistrationRequired');
+requireText('Messaging setup carrier pending label', app, 'SMS configured - test pending');
+requireText('Messaging setup 10DLC label', app, '10DLC approval needed');
 requireText('Customer portal message route', server, "/customer/message");
 requireText('Customer portal receipt request route', server, "/customer/receipt-request");
 requireText('Customer portal receipt approval guard', server, "actionType: 'send_receipt'");

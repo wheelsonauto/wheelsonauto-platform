@@ -623,6 +623,35 @@ function emailProviderConfigured(provider) {
   if (name === 'sendgrid') return !!SENDGRID_API_KEY;
   return false;
 }
+function telnyxCarrierReadiness(data = {}, provider = '') {
+  if (String(provider || '').toLowerCase() !== 'telnyx') {
+    return {
+      carrierDeliveryVerified: false,
+      carrierRegistrationRequired: false,
+      carrierDeliveryStatus: '',
+      carrierDeliveryErrorCode: '',
+      carrierDeliveryError: ''
+    };
+  }
+  const records = (data.messages || []).filter(record => {
+    return String(record.provider || '').toLowerCase() === 'telnyx' &&
+      (record.deliveryUpdatedAt || record.providerStatus || record.providerErrorCode);
+  }).sort((a, b) => {
+    const aTime = Date.parse(a.deliveryUpdatedAt || a.failedAt || a.deliveredAt || a.createdAt || a.date || '') || 0;
+    const bTime = Date.parse(b.deliveryUpdatedAt || b.failedAt || b.deliveredAt || b.createdAt || b.date || '') || 0;
+    return bTime - aTime;
+  });
+  const latest = records[0] || {};
+  const status = String(latest.providerStatus || latest.status || '').toLowerCase();
+  const errorCode = String(latest.providerErrorCode || '').trim();
+  return {
+    carrierDeliveryVerified: status === 'delivered',
+    carrierRegistrationRequired: errorCode === '40010',
+    carrierDeliveryStatus: status || (records.length ? 'unconfirmed' : 'not_tested'),
+    carrierDeliveryErrorCode: errorCode,
+    carrierDeliveryError: String(latest.providerErrorMessage || '').trim()
+  };
+}
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const saved = (((data.integrations || {}).messaging) || {});
@@ -636,6 +665,7 @@ function publicMessagingStatus(data = {}) {
     ((provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) ||
       (provider === 'telnyx' && TELNYX_API_KEY))
   );
+  const carrier = telnyxCarrierReadiness(data, provider);
   return {
     provider,
     enabled: settings.enabled,
@@ -645,7 +675,7 @@ function publicMessagingStatus(data = {}) {
       ? 'Telnyx handles the platform inbox. Keep the T-Mobile number unchanged until the Telnyx test line passes and the final port is approved.'
       : 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
-    ownerMirrorLive: !!(configured && MESSAGING_OWNER_NOTIFY_NUMBER),
+    ownerMirrorLive: !!(configured && MESSAGING_OWNER_NOTIFY_NUMBER && (provider !== 'telnyx' || carrier.carrierDeliveryVerified)),
     ownerReplyBridge: MESSAGING_OWNER_NOTIFY_NUMBER ? 'Phone replies use a stable 6-character conversation code so they stay matched to the right customer.' : 'Add the owner mobile number to mirror customer texts and enable safe phone replies.',
     smsScamGuard: 'Potential scams are labeled, held from Star auto-reply, and require staff review. Phone replies cannot run money or account actions.',
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages' + (provider === 'twilio' || provider === 'telnyx' ? '?provider=' + provider : ''),
@@ -662,6 +692,7 @@ function publicMessagingStatus(data = {}) {
     deliveryUpdated: Number(saved.deliveryUpdated || 0),
     deliveryErrors: Number(saved.deliveryErrors || 0),
     deliveryLastError: saved.deliveryLastError || '',
+    ...carrier,
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     webhookSecretConfigured: !!(MESSAGING_WEBHOOK_SECRET || (provider === 'telnyx' && TELNYX_PUBLIC_KEY)),
     telnyxSignatureReady: provider === 'telnyx' && !!TELNYX_PUBLIC_KEY,
@@ -10420,6 +10451,7 @@ module.exports = {
   rememberSmsBridgeThread,
   resolveOwnerSmsBridge,
   ownerSmsMirrorBody,
+  telnyxCarrierReadiness,
   configureTwilioSmsWebhook,
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,

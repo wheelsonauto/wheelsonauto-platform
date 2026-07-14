@@ -15,6 +15,7 @@ const {
   parseIncomingMessage,
   sendProviderSms,
   applyTelnyxDeliveryEvent,
+  telnyxCarrierReadiness,
   mergeTelnyxDeliveryUpdates,
   reconcileTelnyxDeliveryRecords,
   configureTelnyxMessagingProfile
@@ -107,6 +108,13 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(failedMessageData.messages[0].status, 'Failed');
   assert.strictEqual(failedMessageData.messages[0].providerErrorCode, '40010');
   assert.match(failedMessageData.messages[0].providerErrorMessage, /10DLC registration required/);
+  const failedReadiness = telnyxCarrierReadiness(failedMessageData, 'telnyx');
+  assert.strictEqual(failedReadiness.carrierDeliveryVerified, false);
+  assert.strictEqual(failedReadiness.carrierRegistrationRequired, true);
+  assert.strictEqual(failedReadiness.carrierDeliveryErrorCode, '40010');
+  const deliveredReadiness = telnyxCarrierReadiness(messageData, 'telnyx');
+  assert.strictEqual(deliveredReadiness.carrierDeliveryVerified, true);
+  assert.strictEqual(deliveredReadiness.carrierRegistrationRequired, false);
 
   const latestLiveData = {
     messages: [{ id: 'message-local-2', externalId: 'telnyx-outbound-2', provider: 'telnyx', customer: 'Latest customer name', vehicleId: 'vehicle-latest', status: 'queued', tone: 'blue' }]
