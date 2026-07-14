@@ -15,6 +15,7 @@ const {
   parseIncomingMessage,
   sendProviderSms,
   applyTelnyxDeliveryEvent,
+  reconcileTelnyxDeliveryRecords,
   configureTelnyxMessagingProfile
 } = require('../server');
 
@@ -85,6 +86,26 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(messageData.messages[0].status, 'Delivered');
   assert.strictEqual(messageData.messages[0].tone, 'good');
   assert.strictEqual(messageData.messages[0].providerStatus, 'delivered');
+
+  const failedMessageData = {
+    messages: [{ id: 'message-local-2', externalId: 'telnyx-outbound-2', provider: 'telnyx', createdAt: new Date(Date.now() - 10000).toISOString(), status: 'queued', tone: 'blue' }]
+  };
+  const reconciled = await reconcileTelnyxDeliveryRecords(failedMessageData, {
+    apiKey: 'KEY-test',
+    minAgeMs: 0,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return { data: { id: 'telnyx-outbound-2', to: [{ phone_number: '+16095550102', status: 'delivery_failed' }], errors: [{ code: '40010', title: 'Unregistered 10DLC Message' }] } };
+      }
+    })
+  });
+  assert.strictEqual(reconciled.checked, 1);
+  assert.strictEqual(reconciled.updated, 1);
+  assert.strictEqual(failedMessageData.messages[0].status, 'Failed');
+  assert.strictEqual(failedMessageData.messages[0].providerErrorCode, '40010');
+  assert.match(failedMessageData.messages[0].providerErrorMessage, /10DLC registration required/);
 
   const calls = [];
   const configured = await configureTelnyxMessagingProfile({

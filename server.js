@@ -63,10 +63,11 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260713-final-24">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-25">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
+const TELNYX_DELIVERY_POLL_MS = Math.max(15000, Number(process.env.WOA_TELNYX_DELIVERY_POLL_MS || 30000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
 const WEBHOOK_AUTO_SYNC_DELAY_MS = Math.max(1000, Number(process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS || 5000));
 const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
@@ -96,6 +97,14 @@ const twilioInboundPollStatus = {
   lastError: '',
   lastResult: null,
   lastPersistedAt: 0,
+  lastLoggedAt: 0
+};
+const telnyxDeliveryPollStatus = {
+  inFlight: false,
+  lastCheckedAt: '',
+  lastUpdatedAt: '',
+  lastError: '',
+  lastResult: null,
   lastLoggedAt: 0
 };
 const loginFailureBuckets = new Map();
@@ -8040,6 +8049,16 @@ function telnyxDeliveryStatus(payload = {}) {
   const destination = Array.isArray(message.to) ? message.to[0] || {} : {};
   return String(destination.status || message.delivery_status || message.status || '').toLowerCase();
 }
+function telnyxDeliveryError(message = {}) {
+  const errors = Array.isArray(message.errors) ? message.errors : [];
+  const first = errors[0] || {};
+  const code = String(first.code || first.error_code || '').trim();
+  const raw = String(first.detail || first.title || first.message || '').trim();
+  const known = {
+    '40010': '10DLC registration required. The carrier rejected this text because the Telnyx number is not attached to an approved 10DLC campaign.'
+  };
+  return { code, message: known[code] || raw };
+}
 function applyTelnyxDeliveryEvent(data, payload = {}) {
   const message = payload && payload.data && payload.data.payload || payload.payload || {};
   const externalId = String(message.id || '');
@@ -8056,9 +8075,70 @@ function applyTelnyxDeliveryEvent(data, payload = {}) {
   record.tone = delivered ? 'good' : (failed ? 'bad' : (uncertain ? 'warn' : 'blue'));
   if (delivered) record.deliveredAt = record.deliveryUpdatedAt;
   if (failed) record.failedAt = record.deliveryUpdatedAt;
-  if (Array.isArray(message.errors) && message.errors.length) record.providerErrors = message.errors.slice(0, 10);
+  if (Array.isArray(message.errors) && message.errors.length) {
+    record.providerErrors = message.errors.slice(0, 10);
+    const providerError = telnyxDeliveryError(message);
+    record.providerErrorCode = providerError.code;
+    record.providerErrorMessage = providerError.message;
+  }
   if (message.cost) record.providerCost = message.cost;
   return { matched: true, messageId: record.id, externalId, providerStatus: record.providerStatus, status: record.status };
+}
+async function reconcileTelnyxDeliveryRecords(data, options = {}) {
+  const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
+  const fetchImpl = options.fetchImpl || fetch;
+  const now = Number(options.now || Date.now());
+  const maxRecords = Math.max(1, Math.min(50, Number(options.maxRecords || 25)));
+  const minAgeMs = Math.max(0, Number(options.minAgeMs == null ? 5000 : options.minAgeMs));
+  const maxAgeMs = Math.max(minAgeMs, Number(options.maxAgeMs || 10 * 24 * 60 * 60 * 1000));
+  if (!apiKey) return { checked: 0, updated: 0, errors: [], skipped: true, reason: 'Telnyx API key missing' };
+  const candidates = (data.messages || []).filter(record => {
+    if (String(record.provider || '').toLowerCase() !== 'telnyx' || !String(record.externalId || '').trim()) return false;
+    if (!/queued|sending|sent|accepted|pending|in-flight/i.test(String(record.status || record.providerStatus || ''))) return false;
+    const created = Date.parse(record.createdAt || record.date || '');
+    const age = Number.isFinite(created) ? now - created : minAgeMs;
+    return age >= minAgeMs && age <= maxAgeMs;
+  }).slice(0, maxRecords);
+  let updated = 0;
+  const errors = [];
+  for (const record of candidates) {
+    try {
+      const response = await telnyxApiRequest(fetchImpl, apiKey, '/messages/' + encodeURIComponent(record.externalId));
+      const remote = response && response.data || {};
+      const before = [record.status, record.providerStatus, record.providerErrorCode, record.providerErrorMessage].join('|');
+      applyTelnyxDeliveryEvent(data, { data: { event_type: 'message.finalized', payload: remote } });
+      const after = [record.status, record.providerStatus, record.providerErrorCode, record.providerErrorMessage].join('|');
+      if (before !== after) updated += 1;
+    } catch (err) {
+      errors.push({ externalId: record.externalId, error: String(err && err.message || err) });
+    }
+  }
+  return { checked: candidates.length, updated, errors };
+}
+async function syncTelnyxDeliveryStatuses(options = {}) {
+  const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
+  const provider = String(options.provider || MESSAGING_PROVIDER || '').toLowerCase();
+  if (provider !== 'telnyx' || !apiKey) return { skipped: true, reason: 'Telnyx messaging is not configured' };
+  if (telnyxDeliveryPollStatus.inFlight) return { skipped: true, reason: 'Telnyx delivery sync already running' };
+  telnyxDeliveryPollStatus.inFlight = true;
+  telnyxDeliveryPollStatus.lastCheckedAt = new Date().toISOString();
+  try {
+    const data = await readData();
+    const result = await reconcileTelnyxDeliveryRecords(data, { ...options, apiKey });
+    if (result.updated) {
+      await protectConcurrentLocalWrites(data);
+      await writeData(data);
+      telnyxDeliveryPollStatus.lastUpdatedAt = new Date().toISOString();
+    }
+    telnyxDeliveryPollStatus.lastError = '';
+    telnyxDeliveryPollStatus.lastResult = result;
+    return result;
+  } catch (err) {
+    telnyxDeliveryPollStatus.lastError = String(err && err.message || err);
+    throw err;
+  } finally {
+    telnyxDeliveryPollStatus.inFlight = false;
+  }
 }
 async function processMessagingWebhookEvent(provider, headers, payload) {
   const data = await readData();
@@ -10196,6 +10276,15 @@ if (require.main === module) {
         twilioInboundPollStatus.lastLoggedAt = Date.now();
         console.error('Twilio inbound SMS secure sync failed:', err && err.message || err);
       }), TWILIO_INBOUND_POLL_MS);
+    setTimeout(() => syncTelnyxDeliveryStatuses()
+      .then(result => console.log(result && result.skipped ? 'Telnyx delivery sync skipped.' : 'Telnyx delivery statuses synced.'))
+      .catch(err => console.error('Telnyx delivery sync failed:', err && err.message || err)), 5000);
+    setInterval(() => syncTelnyxDeliveryStatuses()
+      .catch(err => {
+        if (Date.now() - telnyxDeliveryPollStatus.lastLoggedAt < 60 * 1000) return;
+        telnyxDeliveryPollStatus.lastLoggedAt = Date.now();
+        console.error('Telnyx delivery sync failed:', err && err.message || err);
+      }), TELNYX_DELIVERY_POLL_MS);
     setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
     setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
     setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
@@ -10225,6 +10314,8 @@ module.exports = {
   configureTelnyxMessagingProfile,
   autoConfigureTelnyxMessagingProfile,
   applyTelnyxDeliveryEvent,
+  reconcileTelnyxDeliveryRecords,
+  syncTelnyxDeliveryStatuses,
   processMessagingWebhookEvent,
   listTwilioInboundMessages,
   deliverPolledTwilioMessage,
