@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-30">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-31">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -4969,13 +4969,37 @@ function cleanCustomerAccountPayload(payload, existing = null) {
   delete account.password;
   return account;
 }
+function cleanOrganizationText(value, fallback = '', maxLength = 180) {
+  const resolved = value === undefined || value === null ? fallback : value;
+  return String(resolved || '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
 function cleanOrganizationPayload(payload, existing = null) {
   const now = new Date().toISOString();
   const requestedScope = String(payload.dataScope || existing && existing.dataScope || 'Shared owner account').trim();
   const dataScope = WOA_MULTI_TENANT_ENABLED ? requestedScope : 'Shared owner account';
+  const entityTypes = ['Sole proprietorship', 'LLC', 'Corporation', 'Partnership', 'Nonprofit', 'Other / not selected'];
+  const requestedEntityType = cleanOrganizationText(payload.entityType, existing && existing.entityType, 80);
+  const taxIdStatuses = ['Needs owner', 'Ready in provider', 'Not required / confirmed'];
+  const requestedTaxIdStatus = cleanOrganizationText(payload.taxIdStatus, existing && existing.taxIdStatus || 'Needs owner', 80);
   return {
     id: String(payload.id || existing && existing.id || ('org-' + Date.now())).trim(),
-    name: String(payload.name || existing && existing.name || 'New company').trim(),
+    name: cleanOrganizationText(payload.name, existing && existing.name || 'New company', 160),
+    legalBusinessName: cleanOrganizationText(payload.legalBusinessName, existing && existing.legalBusinessName, 180),
+    entityType: entityTypes.includes(requestedEntityType) ? requestedEntityType : 'Other / not selected',
+    businessContactFirstName: cleanOrganizationText(payload.businessContactFirstName, existing && existing.businessContactFirstName, 100),
+    businessContactLastName: cleanOrganizationText(payload.businessContactLastName, existing && existing.businessContactLastName, 100),
+    businessPhone: cleanOrganizationText(payload.businessPhone, existing && existing.businessPhone, 40),
+    businessEmail: cleanOrganizationText(payload.businessEmail, existing && existing.businessEmail, 180),
+    serviceStreet: cleanOrganizationText(payload.serviceStreet, existing && existing.serviceStreet, 200),
+    serviceCity: cleanOrganizationText(payload.serviceCity, existing && existing.serviceCity, 100),
+    serviceState: cleanOrganizationText(payload.serviceState, existing && existing.serviceState, 80),
+    servicePostalCode: cleanOrganizationText(payload.servicePostalCode, existing && existing.servicePostalCode, 20),
+    serviceCountry: cleanOrganizationText(payload.serviceCountry, existing && existing.serviceCountry, 80),
+    taxIdStatus: taxIdStatuses.includes(requestedTaxIdStatus) ? requestedTaxIdStatus : 'Needs owner',
     type: String(payload.type || existing && existing.type || 'Store / location').trim(),
     status: String(payload.status || existing && existing.status || 'Active').trim(),
     plan: String(payload.plan || existing && existing.plan || 'Internal').trim(),
@@ -4987,7 +5011,7 @@ function cleanOrganizationPayload(payload, existing = null) {
     billingStatus: String(payload.billingStatus || existing && existing.billingStatus || 'Not connected').trim(),
     tenantReadiness: String(payload.tenantReadiness || existing && existing.tenantReadiness || 'Internal only').trim(),
     billingOwner: String(payload.billingOwner || existing && existing.billingOwner || 'WheelsonAuto').trim(),
-    notes: String(payload.notes || existing && existing.notes || '').trim(),
+    notes: cleanOrganizationText(payload.notes, existing && existing.notes, 2000),
     createdAt: existing && existing.createdAt || payload.createdAt || now,
     updatedAt: now
   };
@@ -5164,6 +5188,25 @@ function redactStaffSecrets(data) {
   }
   return safe;
 }
+function scrubOrganizationProviderProfile(organization) {
+  const safe = { ...(organization || {}) };
+  [
+    'legalBusinessName',
+    'entityType',
+    'businessContactFirstName',
+    'businessContactLastName',
+    'businessPhone',
+    'businessEmail',
+    'serviceStreet',
+    'serviceCity',
+    'serviceState',
+    'servicePostalCode',
+    'serviceCountry',
+    'taxIdStatus',
+    'billingOwner'
+  ].forEach(key => delete safe[key]);
+  return safe;
+}
 function stateForUserRead(data, user) {
   let safe = redactStaffSecrets(data);
   const owner = isOwnerUser(user);
@@ -5196,6 +5239,7 @@ function stateForUserRead(data, user) {
       ? safe[key].filter(row => String(row.id || '') === userOrganizationId(user))
       : filterRowsForUserOrganization(safe[key], user);
   });
+  if (Array.isArray(safe.organizations)) safe.organizations = safe.organizations.map(scrubOrganizationProviderProfile);
   if (role === 'mechanic') {
     const mechanic = {};
     ['business', 'vehicles', 'maintenance', 'claims', 'customers', 'contracts', 'tasks', 'documents', 'organizations'].forEach(key => {

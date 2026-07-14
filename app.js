@@ -2370,3 +2370,110 @@ document.addEventListener('toggle',function(e){
 },true);
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){enforceSidebarAccordion()}, {once:true});
 else requestAnimationFrame(function(){enforceSidebarAccordion()});
+
+function companyProviderProfileStatus(org){
+  org=org||{};
+  var missing=[];
+  if(!String(org.legalBusinessName||'').trim())missing.push('legal business name');
+  if(!String(org.entityType||'').trim()||/not selected/i.test(String(org.entityType||'')))missing.push('entity type');
+  if(!String(org.businessContactFirstName||'').trim()||!String(org.businessContactLastName||'').trim())missing.push('business contact name');
+  if(!String(org.businessPhone||'').trim())missing.push('business phone');
+  if(!String(org.businessEmail||'').trim())missing.push('business email');
+  if(!String(org.serviceStreet||'').trim()||!String(org.serviceCity||'').trim()||!String(org.serviceState||'').trim()||!String(org.servicePostalCode||'').trim()||!String(org.serviceCountry||'').trim())missing.push('service address');
+  if(!/ready in provider|not required/i.test(String(org.taxIdStatus||'')))missing.push('tax-ID readiness');
+  return{ready:missing.length===0,missing:missing,label:missing.length?'Provider profile needed':'Provider profile ready'}
+}
+
+function organizationProfileOption(value,expected,label){
+  return '<option value="'+esc(expected)+'" '+(String(value||'')===expected?'selected':'')+'>'+esc(label||expected)+'</option>'
+}
+
+function hydrateOrganizationProviderProfileModal(title){
+  if(!/^Add company \/ store$|^Company: /.test(String(title||'')))return;
+  var body=document.getElementById('modalBody'),form=body&&body.querySelector('.form');
+  if(!body||!form||form.querySelector('#orgLegalBusinessName'))return;
+  var saveButton=body.querySelector('button[data-action="save-org"]'),orgId=saveButton&&saveButton.dataset.id||'',org=(db.organizations||[]).find(function(row){return row.id===orgId})||{};
+  var entity=String(org.entityType||'Other / not selected'),taxStatus=String(org.taxIdStatus||'Needs owner'),country=String(org.serviceCountry||'');
+  var fields='<div class="field span2 provider-profile-heading"><strong>Provider identity</strong><small>Trusted business details for Telnyx, email, OpenAI, accounting, and future provider onboarding.</small></div>'+
+    '<div class="field"><label>Legal business name</label><input id="orgLegalBusinessName" value="'+esc(org.legalBusinessName||'')+'" autocomplete="organization" placeholder="Exact registered business name"></div>'+
+    '<div class="field"><label>Entity type</label><select id="orgEntityType">'+organizationProfileOption(entity,'Other / not selected','Select entity type')+organizationProfileOption(entity,'Sole proprietorship')+organizationProfileOption(entity,'LLC')+organizationProfileOption(entity,'Corporation')+organizationProfileOption(entity,'Partnership')+organizationProfileOption(entity,'Nonprofit')+'</select></div>'+
+    '<div class="field"><label>Business contact first name</label><input id="orgBusinessContactFirstName" value="'+esc(org.businessContactFirstName||'')+'" autocomplete="given-name"></div>'+
+    '<div class="field"><label>Business contact last name</label><input id="orgBusinessContactLastName" value="'+esc(org.businessContactLastName||'')+'" autocomplete="family-name"></div>'+
+    '<div class="field"><label>Business phone</label><input id="orgBusinessPhone" value="'+esc(org.businessPhone||'')+'" inputmode="tel" autocomplete="tel"></div>'+
+    '<div class="field"><label>Business email</label><input id="orgBusinessEmail" value="'+esc(org.businessEmail||'')+'" type="email" autocomplete="email"></div>'+
+    '<div class="field span2"><label>Service street address</label><input id="orgServiceStreet" value="'+esc(org.serviceStreet||'')+'" autocomplete="street-address" placeholder="Physical service address"></div>'+
+    '<div class="field"><label>City</label><input id="orgServiceCity" value="'+esc(org.serviceCity||'')+'" autocomplete="address-level2"></div>'+
+    '<div class="field"><label>State / region</label><input id="orgServiceState" value="'+esc(org.serviceState||'')+'" autocomplete="address-level1"></div>'+
+    '<div class="field"><label>Postal code</label><input id="orgServicePostalCode" value="'+esc(org.servicePostalCode||'')+'" autocomplete="postal-code"></div>'+
+    '<div class="field"><label>Country</label><select id="orgServiceCountry">'+organizationProfileOption(country,'','Select country')+organizationProfileOption(country,'United States')+organizationProfileOption(country,'Canada')+organizationProfileOption(country,'Other')+'</select></div>'+
+    '<div class="field span2"><label>Tax-ID readiness</label><select id="orgTaxIdStatus">'+organizationProfileOption(taxStatus,'Needs owner','Needs owner action')+organizationProfileOption(taxStatus,'Ready in provider','Entered securely in provider')+organizationProfileOption(taxStatus,'Not required / confirmed','Not required / confirmed')+'</select></div>';
+  form.insertAdjacentHTML('beforeend',fields);
+  var actions=body.querySelector('.actions');
+  if(actions)actions.insertAdjacentHTML('beforebegin','<div class="notice provider-security-notice">Do not store an EIN, SSN, card number, API key, or provider secret here. Enter full tax, payment, and credential details only in the provider\'s secure portal.</div>')
+}
+
+var __woaOrganizationProfileModalBase=openModal;
+openModal=function(title,body){
+  __woaOrganizationProfileModalBase(title,body);
+  hydrateOrganizationProviderProfileModal(title)
+};
+
+var __woaOrganizationProfilePostBase=post;
+post=async function(url,payload){
+  if(url==='/api/organizations'){
+    payload=Object.assign({},payload||{}, {
+      legalBusinessName:val('orgLegalBusinessName'),
+      entityType:val('orgEntityType')||'Other / not selected',
+      businessContactFirstName:val('orgBusinessContactFirstName'),
+      businessContactLastName:val('orgBusinessContactLastName'),
+      businessPhone:val('orgBusinessPhone'),
+      businessEmail:val('orgBusinessEmail'),
+      serviceStreet:val('orgServiceStreet'),
+      serviceCity:val('orgServiceCity'),
+      serviceState:val('orgServiceState'),
+      servicePostalCode:val('orgServicePostalCode'),
+      serviceCountry:val('orgServiceCountry'),
+      taxIdStatus:val('orgTaxIdStatus')||'Needs owner'
+    });
+    delete payload.ein;
+    delete payload.taxId;
+    delete payload.ssn
+  }
+  return __woaOrganizationProfilePostBase(url,payload)
+};
+
+companyOverviewRow=function(org,staff){
+  var assigned=companyStaffCount(org,staff),fleet=Number(org.fleetCount||((org.id==='org-wheelsonauto')?(db.vehicles||[]).length:0)),status=String(org.status||'Active'),internalReady=status.toLowerCase()==='active'&&assigned>0,provider=companyProviderProfileStatus(org);
+  return '<div class="company-overview-row"><div class="company-overview-name"><strong>'+esc(org.name||'Company')+'</strong><small>'+esc(org.type||'Store')+' | '+esc(org.plan||'Internal account')+'</small></div><div class="company-overview-facts"><span><b>'+fleet+'</b> fleet</span><span><b>'+assigned+'</b> staff</span>'+badge(internalReady?'Internal ready':'Needs setup',internalReady?'good':'warn')+badge(provider.label,provider.ready?'good':'warn')+'</div><div class="actions"><button class="btn" data-action="open-org" data-id="'+esc(org.id)+'">Edit</button><button class="btn gold" data-action="new-staff" data-id="'+esc(org.id)+'">Add staff</button></div></div>'
+};
+
+function OrganizationsProviderReady(){
+  var accounts=orgs(),staff=db.staffAccounts||[],active=accounts.filter(function(org){return String(org.status||'Active').toLowerCase()==='active'}),activeStaff=staff.filter(function(person){return String(person.status||'Active').toLowerCase()!=='disabled'}),internalReady=accounts.filter(function(org){return String(org.status||'Active').toLowerCase()==='active'&&companyStaffCount(org,staff)>0}),profileReady=accounts.filter(function(org){return companyProviderProfileStatus(org).ready}),selected=['Overview','Accounts','Staff','Readiness'].indexOf(tab)>=0?tab:'Overview';
+  var body=fastWorkspaceTabs([['Overview','Overview'],['Accounts','Accounts',accounts.length],['Staff','Staff',activeStaff.length],['Readiness','Readiness',accounts.length-profileReady.length]],selected,'staff-tabs company-tabs');
+  if(selected==='Overview'){
+    var attention=[];
+    accounts.forEach(function(org){
+      var assigned=companyStaffCount(org,staff),fleet=Number(org.fleetCount||((org.id==='org-wheelsonauto')?(db.vehicles||[]).length:0)),status=String(org.status||'Active').toLowerCase(),profile=companyProviderProfileStatus(org);
+      if(status!=='active')attention.push(['Company paused',org.name+' is '+(org.status||'not active')+'.','open-org',org.id]);
+      if(!assigned)attention.push(['Staff needed',org.name+' has no active manager or mechanic login.','new-staff',org.id]);
+      if(!fleet)attention.push(['Fleet count missing',org.name+' needs a fleet count before reports are useful.','open-org',org.id]);
+      if(!profile.ready)attention.push(['Provider profile needed',org.name+' is missing '+profile.missing.slice(0,3).join(', ')+(profile.missing.length>3?' and '+(profile.missing.length-3)+' more':'')+'.','open-org',org.id])
+    });
+    body+='<div class="grid stats company-summary-stats">'+stat('Companies',accounts.length,'Store and client records')+stat('Active',active.length,'Can operate internally')+stat('Internal ready',internalReady.length,'Active with assigned staff')+stat('Provider profile',profileReady.length,'Trusted identity complete')+'</div>';
+    body+='<div class="companies-overview-grid"><section class="card section company-control-panel"><div class="section-head"><div><h2>Company control</h2><p>Internal access and provider readiness stay separate and honest.</p></div><button class="btn primary" data-action="new-org">Add company</button></div><div class="company-overview-list">'+accounts.map(function(org){return companyOverviewRow(org,staff)}).join('')+'</div></section><section class="card section company-attention-panel"><div class="section-head"><div><h2>Setup attention</h2><p>Only company details that still need action.</p></div><button class="btn" data-tab="Readiness">Readiness</button></div><div class="company-attention-list">'+(attention.length?attention.slice(0,6).map(function(item){return '<div class="company-attention-row"><div><strong>'+esc(item[0])+'</strong><small>'+esc(item[1])+'</small></div><button class="btn" data-action="'+esc(item[2])+'" data-id="'+esc(item[3])+'">Fix</button></div>'}).join(''):'<div class="company-clear-state"><strong>Company setup is clear</strong><small>Internal access and provider identity are complete.</small></div>')+'</div></section></div>'
+  }
+  if(selected==='Accounts'){
+    var accountRows=accounts.map(function(org){var assigned=companyStaffCount(org,staff),fleet=Number(org.fleetCount||((org.id==='org-wheelsonauto')?(db.vehicles||[]).length:0)),profile=companyProviderProfileStatus(org);return['<strong>'+esc(org.name||'Company')+'</strong><div class="muted">'+esc(org.type||'Store')+' | '+esc(profile.label)+'</div>',badge(org.status||'Active',String(org.status||'').toLowerCase()==='active'?'good':'warn'),esc(org.plan||'Internal'),esc(org.primaryAdmin||'Not assigned'),esc(fleet),esc(assigned),'<button class="btn" data-action="open-org" data-id="'+esc(org.id)+'">Edit</button>']});
+    body+='<section class="card section company-accounts-panel" data-limit="24"><div class="section-head"><div><h2>Company accounts</h2><p>Edit identity, provider profile, plan, status, fleet count, billing mode, and data scope.</p></div><button class="btn primary" data-action="new-org">Add company</button></div>'+localSearch('Search company, type, plan, admin, status, or staff')+table(['Company','Status','Plan','Primary admin','Fleet','Staff','Action'],accountRows)+'</section>'
+  }
+  if(selected==='Staff'){
+    var staffRows=staff.map(function(person){var org=companyById(person.organizationId||'org-wheelsonauto');return['<strong>'+esc(person.name||person.username||'Staff account')+'</strong><div class="muted">'+esc(person.username||'')+'</div>',esc(person.role||'Staff'),esc(org&&org.name||'WheelsonAuto'),badge(person.status||'Active',String(person.status||'Active').toLowerCase()==='disabled'?'bad':'good'),esc(person.access||((person.role||'Staff')+' access')),'<button class="btn" data-action="open-staff" data-id="'+esc(person.id)+'">Edit</button>']});
+    body+='<section class="card section company-staff-panel" data-limit="24"><div class="section-head"><div><h2>Staff by company</h2><p>Managers and mechanics stay assigned to one company and only see their permitted workspace.</p></div><div class="actions"><button class="btn primary" data-action="new-staff" data-id="'+esc(accounts[0]&&accounts[0].id||'org-wheelsonauto')+'">Add staff</button><button class="btn" data-view="Settings">Account settings</button></div></div>'+localSearch('Search staff name, username, role, company, status, or access')+(staffRows.length?table(['Staff','Role','Company','Status','Access','Action'],staffRows):'<div class="item">No staff accounts are saved yet.</div>')+'</section>'
+  }
+  if(selected==='Readiness'){
+    var externalReady=accounts.filter(companyExternalReady).length,withoutStaff=accounts.filter(function(org){return !companyStaffCount(org,staff)}).length,subscriber=accounts.filter(function(org){return /subscription|subscriber|client/i.test(String([org.type,org.plan].filter(Boolean).join(' ')))}).length,profileMissing=accounts.length-profileReady.length;
+    body+='<section class="card section company-readiness-panel"><div class="section-head"><div><h2>Franchise readiness</h2><p>Internal stores work now. Provider identity and outside subscriber controls remain explicit.</p></div><button class="btn gold" data-view="API Roadmap">API roadmap</button></div><div class="company-readiness-grid">'+companyReadinessItem('Provider identity',profileMissing?profileMissing+' need profile':'Ready','Legal name, business contact, service address, and tax-ID readiness without storing the EIN.',profileMissing?'warn':'good')+companyReadinessItem('Staff scoping',withoutStaff?withoutStaff+' need staff':'Ready','Managers and mechanics are tied to their assigned company.',withoutStaff?'warn':'good')+companyReadinessItem('Owner view',active.length+' active','Owner reporting remains global across company accounts.','good')+companyReadinessItem('Data storage','Shared now','Internal-safe; outside subscribers need isolated storage.','warn')+companyReadinessItem('Per-company keys',externalReady+'/'+accounts.length,'Clover, SMS, email, toll, tracker, and accounting keys must be isolated.',externalReady===accounts.length?'good':'warn')+companyReadinessItem('Billing / SaaS',subscriber?subscriber+' planned':'Locked','Subscription billing must be connected before outside clients launch.','bad')+'</div><div class="company-readiness-footer"><div><strong>Current rule</strong><small>Never save full EIN, SSN, payment card, or provider credentials in a company record. Complete those values only inside each provider\'s secure portal.</small></div><div class="actions"><button class="btn" data-tab="Accounts">Company accounts</button><button class="btn" data-view="Settings">Staff settings</button></div></div></section>'
+  }
+  shell('Companies','Company access, trusted provider identity, and franchise readiness without repeated panels.',body,'')
+}
+Organizations=OrganizationsProviderReady;

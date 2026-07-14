@@ -382,6 +382,13 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'Billing connected',
   'Owner audit + reports',
   'Outside franchise/subscription launch stays locked',
+  'companyProviderProfileStatus',
+  'Legal business name',
+  'Service street address',
+  'Tax-ID readiness',
+  'Do not store an EIN, SSN, card number, API key, or provider secret here.',
+  'Provider profile needed',
+  'Provider profile ready',
   'new-org',
   'save-org'
 ].forEach(text => requireText('Company/franchise foundation UI', organizations + app, text));
@@ -576,6 +583,12 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'dataScopedToOrganization',
   'stateForUserRead',
   'stateForUserWrite',
+  'cleanOrganizationText',
+  'legalBusinessName',
+  'serviceStreet',
+  'taxIdStatus',
+  'scrubOrganizationProviderProfile',
+  'Company provider profile must never store full EIN, tax ID, or SSN values.',
   'organizationId',
   'Choose a saved company/store for this staff account.',
   'Duplicate company/franchise names should be blocked'

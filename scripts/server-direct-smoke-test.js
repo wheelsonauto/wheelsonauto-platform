@@ -588,12 +588,29 @@ async function main() {
         plan: 'Pro',
         primaryAdmin: 'Direct Owner',
         fleetCount: 12,
+        legalBusinessName: 'Direct Franchise Legal LLC',
+        entityType: 'LLC',
+        businessContactFirstName: 'Direct',
+        businessContactLastName: 'Owner',
+        businessPhone: '3135550168',
+        businessEmail: 'owner@direct-franchise.example',
+        serviceStreet: '100 Provider Test Way',
+        serviceCity: 'Detroit',
+        serviceState: 'Michigan',
+        servicePostalCode: '48201',
+        serviceCountry: 'United States',
+        taxIdStatus: 'Ready in provider',
+        ein: '12-3456789',
+        taxId: '12-3456789',
+        ssn: '123-45-6789',
         dataScope: 'Isolated tenant',
         billingOwner: 'WheelsonAuto'
       }
     });
     assert(franchise.status === 200 && franchise.json.ok && franchise.json.organization.id === 'direct-franchise', 'Owner could not create company/franchise account.');
     assert(franchise.json.organization.dataScope === 'Shared owner account', 'Company/franchise should stay owner-managed until multi-tenant isolation is enabled.');
+    assert(franchise.json.organization.legalBusinessName === 'Direct Franchise Legal LLC' && franchise.json.organization.servicePostalCode === '48201' && franchise.json.organization.taxIdStatus === 'Ready in provider', 'Owner company provider profile did not save its trusted legal identity and service address.');
+    assert(!Object.prototype.hasOwnProperty.call(franchise.json.organization, 'ein') && !Object.prototype.hasOwnProperty.call(franchise.json.organization, 'taxId') && !Object.prototype.hasOwnProperty.call(franchise.json.organization, 'ssn'), 'Company provider profile must never store full EIN, tax ID, or SSN values.');
 
     const duplicateFranchise = await request(server, 'POST', '/api/organizations', {
       cookie: ownerCookie,
@@ -633,6 +650,7 @@ async function main() {
     const franchiseState = await request(server, 'GET', '/api/state', { cookie: franchiseManagerCookie });
     assert(franchiseState.status === 200 && franchiseState.json && Array.isArray(franchiseState.json.organizations), 'Franchise manager state did not load.');
     assert((franchiseState.json.organizations || []).length === 1 && franchiseState.json.organizations[0].id === 'direct-franchise', 'Franchise manager should only see their company account.');
+    assert(!Object.prototype.hasOwnProperty.call(franchiseState.json.organizations[0], 'serviceStreet') && !Object.prototype.hasOwnProperty.call(franchiseState.json.organizations[0], 'businessEmail') && !Object.prototype.hasOwnProperty.call(franchiseState.json.organizations[0], 'taxIdStatus'), 'Manager state should not expose owner provider-onboarding profile details.');
     assert(!(franchiseState.json.vehicles || []).some(vehicle => vehicle.id === 'veh-001'), 'Franchise manager should not see main WheelsonAuto fleet records.');
     assert(!JSON.stringify(franchiseState.json).includes('Direct Dispute Customer'), 'Franchise manager should not see main customer/payment/dispute records.');
 
