@@ -2510,6 +2510,12 @@ messageContact=function(name){
     return __woaMessageContactLookupBase(name)
   })
 };
+var __woaExistingCustomerRecordsLookupBase=existingCustomerRecords;
+existingCustomerRecords=function(){
+  if(!__woaPerformanceRenderMemo)return __woaExistingCustomerRecordsLookupBase();
+  if(!__woaPerformanceRenderMemo.existingCustomerRecords)__woaPerformanceRenderMemo.existingCustomerRecords=__woaExistingCustomerRecordsLookupBase();
+  return __woaPerformanceRenderMemo.existingCustomerRecords
+};
 var __woaQueueCustomerProfileBase=existingCustomerProfile;
 existingCustomerProfile=function(name){
   var key=normName(name)||'unknown';
