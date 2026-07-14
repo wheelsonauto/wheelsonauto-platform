@@ -3179,6 +3179,22 @@ function starSafetyIdentifier(context = {}, payload = {}) {
   ].join('|');
   return 'woa-star-' + crypto.createHash('sha256').update(raw || 'anonymous').digest('hex').slice(0, 32);
 }
+const STAR_REPLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string', description: 'Concise, natural customer-facing reply.' },
+    intent: { type: 'string', description: 'Short normalized intent name.' },
+    actionType: { type: 'string', description: 'Requested WheelsonAuto workflow action.' },
+    approvalRequired: { type: 'boolean', description: 'True for every money or account-changing action.' },
+    needsHuman: { type: 'boolean', description: 'True when the message is unclear or requires staff judgment.' },
+    canAutoSend: { type: 'boolean', description: 'True only for safe, non-sensitive, high-confidence replies.' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    tone: { type: 'string', enum: ['good', 'warn', 'bad', 'blue'] },
+    reasons: { type: 'array', items: { type: 'string' }, maxItems: 6 }
+  },
+  required: ['reply', 'intent', 'actionType', 'approvalRequired', 'needsHuman', 'canAutoSend', 'confidence', 'tone', 'reasons'],
+  additionalProperties: false
+};
 async function openAiReplyPlan(data, payload, context, fallback) {
   if (!OPENAI_API_KEY || !WOA_AI_MODEL) return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: OPENAI_API_KEY ? 'Star AI model is not set.' : 'OpenAI API key is not configured.' }, fallback);
   const input = [
@@ -3208,7 +3224,14 @@ async function openAiReplyPlan(data, payload, context, fallback) {
       truncation: 'auto',
       safety_identifier: starSafetyIdentifier(context, payload),
       prompt_cache_key: 'wheelsonauto-star-reply-v1',
-      text: { format: { type: 'json_object' } }
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'wheelsonauto_star_reply',
+          strict: true,
+          schema: STAR_REPLY_SCHEMA
+        }
+      }
     };
     if (starModelSupportsReasoning(WOA_AI_MODEL)) requestBody.reasoning = { effort: WOA_AI_REASONING_EFFORT };
     else requestBody.temperature = 0.2;
@@ -10409,5 +10432,7 @@ module.exports = {
   listTwilioInboundMessages,
   deliverPolledTwilioMessage,
   syncTwilioInboundMessages,
-  twilioSignatureForPayload
+  twilioSignatureForPayload,
+  openAiReplyPlan,
+  starAiProviderHealthCheck
 };
