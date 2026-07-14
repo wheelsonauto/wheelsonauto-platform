@@ -51,10 +51,28 @@ const transactionCandidateNote = finalFunctionSlice('transactionCandidateNote');
 const applyTransactionCandidate = finalFunctionSlice('applyTransactionCandidate');
 const paymentTruthQueueRows = finalFunctionSlice('paymentTruthQueueRows');
 const paymentTruthQueueBoard = finalFunctionSlice('paymentTruthQueueBoard');
+const recurringEligibleForToday = finalFunctionSlice('recurringEligibleForToday');
+const dueOrTouchedToday = finalFunctionSlice('dueOrTouchedToday');
+const todayFailureCount = finalFunctionSlice('todayFailureCount');
+const isDueToday = finalFunctionSlice('isDueToday');
 
-if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout || !paymentTruthQueueRows || !paymentTruthQueueBoard) {
+if (!paymentState || !cardActions || !dailyCloseout || !paymentCloseout || !paymentTruthQueueRows || !paymentTruthQueueBoard || !recurringEligibleForToday || !dueOrTouchedToday) {
   fail('Missing core payment workflow functions.');
 }
+
+[
+  'removed',
+  'history',
+  'returned',
+  'ended',
+  'inactive',
+  'archived'
+].forEach(status => requireText('Today recurring eligibility', recurringEligibleForToday, status));
+requireText('Today recurring filter', dueOrTouchedToday, 'recurringEligibleForToday(r)');
+requireText('Today failure-count guard', todayFailureCount, 'recurringEligibleForToday(r)');
+requireText('Today due-date guard', isDueToday, 'recurringEligibleForToday(r)');
+requireText('Backend Today recurring eligibility', server, 'function recurringEligibleForToday(row = {})');
+requireText('Backend Today recurring filter', server, 'function recurringDueOrTouchedToday(row = {}, dateKeyValue = localDateKey())');
 
 if (!recentPayments) fail('Missing bounded newest-first transaction helper.');
 [

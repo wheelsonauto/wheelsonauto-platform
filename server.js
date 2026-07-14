@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-31">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-32">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -1831,6 +1831,16 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   if (closeoutRecurringCardLinked(row)) return 'Card linked';
   return 'Pending today';
 }
+function recurringEligibleForToday(row = {}) {
+  const status = String([row.status, row.stage].filter(Boolean).join(' ')).toLowerCase();
+  return !/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|archived)/.test(status);
+}
+function recurringDueOrTouchedToday(row = {}, dateKeyValue = localDateKey()) {
+  if (!recurringEligibleForToday(row)) return false;
+  return recurringDateKey(row) === dateKeyValue ||
+    String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === dateKeyValue ||
+    /fail|not found|retry|contact/i.test(String(row.status || ''));
+}
 function isStaleAutopaySchedule(row = {}, dateKeyValue = localDateKey()) {
   const due = recurringDateKey(row) || recordDateKey(row.nextPaymentDate || row.nextRunDate || row.adminNextRun || '');
   if (!due || due >= dateKeyValue) return false;
@@ -2019,10 +2029,7 @@ function reviewPaidOutsideProof(data, user, payload = {}) {
   return payment;
 }
 function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), ownerNote = '') {
-  const recurring = allRecurringRows(data).filter(row => {
-    if (!row) return false;
-    return recurringDateKey(row) === dateKeyValue || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === dateKeyValue || /fail|not found|retry|contact/i.test(String(row.status || ''));
-  });
+  const recurring = allRecurringRows(data).filter(row => recurringDueOrTouchedToday(row, dateKeyValue));
   const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
   const paidPayments = payments.filter(closeoutPaymentPaid);
   const paidOutsidePayments = paidPayments.filter(closeoutPaymentOutsideApp);
@@ -2444,7 +2451,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const rows = [['Section', 'Date', 'Customer', 'Vehicle', 'VIN', 'Tag / plate', 'Tracker', 'Type', 'Amount', 'Status', 'Source', 'Notes']];
   const today = localDateKey();
   const recurring = allRecurringRows(scoped);
-  const dueRows = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const dueRows = recurring.filter(row => recurringDueOrTouchedToday(row, today));
   const payments = uniqueCloseoutPayments(scoped.payments || []);
   const todayPayments = payments.filter(payment => recordDateKey(payment.date || payment.createdAt) === today);
   const collectedToday = todayPayments.filter(closeoutPaymentPaid).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
@@ -2597,7 +2604,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const role = String(user && user.role || 'Owner');
   const recurring = allRecurringRows(scoped);
   const payments = uniqueCloseoutPayments(scoped.payments || []);
-  const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const dueToday = recurring.filter(row => recurringDueOrTouchedToday(row, today));
   const failedOnce = dueToday.filter(row => closeoutRecurringState(row) === 'Failed once');
   const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
   const notFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
@@ -4078,7 +4085,7 @@ function ifleetFunctionCoverageRows(data = {}) {
   const staff = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
   const customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
   const today = localDateKey();
-  const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const dueToday = recurring.filter(row => recurringDueOrTouchedToday(row, today));
   const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
   const paymentNotFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
@@ -5919,7 +5926,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const recurring = allRecurringRows(scoped);
   const payments = uniqueCloseoutPayments(scoped.payments || []);
   const today = localDateKey();
-  const dueToday = recurring.filter(row => recurringDateKey(row) === today || String(row.lastAutoChargeDate || row.lastAutoChargeAttemptDate || '') === today || /fail|not found|retry|contact/i.test(String(row.status || '')));
+  const dueToday = recurring.filter(row => recurringDueOrTouchedToday(row, today));
   const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
   const paymentNotFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');

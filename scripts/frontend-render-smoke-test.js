@@ -421,7 +421,30 @@ function ownerSmoke() {
   assert(context.isInventoryVehicle({ status: 'Active contract', currentCustomer: '' }) === false, 'Unmatched active-contract cars must stay in review instead of available fleet.');
   assert(context.Operations === context.OperationsTruthFocused, 'Operations must use the final mutually exclusive fleet categorization.');
   assertHealthy('Operations prep/review truth split', renderView(context, 'Operations', 'Review'), ['Prep / review', 'Unassigned cars that need prep']);
+  context.db.recurringPayments = context.db.recurringPayments || [];
+  context.db.recurringPayments.unshift({
+    id: 'smoke-removed-today',
+    customer: 'Removed Today Smoke',
+    amount: 987654,
+    nextRun: context.todayKey(),
+    lastAutoChargeAttemptDate: context.todayKey(),
+    retryCount: 2,
+    status: 'Removed'
+  });
+  assert(context.dueOrTouchedToday(context.db.recurringPayments[0]) === false, 'Removed recurring customers must not qualify for Today even after a same-day failed attempt.');
+  assert(!renderView(context, 'Dashboard', 'Board', 'Dues').includes('Removed Today Smoke'), 'Dashboard Today dues must exclude removed recurring customers.');
+  assert(!renderView(context, 'Payments', 'Today').includes('Removed Today Smoke'), 'Payments Today action list must exclude removed recurring customers.');
+  assert(renderView(context, 'Payments', 'History').includes('Removed Today Smoke'), 'Removed recurring customers must remain visible in customer history.');
   context.db.payments = context.db.payments || [];
+  context.db.payments.unshift({
+    id: 'smoke-removed-history-transaction',
+    customer: 'Removed Today Smoke',
+    date: '2000-01-01',
+    method: 'Clover saved card',
+    amount: 99,
+    status: 'FAIL'
+  });
+  assert(renderView(context, 'Payments', 'Transactions').includes('Removed Today Smoke'), 'Removed customer transactions must remain visible in transaction history.');
   context.db.payments.unshift({
     id: 'smoke-paid-receipt',
     customer: 'Alicia Brown',

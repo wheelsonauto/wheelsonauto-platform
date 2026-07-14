@@ -1,8 +1,33 @@
 # WheelsonAuto Platform Roadmap
 
-Last updated: 2026-07-12
+Last updated: 2026-07-14
 
-## 2026-07-12 Build Checkpoint
+## 2026-07-14 Release Checkpoint
+
+Current live release status:
+
+- The provider-readiness company profile is live and stores business identity, contact, and address readiness without storing EIN, SSN, card numbers, API keys, or provider secrets.
+- Owner reads can manage the readiness profile; manager and mechanic reads redact those onboarding details.
+- Removed, returned, ended, inactive, and history autopay rows are excluded from Dashboard Today, Payments Today, daily closeout expected money, contact queues, system health, reports, and readiness counts.
+- Historical transactions for removed customers remain visible in Transactions and payment history.
+- Telnyx signed inbound messaging is connected. Outbound SMS still requires the Telnyx account upgrade, service address and payment verification, 10DLC approval, and a successful live send.
+- Resend outbound and inbound email delivery are connected for platform notifications and replies.
+- Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
+- `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
+- Release asset version is `platform-20260714-final-32`.
+
+Release checks:
+
+- `pnpm run check`
+- `node scripts/deep-tightening-check.js`
+- direct server, frontend rendering, role, payment, messaging, Star safety, and responsive checks
+
+Publish status:
+
+- Code releases are committed and pushed to GitHub, then deployed automatically by Render.
+- Live verification must confirm the release asset version and corrected Today customer list after each deploy.
+
+## 2026-07-12 Build Checkpoint (Previous)
 
 Current checkpoint is focused on tightening the platform, not redesigning it.
 
@@ -87,13 +112,7 @@ Live data status:
 - Live-data check has 0 errors.
 - Known live-data warning: `2013 BMW 528XI` is missing VIN.
 
-Publish status:
-
-- Local branch is ahead of GitHub with committed code changes.
-- Push from this environment was blocked by DNS/network policy and then escalated push was rejected.
-- To publish from the Mac terminal when ready:
-  `cd "/Users/khaled/Documents/Codex/2026-07-03/browser-plugin-browser-openai-bundled/work/wheelsonauto-platform-clean" && git push origin main`
-- Render should deploy from GitHub after that push.
+Publish status at that checkpoint has been superseded by the 2026-07-14 release status above.
 
 ## Product Direction
 
@@ -208,7 +227,7 @@ Settings controls Clover setup, website apply path, staff accounts, role access,
 - tracker/location provider
 - marketing/follow-up systems
 - Telnyx SMS from the WheelsonAuto number: signed inbound webhook is connected; outbound remains blocked until account upgrade and 10DLC approval.
-- Resend email: outbound is verified; inbound reply/webhook delivery remains pending.
+- Resend email: outbound and inbound reply/webhook delivery are connected.
 - Star AI: OpenAI key/model are stored, but usable API credit and a successful controlled Responses API test are still required.
 
 The API Roadmap must derive these three statuses from verified runtime evidence. A stale manually saved provider label cannot override carrier delivery, email direction, or OpenAI health results.

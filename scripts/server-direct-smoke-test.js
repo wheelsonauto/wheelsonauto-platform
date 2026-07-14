@@ -1452,6 +1452,15 @@ async function main() {
       nextRun: '2099-12-30',
       status: 'Active'
     }, {
+      id: 'rec-direct-closeout-removed',
+      customer: 'Direct Closeout Removed',
+      amount: 987654,
+      frequency: 'Weekly',
+      nextRun: '2099-12-31',
+      lastAutoChargeAttemptDate: '2099-12-31',
+      retryCount: 2,
+      status: 'Removed'
+    }, {
       id: 'rec-direct-report-candidate',
       customer: 'Direct Report Candidate',
       phone: '3135550456',
@@ -1488,7 +1497,8 @@ async function main() {
       { id: 'clover-payment-report-candidate', cloverPaymentId: 'pay-report-candidate', customer: 'Unmatched Clover payment', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 456, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
       { id: 'payment-direct-reconciled-link', paymentRequestId: 'plink-direct-closeout-already-paid', customer: 'Direct Reconciled Link', date: '2099-12-30', method: 'Clover Hosted Checkout', source: 'Clover Hosted Checkout', amount: 77, status: 'Paid' },
       { id: 'payment-closeout-paid-outside', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Paid outside app', source: 'WheelsonAuto', amount: 45, status: 'Paid outside app', notes: 'Cash verified' },
-      { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' }
+      { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' },
+      { id: 'clover-payment-closeout-removed-history', cloverPaymentId: 'pay-closeout-removed-history', customer: 'Direct Closeout Removed', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 99, status: 'FAIL', notes: 'Historical failed attempt' }
     );
     closeoutDedupData.paymentRequests = Array.isArray(closeoutDedupData.paymentRequests) ? closeoutDedupData.paymentRequests : [];
     closeoutDedupData.paymentRequests.unshift({
@@ -1542,7 +1552,8 @@ async function main() {
     });
     assert([200, 202].includes(closeoutDedupNotification.status) && closeoutDedupNotification.json.ok, 'Duplicate-safe daily closeout notification failed.');
     assert(closeoutDedupNotification.json.summary.collected === 1401, 'Daily closeout should dedupe duplicate Clover paid rows, count verified paid-outside payments, resolve external customer refs, and ignore failed rows.');
-    assert(closeoutDedupNotification.json.summary.transactions === 5, 'Daily closeout should report unique transaction rows after dedupe.');
+    assert(closeoutDedupNotification.json.summary.transactions === 6, 'Daily closeout should report unique transaction rows after dedupe, including historical failed transactions.');
+    assert(closeoutDedupNotification.json.summary.expected < 987654 && !closeoutDedupNotification.json.summary.contactRows.some(row => row.customer === 'Direct Closeout Removed'), 'Removed recurring customers must not count toward Today expected money or contact work.');
     assert(closeoutDedupNotification.json.summary.paidOutsideApp === 1 && closeoutDedupNotification.json.summary.paidOutsideAmount === 45, 'Daily closeout should break out paid-outside-app records separately.');
     assert(closeoutDedupNotification.json.summary.cloverCollected === 1356 && closeoutDedupNotification.json.summary.cloverTransactions === 3, 'Daily closeout should keep Clover collected totals separate from paid-outside-app records.');
     assert(closeoutDedupNotification.json.summary.openPaymentRequests >= 1 && closeoutDedupNotification.json.summary.openPaymentRequestAmount >= 88 && Object.prototype.hasOwnProperty.call(closeoutDedupNotification.json.summary, 'stalePaymentRequests') && closeoutDedupNotification.json.summary.paymentRequestRows.some(row => row.customer === 'Direct Closeout Payment Link' && row.vin === 'DIRECTREPORTVIN' && row.tag === 'DIR-RPT' && row.ageLabel), 'Daily closeout should expose open hosted checkout links with customer, VIN, tag, amount, and age.');
@@ -1558,6 +1569,8 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.signoffSnapshot && closeoutDedupNotification.json.summary.signoffSnapshot.collected === 1401, 'Daily closeout should carry the frozen signoff snapshot.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Owner signoff: Signed off by Owner Smoke') && String(closeoutDedupNotification.json.message.body || '').includes('Signed snapshot: expected $1,689') && String(closeoutDedupNotification.json.message.body || '').includes('open links 1 / $88') && String(closeoutDedupNotification.json.message.body || '').includes('stale links 1 / $44') && String(closeoutDedupNotification.json.message.body || '').includes('stale autopay 1 / $70') && String(closeoutDedupNotification.json.message.body || '').includes('card setup links 2') && String(closeoutDedupNotification.json.message.body || '').includes('Star approvals 3'), 'Daily closeout message should include signoff status, snapshot numbers, payment links, stale autopay, card setup links, and Star approval counts.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $777') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Customer | $123'), 'Daily closeout should keep the customer name for deduped and externally referenced Clover transactions.');
+    const closeoutReviewBlock = String(closeoutDedupNotification.json.message.body || '').split('Customers to review:')[1].split('Contact list:')[0];
+    assert(!closeoutReviewBlock.includes('Direct Closeout Removed') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Removed | $99 | FAIL'), 'Removed recurring customers must stay out of Today review while their transaction history remains visible.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Paid outside app: 1 / $45'), 'Daily closeout body should show paid-outside-app totals.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Open payment requests:') && String(closeoutDedupNotification.json.message.body || '').includes('Stale payment links:') && String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Payment Link | $88 | Open | New link') && !String(closeoutDedupNotification.json.message.body || '').includes('Direct Closeout Paid Link'), 'Daily closeout body should list open hosted checkout link age and exclude paid links.');
     assert(String(closeoutDedupNotification.json.message.body || '').includes('Open card setup/change links:') && String(closeoutDedupNotification.json.message.body || '').includes('Pending Star approvals:') && String(closeoutDedupNotification.json.message.body || '').includes('Receipt requests waiting:') && String(closeoutDedupNotification.json.message.body || '').includes('Statement/payoff requests waiting:'), 'Daily closeout body should list open card setup links, pending Star approvals, and customer document request counts.');
