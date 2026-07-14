@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-39">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-40">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -2305,13 +2305,28 @@ function reportVehicleFor(data = {}, customerName = '', vehicleId = '') {
     const assigned = (data.vehicles || []).find(row => normKey(row.currentCustomer || row.customer) === nameKey);
     if (assigned) return assigned;
   }
-  const profile = (data.customers || []).find(row => normKey(row.name || row.customer) === nameKey) || (data.contracts || []).find(row => normKey(row.customer || row.name) === nameKey) || {};
+  const profile = (data.customers || []).find(row => normKey(row.name || row.customer) === nameKey)
+    || (data.contracts || []).find(row => normKey(row.customer || row.name) === nameKey)
+    || {};
   if (profile.vehicleId) {
     const byProfileId = (data.vehicles || []).find(row => row.id === profile.vehicleId);
     if (byProfileId) return byProfileId;
   }
   const profileVehicle = normKey(profile.vehicle);
   return profileVehicle ? ((data.vehicles || []).find(row => normKey(vehicleNameFromParts(row)) === profileVehicle || normKey(row.name) === profileVehicle) || {}) : {};
+}
+function recurringVehicleGapRows(data = {}, recurringRows = allRecurringRows(data)) {
+  return recurringRows.filter(row => {
+    if (!row.customer || /removed|history|returned/i.test(String(row.status || ''))) return false;
+    const directVehicle = row.vehicleId || row.vin || row.licensePlate || row.plate || (!weakValue('vehicle', row.vehicle) && row.vehicle);
+    if (directVehicle) return false;
+    if (reportVehicleFor(data, row.customer, row.vehicleId).id) return false;
+    const assignedAlias = (data.vehicles || []).find(vehicle => sameAssignmentCustomer(vehicle.currentCustomer || vehicle.customer, row.customer));
+    if (assignedAlias && assignedAlias.id) return false;
+    const profileAlias = [...(data.customers || []), ...(data.contracts || [])].find(profile => sameAssignmentCustomer(profile.name || profile.customer, row.customer));
+    if (!profileAlias) return true;
+    return !reportVehicleFor(data, profileAlias.name || profileAlias.customer, profileAlias.vehicleId).id;
+  });
 }
 function reportDocumentClearedForCustomer(data = {}, name = '', kind = '') {
   const key = normKey(name);
@@ -2532,7 +2547,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   });
   closeoutVerificationItems(scoped).forEach(item => addReportRow(rows, 'Verification inbox', today, item.customer || 'Unassigned', '', '', '', '', item.type || 'Review', 0, 'Review', 'WheelsonAuto verification', item.detail || ''));
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
-  const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingVehicle = recurringVehicleGapRows(scoped, recurring);
   const failedTwice = dueRows.filter(row => closeoutRecurringState(row, today) === 'Failed twice');
   const paymentNotFound = dueRows.filter(row => closeoutRecurringState(row, today) === 'Payment not found');
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row, today) === 'Setup needed');
@@ -2637,7 +2652,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const ifleetCoverageRows = ifleetFunctionCoverageRows(scoped);
   const ifleetCoverageGaps = ifleetCoverageRows.filter(row => row.gapCount > 0);
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
-  const missingVehicle = recurring.filter(row => row.customer && !/removed|history/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingVehicle = recurringVehicleGapRows(scoped, recurring);
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
   const customerNames = [...new Set([...(scoped.customers || []).map(row => row.name || row.customer), ...(scoped.contracts || []).map(row => row.customer || row.name), ...recurring.map(row => row.customer)].map(value => String(value || '').trim()).filter(Boolean))];
   const activeCustomerNames = customerNames.filter(name => {
@@ -4007,7 +4022,6 @@ function serviceIdentityGapRows(data = {}) {
     if (!tracker) missing.push('tracker');
     if (!customer && !/prep|lot|inventory/i.test(typeText)) missing.push('customer');
     if (cycleJob && !recordDateKey(job.due || job.nextDue || '')) missing.push('due date');
-    if (/inspection/i.test(typeText) && !Array.isArray(job.inspectionChecklist) && !String(job.inspectionChecklist || '').trim()) missing.push('inspection checklist');
     return {
       id: job.id || '',
       customer: customer || 'Unassigned',
@@ -4122,7 +4136,7 @@ function ifleetFunctionCoverageRows(data = {}) {
     return !/removed|returned|history|archived/i.test(String(contract.status || customer.status || recurringRow.status || 'Active'));
   });
   const missingContact = recurring.filter(row => row.customer && !row.phone && !row.email);
-  const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingVehicle = recurringVehicleGapRows(data, recurring);
   const assignmentConflicts = assignmentConflictRows(data);
   const customerVehicleTextGaps = customerVehicleTextGapRows(data);
   const applicationHandoffGaps = applicationHandoffGapRows(data);
@@ -5958,7 +5972,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
   const staleAutopay = staleAutopayScheduleRows(scoped, today);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
-  const missingVehicle = recurring.filter(row => row.customer && !/removed|history|returned/i.test(String(row.status || '')) && !(row.vehicleId || row.vin || row.licensePlate || row.plate || row.vehicle));
+  const missingVehicle = recurringVehicleGapRows(scoped, recurring);
   const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const brokenPaymentRequests = openPaymentRequests.filter(request => {
     const recurringRow = request.recurringPaymentId ? recurring.find(row => row.id === request.recurringPaymentId) : null;

@@ -381,7 +381,7 @@ async function main() {
     driftRepairState.vehicles.unshift({ id: 'veh-direct-drift-repair', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Drift Repair', vin: 'DIRECTDRIFTVIN', plate: 'DIR-DRIFT', tempTag: 'TMP-DRIFT', tracker: 'TRK-DRIFT', currentCustomer: 'Old Drift Customer', status: 'Rented' });
     driftRepairState.recurringPayments.unshift({ id: 'rec-direct-drift-repair', organizationId: 'org-wheelsonauto', customer: 'New Drift Customer', vehicleId: 'veh-direct-drift-repair', amount: 144, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-22' });
     driftRepairState.customers.unshift({ id: 'cus-direct-drift-repair', organizationId: 'org-wheelsonauto', name: 'New Drift Customer', vehicleId: 'veh-direct-drift-repair', status: 'Active' });
-    driftRepairState.maintenance.unshift({ id: 'mnt-direct-drift-repair', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-drift-repair', vehicle: '2025 Direct Drift Repair', customer: 'Old Drift Customer', status: 'Scheduled', type: 'Inspection', issue: 'Should follow active assignment' });
+    driftRepairState.maintenance.unshift({ id: 'mnt-direct-drift-repair', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-drift-repair', vehicle: '2025 Direct Drift Repair', customer: 'Old Drift Customer', status: 'Scheduled', type: 'Inspection', issue: 'Should follow active assignment', due: '2026-07-22' });
     const driftRepairWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: driftRepairState });
     assert(driftRepairWrite.status === 200 && driftRepairWrite.json.ok, 'Owner could not save drift repair scenario.');
     const driftRepairRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -391,16 +391,22 @@ async function main() {
     assert(driftVehicle && driftVehicle.currentCustomer === 'New Drift Customer', 'Active autopay should repair stale vehicle current customer.');
     assert(driftRecurring && driftRecurring.vin === 'DIRECTDRIFTVIN' && driftRecurring.plate === 'DIR-DRIFT' && driftRecurring.tracker === 'TRK-DRIFT', 'Active autopay should inherit vehicle VIN/tag/tracker during truth repair.');
     assert(driftService && driftService.customer === 'New Drift Customer' && driftService.previousCustomer === 'Old Drift Customer' && driftService.vin === 'DIRECTDRIFTVIN', 'Open service should follow repaired active vehicle assignment.');
+    const readinessBeforeAssignment = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
+    assert(readinessBeforeAssignment.status === 200 && readinessBeforeAssignment.json, 'System readiness should return JSON before assignment regression scenarios.');
+    const autopayVehicleCountBefore = Number((readinessBeforeAssignment.json.truthChecks.find(row => row.key === 'autopay_vehicle_link') || {}).count || 0);
+    const serviceIdentityCountBefore = Number((readinessBeforeAssignment.json.truthChecks.find(row => row.key === 'service_identity') || {}).count || 0);
     const assignmentConflictState = JSON.parse(JSON.stringify(driftRepairRead.json));
     assignmentConflictState.customers.unshift({ id: 'cus-direct-numeric-vehicle', organizationId: 'org-wheelsonauto', name: 'Direct Numeric Vehicle', vehicle: '109', weeklyAmount: 109, status: 'Active' });
     assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-alias', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Alias Car', vin: 'DIRECTALIASVIN', plate: 'DIR-ALS', tracker: 'TRK-ALS', currentCustomer: 'Direct Alias Person', status: 'Rented' });
     assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-conflict', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Conflict Car', vin: 'DIRECTCONFLICTVIN', plate: 'DIR-CNF', tracker: 'TRK-CNF', status: 'Rented' });
     assignmentConflictState.recurringPayments.unshift(
+      { id: 'rec-direct-alias-profile-only', organizationId: 'org-wheelsonauto', customer: 'Direct Long Alias Person', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-alias-short', organizationId: 'org-wheelsonauto', customer: 'Direct Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-alias-middle', organizationId: 'org-wheelsonauto', customer: 'Direct Middle Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-conflict-one', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict One', vehicleId: 'veh-direct-assignment-conflict', amount: 111, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-conflict-two', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Two', vehicleId: 'veh-direct-assignment-conflict', amount: 112, status: 'Active', nextRun: '2026-07-24' }
     );
+    assignmentConflictState.maintenance.unshift({ id: 'mnt-direct-open-inspection-no-checklist', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-assignment-alias', vehicle: '2025 Direct Alias Car', vin: 'DIRECTALIASVIN', plate: 'DIR-ALS', tracker: 'TRK-ALS', customer: 'Direct Alias Person', status: 'Scheduled', type: 'Inspection', issue: 'Open inspection checklist is completed at sign-off', due: '2026-07-30' });
     const assignmentConflictWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: assignmentConflictState });
     assert(assignmentConflictWrite.status === 200 && assignmentConflictWrite.json.ok, 'Owner could not save assignment conflict scenario.');
     const assignmentConflictRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -416,8 +422,15 @@ async function main() {
     const conflictReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
     assert(conflictReadiness.status === 200 && conflictReadiness.json, 'System readiness should return JSON after assignment conflict save. Got ' + conflictReadiness.status + ': ' + String(conflictReadiness.text || '').slice(0, 220));
     assert(conflictReadiness.json.truthChecks.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System readiness should flag vehicle assignment conflicts and route to Operations / Assigned.');
+    assert(Number((conflictReadiness.json.truthChecks.find(row => row.key === 'autopay_vehicle_link') || {}).count || 0) === autopayVehicleCountBefore, 'An autopay name alias connected through the customer/fleet truth layer must not inflate the missing-vehicle readiness count.');
+    assert(Number((conflictReadiness.json.truthChecks.find(row => row.key === 'service_identity') || {}).count || 0) === serviceIdentityCountBefore, 'An open inspection with customer, vehicle identity, and due date must not be treated as incomplete before mechanic sign-off.');
     const conflictReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(conflictReport.text.includes('Vehicle assignment conflicts') && conflictReport.text.includes('DIRECTCONFLICTVIN'), 'Deep report should include vehicle assignment conflict QA and fleet evidence.');
+    const readinessCleanupState = JSON.parse(JSON.stringify(assignmentConflictRead.json));
+    readinessCleanupState.recurringPayments = readinessCleanupState.recurringPayments.filter(row => row.id !== 'rec-direct-alias-profile-only');
+    readinessCleanupState.maintenance = readinessCleanupState.maintenance.filter(row => row.id !== 'mnt-direct-open-inspection-no-checklist');
+    const readinessCleanupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: readinessCleanupState });
+    assert(readinessCleanupWrite.status === 200 && readinessCleanupWrite.json.ok, 'Owner could not clean up readiness-only regression records.');
 
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
       json: {
