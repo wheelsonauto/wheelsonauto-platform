@@ -141,7 +141,8 @@ async function main() {
     ownerSmsMirrorBody,
     configureTwilioSmsWebhook,
     apiProviderRows,
-    apiProviderReviewRows
+    apiProviderReviewRows,
+    repairDataIds
   } = require('../server.js');
 
   try {
@@ -168,6 +169,21 @@ async function main() {
     providerFatalState.integrations.wheelsonAutoAutopay.fatalError = 'Autopay data store unavailable';
     const providerFatal = new Map(apiProviderRows(providerFatalState).map(row => [row.id, row]));
     assert(providerFatal.get('woa-autopay').status === 'Blocked - monitor error' && /data store unavailable/i.test(providerFatal.get('woa-autopay').lastTestResult), 'A monitor-level failure should block autopay readiness with the actual failure evidence.');
+    const weakVehicleRepairState = {
+      vehicles: [],
+      customers: [{ id: 'direct-weak-customer', name: 'Direct Weak Customer', vehicle: 'Direct Weak Customer' }, { id: 'direct-legit-customer', name: 'John Ford', vehicle: 'Ford Escape' }],
+      contracts: [{ id: 'direct-weak-contract', customer: 'Direct Weak Customer', vehicle: '229' }],
+      recurringPayments: [{ id: 'direct-weak-recurring', customer: 'Direct Weak Customer', vehicle: '$229.00', amount: 229, status: 'Active' }],
+      maintenance: [], claims: [], payments: [], paymentRequests: [], tasks: [], documents: [], applications: [], messages: [], staffAccounts: [], customerAccounts: [], organizations: [], auditLogs: [],
+      integrations: { clover: { recurringPlanMembers: [] } }
+    };
+    repairDataIds(weakVehicleRepairState);
+    [...weakVehicleRepairState.customers, ...weakVehicleRepairState.contracts, ...weakVehicleRepairState.recurringPayments].forEach(row => {
+      if (row.id === 'direct-legit-customer') return;
+      assert(row.vehicle === '' && row.previousVehicle && row.vehicleLinkStatus === 'Needs vehicle match', 'Impossible customer-name or amount vehicle labels should be cleared while retaining audit evidence.');
+    });
+    assert(weakVehicleRepairState.customers.find(row => row.id === 'direct-legit-customer').vehicle === 'Ford Escape', 'Weak-label repair must not clear a legitimate vehicle that merely shares one word with a customer name.');
+    assert(Number(weakVehicleRepairState.systemRepairs && weakVehicleRepairState.systemRepairs.weakVehicleLabelRepairCount || 0) === 3, 'Weak vehicle-label repair should record the number of safely cleared labels.');
     assert(smsScamAssessment('Send me your verification code using https://bit.ly/fake').suspicious, 'Credential and shortened-link SMS should be marked as a potential scam.');
     assert(!smsScamAssessment('Hi, can I bring the car in for an oil change Tuesday?').suspicious, 'Normal customer service SMS should not be marked as a scam.');
     assert(smsSensitiveActionAssessment('Charge the customer card and change autopay to Friday').sensitive, 'Owner phone money/account instructions should require app review.');
