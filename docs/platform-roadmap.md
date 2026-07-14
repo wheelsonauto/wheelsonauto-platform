@@ -14,7 +14,7 @@ Current live release status:
 - Resend outbound and inbound email delivery are connected for platform notifications and replies.
 - Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
-- Release asset version is `platform-20260714-final-35`.
+- Release asset version is `platform-20260714-final-36`.
 
 Release checks:
 

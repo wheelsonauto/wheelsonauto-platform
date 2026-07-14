@@ -367,11 +367,25 @@ async function ownerInteractionSmoke() {
   assert(context.tab === 'Active', 'Payments data-view click should default to Active tab.');
   assertHealthy('Owner clicked Payments', html(context), ['Payments & Customers', 'Active recurring customers']);
 
+  if (context.db.recurringPayments && context.db.recurringPayments[0]) {
+    context.db.recurringPayments[0].paymentAttempts = { legacy: 'not-an-array' };
+  }
+  context.db.payments.unshift({
+    id: 'legacy-unmatched-payment-shape',
+    date: '7/11/2026',
+    customer: 'Unmatched Clover payment',
+    method: 'Debit Card',
+    amount: 45.53,
+    status: 'Paid'
+  });
   await dispatchClick(context, { tab: 'Transactions' });
   assert(context.view === 'Payments' && context.tab === 'Transactions', 'Payments data-tab click should switch to Transactions.');
   assertHealthy('Owner clicked Transactions tab', html(context), ['Transactions']);
   assert(/<h2>Transactions<\/h2>/.test(html(context)), 'Payments Transactions click must render the Transactions panel.');
   assert(!/<h2>Customer history<\/h2>/.test(html(context)), 'Payments Transactions click must replace the previous History panel.');
+  const transactionDisplayError = html(context).match(/data-display-error="([^"]*)"/);
+  assert(!/Transaction needs review/.test(html(context)), 'Legacy paymentAttempts shapes must not break unmatched transaction rendering: ' + (transactionDisplayError ? transactionDisplayError[1] : 'unknown display error'));
+  assert(/\$45\.53/.test(html(context)), 'Legacy unmatched transactions must remain visible after normalization.');
 
   await dispatchClick(context, { view: 'Operations', tab: 'Service' });
   assert(context.view === 'Operations' && context.tab === 'Service', 'Cross-view tab click should open Operations Service.');
