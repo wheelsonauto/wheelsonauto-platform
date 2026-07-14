@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-29">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-30">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -6379,11 +6379,21 @@ function defaultApiProviderRows(data = {}) {
       id: 'email',
       name: 'Email Notifications',
       group: 'Comms',
-	      status: messageStatus.emailConfigured ? 'Testing' : 'Provider needed',
+	      status: messageStatus.emailOutboundVerified && messageStatus.emailInboundVerified ? 'Connected' : (messageStatus.emailOutboundVerified ? 'Testing - outbound verified' : (messageStatus.emailConfigured ? 'Testing' : 'Provider needed')),
 	      owner: 'Owner',
 	      envKeys: 'WOA_EMAIL_FROM, RESEND_API_KEY or SENDGRID_API_KEY, WOA_MESSAGING_WEBHOOK_SECRET',
       endpoint: '/api/messages/send, /api/webhooks/email, /api/notifications/email/settings',
       liveTest: 'Send customer reply, receive inbound email webhook, and send owner notification test.'
+    },
+    {
+      id: 'star-ai',
+      name: 'Star AI / OpenAI',
+      group: 'Comms',
+      status: messageStatus.aiProviderOperational ? 'Connected' : (messageStatus.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (messageStatus.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (messageStatus.aiProviderConfigured ? 'Testing' : 'Provider needed'))),
+      owner: 'Owner',
+      envKeys: 'OPENAI_API_KEY or WOA_OPENAI_API_KEY, WOA_AI_MODEL',
+      endpoint: 'OpenAI Responses API through /api/messages/star-ai and /api/messages/star-ai/test',
+      liveTest: 'Run Test Star provider, confirm a Responses API answer, verify sanitization, then approve one non-sensitive draft.'
     },
     { id: 'ezpass', name: 'E-ZPass / Tolls', group: 'Risk', status: 'API needed', owner: 'Owner', envKeys: 'EZPASS_ACCOUNT, EZPASS_API_KEY or import/login flow', endpoint: 'Future /api/integrations/ezpass/sync', liveTest: 'Import toll notice, match plate to vehicle/customer, create claim/payment link.' },
     { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'INSURANCE_PROVIDER_KEY', endpoint: 'Future /api/integrations/insurance/verify', liveTest: 'Verify proof, set expiration, surface warning before due date.' },
@@ -6394,20 +6404,51 @@ function defaultApiProviderRows(data = {}) {
     { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: 'Architecture ready', owner: 'Owner', envKeys: 'BILLING_PROVIDER_KEY', endpoint: 'Future /api/billing/subscriptions', liveTest: 'Create company account, staff, fleet, separate provider credentials, subscription status.' }
   ];
 }
+function apiProviderTruthOverrides(data = {}) {
+  const status = publicMessagingStatus(data);
+  const smsResult = status.smsDeliveryLive
+    ? 'Carrier delivery verified.'
+    : (status.carrierRegistrationRequired
+      ? (status.carrierDeliveryError || 'Telnyx is configured, but outbound SMS is blocked until account upgrade and 10DLC approval are complete.')
+      : (status.configured ? 'Provider credentials are stored; carrier delivery has not been verified.' : 'Hosted SMS provider credentials are not complete.'));
+  const emailResult = status.emailOutboundVerified
+    ? (status.emailInboundVerified ? 'Outbound and inbound email are verified.' : 'Outbound email is verified; inbound email webhook/reply delivery is still pending.')
+    : (status.emailConfigured ? 'Email provider is configured; a successful outbound test is still required.' : 'Email provider credentials are not complete.');
+  const starResult = status.aiProviderOperational
+    ? 'OpenAI Responses API answered successfully and Star sanitized the result.'
+    : (status.aiProviderIssue || status.aiLastProviderError || 'OpenAI provider setup and a successful controlled test are still required.');
+  return {
+    'sms-phone': {
+      status: status.smsDeliveryLive ? 'Connected' : (status.carrierRegistrationRequired ? 'Blocked - 10DLC approval' : (status.configured ? 'Testing - delivery pending' : 'Provider needed')),
+      lastTestAt: status.deliveryLastCheckedAt || status.smsWebhookConfiguredAt || '',
+      lastTestResult: smsResult
+    },
+    email: {
+      status: status.emailOutboundVerified && status.emailInboundVerified ? 'Connected' : (status.emailOutboundVerified ? 'Testing - outbound verified' : (status.emailConfigured ? 'Testing' : 'Provider needed')),
+      lastTestAt: status.emailLastInboundAt || status.emailLastSentAt || '',
+      lastTestResult: emailResult
+    },
+    'star-ai': {
+      status: status.aiProviderOperational ? 'Connected' : (status.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (status.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (status.aiProviderConfigured ? 'Testing' : 'Provider needed'))),
+      lastTestAt: status.aiLastHealthAt || status.aiLastProviderAt || '',
+      lastTestResult: starResult
+    }
+  };
+}
 function apiProviderRows(data = {}) {
   const saved = Array.isArray(data.apiProviders) ? data.apiProviders : [];
   const byId = new Map(saved.map(provider => [String(provider.id || ''), provider]));
-  const defaults = defaultApiProviderRows(data).map(provider => ({ ...provider, ...(byId.get(provider.id) || {}) }));
+  const truth = apiProviderTruthOverrides(data);
+  const defaults = defaultApiProviderRows(data).map(provider => ({ ...provider, ...(byId.get(provider.id) || {}), ...(truth[provider.id] || {}) }));
   return defaults.concat(saved.filter(provider => !defaultApiProviderRows(data).some(row => row.id === provider.id)));
 }
 function apiProviderReviewRows(data = {}) {
   return apiProviderRows(data).filter(provider => {
     const status = String(provider.status || 'API needed').toLowerCase();
-    const connected = status.includes('connected');
+    const connected = /connected|live test passed|verified/.test(status);
     const hasLiveReadyProof = ['envKeys', 'endpoint', 'liveTest', 'lastTestAt', 'lastTestResult'].every(key => String(provider[key] || '').trim());
     if (connected) return !hasLiveReadyProof;
-    if (status.includes('testing')) return !hasLiveReadyProof;
-    return /needed|blocked|setup|draft|review|not connected|waiting|planned|provider/i.test(status);
+    return true;
   });
 }
 function claimIdentityTokens(claim = {}) {

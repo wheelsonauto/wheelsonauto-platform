@@ -207,7 +207,11 @@ Settings controls Clover setup, website apply path, staff accounts, role access,
 - insurance verification
 - tracker/location provider
 - marketing/follow-up systems
-- SMS from WheelsonAuto number
+- Telnyx SMS from the WheelsonAuto number: signed inbound webhook is connected; outbound remains blocked until account upgrade and 10DLC approval.
+- Resend email: outbound is verified; inbound reply/webhook delivery remains pending.
+- Star AI: OpenAI key/model are stored, but usable API credit and a successful controlled Responses API test are still required.
+
+The API Roadmap must derive these three statuses from verified runtime evidence. A stale manually saved provider label cannot override carrier delivery, email direction, or OpenAI health results.
 
 ## API Build Order
 
