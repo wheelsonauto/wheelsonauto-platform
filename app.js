@@ -2269,8 +2269,15 @@ messagingStatus=function(){
   status.emailInboundVerified=!!saved.emailInboundVerified;
   status.emailLastInboundAt=saved.emailLastInboundAt||'';
   status.emailWebhookSecretConfigured=!!saved.emailWebhookSecretConfigured;
+  status.aiProviderConfigured=saved.aiProviderConfigured===true||!!status.aiConfigured;
+  status.aiProviderOperational=!!saved.aiProviderOperational;
+  status.aiProviderCreditRequired=!!saved.aiProviderCreditRequired;
+  status.aiProviderCredentialIssue=!!saved.aiProviderCredentialIssue;
+  status.aiProviderStatus=saved.aiProviderStatus||'';
+  status.aiProviderIssue=saved.aiProviderIssue||'';
   status.configured=status.smsDeliveryLive;
   status.emailConfigured=status.emailOutboundVerified;
+  status.aiConfigured=status.aiProviderOperational;
   return status
 };
 function smsDeliveryTruth(status){
@@ -2279,6 +2286,14 @@ function smsDeliveryTruth(status){
   if(status.smsDeliveryLive)return{label:'SMS delivery verified',tone:'good',detail:'The carrier confirmed a delivered message from the platform number.'};
   return{label:'SMS configured - test pending',tone:'warn',detail:'Provider and inbound connection are configured. Do not treat SMS as live until a carrier delivery is confirmed.'}
 }
+function starProviderTruth(status){
+  if(!status.aiEnabled)return{label:'Star turned off',tone:'bad',detail:'Turn Star on when you want rules or OpenAI to prepare replies.'};
+  if(status.aiProviderCreditRequired)return{label:'OpenAI credit needed',tone:'bad',detail:status.aiProviderIssue||'The OpenAI key is stored, but API billing needs usable credit. Star is using the safe rules fallback.'};
+  if(status.aiProviderCredentialIssue)return{label:'OpenAI key needs attention',tone:'bad',detail:status.aiProviderIssue||'The saved OpenAI credential was rejected. Star is using the safe rules fallback.'};
+  if(status.aiProviderOperational)return{label:'OpenAI verified',tone:'good',detail:'A real Responses API call succeeded and Star sanitized the result before showing it.'};
+  if(status.aiProviderConfigured)return{label:'OpenAI test needed',tone:'warn',detail:status.aiProviderIssue||'The key is stored, but a successful Responses API test has not been recorded yet.'};
+  return{label:'Rules fallback',tone:'warn',detail:'Star can prepare basic safe drafts now. Add an OpenAI API key for model-backed replies.'}
+}
 var __woaCarrierMessageStatusStripBase=messageStatusStrip;
 messageStatusStrip=function(status){
   var truth=smsDeliveryTruth(status),html=__woaCarrierMessageStatusStripBase(status);
@@ -2286,7 +2301,7 @@ messageStatusStrip=function(status){
 };
 var __woaMessageSetupDeliveryBase=messageSetupPanel;
 messageSetupPanel=function(status){
-  var truth=smsDeliveryTruth(status),providerStatus=Object.assign({},status,{configured:status.providerConfigured,emailConfigured:status.emailProviderConfigured}),html=__woaMessageSetupDeliveryBase(providerStatus);
+  var truth=smsDeliveryTruth(status),starTruth=starProviderTruth(status),providerStatus=Object.assign({},status,{configured:status.providerConfigured,emailConfigured:status.emailProviderConfigured,aiConfigured:status.aiProviderConfigured}),html=__woaMessageSetupDeliveryBase(providerStatus);
   html=html.replace(providerStatus.configured?'Live SMS connected':'Hosted SMS needed',truth.label);
   if(providerStatus.configured)html=html.replace('Connected through '+status.provider,status.smsDeliveryLive?'Delivery verified through '+status.provider:(status.carrierRegistrationRequired?'Telnyx configured - 10DLC approval needed':'Provider configured - delivery test pending'));
   if(providerStatus.emailConfigured){
@@ -2294,6 +2309,12 @@ messageSetupPanel=function(status){
     html=html.replace('Star can draft and send emails after WOA_EMAIL_FROM plus Resend or SendGrid keys are in Render.',status.emailOutboundVerified?(status.emailInboundVerified?'Outbound and inbound email are verified.':'Outbound email passed. Inbound replies are not verified yet; configure the email webhook before treating the inbox as two-way.'):'Provider credentials are stored. Use Send test before treating outbound email as live.');
     html=html.replace('Give this to the email provider when inbound email is connected.',status.emailInboundVerified?'Inbound email webhook verified'+(status.emailLastInboundAt?' at '+shortDate(status.emailLastInboundAt):'')+'.':(status.emailWebhookSecretConfigured?'Webhook security is ready. Add this endpoint in '+status.emailProvider+' and verify one inbound reply.':'Add the provider webhook secret in Render, then configure this endpoint and verify one inbound reply.'))
   }
+  if(providerStatus.aiConfigured){
+    html=html.replace('OpenAI Responses API connected',starTruth.label);
+    html=html.replace('OpenAI provider connected',starTruth.label);
+  }
+  html=html.replace('Rules fallback until OpenAI key is added',starTruth.label);
+  html=html.replace('Render keys: OPENAI_API_KEY or WOA_OPENAI_API_KEY, optional WOA_AI_MODEL. Default model: gpt-5.5. Test does not send texts, charge cards, or change accounts.',''+starTruth.detail+' The test never sends texts, charges cards, or changes customer accounts.');
   var carrierCard='<div class="item carrier-delivery-card"><strong>Carrier delivery results</strong><div>'+esc(truth.label)+'</div><small>'+esc(truth.detail)+' Queued is never treated as delivered.</small><div class="actions"><button class="btn primary" data-action="refresh-sms-delivery">Refresh delivery</button></div></div>';
   return html.replace('<div class="item"><strong>Email</strong>',carrierCard+'<div class="item"><strong>Email</strong>')
 };

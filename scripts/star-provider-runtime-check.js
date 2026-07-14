@@ -4,7 +4,7 @@ process.env.OPENAI_API_KEY = 'test-openai-key';
 process.env.WOA_AI_MODEL = 'gpt-5.5';
 process.env.WOA_AI_TIMEOUT_MS = '5000';
 
-const { openAiReplyPlan } = require('../server');
+const { openAiReplyPlan, openAiProviderReadiness } = require('../server');
 
 (async () => {
   let request = null;
@@ -39,6 +39,26 @@ const { openAiReplyPlan } = require('../server');
   };
 
   try {
+    const pendingReadiness = openAiProviderReadiness({});
+    assert.strictEqual(pendingReadiness.aiProviderConfigured, true);
+    assert.strictEqual(pendingReadiness.aiProviderOperational, false);
+    assert.strictEqual(pendingReadiness.aiProviderStatus, 'OpenAI test needed');
+    const creditReadiness = openAiProviderReadiness({ integrations: { messaging: {
+      lastAiProvider: 'rules',
+      lastAiHealthStatus: 'OpenAI did not answer. Star used the safe rules fallback.',
+      lastAiProviderError: 'insufficient_quota: add billing credit'
+    } } });
+    assert.strictEqual(creditReadiness.aiProviderCreditRequired, true);
+    assert.strictEqual(creditReadiness.aiProviderOperational, false);
+    assert.strictEqual(creditReadiness.aiProviderStatus, 'OpenAI credit needed');
+    const verifiedReadiness = openAiProviderReadiness({ integrations: { messaging: {
+      lastAiProvider: 'openai',
+      lastAiHealthStatus: 'OpenAI answered through the Responses API and Star sanitized the plan.',
+      lastAiProviderError: ''
+    } } });
+    assert.strictEqual(verifiedReadiness.aiProviderOperational, true);
+    assert.strictEqual(verifiedReadiness.aiProviderStatus, 'OpenAI verified');
+
     const fallback = {
       reply: 'Rules fallback reply',
       intent: 'general_reply',

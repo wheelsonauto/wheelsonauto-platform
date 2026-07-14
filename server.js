@@ -671,6 +671,44 @@ function emailChannelReadiness(data = {}, configured = false) {
     emailLastInboundAt: latestInbound.receivedAt || latestInbound.createdAt || latestInbound.date || ''
   };
 }
+function openAiProviderReadiness(data = {}) {
+  const saved = (((data.integrations || {}).messaging) || {});
+  const configured = !!(OPENAI_API_KEY && WOA_AI_MODEL);
+  const lastProvider = String(saved.lastAiProvider || '').toLowerCase();
+  const lastError = String(saved.lastAiProviderError || '').trim();
+  const lastHealthStatus = String(saved.lastAiHealthStatus || '').trim();
+  const errorText = (lastError + ' ' + lastHealthStatus).toLowerCase();
+  const creditRequired = !!(configured && /insufficient[_ -]?quota|quota|billing|credit|out of funds|payment required/.test(errorText));
+  const credentialIssue = !!(configured && /invalid api key|incorrect api key|unauthorized|authentication|401/.test(errorText));
+  const successfulHealth = /openai answered through the responses api/i.test(lastHealthStatus);
+  const successfulUse = lastProvider === 'openai' && !lastError;
+  const operational = !!(configured && !creditRequired && !credentialIssue && (successfulHealth || successfulUse));
+  let status = 'Rules fallback';
+  let issue = '';
+  if (!configured) {
+    status = 'OpenAI key needed';
+    issue = 'Add the OpenAI API key and model in Render before model-backed replies can run.';
+  } else if (creditRequired) {
+    status = 'OpenAI credit needed';
+    issue = 'The OpenAI key is stored, but API billing has no usable credit. Star is using the safe rules fallback.';
+  } else if (credentialIssue) {
+    status = 'OpenAI key needs attention';
+    issue = 'The saved OpenAI credential was rejected. Star is using the safe rules fallback.';
+  } else if (operational) {
+    status = 'OpenAI verified';
+  } else {
+    status = 'OpenAI test needed';
+    issue = lastError || 'The key is stored, but a successful Responses API test has not been recorded yet.';
+  }
+  return {
+    aiProviderConfigured: configured,
+    aiProviderOperational: operational,
+    aiProviderCreditRequired: creditRequired,
+    aiProviderCredentialIssue: credentialIssue,
+    aiProviderStatus: status,
+    aiProviderIssue: issue
+  };
+}
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const saved = (((data.integrations || {}).messaging) || {});
@@ -686,6 +724,7 @@ function publicMessagingStatus(data = {}) {
       (provider === 'telnyx' && TELNYX_API_KEY))
   );
   const carrier = telnyxCarrierReadiness(data, provider);
+  const aiReadiness = openAiProviderReadiness(data);
   const smsDeliveryLive = !!(configured && (provider !== 'telnyx' || carrier.carrierDeliveryVerified));
   return {
     provider,
@@ -724,12 +763,15 @@ function publicMessagingStatus(data = {}) {
     aiEnabled: settings.aiEnabled,
     aiConfigured: !!(OPENAI_API_KEY && WOA_AI_MODEL),
     aiModel: WOA_AI_MODEL ? 'stored in Render' : '',
-    aiProviderMode: OPENAI_API_KEY && WOA_AI_MODEL ? 'OpenAI provider connected' : 'Rules fallback until OPENAI_API_KEY or WOA_OPENAI_API_KEY is added in Render',
+    aiProviderMode: aiReadiness.aiProviderOperational
+      ? 'OpenAI Responses API verified'
+      : (aiReadiness.aiProviderIssue || 'Rules fallback until OPENAI_API_KEY or WOA_OPENAI_API_KEY is added in Render'),
     aiLastProvider: saved.lastAiProvider || '',
     aiLastProviderAt: saved.lastAiProviderAt || '',
     aiLastProviderError: saved.lastAiProviderError || '',
     aiLastHealthAt: saved.lastAiHealthAt || '',
     aiLastHealthStatus: saved.lastAiHealthStatus || '',
+    ...aiReadiness,
     aiTimeoutMs: WOA_AI_TIMEOUT_MS,
     aiName: 'Star AI',
     aiShortName: 'Star',
@@ -3512,7 +3554,11 @@ async function starAiProviderHealthCheck(data, payload = {}) {
     mode: plan.mode || provider,
     model: provider === 'openai' ? WOA_AI_MODEL : '',
     reasoningEffort: provider === 'openai' && starModelSupportsReasoning(WOA_AI_MODEL) ? WOA_AI_REASONING_EFFORT : '',
-    status: provider === 'openai' ? 'OpenAI answered through the Responses API and Star sanitized the plan.' : 'Rules fallback answered. Add OPENAI_API_KEY or WOA_OPENAI_API_KEY in Render for model-backed replies.',
+    status: provider === 'openai'
+      ? 'OpenAI answered through the Responses API and Star sanitized the plan.'
+      : (plan.providerError
+        ? 'OpenAI did not answer. Star used the safe rules fallback.'
+        : 'Rules fallback answered. Add OPENAI_API_KEY or WOA_OPENAI_API_KEY in Render for model-backed replies.'),
     providerError: plan.providerError || '',
     actionType: plan.actionType || '',
     approvalRequired: !!plan.approvalRequired,
@@ -10486,6 +10532,7 @@ module.exports = {
   ownerSmsMirrorBody,
   telnyxCarrierReadiness,
   emailChannelReadiness,
+  openAiProviderReadiness,
   configureTwilioSmsWebhook,
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,
