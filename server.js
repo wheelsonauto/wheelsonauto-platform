@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-38">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-39">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -3657,6 +3657,17 @@ function softNameMatch(a, b) {
   const overlap = at.filter(token => bt.includes(token));
   return overlap.length >= Math.min(2, at.length, bt.length);
 }
+function sameAssignmentCustomer(a, b) {
+  const ak = normKey(a), bk = normKey(b);
+  if (!ak || !bk) return false;
+  if (ak === bk) return true;
+  const at = nameTokens(ak), bt = nameTokens(bk);
+  if (at.length < 2 || bt.length < 2) return false;
+  const shorter = at.length <= bt.length ? at : bt;
+  const longer = at.length <= bt.length ? bt : at;
+  if (shorter.every(token => longer.includes(token))) return true;
+  return at[0] === bt[0] && at[at.length - 1] === bt[bt.length - 1];
+}
 function weakValue(field, value) {
   const raw = String(value || '').trim();
   if (!raw) return true;
@@ -3737,8 +3748,9 @@ function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '') {
   let changed = 0;
   const vehicleName = vehicleNameFromParts(vehicle);
   const tag = vehicle.plate || vehicle.stock || vehicle.licensePlate || row.licensePlate || row.plate || '';
+  const savedCustomer = row.customer || row.name || '';
   const patch = {
-    customer: customer || row.customer || row.name || '',
+    customer: savedCustomer && sameAssignmentCustomer(savedCustomer, customer) ? savedCustomer : (customer || savedCustomer),
     vehicleId: vehicle.id || row.vehicleId || '',
     vehicle: vehicleName,
     vin: vehicle.vin || row.vin || '',
@@ -3781,13 +3793,19 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
   data.vehicles.forEach(vehicle => {
     const list = byVehicle.get(String(vehicle.id || '')) || [];
     if (!list.length) return;
-    const names = [...new Set(list.map(item => normKey(item.customer)).filter(Boolean))];
-    if (names.length !== 1) {
+    const identityGroups = [];
+    list.map(item => item.customer).filter(Boolean).forEach(name => {
+      const group = identityGroups.find(names => names.some(saved => sameAssignmentCustomer(saved, name)));
+      if (group) group.push(name);
+      else identityGroups.push([name]);
+    });
+    if (identityGroups.length !== 1) {
       vehicle.assignmentConflict = [...new Set(list.map(item => item.customer).filter(Boolean))].join(' / ');
       conflicts += 1;
       return;
     }
-    const customer = list[0].customer;
+    const currentCustomer = String(vehicle.currentCustomer || '').trim();
+    const customer = currentCustomer && list.some(item => sameAssignmentCustomer(item.customer, currentCustomer)) ? currentCustomer : list[0].customer;
     if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
     if (String(vehicle.currentCustomer || '') !== customer) {
       vehicle.previousCustomer = vehicle.currentCustomer || vehicle.previousCustomer || '';
@@ -4369,7 +4387,7 @@ function enrichLinkedProfiles(data) {
     const customer = String(row.customer || row.name || '').trim();
     const vehicle = String(row.vehicle || '').trim();
     const hasVehicleIdentity = !!(row.vehicleId || row.vin || row.licensePlate || row.plate);
-    if (!hasVehicleIdentity && customer && vehicle && softNameMatch(customer, vehicle)) {
+    if (!hasVehicleIdentity && vehicle && (weakValue('vehicle', vehicle) || customer && softNameMatch(customer, vehicle))) {
       row.previousVehicle = row.previousVehicle || vehicle;
       row.vehicle = '';
       row.vehicleLinkStatus = 'Needs vehicle match';
@@ -5860,7 +5878,9 @@ function checkoutStatus() {
   };
 }
 function systemReadiness(data, user = { role: 'Owner' }) {
-  const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+  const scopedSource = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+  const scoped = JSON.parse(JSON.stringify(scopedSource || {}));
+  enrichLinkedProfiles(scoped);
   const env = key => process.env[key] ? 'Set' : 'Missing';
   const route = (method, path, purpose, status = 'Ready') => ({ method, path, purpose, status });
   const envChecks = [

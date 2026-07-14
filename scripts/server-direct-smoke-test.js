@@ -392,15 +392,23 @@ async function main() {
     assert(driftRecurring && driftRecurring.vin === 'DIRECTDRIFTVIN' && driftRecurring.plate === 'DIR-DRIFT' && driftRecurring.tracker === 'TRK-DRIFT', 'Active autopay should inherit vehicle VIN/tag/tracker during truth repair.');
     assert(driftService && driftService.customer === 'New Drift Customer' && driftService.previousCustomer === 'Old Drift Customer' && driftService.vin === 'DIRECTDRIFTVIN', 'Open service should follow repaired active vehicle assignment.');
     const assignmentConflictState = JSON.parse(JSON.stringify(driftRepairRead.json));
+    assignmentConflictState.customers.unshift({ id: 'cus-direct-numeric-vehicle', organizationId: 'org-wheelsonauto', name: 'Direct Numeric Vehicle', vehicle: '109', weeklyAmount: 109, status: 'Active' });
+    assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-alias', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Alias Car', vin: 'DIRECTALIASVIN', plate: 'DIR-ALS', tracker: 'TRK-ALS', currentCustomer: 'Direct Alias Person', status: 'Rented' });
     assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-conflict', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Conflict Car', vin: 'DIRECTCONFLICTVIN', plate: 'DIR-CNF', tracker: 'TRK-CNF', status: 'Rented' });
     assignmentConflictState.recurringPayments.unshift(
+      { id: 'rec-direct-alias-short', organizationId: 'org-wheelsonauto', customer: 'Direct Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
+      { id: 'rec-direct-alias-middle', organizationId: 'org-wheelsonauto', customer: 'Direct Middle Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-conflict-one', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict One', vehicleId: 'veh-direct-assignment-conflict', amount: 111, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-conflict-two', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Two', vehicleId: 'veh-direct-assignment-conflict', amount: 112, status: 'Active', nextRun: '2026-07-24' }
     );
     const assignmentConflictWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: assignmentConflictState });
     assert(assignmentConflictWrite.status === 200 && assignmentConflictWrite.json.ok, 'Owner could not save assignment conflict scenario.');
     const assignmentConflictRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const numericVehicleCustomer = (assignmentConflictRead.json.customers || []).find(row => row.id === 'cus-direct-numeric-vehicle');
+    const aliasVehicle = (assignmentConflictRead.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-alias');
     const conflictVehicle = (assignmentConflictRead.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
+    assert(numericVehicleCustomer && !numericVehicleCustomer.vehicle && numericVehicleCustomer.previousVehicle === '109', 'A payment amount must not remain displayed as a customer vehicle name.');
+    assert(aliasVehicle && !aliasVehicle.assignmentConflict, 'Middle-name variants for the same customer should not create a vehicle assignment conflict.');
     assert(conflictVehicle && /Direct Conflict One/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(conflictVehicle.assignmentConflict || ''), 'Competing active autopays should mark the vehicle assignment conflict.');
     const conflictHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(conflictHealth.status === 200 && conflictHealth.json && Array.isArray(conflictHealth.json.issues), 'System health should return JSON after assignment conflict save. Got ' + conflictHealth.status + ': ' + String(conflictHealth.text || '').slice(0, 220));
