@@ -25,7 +25,8 @@ Current live release status:
 - Resend outbound and inbound email delivery are connected for platform notifications and replies.
 - Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
-- Release asset version is `platform-20260714-final-43`.
+- Release asset version is `platform-20260714-final-44`.
+- API Roadmap now gives each provider one exact next action and the proof required before it can be labeled connected. Telnyx names account upgrade/10DLC/live delivery, Star names usable OpenAI API credit and provider test, Clover Ecommerce names a controlled saved-card charge, and Clover webhooks name a signed live event.
 
 Release checks:
 

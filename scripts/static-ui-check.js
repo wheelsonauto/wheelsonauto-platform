@@ -232,6 +232,7 @@ assertIncludes('Open modal active definition', functionSlice('openModal'), ['ari
 assertIncludes('Close modal active definition', functionSlice('closeModal'), ['aria-hidden', "textContent=''", "innerHTML=''"]);
 assertIncludes('Auto refresh modal guard', app, ["if(modal&&modal.style.display==='grid')return"]);
 assertIncludes('Post-save refresh wrapper', app, ['var __wheelsonBaseSave=save', 'reconcileFleetCustomerLinks()', 'if(ok)await refreshData(true)']);
+assertIncludes('Provider-specific API handoff guidance', app, ['apiProviderGuidancePanel', 'Proof before connected', '10DLC approval', 'OpenAI API key and usable API credit', 'signed payment event']);
 
 const criticalActionRequirements = [
   ['Vehicle save flow', 'save-vehicle', ['clearVehicleFromCustomerRecords', 'syncVehicleCustomerAssignment', 'await save()', 'closeModal()', "view='Operations'"]],

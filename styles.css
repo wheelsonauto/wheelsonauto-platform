@@ -4000,6 +4000,34 @@ body.fast-tab-switch .admin-shell .section{
   font-size:13px;
   line-height:1.35;
 }
+.api-provider-guidance{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+  margin:0 0 14px;
+}
+.api-provider-guidance>div{
+  min-width:0;
+  padding:12px;
+  border:1px solid rgba(240,211,148,.20);
+  border-radius:10px;
+  background:rgba(240,211,148,.065);
+}
+.api-provider-guidance span{
+  display:block;
+  margin-bottom:5px;
+  color:#aeb9c2;
+  font-size:12px;
+  font-weight:700;
+  text-transform:uppercase;
+}
+.api-provider-guidance strong{
+  display:block;
+  color:#f7df9b;
+  font-size:13px;
+  line-height:1.4;
+  overflow-wrap:anywhere;
+}
 .api-operational-count{
   display:flex;
   align-items:baseline;
@@ -4556,6 +4584,7 @@ body.fast-tab-switch .admin-shell .section{
   .application-handoff-grid{grid-template-columns:1fr}
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:1fr}
+  .api-provider-guidance{grid-template-columns:1fr}
   .star-provider-strip .actions{flex-direction:row;flex-wrap:wrap}
   .star-provider-strip .actions .btn{flex:1 1 auto}
 }

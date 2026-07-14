@@ -140,6 +140,7 @@ async function main() {
     resolveOwnerSmsBridge,
     ownerSmsMirrorBody,
     configureTwilioSmsWebhook,
+    apiProviderLaunchGuidance,
     apiProviderRows,
     apiProviderReviewRows,
     repairDataIds
@@ -159,6 +160,11 @@ async function main() {
     assert(providerEvidence.get('clover-ecommerce').status === 'Connected' && /saved-card charge successfully/i.test(providerEvidence.get('clover-ecommerce').lastTestResult), 'Clover Ecommerce should be connected only after a successful WheelsonAuto saved-card charge.');
     assert(providerEvidence.get('clover-webhooks').status === 'Connected' && /webhook event/i.test(providerEvidence.get('clover-webhooks').lastTestResult), 'Clover webhooks should be connected only after a signed live event is recorded.');
     assert(providerEvidence.get('woa-autopay').status === 'Connected' && /1 charged/.test(providerEvidence.get('woa-autopay').lastTestResult), 'WheelsonAuto Autopay should be connected only after a clean monitor run with a managed saved-card schedule.');
+    assert(/controlled saved-card charge/i.test(apiProviderLaunchGuidance({ id: 'clover-ecommerce', status: 'Testing - live charge needed' }).nextAction), 'Clover Ecommerce guidance should name the controlled saved-card charge required before connection.');
+    assert(/10DLC approval/i.test(apiProviderLaunchGuidance({ id: 'sms-phone', status: 'Blocked - 10DLC approval' }).nextAction), 'SMS guidance should name the Telnyx account and 10DLC work blocking outbound delivery.');
+    assert(/API credit/i.test(apiProviderLaunchGuidance({ id: 'star-ai', status: 'Blocked - OpenAI credit needed' }).nextAction), 'Star guidance should name usable OpenAI API credit as the current provider blocker.');
+    assert(/signed payment event/i.test(apiProviderLaunchGuidance({ id: 'clover-webhooks', status: 'Ready for credentials' }).nextAction), 'Clover webhook guidance should require a signed live event instead of treating a saved secret as connected.');
+    assert(providerEvidence.get('clover-ecommerce').nextAction && providerEvidence.get('clover-ecommerce').proofRequired, 'Runtime provider rows should expose next-action and proof-required guidance to the app.');
     const providerReviewIds = new Set(apiProviderReviewRows(providerEvidenceState).map(row => row.id));
     assert(!providerReviewIds.has('clover-core') && !providerReviewIds.has('clover-ecommerce') && !providerReviewIds.has('clover-webhooks') && !providerReviewIds.has('woa-autopay'), 'Evidence-backed Clover and WheelsonAuto autopay providers should not remain in the provider readiness warning count.');
     const providerCustomerFailureState = JSON.parse(JSON.stringify(providerEvidenceState));

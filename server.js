@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-43">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-44">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -6635,12 +6635,47 @@ function apiProviderTruthOverrides(data = {}) {
     }
   };
 }
+function apiProviderLaunchGuidance(provider = {}) {
+  const id = String(provider.id || '').trim();
+  const status = String(provider.status || '').toLowerCase();
+  const connected = /connected|live test passed|verified/.test(status);
+  const guidance = {
+    'clover-core': connected
+      ? ['Keep automatic sync running and compare the daily closeout against Clover.', 'Recent customer and payment sync timestamps plus matching closeout totals.']
+      : ['Run Sync everything, then compare named customers and today totals against Clover.', 'Successful customer/payment sync timestamps and a matching daily closeout.'],
+    'clover-ecommerce': connected
+      ? ['Monitor named saved-card charges and investigate any payment-not-found result.', 'A successful Clover payment ID linked to customer, amount, date, and WheelsonAuto file.']
+      : ['Run one controlled saved-card charge from a named customer file, then confirm Paid in WheelsonAuto and the same customer name in Clover.', 'Successful Clover payment ID, customer name, amount, timestamp, and saved-card source match.'],
+    'clover-webhooks': connected
+      ? ['Monitor signed webhook receipts and confirm payment history continues refreshing automatically.', 'Accepted signed Clover event plus the matching payment/history sync timestamp.']
+      : ['Add the Clover webhook secret in Render, register /api/webhooks/clover in Clover, then trigger one signed payment event.', 'Accepted signed webhook event and an updated WheelsonAuto payment/history timestamp.'],
+    'woa-autopay': connected
+      ? ['Keep the monitor running and review only customer declines, payment-not-found, or retry outcomes.', 'Completed monitor run with next-run time and named charged/failed/skipped results.']
+      : ['Run the autopay monitor with one managed saved-card schedule and verify charge, retry, failure, and next-run tracking.', 'Completed monitor result tied to a named customer and saved-card schedule.'],
+    'sms-phone': connected
+      ? ['Keep delivery monitoring active and review inbound/outbound failures in Messages.', 'Carrier-delivered outbound SMS and signed inbound reply in the same customer thread.']
+      : ['Upgrade the Telnyx account, complete service address/payment verification, submit and receive 10DLC approval, attach the number to the messaging profile, then run one outbound and inbound customer-thread test.', 'Carrier-delivered outbound SMS plus a signed inbound reply on the same customer thread.'],
+    email: connected
+      ? ['Keep inbound and outbound delivery monitoring active and review provider failures in Messages.', 'Verified outbound email and inbound reply in the same customer thread.']
+      : ['Finish sender/domain and inbound webhook setup, then send and receive one customer email from Messages.', 'Provider-accepted outbound email plus verified inbound reply on the same customer thread.'],
+    'star-ai': connected
+      ? ['Keep Star approval gates on for money/account actions and monitor provider health.', 'Successful sanitized Responses API answer plus one admin-approved non-sensitive draft.']
+      : [status.includes('credit') ? 'Add usable OpenAI API credit, then run Test Star provider and approve one non-sensitive draft.' : 'Add the OpenAI API key and usable API credit, then run Test Star provider and approve one non-sensitive draft.', 'Successful sanitized Responses API answer; money and account actions must remain admin-approved.']
+  };
+  const selected = guidance[id] || [
+    connected ? 'Monitor the provider and preserve matching/report evidence.' : 'Finish credentials and endpoint setup, run a controlled live test, and save the result before marking connected.',
+    'Provider result tied to the correct company, customer/vehicle records, timestamp, and affected report.'
+  ];
+  return { nextAction: selected[0], proofRequired: selected[1] };
+}
 function apiProviderRows(data = {}) {
   const saved = Array.isArray(data.apiProviders) ? data.apiProviders : [];
   const byId = new Map(saved.map(provider => [String(provider.id || ''), provider]));
   const truth = apiProviderTruthOverrides(data);
   const defaults = defaultApiProviderRows(data).map(provider => ({ ...provider, ...(byId.get(provider.id) || {}), ...(truth[provider.id] || {}) }));
-  return defaults.concat(saved.filter(provider => !defaultApiProviderRows(data).some(row => row.id === provider.id)));
+  return defaults
+    .concat(saved.filter(provider => !defaultApiProviderRows(data).some(row => row.id === provider.id)))
+    .map(provider => ({ ...provider, ...apiProviderLaunchGuidance(provider) }));
 }
 function apiProviderReviewRows(data = {}) {
   return apiProviderRows(data).filter(provider => {
@@ -10793,6 +10828,7 @@ module.exports = {
   twilioSignatureForPayload,
   openAiReplyPlan,
   starAiProviderHealthCheck,
+  apiProviderLaunchGuidance,
   apiProviderRows,
   apiProviderReviewRows
 };
