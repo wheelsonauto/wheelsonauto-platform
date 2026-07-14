@@ -2339,3 +2339,18 @@ document.addEventListener('click',async function(e){
     notify('Carrier status refreshed: '+checked+' checked, '+updated+' updated')
   }else notify(result.error||'Carrier delivery status could not refresh')
 },true);
+
+function enforceSidebarAccordion(openGroup){
+  var groups=Array.from(document.querySelectorAll('.sidebar .nav-group[data-nav-group]'));
+  var keep=openGroup&&groups.indexOf(openGroup)>=0?openGroup:groups.find(function(group){return !!group.querySelector('button.active')})||null;
+  groups.forEach(function(group){
+    if(group!==keep&&group.open)group.removeAttribute('open')
+  })
+}
+document.addEventListener('toggle',function(e){
+  var group=e.target&&e.target.closest&&e.target.closest('.sidebar .nav-group[data-nav-group]');
+  if(!group||group!==e.target||!group.open)return;
+  enforceSidebarAccordion(group)
+},true);
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){enforceSidebarAccordion()}, {once:true});
+else requestAnimationFrame(function(){enforceSidebarAccordion()});

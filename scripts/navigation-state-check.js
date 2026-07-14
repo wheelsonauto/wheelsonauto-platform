@@ -173,6 +173,10 @@ literalButtonTargets(helperSources)
 const messages = finalFunctionSlice('Messages');
 assertSetIncludes('Messages literal tabs', literalButtonTargets(messages).filter(item => item.tab && !item.view).map(item => item.tab), ['Inbox', 'Star', 'Queue', 'Templates', 'History', 'Setup']);
 
+if (!app.includes('function enforceSidebarAccordion(openGroup)')) fail('Sidebar accordion guard is missing.');
+if (!app.includes(".sidebar .nav-group[data-nav-group]")) fail('Sidebar accordion must target grouped navigation only.');
+if (!app.includes("group!==keep&&group.open")) fail('Sidebar accordion must close unrelated open groups.');
+
 const payments = finalFunctionSlice('Payments');
 assertSetIncludes('Payments literal tabs', literalButtonTargets(payments).filter(item => item.tab && !item.view).map(item => item.tab), ['Active', 'Today', 'History', 'Transactions']);
 if (app.includes("data-tab=\"Attention\"") || app.includes("data-tab='Attention'") || app.includes(",'Attention'") || app.includes(',"Attention"')) {
