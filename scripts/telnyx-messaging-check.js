@@ -15,6 +15,7 @@ const {
   parseIncomingMessage,
   sendProviderSms,
   applyTelnyxDeliveryEvent,
+  mergeTelnyxDeliveryUpdates,
   reconcileTelnyxDeliveryRecords,
   configureTelnyxMessagingProfile
 } = require('../server');
@@ -106,6 +107,25 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(failedMessageData.messages[0].status, 'Failed');
   assert.strictEqual(failedMessageData.messages[0].providerErrorCode, '40010');
   assert.match(failedMessageData.messages[0].providerErrorMessage, /10DLC registration required/);
+
+  const latestLiveData = {
+    messages: [{ id: 'message-local-2', externalId: 'telnyx-outbound-2', provider: 'telnyx', customer: 'Latest customer name', vehicleId: 'vehicle-latest', status: 'queued', tone: 'blue' }]
+  };
+  const mergedDeliveryCount = mergeTelnyxDeliveryUpdates(latestLiveData, failedMessageData);
+  assert.strictEqual(mergedDeliveryCount, 1, 'The final Telnyx result should merge into the latest saved message.');
+  assert.strictEqual(latestLiveData.messages[0].status, 'Failed');
+  assert.strictEqual(latestLiveData.messages[0].providerErrorCode, '40010');
+  assert.strictEqual(latestLiveData.messages[0].customer, 'Latest customer name', 'Delivery reconciliation must preserve newer customer details.');
+  assert.strictEqual(latestLiveData.messages[0].vehicleId, 'vehicle-latest', 'Delivery reconciliation must preserve newer vehicle links.');
+  const repeatedDeliveryCount = mergeTelnyxDeliveryUpdates(latestLiveData, failedMessageData);
+  assert.strictEqual(repeatedDeliveryCount, 0, 'An unchanged carrier result must not rewrite live data every poll.');
+
+  const staleQueuedData = {
+    messages: [{ id: 'message-local-3', externalId: 'telnyx-outbound-3', provider: 'telnyx', createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(), status: 'queued', tone: 'blue' }]
+  };
+  applyTelnyxDeliveryEvent(staleQueuedData, { data: { event_type: 'message.sent', payload: { id: 'telnyx-outbound-3', to: [{ status: 'queued' }] } } });
+  assert.strictEqual(staleQueuedData.messages[0].status, 'Delivery pending review', 'A stale queued message must not be mislabeled as sent.');
+  assert.strictEqual(staleQueuedData.messages[0].tone, 'warn');
 
   const calls = [];
   const configured = await configureTelnyxMessagingProfile({

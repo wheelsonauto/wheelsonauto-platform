@@ -63,11 +63,12 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-25">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-26">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
 const TELNYX_DELIVERY_POLL_MS = Math.max(15000, Number(process.env.WOA_TELNYX_DELIVERY_POLL_MS || 30000));
+const TELNYX_DELIVERY_PENDING_REVIEW_MS = Math.max(60000, Number(process.env.WOA_TELNYX_DELIVERY_PENDING_REVIEW_MS || 5 * 60 * 1000));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
 const WEBHOOK_AUTO_SYNC_DELAY_MS = Math.max(1000, Number(process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS || 5000));
 const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
@@ -655,6 +656,12 @@ function publicMessagingStatus(data = {}) {
     smsPollingIntervalMs: TWILIO_INBOUND_POLL_MS,
     smsWebhookStatus: saved.smsWebhookStatus || ((provider === 'twilio' || provider === 'telnyx') && configured ? 'Connect inbound SMS' : 'Provider setup needed'),
     smsWebhookConfiguredAt: saved.smsWebhookConfiguredAt || '',
+    deliveryLastCheckedAt: saved.deliveryLastCheckedAt || '',
+    deliveryLastUpdatedAt: saved.deliveryLastUpdatedAt || '',
+    deliveryChecked: Number(saved.deliveryChecked || 0),
+    deliveryUpdated: Number(saved.deliveryUpdated || 0),
+    deliveryErrors: Number(saved.deliveryErrors || 0),
+    deliveryLastError: saved.deliveryLastError || '',
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     webhookSecretConfigured: !!(MESSAGING_WEBHOOK_SECRET || (provider === 'telnyx' && TELNYX_PUBLIC_KEY)),
     telnyxSignatureReady: provider === 'telnyx' && !!TELNYX_PUBLIC_KEY,
@@ -5708,6 +5715,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
+    route('POST', '/api/messages/delivery-sync', 'Refresh final SMS carrier delivery results'),
     route('POST', '/api/messages/send', 'Send or save customer SMS/email messages'),
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
@@ -8065,24 +8073,91 @@ function applyTelnyxDeliveryEvent(data, payload = {}) {
   const record = externalId && (data.messages || []).find(item => String(item.externalId || '') === externalId);
   const providerStatus = telnyxDeliveryStatus(payload) || telnyxWebhookEventType(payload).replace(/^message\./, '');
   if (!record) return { matched: false, externalId, providerStatus };
-  const failed = /failed|rejected|expired|timeout|undelivered/.test(providerStatus);
+  const providerError = telnyxDeliveryError(message);
+  const failed = /failed|rejected|expired|timeout|undelivered/.test(providerStatus) || !!providerError.code;
   const delivered = providerStatus === 'delivered';
   const uncertain = /unconfirmed|dlr_timeout/.test(providerStatus);
+  const pending = /^(queued|sending|accepted|pending|in-flight|finalizing)$/.test(providerStatus);
+  const createdAt = Date.parse(record.createdAt || record.date || '');
+  const pendingReview = pending && Number.isFinite(createdAt) && Date.now() - createdAt >= TELNYX_DELIVERY_PENDING_REVIEW_MS;
   record.provider = 'telnyx';
   record.providerStatus = providerStatus || 'updated';
   record.deliveryUpdatedAt = new Date().toISOString();
-  record.status = delivered ? 'Delivered' : (failed ? 'Failed' : (uncertain ? 'Delivery unconfirmed' : 'Sent'));
-  record.tone = delivered ? 'good' : (failed ? 'bad' : (uncertain ? 'warn' : 'blue'));
+  record.status = delivered
+    ? 'Delivered'
+    : (failed
+      ? 'Failed'
+      : (uncertain
+        ? 'Delivery unconfirmed'
+        : (pendingReview
+          ? 'Delivery pending review'
+          : (pending ? providerStatus.charAt(0).toUpperCase() + providerStatus.slice(1) : (providerStatus === 'sent' ? 'Sent' : 'Delivery update')))));
+  record.tone = delivered ? 'good' : (failed ? 'bad' : (uncertain || pendingReview ? 'warn' : 'blue'));
   if (delivered) record.deliveredAt = record.deliveryUpdatedAt;
   if (failed) record.failedAt = record.deliveryUpdatedAt;
   if (Array.isArray(message.errors) && message.errors.length) {
     record.providerErrors = message.errors.slice(0, 10);
-    const providerError = telnyxDeliveryError(message);
     record.providerErrorCode = providerError.code;
     record.providerErrorMessage = providerError.message;
+  } else if (delivered) {
+    record.providerErrors = [];
+    record.providerErrorCode = '';
+    record.providerErrorMessage = '';
   }
   if (message.cost) record.providerCost = message.cost;
   return { matched: true, messageId: record.id, externalId, providerStatus: record.providerStatus, status: record.status };
+}
+const TELNYX_DELIVERY_FIELDS = [
+  'provider', 'providerStatus', 'status', 'tone', 'providerErrors', 'providerErrorCode',
+  'providerErrorMessage', 'providerCost', 'deliveryUpdatedAt', 'deliveredAt', 'failedAt'
+];
+const TELNYX_DELIVERY_COMPARE_FIELDS = TELNYX_DELIVERY_FIELDS.filter(field => field !== 'deliveryUpdatedAt');
+function mergeTelnyxDeliveryUpdates(targetData, sourceData) {
+  targetData.messages = Array.isArray(targetData.messages) ? targetData.messages : [];
+  const sourceMessages = Array.isArray(sourceData && sourceData.messages) ? sourceData.messages : [];
+  let updated = 0;
+  sourceMessages.forEach(source => {
+    if (String(source && source.provider || '').toLowerCase() !== 'telnyx' || !String(source && source.deliveryUpdatedAt || '').trim()) return;
+    const target = targetData.messages.find(item => String(item && item.externalId || '') === String(source.externalId || '') || String(item && item.id || '') === String(source.id || ''));
+    if (!target) return;
+    const targetTime = Date.parse(target.deliveryUpdatedAt || '') || 0;
+    const sourceTime = Date.parse(source.deliveryUpdatedAt || '') || 0;
+    if (targetTime > sourceTime) return;
+    const before = TELNYX_DELIVERY_COMPARE_FIELDS.map(field => JSON.stringify(target[field])).join('|');
+    const incoming = TELNYX_DELIVERY_COMPARE_FIELDS.map(field => JSON.stringify(source[field])).join('|');
+    if (before === incoming) return;
+    TELNYX_DELIVERY_FIELDS.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(source, field)) target[field] = source[field];
+    });
+    updated += 1;
+  });
+  return updated;
+}
+async function persistTelnyxDeliveryUpdates(sourceData, result = {}) {
+  const job = writeDataQueue.then(async () => {
+    const latest = repairDataIds(JSON.parse(await fs.readFile(DATA_FILE, 'utf8')));
+    const updated = mergeTelnyxDeliveryUpdates(latest, sourceData);
+    latest.integrations = latest.integrations || {};
+    latest.integrations.messaging = latest.integrations.messaging || {};
+    const previous = latest.integrations.messaging;
+    const nextError = Array.isArray(result.errors) && result.errors.length ? String(result.errors[0].error || '') : '';
+    const lastChecked = Date.parse(previous.deliveryLastCheckedAt || '') || 0;
+    const diagnosticsDue = Date.now() - lastChecked >= 5 * 60 * 1000;
+    const diagnosticsChanged = nextError !== String(previous.deliveryLastError || '') || updated > 0;
+    if (!diagnosticsDue && !diagnosticsChanged) return { updated, wrote: false };
+    Object.assign(latest.integrations.messaging, {
+      deliveryLastCheckedAt: new Date().toISOString(),
+      deliveryLastUpdatedAt: updated ? new Date().toISOString() : (latest.integrations.messaging.deliveryLastUpdatedAt || ''),
+      deliveryChecked: Number(result.checked || 0),
+      deliveryUpdated: updated,
+      deliveryErrors: Array.isArray(result.errors) ? result.errors.length : 0,
+      deliveryLastError: nextError
+    });
+    await writeDataNow(latest);
+    return { updated, wrote: true };
+  });
+  writeDataQueue = job.catch(() => {});
+  return job;
 }
 async function reconcileTelnyxDeliveryRecords(data, options = {}) {
   const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
@@ -8125,9 +8200,9 @@ async function syncTelnyxDeliveryStatuses(options = {}) {
   try {
     const data = await readData();
     const result = await reconcileTelnyxDeliveryRecords(data, { ...options, apiKey });
-    if (result.updated) {
-      await protectConcurrentLocalWrites(data);
-      await writeData(data);
+    const persistence = await persistTelnyxDeliveryUpdates(data, result);
+    result.persisted = persistence.updated;
+    if (persistence.updated) {
       telnyxDeliveryPollStatus.lastUpdatedAt = new Date().toISOString();
     }
     telnyxDeliveryPollStatus.lastError = '';
@@ -8154,8 +8229,8 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
       lastError: ''
     };
     if (delivery.matched) {
-      await protectConcurrentLocalWrites(data);
-      await writeData(data);
+      const persistence = await persistTelnyxDeliveryUpdates(data, { checked: 1, updated: 1, errors: [] });
+      delivery.persisted = persistence.updated;
     }
     return { ok: true, received: false, delivery };
   }
@@ -9419,7 +9494,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/messages/status' && req.method === 'GET') {
       const data = await readData();
-      return json(res, 200, { ok: true, messaging: publicMessagingStatus(data) });
+      return json(res, 200, { ok: true, messaging: publicMessagingStatus(data), deliverySync: { ...telnyxDeliveryPollStatus, inFlight: !!telnyxDeliveryPollStatus.inFlight } });
+    }
+    if (url.pathname === '/api/messages/delivery-sync' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can refresh carrier delivery results.' });
+      try {
+        const result = await syncTelnyxDeliveryStatuses({ minAgeMs: 0, maxRecords: 50 });
+        return json(res, 200, { ok: true, result, messaging: publicMessagingStatus(await readData()) });
+      } catch (err) {
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error: String(err && err.message || err) });
+      }
     }
     if (url.pathname === '/api/messages/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change messaging and Star AI settings.' });
@@ -10277,9 +10361,13 @@ if (require.main === module) {
         console.error('Twilio inbound SMS secure sync failed:', err && err.message || err);
       }), TWILIO_INBOUND_POLL_MS);
     setTimeout(() => syncTelnyxDeliveryStatuses()
-      .then(result => console.log(result && result.skipped ? 'Telnyx delivery sync skipped.' : 'Telnyx delivery statuses synced.'))
+      .then(result => console.log(result && result.skipped ? 'Telnyx delivery sync skipped.' : 'Telnyx delivery sync checked ' + result.checked + ', updated ' + result.updated + ', persisted ' + result.persisted + ', errors ' + result.errors.length + '.'))
       .catch(err => console.error('Telnyx delivery sync failed:', err && err.message || err)), 5000);
     setInterval(() => syncTelnyxDeliveryStatuses()
+      .then(result => {
+        if (!result || result.skipped || (!result.persisted && !(result.errors && result.errors.length))) return;
+        console.log('Telnyx delivery sync checked ' + result.checked + ', updated ' + result.updated + ', persisted ' + result.persisted + ', errors ' + result.errors.length + '.');
+      })
       .catch(err => {
         if (Date.now() - telnyxDeliveryPollStatus.lastLoggedAt < 60 * 1000) return;
         telnyxDeliveryPollStatus.lastLoggedAt = Date.now();
@@ -10314,6 +10402,7 @@ module.exports = {
   configureTelnyxMessagingProfile,
   autoConfigureTelnyxMessagingProfile,
   applyTelnyxDeliveryEvent,
+  mergeTelnyxDeliveryUpdates,
   reconcileTelnyxDeliveryRecords,
   syncTelnyxDeliveryStatuses,
   processMessagingWebhookEvent,

@@ -2251,3 +2251,31 @@ render=function(){
     if(document.documentElement&&document.documentElement.setAttribute)document.documentElement.setAttribute('data-woa-render-metric',JSON.stringify(metric))
   }
 };
+
+var __woaMessageSetupDeliveryBase=messageSetupPanel;
+messageSetupPanel=function(status){
+  var html=__woaMessageSetupDeliveryBase(status);
+  var carrierCard='<div class="item carrier-delivery-card"><strong>Carrier delivery results</strong><div>Automatic status check every 30 seconds</div><small>Queued is never treated as delivered. Failed carrier results and error codes stay attached to the conversation.</small><div class="actions"><button class="btn primary" data-action="refresh-sms-delivery">Refresh delivery</button></div></div>';
+  return html.replace('<div class="item"><strong>Email</strong>',carrierCard+'<div class="item"><strong>Email</strong>')
+};
+
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action="refresh-sms-delivery"]');
+  if(!b)return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if(!isOwner()){notify('Only owner can refresh carrier delivery results');return}
+  b.disabled=true;
+  b.classList.add('is-loading');
+  var result=await post('/api/messages/delivery-sync',{});
+  b.disabled=false;
+  b.classList.remove('is-loading');
+  if(result.ok){
+    await refreshData(true);
+    view='Messages';
+    tab='Setup';
+    Messages();
+    var checked=result.result&&result.result.checked||0,updated=result.result&&result.result.persisted||0;
+    notify('Carrier status refreshed: '+checked+' checked, '+updated+' updated')
+  }else notify(result.error||'Carrier delivery status could not refresh')
+},true);
