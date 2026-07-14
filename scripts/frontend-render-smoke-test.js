@@ -435,7 +435,8 @@ function ownerSmoke() {
   assert(context.isCurrentAutopayRow(context.db.recurringPayments[0]) === false && context.paymentState(context.db.recurringPayments[0]).key === 'history', 'Legacy removed markers in the schedule field must classify the customer as history, not active or failed.');
   assert(!renderView(context, 'Dashboard', 'Board', 'Dues').includes('Removed Today Smoke'), 'Dashboard Today dues must exclude removed recurring customers.');
   assert(!renderView(context, 'Payments', 'Today').includes('Removed Today Smoke'), 'Payments Today action list must exclude removed recurring customers.');
-  assert(renderView(context, 'Payments', 'History').includes('Removed Today Smoke'), 'Removed recurring customers must remain visible in customer history.');
+  const removedHistory = renderView(context, 'Payments', 'History');
+  assert(removedHistory.includes('Removed Today Smoke') && removedHistory.includes('History / removed'), 'Removed recurring customers must remain visible in customer history with the normalized inactive status.');
   context.db.payments = context.db.payments || [];
   context.db.payments.unshift({
     id: 'smoke-removed-history-transaction',
