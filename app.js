@@ -2497,6 +2497,39 @@ function OrganizationsProviderReady(){
 }
 Organizations=OrganizationsProviderReady;
 
+// Messages Queue touches the same customer, vehicle, and recurring records many
+// times. Keep those lookups proportional to unique customers and reuse the
+// finished queue until the server data or local day changes.
+var __woaMessageContactLookupBase=messageContact;
+messageContact=function(name){
+  var key=normName(name)||'unknown';
+  return performanceMemoLookup('messageContacts',key,function(){
+    var customer=findCustomerByName(name)||{},file=findContractByCustomer(name)||{},recurring=findRecurringByCustomer(name)||{};
+    var phone=customer.phone||file.phone||recurring.phone||'',email=customer.email||file.email||recurring.email||'';
+    if(phone||email)return{name:name||customer.name||file.customer||recurring.customer||'',phone:phone,email:email,source:customer.id?'customer':(file.id?'file':(recurring.id?'autopay':''))};
+    return __woaMessageContactLookupBase(name)
+  })
+};
+var __woaQueueCustomerProfileBase=existingCustomerProfile;
+existingCustomerProfile=function(name){
+  var key=normName(name)||'unknown';
+  return performanceMemoLookup('customerProfiles',key,function(){return __woaQueueCustomerProfileBase(name)})
+};
+var __woaQueueVehicleContextBase=messageQueueVehicleContext;
+messageQueueVehicleContext=function(customer,vehicleId){
+  var key=(normName(customer)||'unknown')+'|'+String(vehicleId||'');
+  return performanceMemoLookup('messageVehicleContexts',key,function(){return __woaQueueVehicleContextBase(customer,vehicleId)})
+};
+var __woaMessageQueueRowsCacheBase=fastMessageQueueRows;
+var __woaMessageQueueRowsCache={fingerprint:'',day:'',rows:null};
+fastMessageQueueRows=function(){
+  var fingerprint=String(lastDataFingerprint||''),day=todayKey();
+  if(__woaMessageQueueRowsCache.rows&&__woaMessageQueueRowsCache.fingerprint===fingerprint&&__woaMessageQueueRowsCache.day===day)return __woaMessageQueueRowsCache.rows.slice();
+  var rows=__woaMessageQueueRowsCacheBase();
+  __woaMessageQueueRowsCache={fingerprint:fingerprint,day:day,rows:rows.slice()};
+  return rows
+};
+
 // Payment tabs are a high-frequency money workflow. Handle them as one
 // authoritative navigation path so older progressive render layers cannot
 // repaint the previous payment panel after the click.

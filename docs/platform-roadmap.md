@@ -10,11 +10,12 @@ Current live release status:
 - Owner reads can manage the readiness profile; manager and mechanic reads redact those onboarding details.
 - Removed, returned, ended, inactive, and history autopay rows are excluded from Dashboard Today, Payments Today, Active, daily closeout expected money, contact queues, system health, reports, and readiness counts, including legacy rows where the removal marker lives in the next-run field.
 - Historical transactions for removed customers remain visible in Transactions and payment history.
+- Messages Queue and Reports Closeout reuse customer, recurring, vehicle, and finished queue lookups until live data changes, keeping high-volume customer follow-up and end-of-day review responsive.
 - Telnyx signed inbound messaging is connected. Outbound SMS still requires the Telnyx account upgrade, service address and payment verification, 10DLC approval, and a successful live send.
 - Resend outbound and inbound email delivery are connected for platform notifications and replies.
 - Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
-- Release asset version is `platform-20260714-final-36`.
+- Release asset version is `platform-20260714-final-37`.
 
 Release checks:
 
@@ -24,7 +25,7 @@ Release checks:
 
 Publish status:
 
-- Code releases are committed and pushed to GitHub, then deployed automatically by Render.
+- Code releases are committed and pushed to GitHub, then deployed manually from Render's latest main-branch commit.
 - Live verification must confirm the release asset version and corrected Today customer list after each deploy.
 
 ## 2026-07-12 Build Checkpoint (Previous)

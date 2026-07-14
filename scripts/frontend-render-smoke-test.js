@@ -596,9 +596,16 @@ function heavyMessagesReportsSmoke() {
   const star = renderView(context, 'Messages', 'Star');
   assertHealthy('Heavy Messages Star', star, ['Star AI', 'Auto-ready replies', 'Needs admin approval']);
   assert(star.length < 240000, 'Heavy Messages Star rendered too much HTML at once.');
+  const queueStarted = Date.now();
   const queue = renderView(context, 'Messages', 'Queue');
+  const firstQueueMs = Date.now() - queueStarted;
   assertHealthy('Heavy Messages queue', queue, ['Follow-up queue']);
   assert(queue.length < 220000, 'Heavy Messages queue rendered too much HTML at once.');
+  const cachedQueueStarted = Date.now();
+  const cachedQueue = renderView(context, 'Messages', 'Queue');
+  const cachedQueueMs = Date.now() - cachedQueueStarted;
+  assertHealthy('Cached heavy Messages queue', cachedQueue, ['Follow-up queue']);
+  assert(cachedQueueMs <= Math.max(250, firstQueueMs), 'Messages queue cache did not make repeated navigation proportional to visible work.');
   ['Summary', 'Accounting', 'Risk', 'Pipeline'].forEach(tabName => {
     const report = renderView(context, 'Reports', tabName);
     assertHealthy('Heavy Reports ' + tabName, report, ['Reports', tabName]);
