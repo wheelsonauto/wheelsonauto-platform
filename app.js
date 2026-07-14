@@ -1147,6 +1147,15 @@ MessagesFast=function(){
   insertStarSystemAuditor();
 }
 Messages=MessagesFast;
+function apiProviderStatusOptions(current){
+  current=String(current||'API needed').trim()||'API needed';
+  var options=[current,'Connected','Testing','Ready for credentials','Ready for API','API needed','Provider needed','Blocked','Architecture ready'],seen={};
+  return options.filter(function(status){if(seen[status])return false;seen[status]=true;return true}).map(function(status){return '<option '+(status===current?'selected':'')+'>'+esc(status)+'</option>'}).join('')
+}
+apiProviderForm=function(p){
+  p=p||{};
+  return '<div class="form"><div class="field"><label>System</label><input id="apiName" value="'+esc(p.name||'')+'"></div><div class="field"><label>Group</label><input id="apiGroup" value="'+esc(p.group||'')+'"></div><div class="field"><label>Status</label><select id="apiStatus">'+apiProviderStatusOptions(p.status)+'</select></div><div class="field"><label>Owner</label><input id="apiOwner" value="'+esc(p.owner||'Owner')+'"></div><div class="field span2"><label>Render env keys / credentials needed</label><textarea id="apiEnvKeys">'+esc(p.envKeys||'')+'</textarea></div><div class="field span2"><label>Endpoint / route</label><input id="apiEndpoint" value="'+esc(p.endpoint||'')+'"></div><div class="field span2"><label>Live test required</label><textarea id="apiLiveTest">'+esc(p.liveTest||'')+'</textarea></div><div class="field"><label>Last test date</label><input id="apiLastTestAt" type="date" value="'+esc(autoDateValue(p.lastTestAt||''))+'"></div><div class="field"><label>Last test result</label><input id="apiLastTestResult" value="'+esc(p.lastTestResult||'')+'" placeholder="Passed, failed, draft-only, provider needed..."></div><div class="field span2"><label>Notes</label><textarea id="apiNotes">'+esc(p.notes||'')+'</textarea></div></div>'
+};
 function apiProviderGuidance(p){
   p=p||{};
   var connected=/connected|live test passed|verified/i.test(String(p.status||'')),fallback={

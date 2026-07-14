@@ -438,6 +438,9 @@ function ownerSmoke() {
   context.db.integrations = context.db.integrations || {};
   context.db.integrations.apiProviderRuntime = [{ id: 'clover-core', name: 'Clover Core', group: 'Money', status: 'Connected', lastTestAt: '2026-07-14T12:00:00.000Z', lastTestResult: 'Runtime sync proof passed.' }];
   assert(context.apiProviders().find(row => row.id === 'clover-core').status === 'Connected', 'API Roadmap should use the live server provider status instead of the generic client default.');
+  const detailedProviderForm = context.apiProviderForm({ name: 'Clover Ecommerce', status: 'Testing - live charge needed' });
+  assert(detailedProviderForm.includes('<option selected>Testing - live charge needed</option>'), 'API setup must preserve the exact runtime status instead of visually defaulting to Connected.');
+  assert(!detailedProviderForm.includes("<option selected>Connected</option>"), 'An unfinished provider must never be promoted to Connected by opening its setup form.');
   assert(context.isInventoryVehicle({ status: 'Ready', currentCustomer: '' }) === true, 'Ready unassigned cars should be available inventory.');
   assert(context.isInventoryVehicle({ status: 'Pending application', currentCustomer: '' }) === false, 'Pending-application cars must not appear in available fleet or autopay pickers.');
   assert(context.isInventoryVehicle({ status: 'Maintenance', currentCustomer: '' }) === false, 'Maintenance cars must not appear in available fleet or autopay pickers.');
