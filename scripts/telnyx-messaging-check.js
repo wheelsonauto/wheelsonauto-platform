@@ -11,6 +11,7 @@ process.env.TELNYX_API_KEY = 'KEY-test';
 process.env.TELNYX_PUBLIC_KEY = publicKeyBase64;
 
 const {
+  publicMessagingStatus,
   verifyTelnyxWebhook,
   parseIncomingMessage,
   sendProviderSms,
@@ -115,6 +116,12 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   const deliveredReadiness = telnyxCarrierReadiness(messageData, 'telnyx');
   assert.strictEqual(deliveredReadiness.carrierDeliveryVerified, true);
   assert.strictEqual(deliveredReadiness.carrierRegistrationRequired, false);
+  const failedPublicStatus = publicMessagingStatus(failedMessageData);
+  assert.strictEqual(failedPublicStatus.configured, true, 'Telnyx credentials and number should remain separately marked as configured.');
+  assert.strictEqual(failedPublicStatus.smsDeliveryLive, false, 'A 10DLC rejection must never be presented as live SMS.');
+  assert.strictEqual(failedPublicStatus.carrierRegistrationRequired, true);
+  const deliveredPublicStatus = publicMessagingStatus(messageData);
+  assert.strictEqual(deliveredPublicStatus.smsDeliveryLive, true, 'A carrier-confirmed delivery should unlock the live SMS state.');
 
   const latestLiveData = {
     messages: [{ id: 'message-local-2', externalId: 'telnyx-outbound-2', provider: 'telnyx', customer: 'Latest customer name', vehicleId: 'vehicle-latest', status: 'queued', tone: 'blue' }]

@@ -2255,17 +2255,28 @@ render=function(){
 var __woaCarrierMessagingStatusBase=messagingStatus;
 messagingStatus=function(){
   var status=__woaCarrierMessagingStatusBase(),saved=((db.integrations||{}).messaging||{});
+  status.providerConfigured=!!status.configured;
   status.carrierDeliveryVerified=!!saved.carrierDeliveryVerified;
   status.carrierRegistrationRequired=!!saved.carrierRegistrationRequired;
   status.carrierDeliveryStatus=saved.carrierDeliveryStatus||'';
   status.carrierDeliveryErrorCode=saved.carrierDeliveryErrorCode||'';
   status.carrierDeliveryError=saved.carrierDeliveryError||'';
+  status.smsDeliveryLive=saved.smsDeliveryLive===true||(status.providerConfigured&&String(status.provider||'').toLowerCase()!=='telnyx');
+  status.emailProviderConfigured=!!status.emailConfigured;
+  status.emailOutboundVerified=!!saved.emailOutboundVerified;
+  status.emailOutboundStatus=saved.emailOutboundStatus||'';
+  status.emailLastSentAt=saved.emailLastSentAt||'';
+  status.emailInboundVerified=!!saved.emailInboundVerified;
+  status.emailLastInboundAt=saved.emailLastInboundAt||'';
+  status.emailWebhookSecretConfigured=!!saved.emailWebhookSecretConfigured;
+  status.configured=status.smsDeliveryLive;
+  status.emailConfigured=status.emailOutboundVerified;
   return status
 };
 function smsDeliveryTruth(status){
-  if(!status.configured)return{label:'Hosted SMS needed',tone:'warn',detail:'Add the provider credentials and platform number in Render.'};
+  if(!status.providerConfigured)return{label:'Hosted SMS needed',tone:'warn',detail:'Add the provider credentials and platform number in Render.'};
   if(status.carrierRegistrationRequired)return{label:'10DLC approval needed',tone:'bad',detail:status.carrierDeliveryError||'Telnyx is configured, but carriers will reject outgoing texts until the number is attached to an approved 10DLC campaign.'};
-  if(status.carrierDeliveryVerified)return{label:'SMS delivery verified',tone:'good',detail:'The carrier confirmed a delivered message from the platform number.'};
+  if(status.smsDeliveryLive)return{label:'SMS delivery verified',tone:'good',detail:'The carrier confirmed a delivered message from the platform number.'};
   return{label:'SMS configured - test pending',tone:'warn',detail:'Provider and inbound connection are configured. Do not treat SMS as live until a carrier delivery is confirmed.'}
 }
 var __woaCarrierMessageStatusStripBase=messageStatusStrip;
@@ -2275,9 +2286,14 @@ messageStatusStrip=function(status){
 };
 var __woaMessageSetupDeliveryBase=messageSetupPanel;
 messageSetupPanel=function(status){
-  var truth=smsDeliveryTruth(status),html=__woaMessageSetupDeliveryBase(status);
-  html=html.replace(status.configured?'Live SMS connected':'Hosted SMS needed',truth.label);
-  if(status.configured)html=html.replace('Connected through '+status.provider,status.carrierDeliveryVerified?'Delivery verified through '+status.provider:(status.carrierRegistrationRequired?'Telnyx configured - 10DLC approval needed':'Provider configured - delivery test pending'));
+  var truth=smsDeliveryTruth(status),providerStatus=Object.assign({},status,{configured:status.providerConfigured,emailConfigured:status.emailProviderConfigured}),html=__woaMessageSetupDeliveryBase(providerStatus);
+  html=html.replace(providerStatus.configured?'Live SMS connected':'Hosted SMS needed',truth.label);
+  if(providerStatus.configured)html=html.replace('Connected through '+status.provider,status.smsDeliveryLive?'Delivery verified through '+status.provider:(status.carrierRegistrationRequired?'Telnyx configured - 10DLC approval needed':'Provider configured - delivery test pending'));
+  if(providerStatus.emailConfigured){
+    html=html.replace('Connected through '+status.emailProvider,status.emailOutboundVerified?'Outbound email verified through '+status.emailProvider:'Email provider configured - send test pending');
+    html=html.replace('Star can draft and send emails after WOA_EMAIL_FROM plus Resend or SendGrid keys are in Render.',status.emailOutboundVerified?(status.emailInboundVerified?'Outbound and inbound email are verified.':'Outbound email passed. Inbound replies are not verified yet; configure the email webhook before treating the inbox as two-way.'):'Provider credentials are stored. Use Send test before treating outbound email as live.');
+    html=html.replace('Give this to the email provider when inbound email is connected.',status.emailInboundVerified?'Inbound email webhook verified'+(status.emailLastInboundAt?' at '+shortDate(status.emailLastInboundAt):'')+'.':(status.emailWebhookSecretConfigured?'Webhook security is ready. Add this endpoint in '+status.emailProvider+' and verify one inbound reply.':'Add the provider webhook secret in Render, then configure this endpoint and verify one inbound reply.'))
+  }
   var carrierCard='<div class="item carrier-delivery-card"><strong>Carrier delivery results</strong><div>'+esc(truth.label)+'</div><small>'+esc(truth.detail)+' Queued is never treated as delivered.</small><div class="actions"><button class="btn primary" data-action="refresh-sms-delivery">Refresh delivery</button></div></div>';
   return html.replace('<div class="item"><strong>Email</strong>',carrierCard+'<div class="item"><strong>Email</strong>')
 };

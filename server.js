@@ -652,6 +652,25 @@ function telnyxCarrierReadiness(data = {}, provider = '') {
     carrierDeliveryError: String(latest.providerErrorMessage || '').trim()
   };
 }
+function emailChannelReadiness(data = {}, configured = false) {
+  const records = (data.messages || []).filter(record => String(record.channel || '').toLowerCase() === 'email');
+  const byTime = records.slice().sort((a, b) => {
+    const aTime = Date.parse(a.createdAt || a.receivedAt || a.sentAt || a.date || '') || 0;
+    const bTime = Date.parse(b.createdAt || b.receivedAt || b.sentAt || b.date || '') || 0;
+    return bTime - aTime;
+  });
+  const latestOutbound = byTime.find(record => !/inbound|received/.test(String(record.direction || record.status || '').toLowerCase())) || {};
+  const latestInbound = byTime.find(record => /inbound|received/.test(String(record.direction || record.status || '').toLowerCase())) || {};
+  const outboundStatus = String(latestOutbound.status || '').toLowerCase();
+  const outboundVerified = !!(configured && /sent|delivered/.test(outboundStatus) && !/failed|draft|needed/.test(outboundStatus));
+  return {
+    emailOutboundVerified: outboundVerified,
+    emailOutboundStatus: outboundStatus || (configured ? 'test_pending' : 'not_configured'),
+    emailLastSentAt: latestOutbound.createdAt || latestOutbound.sentAt || latestOutbound.date || '',
+    emailInboundVerified: !!latestInbound.id,
+    emailLastInboundAt: latestInbound.receivedAt || latestInbound.createdAt || latestInbound.date || ''
+  };
+}
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const saved = (((data.integrations || {}).messaging) || {});
@@ -659,6 +678,7 @@ function publicMessagingStatus(data = {}) {
   const emailIntegration = (((data.integrations || {}).email) || {});
   const emailProvider = String(emailIntegration.provider || WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
   const emailConfigured = !!(settings.emailEnabled && (emailProviderConfigured(emailProvider) || emailIntegration.connected));
+  const emailReadiness = emailChannelReadiness(data, emailConfigured);
   const configured = !!(
     settings.enabled &&
     MESSAGING_FROM_NUMBER &&
@@ -666,16 +686,18 @@ function publicMessagingStatus(data = {}) {
       (provider === 'telnyx' && TELNYX_API_KEY))
   );
   const carrier = telnyxCarrierReadiness(data, provider);
+  const smsDeliveryLive = !!(configured && (provider !== 'telnyx' || carrier.carrierDeliveryVerified));
   return {
     provider,
     enabled: settings.enabled,
     configured,
+    smsDeliveryLive,
     fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
     voiceMode: provider === 'telnyx'
       ? 'Telnyx handles the platform inbox. Keep the T-Mobile number unchanged until the Telnyx test line passes and the final port is approved.'
       : 'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.',
     ownerMirror: MESSAGING_OWNER_NOTIFY_NUMBER ? maskPhone(MESSAGING_OWNER_NOTIFY_NUMBER) : '',
-    ownerMirrorLive: !!(configured && MESSAGING_OWNER_NOTIFY_NUMBER && (provider !== 'telnyx' || carrier.carrierDeliveryVerified)),
+    ownerMirrorLive: !!(smsDeliveryLive && MESSAGING_OWNER_NOTIFY_NUMBER),
     ownerReplyBridge: MESSAGING_OWNER_NOTIFY_NUMBER ? 'Phone replies use a stable 6-character conversation code so they stay matched to the right customer.' : 'Add the owner mobile number to mirror customer texts and enable safe phone replies.',
     smsScamGuard: 'Potential scams are labeled, held from Star auto-reply, and require staff review. Phone replies cannot run money or account actions.',
     webhookUrl: PUBLIC_BASE_URL + '/api/webhooks/messages' + (provider === 'twilio' || provider === 'telnyx' ? '?provider=' + provider : ''),
@@ -716,6 +738,7 @@ function publicMessagingStatus(data = {}) {
     emailEnabled: settings.emailEnabled,
     emailProvider,
     emailConfigured,
+    ...emailReadiness,
     emailFrom: emailConfigured ? 'stored in Render' : '',
     emailReplyTo: WOA_EMAIL_REPLY_TO ? maskEmail(WOA_EMAIL_REPLY_TO) : '',
     emailOwnerCopy: WOA_EMAIL_OWNER_NOTIFY ? maskEmail(WOA_EMAIL_OWNER_NOTIFY) : '',
@@ -3404,7 +3427,7 @@ function starPreparedAction(data, plan = {}, context = {}, payload = {}) {
     paymentLinkUrl: related.paymentLinkUrl || '',
     cardSetupRequestId: related.cardSetupRequestId || '',
     cardSetupUrl: related.cardSetupUrl || '',
-    providerSetupNeeded: actionType === 'reply' || actionType === 'maintenance_schedule' ? !publicMessagingStatus(data).configured && !publicMessagingStatus(data).emailConfigured : false,
+    providerSetupNeeded: actionType === 'reply' || actionType === 'maintenance_schedule' ? !publicMessagingStatus(data).smsDeliveryLive && !publicMessagingStatus(data).emailConfigured : false,
     adminGuardrail: requiresAdminApproval ? 'Star prepared this action only. An admin must approve it in the matching payment/customer workflow before anything sensitive happens.' : 'Safe reply/link draft prepared. Provider setup may still be required before it sends live.'
   };
   if (prepared.paymentLinkUrl) prepared.status = 'Payment link ready';
@@ -6300,7 +6323,7 @@ function defaultApiProviderRows(data = {}) {
 	      id: 'sms-phone',
 	      name: 'SMS / Business Phone',
 	      group: 'Comms',
-	      status: messageStatus.configured ? 'Testing' : 'Provider needed',
+	      status: messageStatus.smsDeliveryLive ? 'Live test passed' : (messageStatus.configured ? (messageStatus.carrierRegistrationRequired ? 'Carrier registration needed' : 'Delivery test needed') : 'Provider needed'),
 	      owner: 'Owner',
 	      envKeys: 'SMS_PROVIDER_KEY, SMS_FROM_NUMBER, WOA_MESSAGING_WEBHOOK_SECRET',
 	      endpoint: '/api/messages/send, /api/webhooks/messages',
@@ -8348,7 +8371,8 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
       body: inbound.body
     }, { sourceMessageId: inbound.externalId || inboundRecord.id });
     const plan = aiResult.plan || {};
-    if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.phone) {
+    const channelStatus = publicMessagingStatus(data);
+    if (settings.aiAutoSend && channelStatus.smsDeliveryLive && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.phone) {
       try {
         const approved = await approveAiMessage(data, { draftId: aiResult.draft.id });
         aiResult.sent = approved.sent;
@@ -8357,6 +8381,10 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
         aiResult.draft.tone = 'warn';
         aiResult.draft.error = String(err && err.message || err);
       }
+    } else if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && !channelStatus.smsDeliveryLive) {
+      aiResult.draft.status = channelStatus.carrierRegistrationRequired ? 'Ready - 10DLC approval needed' : 'Ready - SMS delivery test needed';
+      aiResult.draft.tone = 'warn';
+      aiResult.draft.providerSetupNeeded = true;
     }
   }
   if (MESSAGING_OWNER_NOTIFY_NUMBER && phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER) !== phoneKey(inbound.from)) {
@@ -8549,7 +8577,8 @@ const server = http.createServer(async (req, res) => {
             body: inbound.body
           }, { sourceMessageId: inbound.externalId || inboundRecord.id });
           const plan = aiResult.plan || {};
-          if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.email) {
+          const channelStatus = publicMessagingStatus(data);
+          if (settings.aiAutoSend && channelStatus.emailOutboundVerified && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && aiResult.draft.email) {
             try {
               const approved = await approveAiMessage(data, { draftId: aiResult.draft.id, channel: 'Email' });
               aiResult.sent = approved.sent;
@@ -8558,6 +8587,10 @@ const server = http.createServer(async (req, res) => {
               aiResult.draft.tone = 'warn';
               aiResult.draft.error = String(err && err.message || err);
             }
+          } else if (settings.aiAutoSend && plan.canAutoSend && !plan.approvalRequired && !plan.needsHuman && aiResult.draft && !channelStatus.emailOutboundVerified) {
+            aiResult.draft.status = 'Ready - outbound email test needed';
+            aiResult.draft.tone = 'warn';
+            aiResult.draft.providerSetupNeeded = true;
           }
         }
         if (WOA_EMAIL_OWNER_NOTIFY && String(inbound.from || '').trim().toLowerCase() !== WOA_EMAIL_OWNER_NOTIFY.trim().toLowerCase()) {
@@ -10452,6 +10485,7 @@ module.exports = {
   resolveOwnerSmsBridge,
   ownerSmsMirrorBody,
   telnyxCarrierReadiness,
+  emailChannelReadiness,
   configureTwilioSmsWebhook,
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,

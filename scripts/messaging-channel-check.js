@@ -4,6 +4,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+const { emailChannelReadiness } = require('../server');
 
 function fail(message) {
   throw new Error(message);
@@ -113,6 +114,15 @@ requireText('Server public phone reply bridge status', publicMessagingStatus, 'o
 requireText('Server public SMS scam guard status', publicMessagingStatus, 'smsScamGuard');
 requireText('Server carrier delivery truth', server, 'carrierDeliveryVerified');
 requireText('Server carrier registration truth', server, 'carrierRegistrationRequired');
+requireText('Server live SMS truth', server, 'smsDeliveryLive');
+requireText('Frontend live SMS truth', app, 'status.configured=status.smsDeliveryLive');
+requireText('Server outbound email truth', server, 'emailOutboundVerified');
+requireText('Server inbound email truth', server, 'emailInboundVerified');
+requireText('Frontend outbound email truth', app, 'status.emailConfigured=status.emailOutboundVerified');
+requireText('Messaging setup inbound email warning', app, 'Inbound replies are not verified yet');
+requireText('Star SMS auto-send carrier guard', server, 'settings.aiAutoSend && channelStatus.smsDeliveryLive');
+requireText('Star email auto-send delivery guard', server, 'settings.aiAutoSend && channelStatus.emailOutboundVerified');
+requireText('Star 10DLC draft fallback', server, 'Ready - 10DLC approval needed');
 requireText('Messaging setup carrier pending label', app, 'SMS configured - test pending');
 requireText('Messaging setup 10DLC label', app, '10DLC approval needed');
 requireText('Customer portal message route', server, "/customer/message");
@@ -214,5 +224,15 @@ requireText('Star safe link audit detail', server, 'Card setup link prepared');
 requireText('Star draft linked vehicle', createAiMessageDraft, 'vehicleId: messageFields.vehicleId');
 requireText('Star draft linked company', createAiMessageDraft, 'organizationId: messageFields.organizationId || MAIN_ORG_ID');
 requireText('Star approval keeps linked VIN', approveAiMessage, 'vin: draft.vin ||');
+
+const emailSentState = emailChannelReadiness({ messages: [{ id: 'email-out', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }] }, true);
+if (!emailSentState.emailOutboundVerified || emailSentState.emailInboundVerified) fail('Outbound email must be verified independently from inbound email.');
+const emailTwoWayState = emailChannelReadiness({ messages: [
+  { id: 'email-in', channel: 'Email', direction: 'Inbound', status: 'Received', createdAt: '2026-07-14T12:05:00.000Z' },
+  { id: 'email-out', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }
+] }, true);
+if (!emailTwoWayState.emailOutboundVerified || !emailTwoWayState.emailInboundVerified) fail('Two-way email readiness must require independent outbound and inbound proof.');
+const emailFailedState = emailChannelReadiness({ messages: [{ id: 'email-fail', channel: 'Email', direction: 'Outbound', status: 'Email failed', createdAt: '2026-07-14T12:10:00.000Z' }] }, true);
+if (emailFailedState.emailOutboundVerified) fail('A failed email must never be presented as verified outbound delivery.');
 
 console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, notification email, and channel UI are wired.');
