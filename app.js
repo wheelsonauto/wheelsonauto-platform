@@ -1811,8 +1811,8 @@ document.addEventListener('click',function(e){
   setTimeout(installMaintenanceVehicleSearch,0)
 },true);
 
-function PaymentsFocused(){
-  var selected=['Active','Today','History','Transactions'].indexOf(tab)>=0?tab:'Active',roster=recurringRoster();
+function PaymentsFocused(requestedTab){
+  var selected=['Active','Today','History','Transactions'].indexOf(requestedTab||tab)>=0?(requestedTab||tab):'Active',roster=recurringRoster();
   var tabs=fastWorkspaceTabs([['Active','Active'],['Today','Today'],['History','History'],['Transactions','Transactions']],selected,'payment-tabs');
   var actionBar='<div class="payment-action-bar"><div><strong>Payment actions</strong><small>Sync, restore an existing customer, or add autopay.</small></div><div class="actions"><button class="btn" data-action="sync-all">Sync</button><button class="btn" data-action="reactivate-customer">Existing customer</button><button class="btn primary" data-action="new-autopay">Add autopay</button></div></div>';
   var body=actionBar+tabs+'<div class="payments-main-flow">';
@@ -1831,7 +1831,12 @@ function PaymentsFocused(){
   }
   if(selected==='Transactions'){
     var transactions=recentPayments(db.payments||[],250);
-    body+=paymentCardSection('Transactions','Clover and manual payment history with matched customer names and file shortcuts.','Search transactions, customer, amount, status',transactions.map(function(p){return paymentTransactionCard(p,roster)}),'<button class="btn" data-action="sync-all">Sync</button><button class="btn" data-action="sync-payments">Payments only</button>')
+    body+=paymentCardSection('Transactions','Clover and manual payment history with matched customer names and file shortcuts.','Search transactions, customer, amount, status',transactions.map(function(p){
+      try{return paymentTransactionCard(p,roster)}
+      catch(err){
+        return '<div class="customer-pay-card transaction-card needs-match"><div class="customer-pay-top"><div><strong>Transaction needs review</strong><small>'+esc(p&&p.date||'Date not returned')+'</small></div><div class="customer-pay-meta"><span class="money">'+money(p&&p.amount||0)+'</span>'+badge('Display issue','warn')+'</div></div><div class="customer-car-line"><span>'+esc(p&&p.id||p&&p.cloverPaymentId||'Clover record')+'</span><span>Sync this payment to rebuild its customer match.</span></div><div class="actions"><button class="btn" data-action="sync-payments">Sync payments</button></div></div>'
+      }
+    }),'<button class="btn" data-action="sync-all">Sync</button><button class="btn" data-action="sync-payments">Payments only</button>')
   }
   body+='</div>';
   shell('Payments & Customers','Customers, autopay, charges, closeout, and transactions.',body,'<button class="btn" data-action="sync-all">Sync</button><button class="btn primary" data-action="new-autopay">Add autopay</button>')
@@ -2489,3 +2494,28 @@ function OrganizationsProviderReady(){
   shell('Companies','Company access, trusted provider identity, and franchise readiness without repeated panels.',body,'')
 }
 Organizations=OrganizationsProviderReady;
+
+// Payment tabs are a high-frequency money workflow. Handle them as one
+// authoritative navigation path so older progressive render layers cannot
+// repaint the previous payment panel after the click.
+document.addEventListener('click',function(e){
+  var button=e.target.closest('.payment-tabs button[data-tab]');
+  if(!button||view!=='Payments')return;
+  var requested=String(button.dataset.tab||'');
+  if(['Active','Today','History','Transactions'].indexOf(requested)<0)return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  tab=requested;
+  var started=renderClock(),previousMemo=__woaPerformanceRenderMemo;
+  __woaPerformanceRenderMemo={};
+  try{
+    PaymentsFocused(requested);
+    scrubRoleUi()
+  }finally{
+    __woaPerformanceRenderMemo=previousMemo;
+    var metric={view:view,tab:requested,ms:Math.round((renderClock()-started)*10)/10,at:new Date().toISOString()};
+    window.__woaLastRenderMetric=metric;
+    window.__woaRenderMetrics=(window.__woaRenderMetrics||[]).concat(metric).slice(-30);
+    if(document.documentElement&&document.documentElement.setAttribute)document.documentElement.setAttribute('data-woa-render-metric',JSON.stringify(metric))
+  }
+},true);

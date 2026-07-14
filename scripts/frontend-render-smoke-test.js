@@ -4,7 +4,10 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const appSource = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-const seed = JSON.parse(fs.readFileSync(path.join(root, 'seed.json'), 'utf8'));
+const fixturePath = process.env.WOA_SMOKE_DATA
+  ? path.resolve(root, process.env.WOA_SMOKE_DATA)
+  : path.join(root, 'seed.json');
+const seed = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
 
 function fail(message) {
   throw new Error(message);
@@ -202,6 +205,7 @@ function fakeButton(context, dataset) {
   button.closest = selector => {
     if (selector === 'button') return button;
     if (selector === 'button[data-action]') return button.dataset.action ? button : null;
+    if (selector === '.payment-tabs button[data-tab]') return button.dataset.tab ? button : null;
     if (selector === '.local-search') return searchShell;
     return null;
   };
@@ -366,6 +370,8 @@ async function ownerInteractionSmoke() {
   await dispatchClick(context, { tab: 'Transactions' });
   assert(context.view === 'Payments' && context.tab === 'Transactions', 'Payments data-tab click should switch to Transactions.');
   assertHealthy('Owner clicked Transactions tab', html(context), ['Transactions']);
+  assert(/<h2>Transactions<\/h2>/.test(html(context)), 'Payments Transactions click must render the Transactions panel.');
+  assert(!/<h2>Customer history<\/h2>/.test(html(context)), 'Payments Transactions click must replace the previous History panel.');
 
   await dispatchClick(context, { view: 'Operations', tab: 'Service' });
   assert(context.view === 'Operations' && context.tab === 'Service', 'Cross-view tab click should open Operations Service.');
