@@ -1656,6 +1656,28 @@ portalVerificationCommandBoard=function(){
 if(typeof __woaDashboardStarCommandBase==='function')Dashboard=__woaDashboardStarCommandBase;
 if(typeof __woaMessagesCommunicationBase==='function'){MessagesFast=__woaMessagesCommunicationBase;Messages=MessagesFast}
 if(typeof __woaReportsReadinessBase==='function'){ReportsFast=__woaReportsReadinessBase;Reports=ReportsFast}
+function usableVehicleLabel(value){
+  var text=String(value||'').trim(),numeric=text.replace(/[$,\s]/g,'');
+  if(!text||/^\d+(?:\.\d{1,2})?$/.test(numeric)||/^(none|n\/a|unknown|not linked|no vehicle|needs vehicle match)$/i.test(text))return'';
+  return text
+}
+enrichedVehicleForRecurring=function(r){
+  var vehicle=findVehicleByCustomer(r&&r.customer),saved=usableVehicleLabel(r&&r.vehicle)||usableVehicleLabel(r&&r.plan);
+  return vehicle?vehicleName(vehicle):(saved||'No vehicle linked')
+};
+paymentVehicleInfo=function(c,r,con,car){
+  var savedVehicle=usableVehicleLabel(c&&c.vehicle)||usableVehicleLabel(r&&r.vehicle)||usableVehicleLabel(con&&con.vehicle)||usableVehicleLabel(r&&r.plan),vehicle=car&&car.id?vehicleName(car):(savedVehicle||'No vehicle linked');
+  var plate=car&&car.plate||car&&car.stock||c&&c.licensePlate||r&&r.licensePlate||con&&con.licensePlate||'',temp=car&&car.tempTag||c&&c.tempTag||r&&r.tempTag||con&&con.tempTag||'',tracker=car&&car.tracker||c&&c.tracker||r&&r.tracker||con&&con.tracker||'',vin=car&&car.vin||c&&c.vin||r&&r.vin||con&&con.vin||'';
+  return{vehicle:vehicle,plate:plate,temp:temp,tracker:tracker,vin:vin,line:[plate?'Plate '+plate:'',temp?'Old temp '+temp:'',tracker?'Tracker '+tracker:''].filter(Boolean).join(' | ')||'No tag/tracker saved'}
+};
+var __woaApiProvidersSavedBase=apiProviders;
+apiProviders=function(){
+  var base=__woaApiProvidersSavedBase(),runtime=db.integrations&&db.integrations.apiProviderRuntime||[],byId={};
+  runtime.forEach(function(provider){byId[provider.id]=provider});
+  var merged=base.map(function(provider){return Object.assign({},provider,byId[provider.id]||{})});
+  runtime.forEach(function(provider){if(!merged.some(function(saved){return saved.id===provider.id}))merged.push(Object.assign({view:'Settings',notes:'Runtime provider readiness from the live server.'},provider))});
+  return merged
+};
 window.__woaBootReady=true;
 if(!renderQueued)queueRender();
 

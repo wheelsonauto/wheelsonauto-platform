@@ -415,6 +415,12 @@ assertIncludes('Recurring payment cards', paymentRecurringCard, [
   'recurringDateText',
   'cardActionButtons'
 ]);
+assertIncludes('Weak vehicle display guard', app, [
+  'function usableVehicleLabel',
+  "text.replace(/[$,\\s]/g,'')",
+  "saved||'No vehicle linked'",
+  'paymentVehicleInfo=function'
+]);
 
 const paymentCustomerCard = finalFunctionSlice(app, 'paymentCustomerCard');
 assertIncludes('Customer payment/history cards', paymentCustomerCard, [

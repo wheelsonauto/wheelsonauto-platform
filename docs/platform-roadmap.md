@@ -16,11 +16,14 @@ Current live release status:
 - Autopay readiness now recognizes a vehicle linked through the connected customer/fleet record, including safe name aliases, instead of reporting a false missing-vehicle gap.
 - Open inspections require customer, vehicle identity, and a due date; the checklist and mechanic sign-off are completion evidence and are no longer incorrectly required before work begins.
 - Alias-only readiness matching stays outside customer portal account matching, preserving strict customer login isolation.
+- Numeric payment amounts stored in legacy vehicle text are hidden across Dashboard, Payments, Closeout, Reports, and Messages until a real fleet vehicle is linked.
+- API Roadmap statuses now merge safe live server evidence: Clover Core requires successful customer/payment sync, Ecommerce requires a successful saved-card charge, and Clover webhooks require a received signed event.
+- Resend, Telnyx, and Star continue to use their real outbound/inbound, carrier, and OpenAI health evidence; keys alone never mark a provider connected.
 - Telnyx signed inbound messaging is connected. Outbound SMS still requires the Telnyx account upgrade, service address and payment verification, 10DLC approval, and a successful live send.
 - Resend outbound and inbound email delivery are connected for platform notifications and replies.
 - Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
-- Release asset version is `platform-20260714-final-40`.
+- Release asset version is `platform-20260714-final-41`.
 
 Release checks:
 

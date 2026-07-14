@@ -435,6 +435,9 @@ async function mechanicInteractionSmoke() {
 
 function ownerSmoke() {
   const context = makeContext({ name: 'Owner Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  context.db.integrations = context.db.integrations || {};
+  context.db.integrations.apiProviderRuntime = [{ id: 'clover-core', name: 'Clover Core', group: 'Money', status: 'Connected', lastTestAt: '2026-07-14T12:00:00.000Z', lastTestResult: 'Runtime sync proof passed.' }];
+  assert(context.apiProviders().find(row => row.id === 'clover-core').status === 'Connected', 'API Roadmap should use the live server provider status instead of the generic client default.');
   assert(context.isInventoryVehicle({ status: 'Ready', currentCustomer: '' }) === true, 'Ready unassigned cars should be available inventory.');
   assert(context.isInventoryVehicle({ status: 'Pending application', currentCustomer: '' }) === false, 'Pending-application cars must not appear in available fleet or autopay pickers.');
   assert(context.isInventoryVehicle({ status: 'Maintenance', currentCustomer: '' }) === false, 'Maintenance cars must not appear in available fleet or autopay pickers.');
@@ -442,6 +445,9 @@ function ownerSmoke() {
   assert(context.Operations === context.OperationsTruthFocused, 'Operations must use the final mutually exclusive fleet categorization.');
   assertHealthy('Operations prep/review truth split', renderView(context, 'Operations', 'Review'), ['Prep / review', 'Unassigned cars that need prep']);
   context.db.recurringPayments = context.db.recurringPayments || [];
+  const weakVehicleRow = { customer: 'Weak Vehicle Label Smoke', vehicle: '230', plan: '$230.00', amount: 230, status: 'Active' };
+  assert(context.enrichedVehicleForRecurring(weakVehicleRow) === 'No vehicle linked', 'A numeric payment amount must not render as a vehicle label on Dashboard, Payments, Reports, or Messages.');
+  assert(context.paymentVehicleInfo({}, weakVehicleRow, {}, {}).vehicle === 'No vehicle linked', 'Customer payment cards must replace numeric vehicle text with an honest unlinked label.');
   context.db.recurringPayments.unshift({
     id: 'smoke-removed-today',
     customer: 'Removed Today Smoke',

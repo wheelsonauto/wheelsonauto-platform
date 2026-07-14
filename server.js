@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-40">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-41">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -2702,7 +2702,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(7, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
   issue(7.5, 'vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.length ? (vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Fleet', 'Every active fleet car needs VIN, current tag/plate, and tracker so customers, service, claims, tolls, messages, and reports match the right car.');
   issue(7.75, 'daily_closeout_signoff', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.tone, 'Reports', 'Summary', 'Today has payment/work activity and needs owner signoff: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + '.');
-  issue(7.9, 'service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.length ? (serviceIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Service', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.');
+  issue(7.9, 'service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.length ? (serviceIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Service', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, and a due date before staff works the car. Checklist and mechanic sign-off are required when closing the job.');
   issue(7.95, 'claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.length ? (claimEvidenceGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Claims & Issues', '', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.');
   issue(7.98, 'company_scope', 'Company scope', companyScopeGaps.length, companyScopeGaps.length ? (companyScopeGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Companies', '', 'When more than one company/store exists, fleet, customers, payments, messages, service, claims, staff, and portal records must be scoped to a saved company before franchise/subscription use.');
   issue(7.99, 'ifleet_function_coverage', 'iFleet function coverage', ifleetCoverageGaps.length, ifleetCoverageGaps.length ? (ifleetCoverageGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Dashboard', '', 'Payments, customers, fleet, inspections, tolls, claims, documents, portal, roles, franchise, reports, messages, Star, and API layer must each have a real workflow and matching data before API work is final.');
@@ -5263,6 +5263,7 @@ function stateForUserRead(data, user) {
     safe.integrations.clover = safe.integrations.clover || {};
     safe.integrations.clover.webhookSecretConfigured = !!CLOVER_WEBHOOK_SECRET;
     safe.integrations.clover.webhookSecretStatus = CLOVER_WEBHOOK_SECRET ? 'Configured' : 'Needs shared secret';
+    safe.integrations.apiProviderRuntime = apiProviderRows(safe);
   }
   if (owner) return safe;
   const role = String(user && user.role || '').toLowerCase();
@@ -6026,7 +6027,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('document_expiration', 'Document expiration', documentExpirationReview.length, documentExpirationReview.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Insurance, background, license, registration, and proof documents are expired or due within 30 days and need renewal follow-up.', 'Documents'),
     truthCheck('vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Every active fleet car needs VIN, current tag/plate, and tracker before service, claims, tolls, messages, Star, and reports can be trusted.', 'Operations', 'Fleet'),
     truthCheck('daily_closeout_signoff', 'Daily closeout signoff', closeoutSignoffGap.needsSignoff ? 1 : 0, closeoutSignoffGap.tone === 'bad' ? 'critical' : 'warning', 'Today has payment/work activity and needs owner signoff before the day is trusted: expected ' + moneyText(closeoutSignoffGap.expected) + ', collected ' + moneyText(closeoutSignoffGap.collected) + ', still open ' + moneyText(closeoutSignoffGap.stillOpenAmount) + ', failed twice ' + closeoutSignoffGap.failedTwice + ', payment not found ' + closeoutSignoffGap.paymentNotFound + '.', 'Reports', 'Summary'),
-    truthCheck('service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, due date, and checklist context before staff works the car.', 'Operations', 'Service'),
+    truthCheck('service_identity', 'Service identity', serviceIdentityGaps.length, serviceIdentityGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open service, inspection, oil-change, and mechanic jobs need customer, vehicle, VIN/tag, tracker, and a due date before staff works the car. Checklist and mechanic sign-off are required when closing the job.', 'Operations', 'Service'),
     truthCheck('claim_evidence', 'Claim evidence', claimEvidenceGaps.length, claimEvidenceGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'Open claims, tolls, violations, disputes, and reimbursements need customer match, vehicle/VIN/tag, amount, proof/reference, and follow-up before charge, message, or dispute work.', 'Claims & Issues'),
     truthCheck('company_scope', 'Company scope', companyScopeGaps.length, companyScopeGaps.some(row => row.tone === 'bad') ? 'critical' : 'warning', 'When more than one company/store exists, fleet, customers, payments, messages, service, claims, staff, and portal records must be scoped to a saved company before franchise/subscription use.', 'Companies'),
     truthCheck('launch_readiness', 'Launch readiness', launchReadinessGaps.length, launchReadinessGaps.some(row => /payment|customer|fleet|defense|recovery/i.test(String(row.key || row.title || ''))) ? 'critical' : 'warning', 'Owner launch readiness must be clean across payments, customer/fleet truth, defense packets, recovery ledger, Messages/Star, API handoff, and role portals before provider/API work is treated as final.', 'Dashboard'),
@@ -6497,6 +6498,39 @@ function defaultApiProviderRows(data = {}) {
 }
 function apiProviderTruthOverrides(data = {}) {
   const status = publicMessagingStatus(data);
+  const clover = data.integrations && data.integrations.clover || {};
+  const recurring = allRecurringRows(data);
+  const newestEvidenceAt = values => values.map(value => String(value || '').trim()).filter(Boolean).sort((a, b) => {
+    const at = Date.parse(a), bt = Date.parse(b);
+    if (Number.isFinite(at) && Number.isFinite(bt)) return bt - at;
+    return b.localeCompare(a);
+  })[0] || '';
+  const cloverCoreReady = !!(CLOVER_TOKEN && CLOVER_MERCHANT_ID && clover.connected && clover.lastCustomerSyncAt && clover.lastPaymentSyncAt);
+  const cloverCoreAt = newestEvidenceAt([clover.lastCustomerSyncAt, clover.lastPaymentSyncAt, clover.lastRecurringPlanSyncAt]);
+  const cloverCoreResult = cloverCoreReady
+    ? 'Clover customers and payments synced successfully. ' + Number((clover.recurringPlanMembers || []).length) + ' recurring member record(s) are saved for reconciliation.'
+    : (CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Clover credentials are stored; successful customer and payment sync timestamps are still required.' : 'Clover Core credentials are not complete.');
+  const savedCardPayment = (data.payments || []).find(payment => /paid|succeed|complete/i.test(String(payment.status || '')) && /clover saved-card charge/i.test(String(payment.source || payment.method || '')));
+  const linkedSavedCards = recurring.filter(row => String(row.cloverPaymentSource || '').trim()).length;
+  const completedCardSetup = (data.cardSetupRequests || []).find(request => /complete|saved|linked/i.test(String(request.status || '')));
+  const ecommerceKeysReady = !!(CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
+  const ecommerceLive = !!(ecommerceKeysReady && savedCardPayment);
+  const ecommerceAt = newestEvidenceAt([
+    savedCardPayment && (savedCardPayment.createdAt || savedCardPayment.date),
+    completedCardSetup && (completedCardSetup.completedAt || completedCardSetup.updatedAt || completedCardSetup.createdAt),
+    ...recurring.map(row => row.lastManualChargeAt || row.cardSavedAt || '')
+  ]);
+  const ecommerceResult = ecommerceLive
+    ? 'WheelsonAuto completed a named Clover saved-card charge successfully; ' + linkedSavedCards + ' recurring customer(s) currently expose a saved payment source.'
+    : (ecommerceKeysReady
+      ? (linkedSavedCards || completedCardSetup ? linkedSavedCards + ' saved payment source(s) are linked; a successful controlled saved-card charge is still required.' : 'Ecommerce keys are stored; complete card setup and one controlled saved-card charge before marking this connected.')
+      : 'Clover Ecommerce public/private keys and merchant ID are not complete.');
+  const cloverWebhookEvents = Array.isArray(clover.webhookEvents) ? clover.webhookEvents : [];
+  const latestCloverWebhook = cloverWebhookEvents[0] || {};
+  const cloverWebhookLive = !!(CLOVER_WEBHOOK_SECRET && cloverWebhookEvents.length);
+  const cloverWebhookResult = cloverWebhookLive
+    ? cloverWebhookEvents.length + ' Clover webhook event(s) have been accepted by the signed callback route.'
+    : (CLOVER_WEBHOOK_SECRET ? 'Clover webhook secret is stored; a signed live Clover event is still required.' : 'Clover webhook shared secret is not configured.');
   const smsResult = status.smsDeliveryLive
     ? 'Carrier delivery verified.'
     : (status.carrierRegistrationRequired
@@ -6509,6 +6543,21 @@ function apiProviderTruthOverrides(data = {}) {
     ? 'OpenAI Responses API answered successfully and Star sanitized the result.'
     : (status.aiProviderIssue || status.aiLastProviderError || 'OpenAI provider setup and a successful controlled test are still required.');
   return {
+    'clover-core': {
+      status: cloverCoreReady ? 'Connected' : (CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Testing - sync proof needed' : 'Ready for credentials'),
+      lastTestAt: cloverCoreAt,
+      lastTestResult: cloverCoreResult
+    },
+    'clover-ecommerce': {
+      status: ecommerceLive ? 'Connected' : (ecommerceKeysReady ? (linkedSavedCards || completedCardSetup ? 'Testing - live charge needed' : 'Testing - keys ready') : 'Ready for credentials'),
+      lastTestAt: ecommerceAt,
+      lastTestResult: ecommerceResult
+    },
+    'clover-webhooks': {
+      status: cloverWebhookLive ? 'Connected' : (CLOVER_WEBHOOK_SECRET ? 'Testing - live event needed' : 'Ready for credentials'),
+      lastTestAt: latestCloverWebhook.receivedAt || latestCloverWebhook.createdAt || latestCloverWebhook.at || '',
+      lastTestResult: cloverWebhookResult
+    },
     'sms-phone': {
       status: status.smsDeliveryLive ? 'Connected' : (status.carrierRegistrationRequired ? 'Blocked - 10DLC approval' : (status.configured ? 'Testing - delivery pending' : 'Provider needed')),
       lastTestAt: status.deliveryLastCheckedAt || status.smsWebhookConfiguredAt || '',
@@ -10679,5 +10728,7 @@ module.exports = {
   syncTwilioInboundMessages,
   twilioSignatureForPayload,
   openAiReplyPlan,
-  starAiProviderHealthCheck
+  starAiProviderHealthCheck,
+  apiProviderRows,
+  apiProviderReviewRows
 };

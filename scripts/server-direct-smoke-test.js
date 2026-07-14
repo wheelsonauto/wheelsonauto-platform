@@ -120,6 +120,10 @@ async function main() {
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
   process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
+  process.env.CLOVER_ACCESS_TOKEN = 'direct-clover-token';
+  process.env.CLOVER_MERCHANT_ID = 'direct-clover-merchant';
+  process.env.CLOVER_ECOMMERCE_PUBLIC_KEY = 'direct-clover-public-key';
+  process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'direct-clover-private-key';
   process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
@@ -135,10 +139,23 @@ async function main() {
     rememberSmsBridgeThread,
     resolveOwnerSmsBridge,
     ownerSmsMirrorBody,
-    configureTwilioSmsWebhook
+    configureTwilioSmsWebhook,
+    apiProviderRows,
+    apiProviderReviewRows
   } = require('../server.js');
 
   try {
+    const providerEvidenceState = {
+      integrations: { clover: { connected: true, lastCustomerSyncAt: '2026-07-14T12:00:00.000Z', lastPaymentSyncAt: '2026-07-14T12:01:00.000Z', recurringPlanMembers: [{ id: 'direct-provider-recurring' }], webhookEvents: [{ id: 'direct-provider-webhook', receivedAt: '2026-07-14T12:03:00.000Z' }] } },
+      recurringPayments: [{ id: 'direct-provider-recurring', customer: 'Direct Provider Customer', cloverPaymentSource: 'direct-provider-source', lastManualChargeAt: '2026-07-14T12:02:00.000Z' }],
+      payments: [{ id: 'direct-provider-payment', customer: 'Direct Provider Customer', status: 'Paid', source: 'Clover saved-card charge', createdAt: '2026-07-14T12:02:00.000Z' }]
+    };
+    const providerEvidence = new Map(apiProviderRows(providerEvidenceState).map(row => [row.id, row]));
+    assert(providerEvidence.get('clover-core').status === 'Connected' && /customers and payments synced successfully/i.test(providerEvidence.get('clover-core').lastTestResult), 'Clover Core should be connected only when runtime customer/payment sync evidence exists.');
+    assert(providerEvidence.get('clover-ecommerce').status === 'Connected' && /saved-card charge successfully/i.test(providerEvidence.get('clover-ecommerce').lastTestResult), 'Clover Ecommerce should be connected only after a successful WheelsonAuto saved-card charge.');
+    assert(providerEvidence.get('clover-webhooks').status === 'Connected' && /webhook event/i.test(providerEvidence.get('clover-webhooks').lastTestResult), 'Clover webhooks should be connected only after a signed live event is recorded.');
+    const providerReviewIds = new Set(apiProviderReviewRows(providerEvidenceState).map(row => row.id));
+    assert(!providerReviewIds.has('clover-core') && !providerReviewIds.has('clover-ecommerce') && !providerReviewIds.has('clover-webhooks'), 'Evidence-backed Clover providers should not remain in the provider readiness warning count.');
     assert(smsScamAssessment('Send me your verification code using https://bit.ly/fake').suspicious, 'Credential and shortened-link SMS should be marked as a potential scam.');
     assert(!smsScamAssessment('Hi, can I bring the car in for an oil change Tuesday?').suspicious, 'Normal customer service SMS should not be marked as a scam.');
     assert(smsSensitiveActionAssessment('Charge the customer card and change autopay to Friday').sensitive, 'Owner phone money/account instructions should require app review.');
@@ -795,6 +812,7 @@ async function main() {
     const ownerRuntimeState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(ownerRuntimeState.json.integrations && ownerRuntimeState.json.integrations.messaging && ownerRuntimeState.json.integrations.messaging.webhookSecretConfigured === true, 'Owner state should expose safe messaging webhook readiness without exposing the secret.');
     assert(ownerRuntimeState.json.integrations.clover && ownerRuntimeState.json.integrations.clover.webhookSecretConfigured === true, 'Owner state should expose safe Clover webhook readiness without exposing the secret.');
+    assert(Array.isArray(ownerRuntimeState.json.integrations.apiProviderRuntime) && ownerRuntimeState.json.integrations.apiProviderRuntime.some(row => row.id === 'clover-core' && row.lastTestResult), 'Owner state should expose runtime-derived provider evidence without exposing provider secrets.');
     const portalHealth = ownerHealth.json.issues.find(row => row.key === 'customer_portal_access');
     assert(portalHealth && Number(portalHealth.count) > 0 && /login-ready/i.test(portalHealth.detail || ''), 'Owner system health should flag active customers whose portal record is not login ready.');
     const ownerReadiness = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
