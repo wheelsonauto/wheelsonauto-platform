@@ -426,12 +426,13 @@ function ownerSmoke() {
     id: 'smoke-removed-today',
     customer: 'Removed Today Smoke',
     amount: 987654,
-    nextRun: context.todayKey(),
+    nextRun: 'Removed',
     lastAutoChargeAttemptDate: context.todayKey(),
     retryCount: 2,
-    status: 'Removed'
+    status: 'Active'
   });
   assert(context.dueOrTouchedToday(context.db.recurringPayments[0]) === false, 'Removed recurring customers must not qualify for Today even after a same-day failed attempt.');
+  assert(context.isCurrentAutopayRow(context.db.recurringPayments[0]) === false && context.paymentState(context.db.recurringPayments[0]).key === 'history', 'Legacy removed markers in the schedule field must classify the customer as history, not active or failed.');
   assert(!renderView(context, 'Dashboard', 'Board', 'Dues').includes('Removed Today Smoke'), 'Dashboard Today dues must exclude removed recurring customers.');
   assert(!renderView(context, 'Payments', 'Today').includes('Removed Today Smoke'), 'Payments Today action list must exclude removed recurring customers.');
   assert(renderView(context, 'Payments', 'History').includes('Removed Today Smoke'), 'Removed recurring customers must remain visible in customer history.');

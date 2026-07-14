@@ -1456,10 +1456,10 @@ async function main() {
       customer: 'Direct Closeout Removed',
       amount: 987654,
       frequency: 'Weekly',
-      nextRun: '2099-12-31',
+      nextRun: 'Removed',
       lastAutoChargeAttemptDate: '2099-12-31',
       retryCount: 2,
-      status: 'Removed'
+      status: 'Active'
     }, {
       id: 'rec-direct-report-candidate',
       customer: 'Direct Report Candidate',

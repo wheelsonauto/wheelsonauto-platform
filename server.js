@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-32">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260714-final-33">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -1818,11 +1818,18 @@ function closeoutPaymentCustomerName(data, payment = {}, recurringRows = allRecu
   }
   return recurring && recurring.customer ? recurring.customer : 'Unmatched payment';
 }
+function recurringLifecycleText(row = {}) {
+  return String([
+    row.status, row.stage, row.nextRun, row.adminNextRun, row.nextBillingDate,
+    row.nextPaymentDate, row.nextRunDate, row.autopayManagedBy,
+    row.removedAt ? 'removed' : '', row.returnedAt ? 'returned' : '', row.endedAt ? 'ended' : ''
+  ].filter(Boolean).join(' ')).toLowerCase();
+}
 function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
-  const text = String([row.status, row.tone, row.lastAutoChargeResult, row.lastAutoChargeError].filter(Boolean).join(' ')).toLowerCase();
+  const text = String([recurringLifecycleText(row), row.tone, row.lastAutoChargeResult, row.lastAutoChargeError].filter(Boolean).join(' ')).toLowerCase();
   const failedAttempts = Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0));
-  if (String(row.lastAutoChargeDate || '') === dateKeyValue) return 'Paid';
   if (text.includes('removed') || text.includes('history') || text.includes('returned')) return 'History / removed';
+  if (String(row.lastAutoChargeDate || '') === dateKeyValue) return 'Paid';
   if (text.includes('not found')) return 'Payment not found';
   if (failedAttempts >= 2 || text.includes('2x') || text.includes('contact')) return 'Failed twice';
   if (failedAttempts === 1 || text.includes('1x') || text.includes('retry')) return 'Failed once';
@@ -1832,8 +1839,7 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   return 'Pending today';
 }
 function recurringEligibleForToday(row = {}) {
-  const status = String([row.status, row.stage].filter(Boolean).join(' ')).toLowerCase();
-  return !/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|archived)/.test(status);
+  return !/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|archived)/.test(recurringLifecycleText(row));
 }
 function recurringDueOrTouchedToday(row = {}, dateKeyValue = localDateKey()) {
   if (!recurringEligibleForToday(row)) return false;
