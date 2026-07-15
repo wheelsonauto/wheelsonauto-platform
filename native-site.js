@@ -63,7 +63,7 @@ function baseHead({ title, description, canonical, image, jsonLd, noIndex = fals
     '<meta property="og:description" content="' + safeDescription + '"><meta property="og:url" content="' + esc(canonical) + '">' +
     '<meta property="og:image" content="' + esc(image || HERO_URL) + '">' +
     '<link rel="icon" href="' + LOGO_URL + '"><link rel="apple-touch-icon" href="' + LOGO_URL + '">' +
-    '<link rel="stylesheet" href="/native-site.css?v=native-2-compact-hero">' +
+    '<link rel="stylesheet" href="/native-site.css?v=native-3-mobile-hero">' +
     (jsonLd ? '<script type="application/ld+json">' + JSON.stringify(jsonLd).replace(/</g, '\\u003c') + '</script>' : '');
 }
 
