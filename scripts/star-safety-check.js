@@ -95,7 +95,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
 
 [
   'OPENAI_BASE_URL',
-  "'gpt-5.5'",
+  "'gpt-5.4-nano'",
   'WOA_AI_REASONING_EFFORT',
   'WOA_AI_TIMEOUT_MS',
   'parseStarAiJson',
@@ -216,7 +216,7 @@ if (!aiRules || !sanitize || !openAiPlan || !safeLinks || !aiDraft || !aiFindCon
   'aiLastProviderError',
   'star-openai-setup-card',
   'OPENAI_API_KEY or WOA_OPENAI_API_KEY',
-  'Default model: gpt-5.5',
+  'Default model: gpt-5.4-nano',
   'Test does not send texts, charge cards, or change accounts'
 ].forEach(text => requireText('Star provider UI safety', app + starReadiness, text));
 

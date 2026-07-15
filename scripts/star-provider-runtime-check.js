@@ -1,7 +1,7 @@
 const assert = require('node:assert');
 
 process.env.OPENAI_API_KEY = 'test-openai-key';
-process.env.WOA_AI_MODEL = 'gpt-5.5';
+process.env.WOA_AI_MODEL = 'gpt-5.4-nano';
 process.env.WOA_AI_TIMEOUT_MS = '5000';
 
 const { openAiReplyPlan, openAiProviderReadiness } = require('../server');
