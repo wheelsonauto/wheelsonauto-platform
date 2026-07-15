@@ -1,5 +1,6 @@
 const assert = require('assert');
 const { mapShopifyCatalogProducts, shopifyProductVin } = require('../server');
+const nativeSite = require('../native-site');
 
 function product(id, title, vin, image, price = '229.00') {
   return {
@@ -8,7 +9,7 @@ function product(id, title, vin, image, price = '229.00') {
     handle: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     body_html: '<p>Clean vehicle</p><p>VIN#' + vin + '</p>',
     image: { src: image },
-    images: [{ src: image }],
+    images: [{ src: image }, { src: image.replace(/\.jpg$/, '-interior.jpg') }, { src: image.replace(/\.jpg$/, '-rear.jpg') }],
     variants: [{ available: true, price }]
   };
 }
@@ -55,6 +56,13 @@ assert.strictEqual(report.rows.find(row => row.sourceProductId === 'a').platform
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'b').platformVehicleId, 'fleet-b', 'The second duplicate-title car should link to its own VIN.');
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'a').imageUrl, '/native-media/custom.jpg', 'A locally edited image should be preserved.');
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'b').imageUrl, 'https://cdn.shopify.com/b.jpg', 'New imports should use the Shopify CDN directly without blocking image downloads.');
+assert.deepStrictEqual(report.rows.find(row => row.sourceProductId === 'b').imageUrls, ['https://cdn.shopify.com/b.jpg', 'https://cdn.shopify.com/b-interior.jpg', 'https://cdn.shopify.com/b-rear.jpg'], 'Every Shopify product photo should be retained in source order.');
+assert.deepStrictEqual(report.rows.find(row => row.sourceProductId === 'a').imageUrls, ['/native-media/custom.jpg', 'https://cdn.shopify.com/a-new.jpg', 'https://cdn.shopify.com/a-new-interior.jpg', 'https://cdn.shopify.com/a-new-rear.jpg'], 'A custom cover should stay first while retaining the complete Shopify gallery.');
+const galleryHtml = nativeSite.vehicleHtml({ publicSite: {} }, report.rows.find(row => row.sourceProductId === 'b'), 'https://wheelsonauto.com');
+assert.strictEqual((galleryHtml.match(/data-gallery-slide=/g) || []).length, 3, 'The public vehicle page should render every imported photo as a swipeable slide.');
+assert.strictEqual((galleryHtml.match(/data-gallery-thumb=/g) || []).length, 3, 'The public vehicle page should render a thumbnail for every imported photo.');
+assert(galleryHtml.includes('1</b> / 3 photos'), 'The public vehicle page should show a clear gallery photo count.');
+assert(galleryHtml.includes('native-4-vehicle-gallery'), 'Gallery CSS and JavaScript should use a fresh cache version.');
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'a').weeklyPayment, 250, 'Existing per-car pricing should be preserved.');
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'a').downPayment, 0, 'A deliberately waived down payment should stay zero.');
 assert(report.onlineVehicles.some(row => row.id === 'native-manual'), 'Native/manual inventory must never be removed by Shopify import.');

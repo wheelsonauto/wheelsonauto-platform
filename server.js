@@ -5975,6 +5975,9 @@ function cleanOnlineVehiclePayload(payload = {}, existing = null) {
   const title = onboarding.text(payload.title || payload.name || existing && existing.title || '', 160);
   const id = String(payload.id || existing && existing.id || ('online-' + crypto.randomBytes(8).toString('hex'))).trim();
   const linkedVehicle = onboarding.text(payload.platformVehicleId || existing && existing.platformVehicleId || '', 120);
+  const primaryImage = onboarding.text(payload.imageUrl || existing && existing.imageUrl || '', 1200);
+  const suppliedImages = Array.isArray(payload.imageUrls) ? payload.imageUrls : existing && Array.isArray(existing.imageUrls) ? existing.imageUrls : [];
+  const imageUrls = Array.from(new Set([primaryImage].concat(suppliedImages.map(value => onboarding.text(value, 1200))).filter(Boolean)));
   return {
     id,
     title: title || 'Online vehicle',
@@ -5993,7 +5996,8 @@ function cleanOnlineVehiclePayload(payload = {}, existing = null) {
     dailyMileageAllowance: Math.max(0, Number(payload.dailyMileageAllowance === undefined ? existing && existing.dailyMileageAllowance : payload.dailyMileageAllowance) || 0),
     excessMileageRate: Math.max(0, Number(payload.excessMileageRate === undefined ? existing && existing.excessMileageRate : payload.excessMileageRate) || 0),
     contractMonths: nativeSite.CONTRACT_MONTHS,
-    imageUrl: onboarding.text(payload.imageUrl || existing && existing.imageUrl || '', 1200),
+    imageUrl: primaryImage,
+    imageUrls,
     sourceImageUrl: onboarding.text(payload.sourceImageUrl || existing && existing.sourceImageUrl || '', 1200),
     description: onboarding.text(payload.description || existing && existing.description || '', 3000),
     availability: onboarding.text(payload.availability || existing && existing.availability || 'Available', 60),
@@ -6109,8 +6113,10 @@ function mapShopifyCatalogProducts(data, products = []) {
       || (productTitleCounts.get(normKey(title)) === 1 && titleMatches.length === 1 ? titleMatches[0] : null);
     const variant = (product.variants || []).find(item => item.available !== false) || (product.variants || [])[0] || {};
     const imageSource = product.image && product.image.src || product.images && product.images[0] && product.images[0].src || '';
+    const imageSources = Array.from(new Set([imageSource].concat((product.images || []).map(image => image && image.src || '')).filter(Boolean)));
     const keepCustomImage = old && old.imageUrl && (/^\/native-media\//.test(old.imageUrl) || old.sourceImageUrl && old.imageUrl !== old.sourceImageUrl);
     const imageUrl = keepCustomImage ? old.imageUrl : imageSource || old && old.imageUrl || '';
+    const imageUrls = Array.from(new Set((keepCustomImage ? [old.imageUrl] : []).concat(imageSources).filter(Boolean)));
     const parts = title.match(/^((?:19|20)\d{2})\s+([^\s]+)\s+(.+)$/i) || [];
     const productVin = shopifyProductVin(product);
     const linkedByVin = productVin ? fleetByVin.get(productVin) : null;
@@ -6152,6 +6158,7 @@ function mapShopifyCatalogProducts(data, products = []) {
       dailyMileageAllowance: old && old.dailyMileageAllowance || linked.dailyMileageAllowance || 100,
       excessMileageRate: old && old.excessMileageRate || linked.excessMileageRate || 0,
       imageUrl,
+      imageUrls,
       sourceImageUrl: imageSource,
       description: old && old.description || description,
       availability: (product.variants || []).some(item => item.available !== false) ? 'Available' : 'Unavailable',
@@ -6461,6 +6468,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
       title: nativeSite.vehicleTitle(vehicle),
       slug: nativeSite.publicVehicleSlug(vehicle),
       imageUrl: vehicle.imageUrl || vehicle.photoUrl || '',
+      imageUrls: Array.isArray(vehicle.imageUrls) ? vehicle.imageUrls : [],
       weeklyPayment: Number(vehicle.weeklyPayment || 0),
       downPayment: Number(vehicle.downPayment || 0),
       availability: vehicle.availability || 'Available',

@@ -26,6 +26,12 @@ function publicVehicleSlug(vehicle = {}) {
   return vehicle.slug || vehicle.handle || slug(vehicleTitle(vehicle)) + '-' + String(vehicle.id || '').slice(-6);
 }
 
+function vehicleImages(vehicle = {}) {
+  const saved = Array.isArray(vehicle.imageUrls) ? vehicle.imageUrls : [];
+  const images = Array.from(new Set([vehicle.imageUrl, ...saved, vehicle.photoUrl].map(value => String(value || '').trim()).filter(Boolean)));
+  return images.length ? images : [HERO_URL];
+}
+
 function publishedVehicles(data = {}) {
   return (data.onlineVehicles || []).filter(vehicle => vehicle && vehicle.published === true && !/unavailable|removed|rented/i.test(String(vehicle.availability || vehicle.status || 'Available')));
 }
@@ -63,7 +69,7 @@ function baseHead({ title, description, canonical, image, jsonLd, noIndex = fals
     '<meta property="og:description" content="' + safeDescription + '"><meta property="og:url" content="' + esc(canonical) + '">' +
     '<meta property="og:image" content="' + esc(image || HERO_URL) + '">' +
     '<link rel="icon" href="' + LOGO_URL + '"><link rel="apple-touch-icon" href="' + LOGO_URL + '">' +
-    '<link rel="stylesheet" href="/native-site.css?v=native-3-mobile-hero">' +
+    '<link rel="stylesheet" href="/native-site.css?v=native-4-vehicle-gallery">' +
     (jsonLd ? '<script type="application/ld+json">' + JSON.stringify(jsonLd).replace(/</g, '\\u003c') + '</script>' : '');
 }
 
@@ -84,12 +90,12 @@ function footer(settings, homePath = '/') {
 
 function layout({ title, description, canonical, active, body, settings, image, jsonLd, pageClass = '', homePath = '/', noIndex = false }) {
   return '<!doctype html><html lang="en"><head>' + baseHead({ title, description, canonical, image, jsonLd, noIndex }) + '</head><body class="native-site ' + esc(pageClass) + '">' +
-    header(active, homePath) + '<main>' + body + '</main>' + footer(settings, homePath) + '<script src="/native-site-client.js?v=native-2-customer-login" defer></script></body></html>';
+    header(active, homePath) + '<main>' + body + '</main>' + footer(settings, homePath) + '<script src="/native-site-client.js?v=native-4-vehicle-gallery" defer></script></body></html>';
 }
 
 function vehicleCard(vehicle, compact = false) {
   const down = Number(vehicle.downPayment || 0);
-  const image = vehicle.imageUrl || vehicle.photoUrl || HERO_URL;
+  const image = vehicleImages(vehicle)[0];
   const href = '/vehicles/' + encodeURIComponent(publicVehicleSlug(vehicle));
   return '<article class="vehicle-card' + (compact ? ' compact' : '') + '"><a class="vehicle-photo" href="' + href + '"><img src="' + esc(image) + '" alt="' + esc(vehicleTitle(vehicle)) + '" loading="lazy"><span>' + esc(vehicle.availability || 'Available') + '</span></a>' +
     '<div class="vehicle-copy"><div><h3><a href="' + href + '">' + esc(vehicleTitle(vehicle)) + '</a></h3><p>' + esc([vehicle.color, vehicle.mileage ? Number(vehicle.mileage).toLocaleString() + ' miles' : '', vehicle.transmission].filter(Boolean).join(' · ') || 'Available for application') + '</p></div>' +
@@ -127,9 +133,13 @@ function vehicleHtml(data, vehicle, baseUrl, options = {}) {
   const settings = publicSettings(data);
   const title = vehicleTitle(vehicle);
   const down = Number(vehicle.downPayment || 0);
-  const image = vehicle.imageUrl || vehicle.photoUrl || HERO_URL;
-  const body = '<section class="vehicle-detail"><div class="vehicle-detail-media"><img src="' + esc(image) + '" alt="' + esc(title) + '"><span>' + esc(vehicle.availability || 'Available') + '</span></div><div class="vehicle-detail-copy"><a class="back-link" href="/inventory">← Inventory</a><h1>' + esc(title) + '</h1><p class="vehicle-subtitle">' + esc([vehicle.color, vehicle.mileage ? Number(vehicle.mileage).toLocaleString() + ' miles' : '', vehicle.transmission].filter(Boolean).join(' · ') || 'WheelsonAuto long-term rental') + '</p><div class="price-panel"><div><span>Weekly payment</span><strong>' + money(vehicle.weeklyPayment) + '</strong></div><div><span>Nonrefundable down payment</span><strong>' + (down ? money(down) : '$0') + '</strong></div></div><div class="detail-list"><span>Customer must maintain full-coverage insurance</span><span>Minimum rental commitment: 30 days</span><span>Optional purchase eligibility after ' + esc(settings.contractMonths) + ' consecutive months in good standing</span><span>Pickup must be scheduled within seven days after onboarding</span></div><a class="button primary large full" href="/apply/' + encodeURIComponent(publicVehicleSlug(vehicle)) + '">Apply for this vehicle</a><p class="detail-disclaimer">Submitting an application does not guarantee approval or hold the vehicle. Pricing and vehicle terms are locked only when your agreement is created.</p></div></section>';
-  return layout({ title, description: 'Apply for the ' + title + ' through WheelsonAuto.', canonical: baseUrl + '/vehicles/' + publicVehicleSlug(vehicle), active: 'inventory', body, settings, image, pageClass: 'vehicle-view', jsonLd: { '@context': 'https://schema.org', '@type': 'Product', name: title, image: [image], offers: { '@type': 'Offer', priceCurrency: 'USD', price: Number(vehicle.weeklyPayment || 0), availability: 'https://schema.org/InStock', url: baseUrl + '/vehicles/' + publicVehicleSlug(vehicle) } }, homePath: options.homePath || '/', noIndex: !!options.noIndex });
+  const images = vehicleImages(vehicle);
+  const image = images[0];
+  const slides = images.map((source, index) => '<figure data-gallery-slide="' + index + '"><img src="' + esc(source) + '" alt="' + esc(title + ' photo ' + (index + 1)) + '" ' + (index ? 'loading="lazy"' : '') + '></figure>').join('');
+  const thumbnails = images.map((source, index) => '<button type="button" class="' + (index === 0 ? 'active' : '') + '" data-gallery-thumb="' + index + '" aria-label="Show photo ' + (index + 1) + '"><img src="' + esc(source) + '" alt="" loading="lazy"></button>').join('');
+  const gallery = '<div class="vehicle-detail-media vehicle-gallery" data-vehicle-gallery><div class="vehicle-gallery-track" data-gallery-track>' + slides + '</div><span>' + esc(vehicle.availability || 'Available') + '</span>' + (images.length > 1 ? '<div class="vehicle-gallery-toolbar"><small><b data-gallery-position>1</b> / ' + images.length + ' photos</small><div><button type="button" data-gallery-previous aria-label="Previous photo">‹</button><button type="button" data-gallery-next aria-label="Next photo">›</button></div></div><div class="vehicle-gallery-thumbs">' + thumbnails + '</div>' : '') + '</div>';
+  const body = '<section class="vehicle-detail">' + gallery + '<div class="vehicle-detail-copy"><a class="back-link" href="/inventory">← Inventory</a><h1>' + esc(title) + '</h1><p class="vehicle-subtitle">' + esc([vehicle.color, vehicle.mileage ? Number(vehicle.mileage).toLocaleString() + ' miles' : '', vehicle.transmission].filter(Boolean).join(' · ') || 'WheelsonAuto long-term rental') + '</p><div class="price-panel"><div><span>Weekly payment</span><strong>' + money(vehicle.weeklyPayment) + '</strong></div><div><span>Nonrefundable down payment</span><strong>' + (down ? money(down) : '$0') + '</strong></div></div><div class="detail-list"><span>Customer must maintain full-coverage insurance</span><span>Minimum rental commitment: 30 days</span><span>Optional purchase eligibility after ' + esc(settings.contractMonths) + ' consecutive months in good standing</span><span>Pickup must be scheduled within seven days after onboarding</span></div><a class="button primary large full" href="/apply/' + encodeURIComponent(publicVehicleSlug(vehicle)) + '">Apply for this vehicle</a><p class="detail-disclaimer">Submitting an application does not guarantee approval or hold the vehicle. Pricing and vehicle terms are locked only when your agreement is created.</p></div></section>';
+  return layout({ title, description: 'Apply for the ' + title + ' through WheelsonAuto.', canonical: baseUrl + '/vehicles/' + publicVehicleSlug(vehicle), active: 'inventory', body, settings, image, pageClass: 'vehicle-view', jsonLd: { '@context': 'https://schema.org', '@type': 'Product', name: title, image: images, offers: { '@type': 'Offer', priceCurrency: 'USD', price: Number(vehicle.weeklyPayment || 0), availability: 'https://schema.org/InStock', url: baseUrl + '/vehicles/' + publicVehicleSlug(vehicle) } }, homePath: options.homePath || '/', noIndex: !!options.noIndex });
 }
 
 function applicationHtml(data, vehicle, baseUrl, options = {}) {
@@ -224,6 +234,7 @@ module.exports = {
   money,
   vehicleTitle,
   publicVehicleSlug,
+  vehicleImages,
   publishedVehicles,
   publicSettings,
   layout,
