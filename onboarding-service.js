@@ -317,7 +317,13 @@ function validatePickupTime(value) {
 
 function createPendingCustomerAccount(data, application, links = {}) {
   ensureCollections(data);
-  let account = data.customerAccounts.find(item => item.applicationId === application.id || String(item.email || '').toLowerCase() === String(application.email || '').toLowerCase());
+  const applicationEmail = String(application.email || '').trim().toLowerCase();
+  const applicationPhone = String(application.phone || '').replace(/\D/g, '').slice(-10);
+  let account = data.customerAccounts.find(item => {
+    if (item.applicationId === application.id) return true;
+    if (applicationEmail && String(item.email || '').trim().toLowerCase() === applicationEmail) return true;
+    return !!(applicationPhone && String(item.phone || item.username || '').replace(/\D/g, '').slice(-10) === applicationPhone);
+  });
   const base = {
     customer: application.name,
     name: application.name,

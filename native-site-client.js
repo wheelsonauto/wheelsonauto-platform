@@ -71,7 +71,7 @@
       delete payload.confirmPassword;
       try{
         var result = await request('/api/public/applications', payload);
-        applicationForm.innerHTML = '<div class="form-title"><span>Application received</span><h2>Thank you, ' + String(payload.firstName || '').replace(/[<>]/g,'') + '.</h2><p>Your application for ' + String(result.application && result.application.vehicle || 'this vehicle').replace(/[<>]/g,'') + ' is now in staff review. No payment has been charged. WheelsonAuto will send your secure onboarding link after approval.</p></div><a class="button primary wide" href="/customer/login">Customer login</a>';
+        applicationForm.innerHTML = '<div class="form-title"><span>Application received</span><h2>Thank you, ' + String(payload.firstName || '').replace(/[<>]/g,'') + '.</h2><p>Your application for ' + String(result.application && result.application.vehicle || 'this vehicle').replace(/[<>]/g,'') + ' is now in staff review. No payment has been charged. Your customer portal is ready now using the same email or phone number and password. WheelsonAuto will send your secure onboarding link after approval.</p></div><a class="button primary wide" href="' + String(result.loginUrl || '/customer/login').replace(/[<>\"]/g,'') + '">Open customer portal</a>';
         window.scrollTo({top:applicationForm.offsetTop - 90, behavior:'smooth'});
       }catch(error){ message(error.message, true); }
     });

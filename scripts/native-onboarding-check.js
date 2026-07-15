@@ -163,8 +163,25 @@ async function main() {
     const applicationId = applicationResponse.json.application.id;
     let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedApplication = saved.applications.find(row => row.id === applicationId);
-    assert(savedApplication && /^pbkdf2\$/.test(savedApplication.pendingPasswordHash || ''), 'Customer password should be PBKDF2-hashed while the application is pending.');
+    const pendingCustomerAccount = saved.customerAccounts.find(row => row.applicationId === applicationId);
+    assert(savedApplication && pendingCustomerAccount && /^pbkdf2\$/.test(pendingCustomerAccount.passwordHash || '') && !savedApplication.pendingPasswordHash, 'A successful application should immediately create a PBKDF2-backed customer portal login without duplicating password secrets.');
     assert(!JSON.stringify(saved).includes('NativeTest123'), 'Plaintext customer password must never be persisted.');
+    const customerEmailLogin = await request(server, 'POST', '/customer/login', { form: { username: applicationPayload.email, password: applicationPayload.password } });
+    assert(customerEmailLogin.status === 302 && String(customerEmailLogin.cookie).includes('woa_customer_session='), 'New applicant should be able to log in immediately with email and the application password.');
+    const customerPhoneLogin = await request(server, 'POST', '/customer/login', { form: { username: '(856) 555-0107', password: applicationPayload.password } });
+    assert(customerPhoneLogin.status === 302 && String(customerPhoneLogin.cookie).includes('woa_customer_session='), 'New applicant should be able to log in with a formatted application phone number.');
+    const customerPortal = await request(server, 'GET', '/customer', { cookie: String(customerEmailLogin.cookie).split(';')[0] });
+    assert(customerPortal.status === 200 && /New - staff review/.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text), 'Pending applicant portal should show the application status and selected vehicle.');
+
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    saved.applications.unshift({
+      id: 'app-legacy-pending-login', organizationId: 'org-wheelsonauto', name: 'Legacy Applicant', phone: '8565550199', email: 'legacy.applicant@example.com', onlineVehicleId: 'online-native-1', vehicleId: 'veh-native-1', vehicle: '2016 Ford Focus', status: 'New - staff review', stage: 'New', pendingPasswordHash: pendingCustomerAccount.passwordHash, pendingPasswordSalt: pendingCustomerAccount.passwordSalt, pendingPasswordUpdatedAt: pendingCustomerAccount.passwordUpdatedAt
+    });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const legacyCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: '856-555-0199', password: applicationPayload.password } });
+    assert(legacyCustomerLogin.status === 302 && String(legacyCustomerLogin.cookie).includes('woa_customer_session='), 'Applications saved before immediate portal activation should self-repair on the first correct login.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    assert(saved.customerAccounts.some(row => row.applicationId === 'app-legacy-pending-login') && !saved.applications.find(row => row.id === 'app-legacy-pending-login').pendingPasswordHash, 'Legacy pending login migration should move the password hash into one customer account and remove the application copy.');
 
     const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
     assert(login.status === 302 && String(login.cookie).includes('woa_session='), 'Owner login should provide a signed staff session.');
