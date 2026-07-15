@@ -816,6 +816,38 @@ async function main() {
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const tollSeedRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const tollSeedState = JSON.parse(JSON.stringify(tollSeedRead.json));
+    tollSeedState.vehicles = tollSeedState.vehicles || [];
+    tollSeedState.customers = tollSeedState.customers || [];
+    tollSeedState.contracts = tollSeedState.contracts || [];
+    tollSeedState.vehicles.unshift({ id: 'direct-toll-vehicle', organizationId: 'org-wheelsonauto', year: '2019', make: 'Test', model: 'Toll Car', vin: 'DIRECTTOLLVIN0001', plate: 'DIRECTTOLL', currentCustomer: 'Direct Toll Customer', status: 'Rented' });
+    tollSeedState.customers.unshift({ id: 'direct-toll-customer', organizationId: 'org-wheelsonauto', name: 'Direct Toll Customer', phone: '3135550145', email: 'direct-toll@example.com', vehicleId: 'direct-toll-vehicle', vehicle: '2019 Test Toll Car', vin: 'DIRECTTOLLVIN0001', licensePlate: 'DIRECTTOLL' });
+    tollSeedState.contracts.unshift({ id: 'direct-toll-contract', organizationId: 'org-wheelsonauto', customer: 'Direct Toll Customer', vehicleId: 'direct-toll-vehicle', vehicle: '2019 Test Toll Car', startDate: '2026-01-01', status: 'Active' });
+    const tollSeedWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: tollSeedState });
+    assert(tollSeedWrite.status === 200 && tollSeedWrite.json.ok, 'Owner could not seed toll-import matching records.');
+    const directTollCsv = [
+      'POSTING DATE,TRANSACTION DATE,TAG/PLATE NUMBER,AGENCY,DESCRIPTION,ENTRY TIME,ENTRY PLAZA,ENTRY LANE,EXIT TIME,EXIT PLAZA,EXIT LANE,VEHICLE TYPE CODE,AMOUNT,PREPAID,PLAN/RATE,FARE TYPE,BALANCE',
+      '07/15/2026,07/15/2026,-,NJ E-ZPass,Prepaid Payment,,-,-,17:52:48,-,-,-,$100.00,Y,-,-,$999.99',
+      '07/15/2026,07/13/2026,DIRECTTOLL-NJ,DRPA,TOLL,,-,-,22:40:02,WWB,10W,2,($6.00),Y,BUSINESS,N,$899.99'
+    ].join('\n');
+    const managerTollImport = await request(server, 'POST', '/api/tolls/import', { cookie: managerCookie, json: { preview: true, raw: directTollCsv } });
+    assert(managerTollImport.status === 403, 'Manager must not import toll statements or approve customer recovery money.');
+    const mechanicTollImport = await request(server, 'POST', '/api/tolls/import', { cookie: mechanicCookie, json: { preview: true, raw: directTollCsv } });
+    assert(mechanicTollImport.status === 403, 'Mechanic must not import toll statements.');
+    const tollPreview = await request(server, 'POST', '/api/tolls/import', { cookie: ownerCookie, json: { preview: true, raw: directTollCsv } });
+    assert(tollPreview.status === 200 && tollPreview.json.summary.importable === 1 && tollPreview.json.summary.accountActivity === 1, 'Owner toll preview should match the customer toll and skip account funding.');
+    assert(tollPreview.json.preview.find(row => row.valid).transactionDate === '2026-07-13' && tollPreview.json.preview.find(row => row.valid).postingDate === '2026-07-15', 'Toll API preview must keep transaction and posting dates separate.');
+    const tollImport = await request(server, 'POST', '/api/tolls/import', { cookie: ownerCookie, json: { raw: directTollCsv } });
+    assert(tollImport.status === 200 && tollImport.json.result.importable === 1 && tollImport.json.result.matched === 1, 'Owner toll import should create one matched recovery claim.');
+    const duplicateTollImport = await request(server, 'POST', '/api/tolls/import', { cookie: ownerCookie, json: { raw: directTollCsv } });
+    assert(duplicateTollImport.status === 200 && duplicateTollImport.json.result.importable === 0 && duplicateTollImport.json.result.duplicates === 1, 'Re-importing the same E-ZPass row must not create a duplicate claim.');
+    const tollImportedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const directTollClaim = (tollImportedState.json.claims || []).find(row => row.customer === 'Direct Toll Customer' && row.source === 'E-ZPass CSV import');
+    assert(directTollClaim && directTollClaim.receiptUrl && directTollClaim.transactionDate === '2026-07-13', 'Imported toll should retain the matched customer and private receipt URL.');
+    const publicTollReceipt = await request(server, 'GET', new URL(directTollClaim.receiptUrl).pathname);
+    assert(publicTollReceipt.status === 200 && publicTollReceipt.text.includes('Direct Toll Customer') && publicTollReceipt.text.includes('2026-07-13') && publicTollReceipt.text.includes('2026-07-15'), 'Private toll receipt should show customer, transaction date, and posting date.');
+    assert(!publicTollReceipt.text.includes('$899.99') && !publicTollReceipt.text.includes('$999.99'), 'Customer toll receipt must not expose the private E-ZPass account balance.');
     const ownerReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Messages / communications') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, communication, Star QA, and audit sections.');

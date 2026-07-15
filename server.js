@@ -63,7 +63,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-messages-47">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-tolls-49">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -5593,8 +5593,29 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
     source: row.source || 'WheelsonAuto',
     notes: row.requiresVerification ? 'Reported by customer; office verification required.' : 'Payment record linked to this customer.'
   }));
+  const tollReceipts = (scopedData.claims || []).filter(row => {
+    return isTollViolationClaim(row) && row.customerVisible === true && row.receiptUrl && customerPortalRecordMatches(row, identity, 'claim');
+  }).map(row => stripPrivateCustomerFields({
+    id: 'toll-receipt-' + row.id,
+    kind: 'Receipt',
+    type: 'E-ZPass toll proof',
+    title: 'E-ZPass toll reimbursement proof',
+    customer: row.customer || '',
+    vehicle: row.vehicle || '',
+    vehicleId: row.vehicleId || '',
+    vin: row.vin || '',
+    licensePlate: row.plate || row.licensePlate || '',
+    amount: row.amount || 0,
+    method: row.agency || row.provider || 'E-ZPass',
+    status: row.receiptStatus || row.status || 'Sent',
+    date: row.transactionDate || row.incidentDate || row.createdAt || '',
+    source: 'WheelsonAuto toll receipt',
+    url: row.receiptUrl,
+    reference: row.reference || row.externalId || '',
+    notes: 'Transaction proof matched to this vehicle and customer on the toll transaction date.'
+  }));
   const seen = new Set();
-  return visibleDocs.concat(receipts).filter(row => {
+  return visibleDocs.concat(receipts, tollReceipts).filter(row => {
     const key = String(row.id || row.kind + row.type + row.date + row.amount);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -5972,6 +5993,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
+    route('POST', '/api/tolls/import', 'Preview or import E-ZPass/toll statement rows with matching and duplicate protection'),
+    route('GET', '/toll-receipt/:token', 'Private-token customer E-ZPass reimbursement proof'),
+    route('POST', '/api/tolls/receipt/send', 'Owner-approved E-ZPass reimbursement proof delivery'),
     route('GET', '/api/reports/deep.csv', 'Role-scoped deep CSV export'),
     route('GET', '/api/system/health', 'Role-scoped Star/system health snapshot'),
     route('POST', '/api/system/launch-readiness/tasks', 'Launch readiness Dispatch task sync'),
@@ -6455,6 +6479,528 @@ function isTollViolationClaim(claim = {}) {
 function tollViolationRecoveryRows(data = {}) {
   return (data.claims || []).filter(claim => isTollViolationClaim(claim) && !/paid|closed/i.test(String(claim.status || 'Open')));
 }
+function tollImportHeader(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+function tollImportCells(line, delimiter) {
+  const cells = [];
+  let value = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (char === delimiter && !quoted) {
+      cells.push(value.trim());
+      value = '';
+    } else {
+      value += char;
+    }
+  }
+  cells.push(value.trim());
+  return cells;
+}
+function parseTollImportRows(payload = {}) {
+  if (Array.isArray(payload.rows)) return payload.rows.filter(row => row && typeof row === 'object').slice(0, 2000);
+  const raw = String(payload.raw || payload.text || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter(row => row && typeof row === 'object').slice(0, 2000);
+    } catch (err) {
+      // Continue with delimited parsing so the user gets row-level feedback.
+    }
+  }
+  const lines = raw.split(/\r?\n/).filter(line => String(line || '').trim()).slice(0, 2001);
+  if (!lines.length) return [];
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  const first = tollImportCells(lines[0], delimiter);
+  const hasHeader = first.some(value => /plate|tag|customer|amount|date|notice|ticket|agency|source|vehicle|vin|location/i.test(value));
+  const headers = hasHeader
+    ? first.map(tollImportHeader)
+    : ['plate', 'date', 'amount', 'reference', 'provider', 'customer', 'notes'];
+  return lines.slice(hasHeader ? 1 : 0).map(line => {
+    const cells = tollImportCells(line, delimiter);
+    return headers.reduce((row, header, index) => {
+      row[header || ('column' + index)] = cells[index] || '';
+      return row;
+    }, {});
+  }).filter(row => Object.values(row).some(value => String(value || '').trim()));
+}
+function tollImportValue(row, names) {
+  for (const name of names) {
+    const wanted = tollImportHeader(name);
+    const directKey = Object.prototype.hasOwnProperty.call(row, wanted) ? wanted : Object.keys(row).find(key => tollImportHeader(key) === wanted);
+    const value = directKey ? row[directKey] : undefined;
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
+function tollImportMoney(value) {
+  const amount = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(amount) ? Math.round(Math.abs(amount) * 100) / 100 : 0;
+}
+function tollImportDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return localDateKey();
+  const iso = raw.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (iso) return iso[1];
+  const us = raw.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\b/);
+  if (us) {
+    const year = us[3].length === 2 ? Number('20' + us[3]) : Number(us[3]);
+    const date = new Date(year, Number(us[1]) - 1, Number(us[2]), 12, 0, 0);
+    if (!Number.isNaN(date.getTime())) return localDateKey(date);
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? localDateKey() : localDateKey(parsed);
+}
+function tollTagKey(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+function tollTagKeys(value) {
+  const key = tollTagKey(value);
+  if (!key) return [];
+  const withoutState = key.replace(/(NJ|PA|NY|DE|MD|VA|CT|MA|RI|DC)$/i, '');
+  return Array.from(new Set([key, withoutState].filter(Boolean)));
+}
+function tollVehicleTags(vehicle = {}) {
+  const list = [
+    vehicle.plate,
+    vehicle.licensePlate,
+    vehicle.stock,
+    vehicle.tempTag,
+    vehicle.oldTempTag,
+    vehicle.currentTag,
+    vehicle.currentPlate
+  ];
+  ['oldTempTags', 'previousPlates', 'plateHistory', 'tempTags'].forEach(key => {
+    if (Array.isArray(vehicle[key])) list.push(...vehicle[key]);
+  });
+  return Array.from(new Set(list.flatMap(tollTagKeys).filter(Boolean)));
+}
+function tollVehicleLabel(vehicle = {}) {
+  return [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(' ') || vehicle.name || 'Vehicle';
+}
+function tollCustomerProfile(data, name) {
+  const key = normKey(name);
+  if (!key) return {};
+  return (data.customers || []).find(row => normKey(row.name || row.customer) === key) ||
+    (data.contracts || []).find(row => normKey(row.customer || row.name) === key) ||
+    allRecurringRows(data).find(row => normKey(row.customer || row.name) === key) || {};
+}
+function tollImportTransactionDate(row = {}) {
+  return tollImportDate(tollImportValue(row, ['transactiondate', 'tolldate', 'violationdate', 'incidentdate', 'date']));
+}
+function tollImportPostingDate(row = {}) {
+  const posted = tollImportValue(row, ['postingdate', 'posteddate', 'postdate']);
+  return posted ? tollImportDate(posted) : tollImportTransactionDate(row);
+}
+function tollImportEvidence(row = {}) {
+  const postingDate = tollImportPostingDate(row);
+  const transactionDate = tollImportTransactionDate(row);
+  return {
+    postingDate,
+    transactionDate,
+    tagPlateNumber: tollImportValue(row, ['tagplatenumber', 'plate', 'tag', 'licenseplate', 'currenttag', 'currentplate']),
+    agency: tollImportValue(row, ['agency', 'provider', 'source', 'authority']) || 'E-ZPass',
+    description: tollImportValue(row, ['description', 'transactiontype', 'type']) || 'TOLL',
+    entryTime: tollImportValue(row, ['entrytime']),
+    entryPlaza: tollImportValue(row, ['entryplaza']),
+    entryLane: tollImportValue(row, ['entrylane']),
+    exitTime: tollImportValue(row, ['exittime', 'transactiontime', 'time']),
+    exitPlaza: tollImportValue(row, ['exitplaza', 'plaza', 'location', 'facility', 'road']),
+    exitLane: tollImportValue(row, ['exitlane', 'lane']),
+    vehicleTypeCode: tollImportValue(row, ['vehicletypecode', 'vehicleclass', 'class']),
+    amountText: tollImportValue(row, ['amount', 'toll', 'fee', 'total', 'charge']),
+    prepaid: tollImportValue(row, ['prepaid']),
+    planRate: tollImportValue(row, ['planrate', 'plan', 'rate']),
+    fareType: tollImportValue(row, ['faretype'])
+  };
+}
+function tollEvidenceHash(evidence = {}) {
+  const parts = [
+    evidence.postingDate,
+    evidence.transactionDate,
+    tollTagKey(evidence.tagPlateNumber),
+    normKey(evidence.agency),
+    normKey(evidence.description),
+    evidence.entryTime,
+    normKey(evidence.entryPlaza),
+    tollTagKey(evidence.entryLane),
+    evidence.exitTime,
+    normKey(evidence.exitPlaza),
+    tollTagKey(evidence.exitLane),
+    tollTagKey(evidence.vehicleTypeCode),
+    Number(tollImportMoney(evidence.amountText)).toFixed(2),
+    normKey(evidence.planRate),
+    normKey(evidence.fareType)
+  ];
+  return crypto.createHash('sha256').update(parts.join('|')).digest('hex');
+}
+function tollImportChargeKind(row = {}, evidence = tollImportEvidence(row)) {
+  const description = String(evidence.description || '').trim();
+  const tag = tollTagKey(evidence.tagPlateNumber);
+  const amountText = String(evidence.amountText || '').trim();
+  const funding = /prepaid payment|payment|replenish|deposit|account credit|refund/i.test(description) && !/toll|parking|violation|ticket/i.test(description);
+  const customerCharge = !!tag && tag !== 'NA' && tag !== 'NONE' && !funding && (/toll|parking|violation|ticket/i.test(description) || /^\s*\(|^\s*-/.test(amountText));
+  return { customerCharge, funding, description };
+}
+function tollImportMatch(data, row = {}) {
+  const plateKeys = tollTagKeys(tollImportValue(row, ['tagplatenumber', 'plate', 'tag', 'licenseplate', 'currenttag', 'currentplate']));
+  const vin = tollTagKey(tollImportValue(row, ['vin', 'vehicleidentificationnumber']));
+  const vehicleText = normKey(tollImportValue(row, ['vehicle', 'car', 'unit', 'vehiclelabel']));
+  const importedCustomer = tollImportValue(row, ['customer', 'name', 'driver', 'renter']);
+  const vehicles = data.vehicles || [];
+  let candidates = plateKeys.length ? vehicles.filter(vehicle => tollVehicleTags(vehicle).some(tag => plateKeys.includes(tag))) : [];
+  let matchSource = candidates.length ? 'Exact plate / tag' : '';
+  if (!candidates.length && plateKeys.length) {
+    const savedMappings = ((((data.integrations || {}).tolls || {}).tagMappings) || data.tollTagMappings || []).filter(mapping => {
+      return tollTagKeys(mapping.tag || mapping.plate || mapping.tagPlateNumber).some(tag => plateKeys.includes(tag));
+    });
+    const mappedVehicleIds = Array.from(new Set(savedMappings.map(mapping => mapping.vehicleId).filter(Boolean)));
+    candidates = mappedVehicleIds.map(vehicleId => vehicles.find(vehicle => vehicle.id === vehicleId)).filter(Boolean);
+    if (candidates.length) matchSource = 'Saved E-ZPass tag mapping';
+  }
+  if (!candidates.length && vin) {
+    candidates = vehicles.filter(vehicle => tollTagKey(vehicle.vin) === vin);
+    if (candidates.length) matchSource = 'Exact VIN';
+  }
+  if (!candidates.length && vehicleText) {
+    candidates = vehicles.filter(vehicle => {
+      const label = normKey(tollVehicleLabel(vehicle));
+      return label === vehicleText || label.includes(vehicleText);
+    });
+    if (candidates.length) matchSource = 'Vehicle description';
+  }
+  if (!candidates.length && importedCustomer) {
+    const key = normKey(importedCustomer);
+    candidates = vehicles.filter(vehicle => normKey(vehicle.currentCustomer) === key);
+    if (candidates.length) matchSource = 'Imported customer';
+  }
+  const incidentDate = tollImportTransactionDate(row);
+  const contractMatchesVehicleOnDate = (contract, vehicle) => {
+    const linked = contract.vehicleId === vehicle.id || contract.returnedVehicleId === vehicle.id ||
+      normKey(contract.vehicle || contract.returnedVehicle) === normKey(tollVehicleLabel(vehicle));
+    if (!linked) return false;
+    const startRaw = contract.startDate || contract.start || contract.createdAt || '';
+    const start = startRaw ? tollImportDate(startRaw) : '';
+    const endRaw = contract.endDate || contract.endedAt || contract.returnedAt || '';
+    const end = endRaw ? tollImportDate(endRaw) : '';
+    return (!start || start <= incidentDate) && (!end || end >= incidentDate);
+  };
+  const candidateContractMatches = candidates.flatMap(vehicle => (data.contracts || []).filter(contract => contractMatchesVehicleOnDate(contract, vehicle)).map(contract => ({ vehicle, contract })));
+  let uniqueVehicle = candidates.length === 1 ? candidates[0] : null;
+  const datedVehicleIds = Array.from(new Set(candidateContractMatches.map(item => item.vehicle.id).filter(Boolean)));
+  if (!uniqueVehicle && datedVehicleIds.length === 1) {
+    uniqueVehicle = candidates.find(vehicle => vehicle.id === datedVehicleIds[0]) || null;
+    matchSource = 'Unique vehicle/customer assignment on toll date';
+  }
+  if (!uniqueVehicle && candidates.length > 1) {
+    const activeVehicles = candidates.filter(vehicle => vehicle.currentCustomer && !/removed|returned|history|archived|ended/i.test(String(vehicle.status || '')));
+    if (activeVehicles.length === 1) {
+      uniqueVehicle = activeVehicles[0];
+      matchSource = 'Unique active vehicle for tag';
+    }
+  }
+  const datedContracts = uniqueVehicle ? (data.contracts || []).filter(contract => contractMatchesVehicleOnDate(contract, uniqueVehicle)) : [];
+  const datedCustomerNames = Array.from(new Set(datedContracts.map(contract => contract.customer || contract.name || '').filter(Boolean).map(normKey)));
+  const datedCustomer = datedCustomerNames.length === 1 ? ((datedContracts.find(contract => normKey(contract.customer || contract.name) === datedCustomerNames[0]) || {}).customer || (datedContracts.find(contract => normKey(contract.customer || contract.name) === datedCustomerNames[0]) || {}).name || '') : '';
+  if (datedCustomer) matchSource = 'Customer assigned on toll date';
+  let customer = importedCustomer;
+  if (customer) {
+    const profile = tollCustomerProfile(data, customer);
+    customer = profile.name || profile.customer || customer;
+  }
+  if (!customer && datedCustomer) customer = datedCustomer;
+  if (!customer && uniqueVehicle && uniqueVehicle.currentCustomer) customer = uniqueVehicle.currentCustomer;
+  if (!customer && uniqueVehicle) {
+    const linked = (data.contracts || []).filter(row => row.vehicleId === uniqueVehicle.id && !/removed|returned|history|archived|ended/i.test(String(row.status || 'Active')));
+    if (linked.length === 1) customer = linked[0].customer || linked[0].name || '';
+  }
+  const profile = tollCustomerProfile(data, customer);
+  const matchCandidates = candidates.slice(0, 5).map(vehicle => ({
+    customer: vehicle.currentCustomer || '',
+    vehicleId: vehicle.id || '',
+    vehicle: tollVehicleLabel(vehicle),
+    vin: vehicle.vin || '',
+    plate: vehicle.plate || vehicle.licensePlate || vehicle.stock || '',
+    tracker: vehicle.tracker || '',
+    source: matchSource
+  }));
+  const expectedCustomer = datedCustomer || uniqueVehicle && uniqueVehicle.currentCustomer || '';
+  const ambiguous = (!uniqueVehicle && candidates.length > 1) || datedCustomerNames.length > 1 || (!!importedCustomer && !!expectedCustomer && normKey(importedCustomer) !== normKey(expectedCustomer));
+  return {
+    vehicle: ambiguous ? null : uniqueVehicle,
+    customer: ambiguous ? '' : customer,
+    profile: ambiguous ? {} : profile,
+    candidates: matchCandidates,
+    ambiguous,
+    source: ambiguous ? 'Ambiguous vehicle/customer match' : (customer ? (matchSource || 'Imported customer') : 'No exact customer match')
+  };
+}
+function tollImportFingerprint(record = {}) {
+  if (record.statementRowHash) return 'toll-v2|' + record.statementRowHash;
+  if (record.tollEvidence && Object.keys(record.tollEvidence).length) return 'toll-v2|' + tollEvidenceHash(record.tollEvidence);
+  return 'toll-v1|' + [
+    normKey(record.provider || record.agency || record.source),
+    tollTagKey(record.reference || record.externalId || record.caseId),
+    tollTagKey(record.plate || record.licensePlate),
+    tollTagKey(record.vin),
+    tollImportDate(record.transactionDate || record.incidentDate || record.date || record.createdAt),
+    Number(record.amount || 0).toFixed(2)
+  ].join('|');
+}
+function prepareTollImport(data, payload = {}, user = {}) {
+  const rows = parseTollImportRows(payload);
+  const existing = new Set();
+  (data.claims || []).filter(isTollViolationClaim).forEach(claim => {
+    if (claim.importFingerprint) existing.add(claim.importFingerprint);
+    existing.add(tollImportFingerprint(claim));
+  });
+  const seen = new Set();
+  const now = new Date().toISOString();
+  const organizationId = userOrganizationId(user);
+  const prepared = rows.map((row, index) => {
+    const match = tollImportMatch(data, row);
+    const vehicle = match.vehicle || {};
+    const profile = match.profile || {};
+    const evidence = tollImportEvidence(row);
+    const chargeKind = tollImportChargeKind(row, evidence);
+    const plate = evidence.tagPlateNumber || vehicle.plate || vehicle.licensePlate || vehicle.stock || profile.licensePlate || profile.plate || '';
+    const reference = tollImportValue(row, ['reference', 'ref', 'notice', 'noticeid', 'ticket', 'ticketid', 'violation', 'externalid', 'transactionid']);
+    const provider = evidence.agency || 'E-ZPass';
+    const amount = tollImportMoney(evidence.amountText);
+    const incidentDate = evidence.transactionDate;
+    const postingDate = evidence.postingDate;
+    const location = [evidence.entryPlaza && ('Entry ' + evidence.entryPlaza), evidence.exitPlaza && ('Exit ' + evidence.exitPlaza)].filter(Boolean).join(' to ') || tollImportValue(row, ['location', 'plaza', 'facility', 'road']);
+    const notes = tollImportValue(row, ['notes', 'note', 'details']) || 'Imported from an E-ZPass posted-date transaction report.';
+    const proofUrl = tollImportValue(row, ['proof', 'proofurl', 'evidence', 'document', 'url']);
+    const statementRowHash = tollEvidenceHash(evidence);
+    const receiptToken = crypto.randomBytes(24).toString('hex');
+    const receiptUrl = PUBLIC_BASE_URL + '/toll-receipt/' + receiptToken;
+    const generatedReference = 'EZP-' + statementRowHash.slice(0, 12).toUpperCase();
+    const claim = {
+      id: 'claim-toll-' + Date.now() + '-' + index + '-' + crypto.randomBytes(2).toString('hex'),
+      organizationId,
+      customer: match.customer || '',
+      phone: profile.phone || '',
+      email: profile.email || '',
+      vehicle: vehicle.id ? tollVehicleLabel(vehicle) : tollImportValue(row, ['vehicle', 'car', 'unit']),
+      vehicleId: vehicle.id || profile.vehicleId || '',
+      vin: vehicle.vin || profile.vin || tollImportValue(row, ['vin']) || '',
+      plate,
+      licensePlate: plate,
+      tracker: vehicle.tracker || profile.tracker || '',
+      reference: reference || generatedReference,
+      type: /ticket|violation/i.test([provider, reference, evidence.description, notes].join(' ')) ? 'Ticket / violation' : 'Toll',
+      source: 'E-ZPass CSV import',
+      provider,
+      agency: provider,
+      externalId: reference || generatedReference,
+      caseId: reference || generatedReference,
+      amount,
+      paidAmount: 0,
+      balance: amount,
+      status: 'Open',
+      recoveryStatus: 'Open',
+      responsibility: 'Customer',
+      incidentDate,
+      transactionDate: incidentDate,
+      postingDate,
+      postedMonth: String(postingDate || '').slice(0, 7),
+      location,
+      nextFollowUp: localDateKey(),
+      customerMatchStatus: match.customer ? 'Matched from toll import' : 'Needs payment/customer match',
+      customerMatchSource: match.source,
+      matchCandidates: match.candidates,
+      proofUrl: proofUrl || receiptUrl,
+      evidence: proofUrl || receiptUrl,
+      receiptToken,
+      receiptUrl,
+      receiptStatus: 'Ready for admin review',
+      receiptApproved: false,
+      customerVisible: false,
+      portalVisible: false,
+      statementRowHash,
+      tollEvidence: evidence,
+      notes,
+      importedAt: now,
+      createdAt: now,
+      updatedAt: now
+    };
+    claim.importFingerprint = tollImportFingerprint(claim);
+    const errors = [];
+    if (!chargeKind.customerCharge) errors.push(chargeKind.funding ? 'Account payment/funding row skipped' : 'Non-toll account activity skipped');
+    if (!amount) errors.push('Valid amount required');
+    if (!reference && !plate && !claim.vin && !claim.customer) errors.push('Reference, plate, VIN, or customer required');
+    const duplicate = existing.has(claim.importFingerprint) || seen.has(claim.importFingerprint);
+    seen.add(claim.importFingerprint);
+    return { row: index + 1, claim, duplicate, valid: !errors.length, errors };
+  });
+  return {
+    rows: prepared,
+    summary: {
+      received: prepared.length,
+      importable: prepared.filter(item => item.valid && !item.duplicate).length,
+      matched: prepared.filter(item => item.valid && !item.duplicate && item.claim.customer).length,
+      unmatched: prepared.filter(item => item.valid && !item.duplicate && !item.claim.customer).length,
+      duplicates: prepared.filter(item => item.duplicate).length,
+      invalid: prepared.filter(item => !item.valid).length,
+      accountActivity: prepared.filter(item => item.errors.includes('Account payment/funding row skipped')).length
+    }
+  };
+}
+async function importTollRows(data, payload = {}, user = {}) {
+  const preview = prepareTollImport(data, payload, user);
+  const imported = preview.rows.filter(item => item.valid && !item.duplicate).map(item => item.claim);
+  data.claims = Array.isArray(data.claims) ? data.claims : [];
+  imported.slice().reverse().forEach(claim => data.claims.unshift(claim));
+  if (imported.length) {
+    appendAuditLog(data, user, 'Toll / violation statement imported', [
+      imported.length + ' imported',
+      preview.summary.matched + ' matched',
+      preview.summary.unmatched + ' need review',
+      preview.summary.duplicates + ' duplicates skipped',
+      preview.summary.invalid + ' invalid skipped'
+    ]);
+  }
+  return { ...preview.summary, claims: imported };
+}
+function tollReceiptText(claim = {}) {
+  const evidence = claim.tollEvidence || {};
+  const amount = moneyText(claim.amount || tollImportMoney(evidence.amountText));
+  const entry = [evidence.entryTime, evidence.entryPlaza, evidence.entryLane && ('Lane ' + evidence.entryLane)].filter(Boolean).join(' | ');
+  const exit = [evidence.exitTime, evidence.exitPlaza, evidence.exitLane && ('Lane ' + evidence.exitLane)].filter(Boolean).join(' | ');
+  return [
+    'WheelsonAuto E-ZPass toll reimbursement proof',
+    'Customer: ' + (claim.customer || 'Customer match required'),
+    'Vehicle: ' + ([claim.vehicle, claim.vin && ('VIN ' + claim.vin), (claim.plate || claim.licensePlate) && ('Tag/plate ' + (claim.plate || claim.licensePlate))].filter(Boolean).join(' | ') || 'Vehicle match required'),
+    'Transaction date: ' + (claim.transactionDate || claim.incidentDate || evidence.transactionDate || 'Not provided'),
+    'Posted date: ' + (claim.postingDate || evidence.postingDate || 'Not provided'),
+    'Agency: ' + (claim.agency || claim.provider || evidence.agency || 'E-ZPass'),
+    entry ? 'Entry: ' + entry : '',
+    exit ? 'Exit: ' + exit : '',
+    'Amount: ' + amount,
+    'Reference: ' + (claim.reference || claim.externalId || 'Not provided'),
+    'Receipt: ' + (claim.receiptUrl || claim.proofUrl || ''),
+    '',
+    'This reimbursement proof was generated by WheelsonAuto from the imported E-ZPass transaction statement. Sensitive E-ZPass account balance information is not included.'
+  ].filter(value => value !== '').join('\n');
+}
+function tollReceiptHtml(claim = {}) {
+  const evidence = claim.tollEvidence || {};
+  const customer = claim.customer || 'Customer match required';
+  const plate = claim.plate || claim.licensePlate || evidence.tagPlateNumber || 'Not provided';
+  const vehicle = claim.vehicle || 'Vehicle match required';
+  const transactionDate = claim.transactionDate || claim.incidentDate || evidence.transactionDate || 'Not provided';
+  const postingDate = claim.postingDate || evidence.postingDate || 'Not provided';
+  const agency = claim.agency || claim.provider || evidence.agency || 'E-ZPass';
+  const entry = [evidence.entryTime, evidence.entryPlaza, evidence.entryLane && ('Lane ' + evidence.entryLane)].filter(Boolean).join(' | ') || 'Not recorded';
+  const exit = [evidence.exitTime, evidence.exitPlaza, evidence.exitLane && ('Lane ' + evidence.exitLane)].filter(Boolean).join(' | ') || 'Not recorded';
+  const status = claim.status || 'Open';
+  const reference = claim.reference || claim.externalId || 'Not provided';
+  const amount = moneyText(claim.amount || tollImportMoney(evidence.amountText));
+  const row = (label, value) => '<div class="receipt-row"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value || 'Not provided') + '</strong></div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto toll reimbursement proof</title><style>:root{color-scheme:dark;--bg:#0b0b0c;--panel:#151517;--line:#3a3221;--gold:#d6ad5c;--muted:#aaa49a;--text:#f7f3ea;--good:#70d49b}*{box-sizing:border-box}body{margin:0;background:#080809;color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}.wrap{width:min(760px,calc(100% - 28px));margin:32px auto}.brand{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand b{font-size:22px;color:var(--gold)}.brand span{color:var(--muted);font-size:12px;text-transform:uppercase}.receipt{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.35)}.hero{padding:28px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.hero h1{font-size:25px;line-height:1.2;margin:4px 0 8px}.eyebrow{color:var(--gold);font-weight:800;text-transform:uppercase;font-size:11px}.amount{text-align:right}.amount span{display:block;color:var(--muted);font-size:12px}.amount strong{font-size:30px;color:var(--gold)}.grid{padding:8px 28px 24px}.receipt-row{display:grid;grid-template-columns:160px 1fr;gap:18px;padding:12px 0;border-bottom:1px solid rgba(214,173,92,.12)}.receipt-row span{color:var(--muted)}.receipt-row strong{text-align:right;overflow-wrap:anywhere}.proof{margin:0;padding:20px 28px;background:#111112;color:var(--muted);font-size:12px}.actions{display:flex;justify-content:flex-end;margin-top:16px}.actions button{border:1px solid var(--gold);background:var(--gold);color:#13100a;border-radius:7px;padding:12px 18px;font-weight:800;cursor:pointer}@media(max-width:560px){.wrap{margin:14px auto}.hero{padding:20px;display:block}.amount{text-align:left;margin-top:18px}.grid{padding:6px 20px 20px}.receipt-row{grid-template-columns:1fr;gap:3px}.receipt-row strong{text-align:left}.brand{align-items:flex-start}}@media print{body{background:#fff;color:#111}.wrap{width:100%;margin:0}.receipt{box-shadow:none;background:#fff;border-color:#bbb}.proof{background:#f5f5f5;color:#333}.actions{display:none}.brand b,.eyebrow,.amount strong{color:#8a651d}.receipt-row span{color:#555}}</style></head><body><main class="wrap"><header class="brand"><b>WheelsonAuto</b><span>Customer reimbursement record</span></header><article class="receipt"><section class="hero"><div><div class="eyebrow">E-ZPass transaction proof</div><h1>Toll reimbursement receipt</h1><div>' + escapeHtml(customer) + '</div></div><div class="amount"><span>Amount to reimburse</span><strong>' + escapeHtml(amount) + '</strong></div></section><section class="grid">' + row('Status', status) + row('Transaction date', transactionDate) + row('Posted date', postingDate) + row('Tag / plate', plate) + row('Vehicle', vehicle) + row('VIN', claim.vin || 'Not provided') + row('Agency', agency) + row('Description', evidence.description || claim.type || 'TOLL') + row('Entry', entry) + row('Exit', exit) + row('Vehicle type code', evidence.vehicleTypeCode || 'Not provided') + row('Plan / rate', evidence.planRate || 'Not provided') + row('Fare type', evidence.fareType || 'Not provided') + row('Reference', reference) + '</section><p class="proof">Generated by WheelsonAuto from the imported E-ZPass NJ transaction report. The transaction fields above are preserved from the source row. The private E-ZPass account number and account balance are intentionally excluded.</p></article><div class="actions"><button type="button" onclick="window.print()">Print receipt</button></div></main></body></html>';
+}
+async function sendTollReceipt(data, claim, channel, user) {
+  const selectedChannel = String(channel || (claim.email ? 'Email' : 'SMS')).toLowerCase() === 'sms' ? 'SMS' : 'Email';
+  const to = selectedChannel === 'Email' ? String(claim.email || '').trim() : String(claim.phone || '').trim();
+  if (!claim.customer || weakClaimCustomer(claim.customer)) throw new Error('Match the exact customer before sending toll proof.');
+  if (!Number(claim.amount || 0)) throw new Error('Add the exact toll amount before sending proof.');
+  if (!to) throw new Error('Add the customer ' + (selectedChannel === 'Email' ? 'email' : 'phone number') + ' before sending.');
+  const settings = messageSettings(data);
+  const body = tollReceiptText(claim);
+  let result;
+  try {
+    result = selectedChannel === 'Email'
+      ? await sendProviderEmail(to, 'WheelsonAuto E-ZPass toll reimbursement proof', body, { customer: claim.customer, messagingSettings: settings })
+      : await sendProviderSms(to, body, { customer: claim.customer, messagingSettings: settings });
+  } catch (err) {
+    result = { sent: false, status: selectedChannel + ' draft', provider: selectedChannel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER, message: String(err && err.message || err) };
+  }
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const now = new Date().toISOString();
+  const record = {
+    id: 'msg-toll-receipt-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
+    externalId: result.externalId || '',
+    date: new Date().toLocaleString('en-US'),
+    createdAt: now,
+    customer: claim.customer,
+    customerId: claim.customerId || '',
+    contractId: claim.contractId || '',
+    vehicleId: claim.vehicleId || '',
+    vehicle: claim.vehicle || '',
+    vin: claim.vin || '',
+    licensePlate: claim.plate || claim.licensePlate || '',
+    tracker: claim.tracker || '',
+    phone: claim.phone || '',
+    email: claim.email || '',
+    to,
+    direction: 'Outbound',
+    channel: selectedChannel,
+    template: 'E-ZPass toll reimbursement proof',
+    subject: 'WheelsonAuto E-ZPass toll reimbursement proof',
+    status: result.sent ? (result.status || 'Sent') : (result.status || selectedChannel + ' draft'),
+    tone: result.sent ? 'good' : 'warn',
+    body,
+    provider: result.provider || '',
+    source: 'WheelsonAuto toll receipt',
+    claimId: claim.id,
+    receiptUrl: claim.receiptUrl || claim.proofUrl || '',
+    error: result.sent ? '' : (result.message || '')
+  };
+  data.messages.unshift(record);
+  claim.receiptApproved = true;
+  claim.receiptApprovedAt = now;
+  claim.receiptApprovedBy = user && (user.name || user.role) || 'Owner';
+  claim.receiptStatus = result.sent ? 'Sent to customer' : record.status;
+  claim.receiptLastChannel = selectedChannel;
+  claim.receiptLastAttemptAt = now;
+  claim.receiptLastError = result.sent ? '' : (result.message || 'Provider setup required');
+  claim.customerVisible = !!result.sent;
+  claim.portalVisible = !!result.sent;
+  claim.updatedAt = now;
+  appendAuditLog(data, user, result.sent ? 'Toll reimbursement proof sent' : 'Toll reimbursement proof saved', [claim.customer, claim.vehicle || claim.vin || claim.plate || '', moneyText(claim.amount || 0), selectedChannel, record.status]);
+  return { sent: !!result.sent, status: record.status, channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: record };
+}
+function rematchSavedTollClaims(data, user) {
+  let updated = 0;
+  (data.claims || []).filter(claim => isTollViolationClaim(claim) && (weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match')).forEach(claim => {
+    const evidence = claim.tollEvidence || {};
+    const row = {};
+    Object.entries(evidence).forEach(([key, value]) => { row[tollImportHeader(key)] = value; });
+    if (!row.tagplatenumber) row.tagplatenumber = claim.plate || claim.licensePlate || '';
+    if (!row.transactiondate) row.transactiondate = claim.transactionDate || claim.incidentDate || '';
+    if (!row.postingdate) row.postingdate = claim.postingDate || '';
+    const match = tollImportMatch(data, row);
+    if (!match.customer || !match.vehicle) return;
+    const profile = match.profile || tollCustomerProfile(data, match.customer);
+    Object.assign(claim, {
+      customer: match.customer,
+      customerId: profile.id || claim.customerId || '',
+      phone: profile.phone || claim.phone || '',
+      email: profile.email || claim.email || '',
+      vehicle: tollVehicleLabel(match.vehicle),
+      vehicleId: match.vehicle.id || '',
+      vin: match.vehicle.vin || profile.vin || claim.vin || '',
+      tracker: match.vehicle.tracker || profile.tracker || claim.tracker || '',
+      customerMatchStatus: 'Matched from saved E-ZPass tag',
+      customerMatchSource: match.source,
+      matchCandidates: match.candidates,
+      updatedAt: new Date().toISOString()
+    });
+    updated += 1;
+  });
+  if (updated) appendAuditLog(data, user, 'Saved E-ZPass tag reapplied', [updated + ' unmatched toll row(s) linked by transaction-date customer history']);
+  return updated;
+}
 function defaultApiProviderRows(data = {}) {
   const messageStatus = publicMessagingStatus(data);
   return [
@@ -6528,7 +7074,7 @@ function defaultApiProviderRows(data = {}) {
       endpoint: 'OpenAI Responses API through /api/messages/star-ai and /api/messages/star-ai/test',
       liveTest: 'Run Test Star provider, confirm a Responses API answer, verify sanitization, then approve one non-sensitive draft.'
     },
-    { id: 'ezpass', name: 'E-ZPass / Tolls', group: 'Risk', status: 'API needed', owner: 'Owner', envKeys: 'EZPASS_ACCOUNT, EZPASS_API_KEY or import/login flow', endpoint: 'Future /api/integrations/ezpass/sync', liveTest: 'Import toll notice, match plate to vehicle/customer, create claim/payment link.' },
+    { id: 'ezpass', name: 'WheelsonAuto Toll Import / E-ZPass', group: 'Risk', status: 'Ready - WheelsonAuto import', owner: 'Owner', envKeys: 'No external key required for CSV/TSV/JSON import', endpoint: '/api/tolls/import', liveTest: 'Preview statement, verify plate/VIN/customer separation, import once, import again to prove duplicate protection, then create one recovery link.' },
     { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'INSURANCE_PROVIDER_KEY', endpoint: 'Future /api/integrations/insurance/verify', liveTest: 'Verify proof, set expiration, surface warning before due date.' },
     { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'BACKGROUND_PROVIDER_KEY', endpoint: 'Future /api/integrations/background/run', liveTest: 'Run from approved application and attach result to customer file.' },
     { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: 'Provider needed', owner: 'Manager', envKeys: 'TRACKER_PROVIDER_KEY', endpoint: 'Future /api/integrations/tracker/sync', liveTest: 'Connect tracker name to vehicle, show last location and alert state.' },
@@ -6597,6 +7143,11 @@ function apiProviderTruthOverrides(data = {}) {
   const starResult = status.aiProviderOperational
     ? 'OpenAI Responses API answered successfully and Star sanitized the result.'
     : (status.aiProviderIssue || status.aiLastProviderError || 'OpenAI provider setup and a successful controlled test are still required.');
+  const latestTollImport = (data.claims || []).filter(claim => claim.source === 'Manual toll import' && claim.importedAt).sort((a, b) => String(b.importedAt).localeCompare(String(a.importedAt)))[0] || {};
+  const tollImportLive = !!latestTollImport.id;
+  const tollImportResult = tollImportLive
+    ? 'A WheelsonAuto statement import is saved with duplicate protection and customer/vehicle matching. Future direct toll providers will use the same claim ledger.'
+    : 'WheelsonAuto statement import is ready. Import one real E-ZPass CSV/TSV statement and verify the separated customer totals before calling the production workflow proven.';
   return {
     'clover-core': {
       status: cloverCoreReady ? 'Connected' : (CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Testing - sync proof needed' : 'Ready for credentials'),
@@ -6632,6 +7183,11 @@ function apiProviderTruthOverrides(data = {}) {
       status: status.aiProviderOperational ? 'Connected' : (status.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (status.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (status.aiProviderConfigured ? 'Testing' : 'Provider needed'))),
       lastTestAt: status.aiLastHealthAt || status.aiLastProviderAt || '',
       lastTestResult: starResult
+    },
+    ezpass: {
+      status: tollImportLive ? 'Connected - WheelsonAuto import' : 'Ready - WheelsonAuto import',
+      lastTestAt: latestTollImport.importedAt || '',
+      lastTestResult: tollImportResult
     }
   };
 }
@@ -6660,7 +7216,10 @@ function apiProviderLaunchGuidance(provider = {}) {
       : ['Finish sender/domain and inbound webhook setup, then send and receive one customer email from Messages.', 'Provider-accepted outbound email plus verified inbound reply on the same customer thread.'],
     'star-ai': connected
       ? ['Keep Star approval gates on for money/account actions and monitor provider health.', 'Successful sanitized Responses API answer plus one admin-approved non-sensitive draft.']
-      : [status.includes('credit') ? 'Add usable OpenAI API credit, then run Test Star provider and approve one non-sensitive draft.' : 'Add the OpenAI API key and usable API credit, then run Test Star provider and approve one non-sensitive draft.', 'Successful sanitized Responses API answer; money and account actions must remain admin-approved.']
+      : [status.includes('credit') ? 'Add usable OpenAI API credit, then run Test Star provider and approve one non-sensitive draft.' : 'Add the OpenAI API key and usable API credit, then run Test Star provider and approve one non-sensitive draft.', 'Successful sanitized Responses API answer; money and account actions must remain admin-approved.'],
+    ezpass: connected
+      ? ['Import each new E-ZPass statement through Tolls and clear only uncertain plate/customer matches.', 'Statement rows separated by customer and vehicle, duplicate re-import skipped, recovery totals visible in Tolls and Reports.']
+      : ['Export CSV from E-ZPass, preview it in Tolls, verify the separated customer/car matches, then import the same file twice to prove duplicate protection.', 'Exact plate/VIN/customer matches, an unmatched review queue, duplicate count, and recovery totals tied to the source references.']
   };
   const selected = guidance[id] || [
     connected ? 'Monitor the provider and preserve matching/report evidence.' : 'Finish credentials and endpoint setup, run a controlled live test, and save the result before marking connected.',
@@ -8741,6 +9300,13 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
     if (await staticFile(res, url.pathname)) return;
+    if (url.pathname.startsWith('/toll-receipt/') && req.method === 'GET') {
+      const token = String(url.pathname.split('/').filter(Boolean)[1] || '');
+      const data = await readData();
+      const claim = (data.claims || []).find(row => isTollViolationClaim(row) && row.receiptToken === token);
+      if (!claim || token.length < 32) return send(res, 404, paymentResultHtml('Toll receipt not found', 'Please contact WheelsonAuto so we can verify the transaction and send fresh proof.'));
+      return send(res, 200, tollReceiptHtml(claim), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+    }
     if (url.pathname === '/apply' && req.method === 'GET') return send(res, 200, await appHtml({ publicMode: true }), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname.startsWith('/setup-card/') && req.method === 'GET') {
       const requestId = url.pathname.split('/').filter(Boolean)[1];
@@ -9898,6 +10464,7 @@ const server = http.createServer(async (req, res) => {
       const current = await readData();
       const nextState = stateForUserWrite(current, incoming, user);
       enrichLinkedProfiles(nextState);
+      rematchSavedTollClaims(nextState, user);
       const changes = auditChangedSections(current, nextState);
       await queueStateChangeNotifications(current, nextState, user);
       if (changes.length) appendAuditLog(nextState, user, 'Platform state saved', changes);
@@ -9916,6 +10483,73 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, result, messaging: publicMessagingStatus(await readData()) });
       } catch (err) {
         return json(res, Number(err && err.statusCode || 502), { ok: false, error: String(err && err.message || err) });
+      }
+    }
+    if (url.pathname === '/api/tolls/import' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can import toll or violation statements.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const preview = prepareTollImport(data, payload, user);
+      if (payload.preview === true) {
+        return json(res, 200, {
+          ok: true,
+          preview: preview.rows.slice(0, 100).map(item => ({
+            row: item.row,
+            duplicate: item.duplicate,
+            valid: item.valid,
+            errors: item.errors,
+            customer: item.claim.customer,
+            vehicle: item.claim.vehicle,
+            vehicleId: item.claim.vehicleId,
+            vin: item.claim.vin,
+            plate: item.claim.plate,
+            tracker: item.claim.tracker,
+            reference: item.claim.reference,
+            provider: item.claim.provider,
+            incidentDate: item.claim.incidentDate,
+            transactionDate: item.claim.transactionDate,
+            postingDate: item.claim.postingDate,
+            entryTime: item.claim.tollEvidence && item.claim.tollEvidence.entryTime || '',
+            entryPlaza: item.claim.tollEvidence && item.claim.tollEvidence.entryPlaza || '',
+            entryLane: item.claim.tollEvidence && item.claim.tollEvidence.entryLane || '',
+            exitTime: item.claim.tollEvidence && item.claim.tollEvidence.exitTime || '',
+            exitPlaza: item.claim.tollEvidence && item.claim.tollEvidence.exitPlaza || '',
+            exitLane: item.claim.tollEvidence && item.claim.tollEvidence.exitLane || '',
+            amount: item.claim.amount,
+            customerMatchStatus: item.claim.customerMatchStatus,
+            customerMatchSource: item.claim.customerMatchSource,
+            matchCandidates: item.claim.matchCandidates
+          })),
+          summary: preview.summary
+        });
+      }
+      const result = await importTollRows(data, payload, user);
+      if (!result.received) return json(res, 400, { ok: false, error: 'Paste at least one toll or violation row first.' });
+      if (result.importable) {
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      }
+      return json(res, 200, { ok: true, result, version: await dataVersion() });
+    }
+    if (url.pathname === '/api/tolls/receipt/send' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can approve and send toll reimbursement proof.' });
+      const payload = JSON.parse(await readBody(req) || '{}');
+      const data = await readData();
+      const claim = (data.claims || []).find(row => row.id === payload.id && isTollViolationClaim(row));
+      if (!claim) return json(res, 404, { ok: false, error: 'That toll or violation record was not found.' });
+      if (!claim.receiptToken) {
+        claim.receiptToken = crypto.randomBytes(24).toString('hex');
+        claim.receiptUrl = PUBLIC_BASE_URL + '/toll-receipt/' + claim.receiptToken;
+        claim.proofUrl = claim.proofUrl || claim.receiptUrl;
+        claim.evidence = claim.evidence || claim.receiptUrl;
+      }
+      try {
+        const result = await sendTollReceipt(data, claim, payload.channel, user);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, result, claim: { id: claim.id, receiptUrl: claim.receiptUrl, receiptStatus: claim.receiptStatus }, version: await dataVersion() });
+      } catch (err) {
+        return json(res, 400, { ok: false, error: String(err && err.message || err) });
       }
     }
     if (url.pathname === '/api/messages/settings' && req.method === 'POST') {
@@ -10828,6 +11462,14 @@ module.exports = {
   twilioSignatureForPayload,
   openAiReplyPlan,
   starAiProviderHealthCheck,
+  parseTollImportRows,
+  tollImportMatch,
+  tollImportFingerprint,
+  prepareTollImport,
+  importTollRows,
+  tollReceiptText,
+  tollReceiptHtml,
+  rematchSavedTollClaims,
   apiProviderLaunchGuidance,
   apiProviderRows,
   apiProviderReviewRows

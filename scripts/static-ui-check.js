@@ -11,6 +11,10 @@ function fail(message) {
   throw new Error(message);
 }
 
+if (!app.includes('async function action(a,id,el){var b=el;')) {
+  fail('The shared action handler must bind the clicked button before async UI actions run.');
+}
+
 function unique(matches, map) {
   return [...new Set([...matches].map(map).filter(Boolean))].sort();
 }

@@ -163,7 +163,7 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'Needs payment/customer match',
   'Import tolls',
   'parseTollImportRows',
-  'Matched from toll import',
+  'Saved E-ZPass tag mapping',
   'save-toll-import',
   'apply-claim-match',
   'matchReason',

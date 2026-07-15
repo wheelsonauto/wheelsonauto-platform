@@ -4194,6 +4194,56 @@ body.fast-tab-switch .admin-shell .section{
   line-height:1.35;
   overflow-wrap:anywhere;
 }
+.toll-import-preview-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+  margin-top:12px;
+}
+.toll-import-preview-card,
+.toll-receipt-review{
+  min-width:0;
+  padding:13px;
+  border:1px solid rgba(255,255,255,.10);
+  border-radius:8px;
+  background:rgba(255,255,255,.055);
+  color:#e8edf2;
+}
+.toll-import-preview-card.good{border-left:3px solid #7ee787}
+.toll-import-preview-card.warn{border-left:3px solid #f0d394}
+.toll-import-preview-card.bad{border-left:3px solid #ff705c}
+.toll-import-preview-card.blue{border-left:3px solid #58a6ff}
+.toll-import-date-row{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+  margin:10px 0;
+}
+.toll-import-date-row span{
+  min-width:0;
+  padding:8px 9px;
+  border:1px solid rgba(240,211,148,.14);
+  border-radius:7px;
+  background:rgba(0,0,0,.18);
+  color:#aeb8c2;
+  font-size:12px;
+}
+.toll-import-date-row b{
+  display:block;
+  margin-top:2px;
+  color:#f7df9b;
+  font-size:13px;
+  overflow-wrap:anywhere;
+}
+.toll-receipt-review{
+  margin-top:12px;
+  border-color:rgba(240,211,148,.22);
+}
+.toll-receipt-review .muted{
+  margin-top:7px;
+  color:#c8d2dc;
+  overflow-wrap:anywhere;
+}
 .dispatch-command-board{
   background:linear-gradient(145deg,rgba(12,15,19,.97),rgba(24,28,33,.93));
   border-color:rgba(240,211,148,.22);
@@ -4574,6 +4624,7 @@ body.fast-tab-switch .admin-shell .section{
   .service-inspection-grid,
   .service-route-grid,
   .toll-route-grid,
+  .toll-import-preview-grid,
   .company-launch-grid,
   .notification-command-grid,
   .customer-portal-command-grid,
@@ -4592,6 +4643,7 @@ body.fast-tab-switch .admin-shell .section{
   .service-inspection-grid,
   .service-route-grid,
   .toll-route-grid,
+  .toll-import-preview-grid,
   .company-launch-grid,
   .notification-command-grid,
   .customer-portal-command-grid,

@@ -47,9 +47,9 @@ const saveContractHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='sa
 const saveVehicleHandler = app.slice(app.indexOf("if(!b||b.dataset.action!=='save-vehicle')"), app.indexOf("function openMaintenanceModal", app.indexOf("if(!b||b.dataset.action!=='save-vehicle')")));
 const endCustomer = finalFunctionSlice(app, 'confirmEndCustomerFile');
 const tollParser = finalFunctionSlice(app, 'parseTollImportRows');
-const tollMatcher = finalFunctionSlice(app, 'matchTollImportRow');
-const tollClaim = finalFunctionSlice(app, 'tollImportClaim');
-const tollSave = finalFunctionSlice(app, 'saveTollImport');
+const tollMatcher = finalFunctionSlice(server, 'tollImportMatch') + finalFunctionSlice(server, 'tollVehicleTags') + finalFunctionSlice(server, 'tollCustomerProfile');
+const tollClaim = finalFunctionSlice(server, 'prepareTollImport');
+const tollSave = finalFunctionSlice(server, 'importTollRows');
 const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
 const syncVehicleAssignmentsFromActiveRecords = finalFunctionSlice(server, 'syncVehicleAssignmentsFromActiveRecords');
 const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/update'", server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')")));
@@ -127,13 +127,13 @@ const removeRecurringRoute = server.slice(server.indexOf("if (url.pathname === '
 ].forEach(text => requireText('Manual toll import parser', tollParser, text));
 
 [
-  'licenseplate',
-  'v.plate',
-  'v.stock',
-  'v.tempTag',
-  'v.vin',
+  'tagplatenumber',
+  'tollVehicleTags',
+  'vehicle.vin',
   'currentCustomer',
-  'existingCustomerProfile'
+  'tollCustomerProfile',
+  'Saved E-ZPass tag mapping',
+  'Customer assigned on toll date'
 ].forEach(text => requireText('Manual toll import matching', tollMatcher, text));
 
 [
@@ -143,13 +143,15 @@ const removeRecurringRoute = server.slice(server.indexOf("if (url.pathname === '
   'customerMatchStatus',
   'Matched from toll import',
   'Needs payment/customer match',
-  'Manual toll import'
+  'E-ZPass CSV import',
+  'transactionDate',
+  'postingDate'
 ].forEach(text => requireText('Manual toll import claim truth layer', tollClaim, text));
 
 [
-  'db.claims.unshift',
-  'logMessage',
-  'Toll / violation imported'
+  'data.claims.unshift',
+  'appendAuditLog',
+  'Toll / violation statement imported'
 ].forEach(text => requireText('Manual toll import save flow', tollSave, text));
 
 [
