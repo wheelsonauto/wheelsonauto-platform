@@ -68,7 +68,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-native-onboarding-52">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-charcoal-19-months-53">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -5967,7 +5967,7 @@ function cleanOnlineVehiclePayload(payload = {}, existing = null) {
     optionalPurchasePrice: Math.max(0, Number(payload.optionalPurchasePrice === undefined ? existing && existing.optionalPurchasePrice : payload.optionalPurchasePrice) || 0),
     dailyMileageAllowance: Math.max(0, Number(payload.dailyMileageAllowance === undefined ? existing && existing.dailyMileageAllowance : payload.dailyMileageAllowance) || 0),
     excessMileageRate: Math.max(0, Number(payload.excessMileageRate === undefined ? existing && existing.excessMileageRate : payload.excessMileageRate) || 0),
-    contractMonths: 18,
+    contractMonths: nativeSite.CONTRACT_MONTHS,
     imageUrl: onboarding.text(payload.imageUrl || existing && existing.imageUrl || '', 1200),
     sourceImageUrl: onboarding.text(payload.sourceImageUrl || existing && existing.sourceImageUrl || '', 1200),
     description: onboarding.text(payload.description || existing && existing.description || '', 3000),
@@ -11445,7 +11445,7 @@ const server = http.createServer(async (req, res) => {
         pickupCapacity: Math.max(1, Math.min(4, Number(payload.pickupCapacity || data.publicSite && data.publicSite.pickupCapacity || 2))),
         minimumPickupDays: 1,
         maximumVehicleHoldDays: 7,
-        contractMonths: 18,
+        contractMonths: nativeSite.CONTRACT_MONTHS,
         pickupAddress: '5150 NJ-42, Blackwood, NJ 08012',
         businessHours: 'Monday-Saturday, 11:00 AM-5:00 PM',
         updatedAt: new Date().toISOString(),

@@ -62,7 +62,7 @@ function pricingSnapshot(vehicle = {}) {
     optionalPurchasePrice: Number(vehicle.optionalPurchasePrice || 0),
     dailyMileageAllowance: Number(vehicle.dailyMileageAllowance || 0),
     excessMileageRate: Number(vehicle.excessMileageRate || 0),
-    contractMonths: Number(vehicle.contractMonths || 18),
+    contractMonths: nativeSite.CONTRACT_MONTHS,
     capturedAt: new Date().toISOString()
   };
 }

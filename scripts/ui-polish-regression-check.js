@@ -80,7 +80,12 @@ if (shell.includes('/logout')) fail('Log out must stay inside Settings.');
   '.message-inbox-shell{height:calc(100dvh - 222px)',
   '.message-focused-list,.message-focused-review{height:calc(100dvh - 222px)',
   '.message-inbox-shell.message-mobile-thread-open .message-thread-list{display:none}',
-  '.message-inbox-shell.message-mobile-thread-open .message-conversation-panel{display:grid}'
+  '.message-inbox-shell.message-mobile-thread-open .message-conversation-panel{display:grid}',
+  'Unified charcoal glass workspace: public-site depth with sharp staff controls.',
+  '--staff-canvas:#121416',
+  '--staff-panel:#1a1d20',
+  '--staff-panel-raised:#22262a',
+  'box-shadow:inset 0 1px 0 rgba(255,255,255,.11)'
 ].forEach(text => {
   if (!css.includes(text)) fail('responsive polish guard is missing: ' + text);
 });

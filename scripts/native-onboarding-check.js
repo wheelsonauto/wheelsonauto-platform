@@ -150,6 +150,7 @@ async function main() {
   try {
     const preview = await request(server, 'GET', '/site-preview');
     assert(preview.status === 200 && /2016 Ford Focus/.test(preview.text), 'Public preview should render only the native published vehicle.');
+    assert(/<b>19 months<\/b>/.test(preview.text) && !/<b>18 months<\/b>/.test(preview.text), 'Public purchase-eligibility copy should use the canonical 19-month term even when an older vehicle record still says 18.');
     assert(/name="robots" content="noindex,nofollow"/.test(preview.text) && /class="site-brand" href="\/site-preview"/.test(preview.text), 'Render preview should stay out of search results and keep preview navigation inside the public preview.');
 
     const applicationPayload = {
@@ -210,6 +211,10 @@ async function main() {
     assert(documentsApproved.status === 200, 'Owner should be able to approve complete identity and insurance documents.');
     const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Native Applicant', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
     assert(signature.status === 201, 'Customer should be able to sign the exact versioned agreement after document approval.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    const signedAgreement = saved.eSignatures.find(row => row.onboardingSessionId === onboardingId);
+    assert(signedAgreement && /nineteen \(19\) consecutive months/i.test(signedAgreement.contractBody || ''), 'New signed agreements should lock the corrected 19-month optional-purchase term.');
+    assert(signedAgreement && Number(signedAgreement.pricingSnapshot && signedAgreement.pricingSnapshot.contractMonths) === 19, 'The immutable pricing snapshot should store the canonical 19-month term.');
     const earlyCard = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
     assert(earlyCard.status === 409, 'Clover card setup must remain locked until staff compares the signature with the license.');
     const signatureApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'signature', decision: 'approve', signatureMatchConfirmed: true, notes: 'Signature manually matched to license.' } });

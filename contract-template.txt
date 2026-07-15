@@ -119,8 +119,8 @@ Recovery may occur without further notice as permitted under New Jersey law.
 11. OPTIONAL PURCHASE OPPORTUNITY AFTER RENTAL PROGRAM
 This Agreement is a rental agreement and not a financing or loan agreement.
 The Renter is not obligated to purchase the Vehicle.
-If the Renter remains in good standing under this Agreement and completes eighteen (18) consecutive months of rental payments, the Renter may become eligible to purchase the Vehicle under the following conditions:
-All weekly rental payments must have been paid in full and on time for the full eighteen (18) month period.
+If the Renter remains in good standing under this Agreement and completes nineteen (19) consecutive months of rental payments, the Renter may become eligible to purchase the Vehicle under the following conditions:
+All weekly rental payments must have been paid in full and on time for the full nineteen (19) month period.
 
 The Renter must not be in default under any term of this Agreement, including but not limited to:
 
@@ -132,7 +132,7 @@ damage obligations
 
 late payment violations.
 
-At the completion of the eighteen (18) month rental period, the Renter may exercise the option to purchase the Vehicle for the agreed purchase price of:
+At the completion of the nineteen (19) month rental period, the Renter may exercise the option to purchase the Vehicle for the agreed purchase price of:
 
 ${{OPTIONAL_PURCHASE_PRICE}}
 If the Renter elects to purchase the Vehicle, the following will occur:
@@ -147,7 +147,7 @@ If the Renter elects to purchase the Vehicle, the following will occur:
 
 Until the purchase option is exercised and title is transferred, the Vehicle shall remain the sole property of Wheels On Auto INC.
 
-If the Renter chooses not to exercise the purchase option after the eighteen (18) month period, the rental agreement may continue on a week-to-week basis or the Vehicle may be returned to the Owner.
+If the Renter chooses not to exercise the purchase option after the nineteen (19) month period, the rental agreement may continue on a week-to-week basis or the Vehicle may be returned to the Owner.
 
 12. INDEMNIFICATION
 Renter agrees to indemnify and hold Wheels On Auto INC harmless from any claims, damages, losses, penalties, or legal expenses arising from use of the Vehicle.

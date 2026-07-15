@@ -2,6 +2,7 @@ const crypto = require('crypto');
 
 const LOGO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=240';
 const HERO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/clean-luxury-car-hero-banner.png?v=1772796803&width=3840';
+const CONTRACT_MONTHS = 19;
 
 function esc(value) {
   return String(value === undefined || value === null ? '' : value).replace(/[&<>\"]/g, character => ({
@@ -43,7 +44,7 @@ function publicSettings(data = {}) {
     pickupCapacity: Number(saved.pickupCapacity || 2),
     minimumPickupDays: Number(saved.minimumPickupDays || 1),
     maximumVehicleHoldDays: Number(saved.maximumVehicleHoldDays || 7),
-    contractMonths: Number(saved.contractMonths || 18),
+    contractMonths: CONTRACT_MONTHS,
     excessMileageRate: Number(saved.excessMileageRate || 0),
     dailyMileageAllowance: Number(saved.dailyMileageAllowance || 100)
   };
@@ -99,7 +100,7 @@ function vehicleCard(vehicle, compact = false) {
 function homeHtml(data, baseUrl, options = {}) {
   const settings = publicSettings(data);
   const vehicles = publishedVehicles(data).slice(0, 6);
-  const body = '<section class="home-hero" style="--hero:url(\'' + esc(HERO_URL) + '\')"><div class="hero-shade"></div><div class="hero-copy"><span class="eyebrow">South Jersey rent-to-own vehicles</span><h1>WheelsonAuto</h1><p>Choose an available car, apply online, complete your documents securely, and schedule pickup when your file is approved.</p><div class="hero-actions"><a class="button primary large" href="/inventory">Browse available cars</a><a class="button glass large" href="#process">See how it works</a></div><div class="hero-facts"><span><b>18 months</b> optional purchase eligibility</span><span><b>Weekly</b> clear scheduled payments</span><span><b>Local</b> Blackwood pickup and service</span></div></div></section>' +
+  const body = '<section class="home-hero" style="--hero:url(\'' + esc(HERO_URL) + '\')"><div class="hero-shade"></div><div class="hero-copy"><span class="eyebrow">South Jersey rent-to-own vehicles</span><h1>WheelsonAuto</h1><p>Choose an available car, apply online, complete your documents securely, and schedule pickup when your file is approved.</p><div class="hero-actions"><a class="button primary large" href="/inventory">Browse available cars</a><a class="button glass large" href="#process">See how it works</a></div><div class="hero-facts"><span><b>' + CONTRACT_MONTHS + ' months</b> optional purchase eligibility</span><span><b>Weekly</b> clear scheduled payments</span><span><b>Local</b> Blackwood pickup and service</span></div></div></section>' +
     '<section class="site-band inventory-preview"><div class="section-title"><div><span class="eyebrow">Available now</span><h2>Find the right vehicle</h2><p>Only cars published by WheelsonAuto appear here. Availability updates from the same fleet record staff use.</p></div><a class="text-link" href="/inventory">View all inventory →</a></div><div class="vehicle-grid">' + (vehicles.length ? vehicles.map(vehicle => vehicleCard(vehicle)).join('') : '<div class="public-empty"><strong>Inventory is being prepared</strong><p>Call ' + esc(settings.phone) + ' for current availability.</p></div>') + '</div></section>' +
     '<section class="site-band process-band" id="process"><div class="section-title"><div><span class="eyebrow">One connected process</span><h2>From application to pickup</h2></div></div><div class="process-grid">' +
     [['01', 'Choose and apply', 'Select a currently published vehicle and create your secure application.'], ['02', 'Verify and sign', 'Upload your license and full-coverage insurance, then review and sign the exact agreement.'], ['03', 'Set up payments', 'After staff verification, save your card through Clover and complete the separate down payment and first weekly payment.'], ['04', 'Schedule pickup', 'Choose an available pickup within seven days. Your pickup date becomes your weekly autopay day.']].map(item => '<article><span>' + item[0] + '</span><h3>' + item[1] + '</h3><p>' + item[2] + '</p></article>').join('') + '</div></section>' +
@@ -127,7 +128,7 @@ function vehicleHtml(data, vehicle, baseUrl, options = {}) {
   const title = vehicleTitle(vehicle);
   const down = Number(vehicle.downPayment || 0);
   const image = vehicle.imageUrl || vehicle.photoUrl || HERO_URL;
-  const body = '<section class="vehicle-detail"><div class="vehicle-detail-media"><img src="' + esc(image) + '" alt="' + esc(title) + '"><span>' + esc(vehicle.availability || 'Available') + '</span></div><div class="vehicle-detail-copy"><a class="back-link" href="/inventory">← Inventory</a><h1>' + esc(title) + '</h1><p class="vehicle-subtitle">' + esc([vehicle.color, vehicle.mileage ? Number(vehicle.mileage).toLocaleString() + ' miles' : '', vehicle.transmission].filter(Boolean).join(' · ') || 'WheelsonAuto long-term rental') + '</p><div class="price-panel"><div><span>Weekly payment</span><strong>' + money(vehicle.weeklyPayment) + '</strong></div><div><span>Nonrefundable down payment</span><strong>' + (down ? money(down) : '$0') + '</strong></div></div><div class="detail-list"><span>Customer must maintain full-coverage insurance</span><span>Minimum rental commitment: 30 days</span><span>Optional purchase eligibility after ' + esc(vehicle.contractMonths || settings.contractMonths) + ' consecutive months in good standing</span><span>Pickup must be scheduled within seven days after onboarding</span></div><a class="button primary large full" href="/apply/' + encodeURIComponent(publicVehicleSlug(vehicle)) + '">Apply for this vehicle</a><p class="detail-disclaimer">Submitting an application does not guarantee approval or hold the vehicle. Pricing and vehicle terms are locked only when your agreement is created.</p></div></section>';
+  const body = '<section class="vehicle-detail"><div class="vehicle-detail-media"><img src="' + esc(image) + '" alt="' + esc(title) + '"><span>' + esc(vehicle.availability || 'Available') + '</span></div><div class="vehicle-detail-copy"><a class="back-link" href="/inventory">← Inventory</a><h1>' + esc(title) + '</h1><p class="vehicle-subtitle">' + esc([vehicle.color, vehicle.mileage ? Number(vehicle.mileage).toLocaleString() + ' miles' : '', vehicle.transmission].filter(Boolean).join(' · ') || 'WheelsonAuto long-term rental') + '</p><div class="price-panel"><div><span>Weekly payment</span><strong>' + money(vehicle.weeklyPayment) + '</strong></div><div><span>Nonrefundable down payment</span><strong>' + (down ? money(down) : '$0') + '</strong></div></div><div class="detail-list"><span>Customer must maintain full-coverage insurance</span><span>Minimum rental commitment: 30 days</span><span>Optional purchase eligibility after ' + esc(settings.contractMonths) + ' consecutive months in good standing</span><span>Pickup must be scheduled within seven days after onboarding</span></div><a class="button primary large full" href="/apply/' + encodeURIComponent(publicVehicleSlug(vehicle)) + '">Apply for this vehicle</a><p class="detail-disclaimer">Submitting an application does not guarantee approval or hold the vehicle. Pricing and vehicle terms are locked only when your agreement is created.</p></div></section>';
   return layout({ title, description: 'Apply for the ' + title + ' through WheelsonAuto.', canonical: baseUrl + '/vehicles/' + publicVehicleSlug(vehicle), active: 'inventory', body, settings, image, pageClass: 'vehicle-view', jsonLd: { '@context': 'https://schema.org', '@type': 'Product', name: title, image: [image], offers: { '@type': 'Offer', priceCurrency: 'USD', price: Number(vehicle.weeklyPayment || 0), availability: 'https://schema.org/InStock', url: baseUrl + '/vehicles/' + publicVehicleSlug(vehicle) } }, homePath: options.homePath || '/', noIndex: !!options.noIndex });
 }
 
@@ -234,6 +235,7 @@ module.exports = {
   onboardingStatus,
   contractTemplateHash,
   renderContract,
+  CONTRACT_MONTHS,
   LOGO_URL,
   HERO_URL
 };

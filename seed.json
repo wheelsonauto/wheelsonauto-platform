@@ -435,6 +435,6 @@
     "maximumVehicleHoldDays": 7,
     "pickupSlotMinutes": 60,
     "pickupCapacity": 2,
-    "contractMonths": 18
+    "contractMonths": 19
   }
 }
