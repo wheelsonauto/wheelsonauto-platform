@@ -6021,36 +6021,124 @@ async function cacheNativeImage(imageUrl) {
   try { await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' }); } catch (err) { if (err.code !== 'EEXIST') throw err; }
   return '/native-media/' + filename;
 }
-async function importShopifyCatalog(data) {
+function shopifyProductVin(product = {}) {
+  const source = String(product.body_html || product.body || product.description || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .toUpperCase();
+  const matches = source.match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || [];
+  return matches.find(value => /[A-Z]/.test(value) && /\d/.test(value)) || '';
+}
+function shopifyVehicleProducts(products = []) {
+  return (Array.isArray(products) ? products : []).filter(product => /\b(19|20)\d{2}\b/.test(String(product && product.title || '')));
+}
+function oneEditApart(left, right) {
+  const a = normKey(left);
+  const b = normKey(right);
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i += 1; j += 1; continue; }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (b.length > a.length) j += 1;
+    else { i += 1; j += 1; }
+  }
+  if (i < a.length || j < b.length) edits += 1;
+  return edits <= 1;
+}
+function shopifyModelMatches(productModel, fleetModel) {
+  const left = normKey(productModel);
+  const right = normKey(fleetModel);
+  if (!left || !right) return false;
+  if (left === right || left.startsWith(right + ' ') || right.startsWith(left + ' ')) return true;
+  return oneEditApart(left.split(' ')[0], right.split(' ')[0]);
+}
+function mapShopifyCatalogProducts(data, products = []) {
   onboarding.ensureCollections(data);
-  const response = await fetch('https://www.wheelsonauto.com/products.json?limit=250', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
-  if (!response.ok) throw new Error('Current Shopify inventory returned ' + response.status + '.');
-  const payload = await response.json();
-  const products = Array.isArray(payload.products) ? payload.products : [];
+  if (!Array.isArray(products) || !products.length) throw new Error('Shopify returned an empty product catalog. No inventory was changed.');
+  const vehicleProducts = shopifyVehicleProducts(products);
+  if (!vehicleProducts.length) throw new Error('Shopify returned no vehicle listings. No inventory was changed.');
+  const productTitleCounts = new Map();
+  vehicleProducts.forEach(product => {
+    const key = normKey(product && product.title);
+    productTitleCounts.set(key, (productTitleCounts.get(key) || 0) + 1);
+  });
+  const existingRows = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
+  const fleet = Array.isArray(data.vehicles) ? data.vehicles : [];
+  const fleetById = new Map(fleet.map(vehicle => [String(vehicle.id || ''), vehicle]));
+  const fleetByVin = new Map();
+  fleet.forEach(vehicle => {
+    const vin = String(vehicle.vin || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    if (vin) fleetByVin.set(vin, vehicle);
+  });
+  const fleetByTitle = new Map();
+  fleet.forEach(vehicle => {
+    const key = normKey(vehicleNameFromParts(vehicle));
+    if (!key) return;
+    const candidates = fleetByTitle.get(key) || [];
+    candidates.push(vehicle);
+    fleetByTitle.set(key, candidates);
+  });
+  const importedByTitle = new Map();
+  existingRows.forEach(row => {
+    if (row.source !== 'Imported from current Shopify catalog') return;
+    const key = normKey(row.title);
+    const candidates = importedByTitle.get(key) || [];
+    candidates.push(row);
+    importedByTitle.set(key, candidates);
+  });
   const rows = [];
-  for (const product of products) {
+  let created = 0;
+  let updated = 0;
+  vehicleProducts.forEach(product => {
     const title = onboarding.text(product.title, 160);
-    if (!/\b(19|20)\d{2}\b/.test(title)) continue;
     const handle = onboarding.text(product.handle, 160);
-    const old = data.onlineVehicles.find(row => row.sourceProductId === String(product.id) || row.sourceHandle === handle || normKey(row.title) === normKey(title));
+    const sourceProductId = String(product.id || '');
+    const titleMatches = importedByTitle.get(normKey(title)) || [];
+    const old = existingRows.find(row => sourceProductId && row.sourceProductId === sourceProductId)
+      || existingRows.find(row => handle && row.sourceHandle === handle)
+      || (productTitleCounts.get(normKey(title)) === 1 && titleMatches.length === 1 ? titleMatches[0] : null);
     const variant = (product.variants || []).find(item => item.available !== false) || (product.variants || [])[0] || {};
     const imageSource = product.image && product.image.src || product.images && product.images[0] && product.images[0].src || '';
-    let imageUrl = old && old.imageUrl || '';
-    if (imageSource && (!imageUrl || /^https?:/i.test(imageUrl))) {
-      try { imageUrl = await cacheNativeImage(imageSource); } catch { imageUrl = imageSource; }
-    }
+    const keepCustomImage = old && old.imageUrl && (/^\/native-media\//.test(old.imageUrl) || old.sourceImageUrl && old.imageUrl !== old.sourceImageUrl);
+    const imageUrl = keepCustomImage ? old.imageUrl : imageSource || old && old.imageUrl || '';
     const parts = title.match(/^((?:19|20)\d{2})\s+([^\s]+)\s+(.+)$/i) || [];
-    const linked = (data.vehicles || []).find(vehicle => normKey(vehicleNameFromParts(vehicle)) === normKey(title)) || {};
+    const productVin = shopifyProductVin(product);
+    const linkedByVin = productVin ? fleetByVin.get(productVin) : null;
+    const linkedByVinSuffix = productVin ? fleet.filter(vehicle => {
+      const candidateVin = String(vehicle.vin || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      return candidateVin.length >= 8 && (productVin.endsWith(candidateVin) || candidateVin.endsWith(productVin));
+    }) : [];
+    const oldLinked = old && old.platformVehicleId ? fleetById.get(String(old.platformVehicleId)) : null;
+    const titleFleetMatches = fleetByTitle.get(normKey(title)) || [];
+    const identityMatches = parts.length ? fleet.filter(vehicle => String(vehicle.year || '') === String(parts[1] || '')
+      && normKey(vehicle.make) === normKey(parts[2])
+      && shopifyModelMatches(parts[3], vehicle.model)) : [];
+    let linked = linkedByVin || (linkedByVinSuffix.length === 1 ? linkedByVinSuffix[0] : null);
+    if (!linked && productVin && oldLinked) {
+      const oldLinkedVin = String(oldLinked.vin || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      if (!oldLinkedVin || oldLinkedVin === productVin) linked = oldLinked;
+    }
+    if (!linked && !productVin && oldLinked) linked = oldLinked;
+    if (!linked && titleFleetMatches.length === 1) linked = titleFleetMatches[0];
+    if (!linked && identityMatches.length === 1) linked = identityMatches[0];
+    linked = linked || {};
+    const description = onboarding.text(product.body_html || '', 3000).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     rows.push(cleanOnlineVehiclePayload({
-      id: old && old.id || ('online-shopify-' + String(product.id)),
+      id: old && old.id || ('online-shopify-' + sourceProductId),
       title,
       slug: handle,
-      platformVehicleId: old && old.platformVehicleId || linked.id || '',
+      platformVehicleId: linked.id || '',
       year: old && old.year || parts[1] || linked.year || '',
       make: old && old.make || parts[2] || linked.make || '',
       model: old && old.model || parts[3] || linked.model || '',
       color: old && old.color || linked.color || '',
-      vin: old && old.vin || linked.vin || '',
+      vin: productVin || old && old.vin || linked.vin || '',
       plate: old && old.plate || linked.plate || linked.stock || '',
       mileage: old && old.mileage || linked.mileage || linked.odometer || 0,
       weeklyPayment: old && old.weeklyPayment || Number(variant.price || 0) || Number(data.publicSite && data.publicSite.defaultWeeklyPayment || 229),
@@ -6060,20 +6148,48 @@ async function importShopifyCatalog(data) {
       excessMileageRate: old && old.excessMileageRate || linked.excessMileageRate || 0,
       imageUrl,
       sourceImageUrl: imageSource,
-      description: onboarding.text(product.body_html || old && old.description || '', 3000).replace(/<[^>]+>/g, ' '),
+      description: old && old.description || description,
       availability: (product.variants || []).some(item => item.available !== false) ? 'Available' : 'Unavailable',
       published: old ? old.published : (product.variants || []).some(item => item.available !== false),
       source: 'Imported from current Shopify catalog',
-      sourceProductId: String(product.id || ''),
+      sourceProductId,
       sourceHandle: handle
     }, old));
-  }
+    if (old) updated += 1;
+    else created += 1;
+  });
   const importedIds = new Set(rows.map(row => row.id));
-  data.onlineVehicles = rows.concat(data.onlineVehicles.filter(row => !importedIds.has(row.id) && row.source !== 'Imported from current Shopify catalog'));
+  return {
+    rows,
+    onlineVehicles: rows.concat(existingRows.filter(row => !importedIds.has(row.id))),
+    sourceProducts: products.length,
+    vehicleProducts: vehicleProducts.length,
+    created,
+    updated,
+    linked: rows.filter(row => row.platformVehicleId).length,
+    unlinked: rows.filter(row => !row.platformVehicleId).length
+  };
+}
+async function importShopifyCatalog(data) {
+  onboarding.ensureCollections(data);
+  const response = await fetch('https://www.wheelsonauto.com/products.json?limit=250', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error('Current Shopify inventory returned ' + response.status + '.');
+  const payload = await response.json();
+  const products = Array.isArray(payload.products) ? payload.products : [];
+  const report = mapShopifyCatalogProducts(data, products);
+  data.onlineVehicles = report.onlineVehicles;
   data.publicSite = data.publicSite || {};
   data.publicSite.lastShopifyMigrationImportAt = new Date().toISOString();
-  data.publicSite.lastShopifyMigrationImportCount = rows.length;
-  return rows;
+  data.publicSite.lastShopifyMigrationImportCount = report.rows.length;
+  data.publicSite.lastShopifyMigrationImportReport = {
+    sourceProducts: report.sourceProducts,
+    vehicleProducts: report.vehicleProducts,
+    created: report.created,
+    updated: report.updated,
+    linked: report.linked,
+    unlinked: report.unlinked
+  };
+  return report;
 }
 async function nativePolicyHtml(data, baseUrl, kind, options = {}) {
   const settings = nativeSite.publicSettings(data);
@@ -11539,10 +11655,17 @@ const server = http.createServer(async (req, res) => {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can run the one-time Shopify catalog import.' });
       const data = await readData();
       const imported = await importShopifyCatalog(data);
-      appendAuditLog(data, user, 'Shopify catalog imported to native website', [imported.length + ' vehicle(s)', 'Images and pricing copied into native online inventory']);
+      appendAuditLog(data, user, 'Shopify catalog imported to native website', [imported.rows.length + ' vehicle(s)', imported.created + ' created', imported.updated + ' updated', imported.linked + ' linked to fleet by VIN or unique identity']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, imported: imported.length });
+      return json(res, 200, {
+        ok: true,
+        imported: imported.rows.length,
+        created: imported.created,
+        updated: imported.updated,
+        linked: imported.linked,
+        unlinked: imported.unlinked
+      });
     }
     if (url.pathname === '/api/public-site/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can update public-site defaults.' });
@@ -12709,6 +12832,8 @@ module.exports = {
   tollReceiptText,
   tollReceiptHtml,
   rematchSavedTollClaims,
+  shopifyProductVin,
+  mapShopifyCatalogProducts,
   verifyCloverHostedCheckoutWebhook,
   hostedCheckoutWebhookDetails,
   applyHostedCheckoutWebhook,
