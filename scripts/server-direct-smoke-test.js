@@ -165,7 +165,9 @@ async function main() {
     apiProviderLaunchGuidance,
     apiProviderRows,
     apiProviderReviewRows,
-    repairDataIds
+    repairDataIds,
+    enrichLinkedProfiles,
+    nearEndpointNameMatch
   } = require('../server.js');
 
   try {
@@ -212,6 +214,17 @@ async function main() {
     });
     assert(weakVehicleRepairState.customers.find(row => row.id === 'direct-legit-customer').vehicle === 'Ford Escape', 'Weak-label repair must not clear a legitimate vehicle that merely shares one word with a customer name.');
     assert(Number(weakVehicleRepairState.systemRepairs && weakVehicleRepairState.systemRepairs.weakVehicleLabelRepairCount || 0) === 3, 'Weak vehicle-label repair should record the number of safely cleared labels.');
+    assert(nearEndpointNameMatch('Rone Nfoe', 'Ronel Babey nfor'), 'Customer alias matching should tolerate a one-character first/last-name variation.');
+    const aliasVehicleState = {
+      vehicles: [{ id: 'veh-direct-alias', name: '2014 Nissan Rogue', vin: 'DIRECTALIASVIN1', plate: 'ALIAS-1', status: 'Rented', currentCustomer: 'Ronel Babey nfor' }],
+      customers: [{ id: 'cus-direct-alias', name: 'Ronel Babey nfor', vehicle: '2014 Nissan Rogue', vehicleId: 'veh-direct-alias', vin: 'DIRECTALIASVIN1', licensePlate: 'ALIAS-1', status: 'Active' }],
+      contracts: [{ id: 'con-direct-alias', customer: 'Ronel Babey nfor', vehicle: '2014 Nissan Rogue', vehicleId: 'veh-direct-alias', vin: 'DIRECTALIASVIN1', licensePlate: 'ALIAS-1', status: 'Active' }],
+      recurringPayments: [{ id: 'rec-direct-alias', customer: 'Rone Nfoe', amount: 230, status: 'Active' }],
+      maintenance: [], claims: [], payments: [], paymentRequests: [], tasks: [], documents: [], applications: [], messages: [], staffAccounts: [], customerAccounts: [], organizations: [], auditLogs: [],
+      integrations: { clover: { recurringPlanMembers: [] } }
+    };
+    enrichLinkedProfiles(aliasVehicleState);
+    assert(aliasVehicleState.recurringPayments[0].vehicleId === 'veh-direct-alias' && aliasVehicleState.recurringPayments[0].vehicle === '2014 Nissan Rogue' && aliasVehicleState.recurringPayments[0].vin === 'DIRECTALIASVIN1', 'An unambiguous Clover name alias should recover the current vehicle, VIN, and tag instead of showing No vehicle linked.');
     assert(smsScamAssessment('Send me your verification code using https://bit.ly/fake').suspicious, 'Credential and shortened-link SMS should be marked as a potential scam.');
     assert(!smsScamAssessment('Hi, can I bring the car in for an oil change Tuesday?').suspicious, 'Normal customer service SMS should not be marked as a scam.');
     assert(smsSensitiveActionAssessment('Charge the customer card and change autopay to Friday').sensitive, 'Owner phone money/account instructions should require app review.');

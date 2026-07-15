@@ -68,7 +68,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-native-onboarding-50">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-native-onboarding-51">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -237,7 +237,7 @@ function clearWrongVehicleClaims(data, vehicle, customerName, reason) {
     const rows = Array.isArray(data[collectionName]) ? data[collectionName] : [];
     rows.forEach(row => {
       const rowCustomer = row[customerField] || row.customer || row.name || '';
-      if (!activeSheetRecord(row) || normKey(rowCustomer) === normKey(customerName) || !rowClaimsVehicle(row, vehicle)) return;
+      if (!activeSheetRecord(row) || sameAssignmentCustomer(rowCustomer, customerName) || nearEndpointNameMatch(rowCustomer, customerName) || !rowClaimsVehicle(row, vehicle)) return;
       row.previousVehicleId = row.vehicleId || row.previousVehicleId || '';
       row.previousVehicle = row.vehicle || row.previousVehicle || '';
       row.previousVin = row.vin || row.previousVin || '';
@@ -258,7 +258,7 @@ function clearWrongVehicleClaims(data, vehicle, customerName, reason) {
   const cloverRows = (((data.integrations || {}).clover || {}).recurringPlanMembers) || [];
   cloverRows.forEach(row => {
     const rowCustomer = row.customer || row.name || '';
-    if (!activeSheetRecord(row) || normKey(rowCustomer) === normKey(customerName) || !rowClaimsVehicle(row, vehicle)) return;
+    if (!activeSheetRecord(row) || sameAssignmentCustomer(rowCustomer, customerName) || nearEndpointNameMatch(rowCustomer, customerName) || !rowClaimsVehicle(row, vehicle)) return;
     row.previousVehicleId = row.vehicleId || row.previousVehicleId || '';
     row.previousVehicle = row.vehicle || row.previousVehicle || '';
     row.previousVin = row.vin || row.previousVin || '';
@@ -3703,10 +3703,43 @@ function emailKey(value) {
 function nameTokens(value) {
   return String(value || '').toLowerCase().split(/[^a-z0-9]+/).filter(token => token.length > 2 && !['and', 'the', 'jr', 'sr'].includes(token));
 }
+function nameTokenWithinOneEdit(a, b) {
+  a = String(a || '');
+  b = String(b || '');
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 4 || Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) {
+    let mismatches = 0;
+    for (let index = 0; index < a.length; index += 1) {
+      if (a[index] !== b[index] && ++mismatches > 1) return false;
+    }
+    return true;
+  }
+  const shorter = a.length < b.length ? a : b;
+  const longer = a.length < b.length ? b : a;
+  let shortIndex = 0, longIndex = 0, skipped = false;
+  while (shortIndex < shorter.length && longIndex < longer.length) {
+    if (shorter[shortIndex] === longer[longIndex]) {
+      shortIndex += 1;
+      longIndex += 1;
+      continue;
+    }
+    if (skipped) return false;
+    skipped = true;
+    longIndex += 1;
+  }
+  return true;
+}
+function nearEndpointNameMatch(a, b) {
+  const at = nameTokens(a), bt = nameTokens(b);
+  if (at.length < 2 || bt.length < 2) return false;
+  return nameTokenWithinOneEdit(at[0], bt[0]) && nameTokenWithinOneEdit(at[at.length - 1], bt[bt.length - 1]);
+}
 function softNameMatch(a, b) {
   const ak = normKey(a), bk = normKey(b);
   if (!ak || !bk) return false;
   if (ak === bk) return true;
+  if (nearEndpointNameMatch(ak, bk)) return true;
   const ac = compactKey(ak), bc = compactKey(bk);
   if (ac.length >= 6 && bc.length >= 6 && (ac.includes(bc) || bc.includes(ac))) return true;
   const at = nameTokens(ak), bt = nameTokens(bk);
@@ -4478,7 +4511,16 @@ function enrichLinkedProfiles(data) {
     if (profile.customer) {
       const exactName = richest(profiles.filter(item => item.customer && normKey(item.customer) === normKey(profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
       if (exactName) return exactName;
-      return richest(profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && sameProfileVehicle(item, profile) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
+      const softMatches = profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource));
+      const sameVehicle = richest(softMatches.filter(item => sameProfileVehicle(item, profile)));
+      if (sameVehicle) return sameVehicle;
+      const profileHasVehicle = !!(profile.vehicleId || profile.vin || profile.licensePlate || profile.plate || profile.vehicle);
+      if (!profileHasVehicle) {
+        const assignmentMatches = softMatches.filter(item => item.vehicleId || item.vin || item.licensePlate || item.plate || item.vehicle);
+        const assignmentKeys = [...new Set(assignmentMatches.map(item => normKey(item.vehicleId || item.vin || item.licensePlate || item.plate || item.vehicle)).filter(Boolean))];
+        if (assignmentKeys.length === 1) return richest(assignmentMatches);
+      }
+      return null;
     }
     return null;
   }
@@ -12506,6 +12548,8 @@ module.exports = {
   server,
   repairDataIds,
   repairVehicleSheetLinkConflicts,
+  enrichLinkedProfiles,
+  nearEndpointNameMatch,
   publicMessagingStatus,
   hydrateIncomingEmail,
   verifyResendWebhook,
