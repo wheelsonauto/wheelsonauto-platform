@@ -418,5 +418,23 @@
       "graceDays": 3,
       "defaultTermWeeks": 104
     }
-  ]
+  ],
+  "onlineVehicles": [],
+  "onboardingSessions": [],
+  "eSignatures": [],
+  "pickupAppointments": [],
+  "paymentRequests": [],
+  "cardSetupRequests": [],
+  "customerAccounts": [],
+  "publicSite": {
+    "defaultWeeklyPayment": 229,
+    "defaultDownPayment": 485,
+    "pickupAddress": "5150 NJ-42, Blackwood, NJ 08012",
+    "businessHours": "Monday-Saturday, 11:00 AM-5:00 PM",
+    "minimumPickupDays": 1,
+    "maximumVehicleHoldDays": 7,
+    "pickupSlotMinutes": 60,
+    "pickupCapacity": 2,
+    "contractMonths": 18
+  }
 }

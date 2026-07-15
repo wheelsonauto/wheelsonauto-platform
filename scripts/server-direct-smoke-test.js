@@ -15,6 +15,28 @@ function assert(condition, message) {
   if (!condition) fail(message);
 }
 
+function nativePublicApplicationPayload(overrides = {}) {
+  return {
+    onlineVehicleId: 'online-direct-001',
+    firstName: 'Direct',
+    lastName: 'Applicant',
+    phone: '3135550111',
+    email: 'direct-applicant@example.com',
+    password: 'DirectApplicant123!',
+    address: '5150 NJ-42',
+    city: 'Blackwood',
+    state: 'NJ',
+    postalCode: '08012',
+    dateOfBirth: '1990-01-15',
+    driverLicenseId: 'D12345678901234',
+    driverLicenseExpires: '2030-01-15',
+    employer: 'Direct Smoke Employer',
+    income: 4500,
+    applicationConsent: true,
+    ...overrides
+  };
+}
+
 class MockRequest extends Readable {
   constructor(method, url, headers, body) {
     super();
@@ -483,17 +505,23 @@ async function main() {
     const readinessCleanupWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: readinessCleanupState });
     assert(readinessCleanupWrite.status === 200 && readinessCleanupWrite.json.ok, 'Owner could not clean up readiness-only regression records.');
 
+    const onlineVehicleOne = await request(server, 'POST', '/api/online-vehicles', {
+      cookie: ownerCookie,
+      json: { id: 'online-direct-001', platformVehicleId: 'veh-001', title: '2016 Ford Focus Hatch', weeklyPayment: 229, downPayment: 500, availability: 'Available', published: true }
+    });
+    assert(onlineVehicleOne.status === 201 && onlineVehicleOne.json.ok, 'Owner could not publish the direct smoke vehicle.');
+    const onlineVehicleTwo = await request(server, 'POST', '/api/online-vehicles', {
+      cookie: ownerCookie,
+      json: { id: 'online-direct-002', title: '2017 Ford Fusion', year: '2017', make: 'Ford', model: 'Fusion', weeklyPayment: 250, downPayment: 600, availability: 'Available', published: true }
+    });
+    assert(onlineVehicleTwo.status === 201 && onlineVehicleTwo.json.ok, 'Owner could not publish the second direct smoke vehicle.');
+    const duplicateOnlineVehicle = await request(server, 'POST', '/api/online-vehicles', {
+      cookie: ownerCookie,
+      json: { id: 'online-direct-duplicate', platformVehicleId: 'veh-001', title: 'Duplicate Ford Focus', weeklyPayment: 229, downPayment: 500, availability: 'Available', published: true }
+    });
+    assert(duplicateOnlineVehicle.status === 409 && /already connected/i.test(duplicateOnlineVehicle.json.error || ''), 'One internal fleet car must not be linked to two online vehicle records.');
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
-      json: {
-        id: 'direct-public-app',
-        name: 'Direct Applicant',
-        phone: '3135550111',
-        email: 'direct-applicant@example.com',
-        vehicleId: 'veh-001',
-        vehicle: '2016 Ford Focus Hatch',
-        income: 4500,
-        down: 500
-      }
+      json: nativePublicApplicationPayload()
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
 
@@ -1082,9 +1110,9 @@ async function main() {
     const mechanicPrivacyRead = await request(server, 'GET', '/api/state', { cookie: mechanicCookie });
     assert(mechanicPrivacyRead.status === 200 && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-source-token') && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-payment-token') && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-raw-value'), 'Mechanic state should not expose raw saved-card/source secrets.');
 
-    const publicApplyPage = await request(server, 'GET', '/apply');
-    assert(publicApplyPage.status === 200 && publicApplyPage.text.includes('window.__PUBLIC_MODE__=true'), 'Public application page should render in public mode.');
-    assert(publicApplyPage.text.includes('veh-001'), 'Public application page should include public ready fleet choices.');
+    const publicApplyPage = await request(server, 'GET', '/apply/' + encodeURIComponent(onlineVehicleOne.json.vehicle.slug));
+    assert(publicApplyPage.status === 200 && publicApplyPage.text.includes('nativeApplicationForm'), 'Native vehicle application page should render its secure public form.');
+    assert(publicApplyPage.text.includes('online-direct-001') && publicApplyPage.text.includes('2016 Ford Focus Hatch'), 'Native application page should be locked to the selected published online vehicle.');
     assert(!publicApplyPage.text.includes('secret-source-token') && !publicApplyPage.text.includes('secret-payment-token') && !publicApplyPage.text.includes('secret-raw-value'), 'Public application page should not expose private payment tokens.');
     assert(!publicApplyPage.text.includes('Direct Dispute Customer') && !publicApplyPage.text.includes('direct-customer'), 'Public application page should not expose customer, dispute, or portal login records.');
 
@@ -1448,16 +1476,7 @@ async function main() {
     });
     assert(filteredNotificationSettings.status === 200 && filteredNotificationSettings.json.notifications.events.length === 1 && filteredNotificationSettings.json.notifications.events[0] === 'customer_message', 'Notification event filters should save exactly.');
     const filteredApplication = await request(server, 'POST', '/api/public/applications', {
-      json: {
-        id: 'direct-filtered-public-app',
-        name: 'Direct Filtered Applicant',
-        phone: '3135550333',
-        email: 'direct-filtered@example.com',
-        vehicleId: 'veh-002',
-        vehicle: '2017 Ford Fusion',
-        income: 5100,
-        down: 600
-      }
+      json: nativePublicApplicationPayload({ onlineVehicleId: 'online-direct-002', firstName: 'Direct Filtered', lastName: 'Applicant', phone: '3135550333', email: 'direct-filtered@example.com', password: 'DirectFiltered123!', income: 5100 })
     });
     assert(filteredApplication.status === 201 && filteredApplication.json.ok, 'Filtered public application path did not save.');
     const filteredNotificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -1469,16 +1488,7 @@ async function main() {
     assert(restoredNotificationSettings.status === 200 && restoredNotificationSettings.json.notifications.events.includes('application_submitted'), 'Notification events should restore application alerts.');
 
     const notifiedApplication = await request(server, 'POST', '/api/public/applications', {
-      json: {
-        id: 'direct-notified-public-app',
-        name: 'Direct Notified Applicant',
-        phone: '3135550222',
-        email: 'direct-notified@example.com',
-        vehicleId: 'veh-002',
-        vehicle: '2017 Ford Fusion',
-        income: 5200,
-        down: 700
-      }
+      json: nativePublicApplicationPayload({ onlineVehicleId: 'online-direct-002', firstName: 'Direct Notified', lastName: 'Applicant', phone: '3135550222', email: 'direct-notified@example.com', password: 'DirectNotified123!', income: 5200 })
     });
     assert(notifiedApplication.status === 201 && notifiedApplication.json.ok, 'Public application notification path did not save.');
 

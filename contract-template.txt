@@ -1,0 +1,238 @@
+LONG-TERM VEHICLE RENTAL WITH OPTIONAL PURCHASE AGREEMENT
+
+(State of New Jersey)
+This Agreement is a Long-Term rental agreement with an optional purchase opportunity and is not a financing agreement, Entered into on {{EFFECTIVE_DATE}} ("Effective Date"), by and between:
+Owner / Rental Company:
+Wheels On Auto INC.
+329 Linden Ave
+Woodlynne, NJ 08107
+and
+Renter:
+Name: {{RENTER_NAME}}
+Driver license ID: {{DRIVER_LICENSE_ID}}
+Address: {{RENTER_ADDRESS}}
+Collectively referred to as the "Parties."
+
+1. VEHICLE INFORMATION
+The vehicle subject to this Agreement ("Vehicle") is described as follows:
+Year: {{VEHICLE_YEAR}}
+Make: {{VEHICLE_MAKE}}
+Model: {{VEHICLE_MODEL}}
+VIN: {{VEHICLE_VIN}}
+License Plate: {{VEHICLE_PLATE}}
+Odometer Reading at Start: {{START_ODOMETER}} miles
+Daily mileage allowance {{DAILY_MILEAGE_ALLOWANCE}} per day
+Renter acknowledges that the odometer reading listed above is accurate at the commencement of this Agreement.
+Excess Mileage Charge (if applicable): ${{EXCESS_MILEAGE_RATE}} per mile.
+Renter is fully responsible for all mileage accumulated and for any abnormal wear, excessive mileage, or reduction in vehicle value.
+Any tampering with the odometer constitutes immediate breach and may result in termination and repossession under New Jersey law.
+
+2. RENTAL TERM
+Rental begins on {{RENTAL_START_DATE}} and requires a minimum commitment of thirty (30) days.
+After the initial period, rental continues week-to-week unless terminated under this Agreement.
+
+3. WEEKLY PAYMENT TERMS
+Weekly Rental Payment: ${{WEEKLY_PAYMENT}}
+Payment is due in advance each week.
+
+Down Payment
+A non-refundable down payment of ${{DOWN_PAYMENT}} is required prior to vehicle pickup when the amount shown above is greater than $0.
+The down payment and first weekly rental payment are processed as separate transactions and receive separate receipts.
+The first weekly rental payment is charged immediately after the down payment is successfully completed. It covers the first rental week beginning on {{RENTAL_START_DATE}}.
+Automatic Payment Authorization
+The rental start and pickup date, {{RENTAL_START_DATE}}, establishes the Renter's weekly payment weekday. After the separately paid first rental week, the next automatic weekly payment is scheduled seven (7) days after {{RENTAL_START_DATE}} and continues every seven (7) days while this Agreement remains active.
+Renter authorizes automatic recurring payments via:
+• Credit Card
+• Debit Card
+• ACH / Bank Withdrawal
+• Other approved electronic method
+Renter authorizes Wheels On Auto INC and its payment provider, Clover, to store a tokenized payment method on file and use it for the weekly rental payments authorized by this Agreement, permitted payment retries, and approved catch-up payments owed on the Renter's account. Wheels On Auto INC does not store the full card number or CVV.
+Valid payment information must remain active at all times.
+Late Fees
+If payment is not paid in full by the due date, a $50 late fee will be charged per day for each day the balance remains unpaid, beginning the day after the due date.
+Late fees accrue daily and are immediately due.
+
+4. INSURANCE REQUIREMENT (MANDATORY)
+Full-coverage automobile insurance is required at all times during the rental term.
+Insurance must include:
+• Liability
+• Collision
+• Comprehensive
+Insurance Provider: {{INSURANCE_PROVIDER}}
+Policy Number: {{INSURANCE_POLICY_NUMBER}}
+Wheels On Auto INC must be listed as vehicle owner and/or loss payee.
+Renter's insurance shall be primary.
+Failure to maintain active insurance results in immediate termination and vehicle recovery.
+
+5. USE OF VEHICLE
+Renter agrees:
+• To operate the Vehicle lawfully
+• Not to sublease or transfer the Vehicle
+• Not to use the Vehicle for illegal purposes
+• To comply with all federal, state, and local laws
+Renter assumes full responsibility for all use of the Vehicle.
+
+6. MAINTENANCE & REQUIRED MONTHLY INSPECTION
+Vehicle is accepted "AS IS."
+Wheels On Auto INC covers routine oil changes and scheduled maintenance when performed at Owner's designated location.
+Renter is responsible for:
+• Damage
+• Abuse
+• Neglect
+• Unauthorized repairs
+• Insurance deductibles
+The vehicle must return once per month for inspection and oil service.
+Failure to return for inspection constitutes breach of this Agreement.
+
+7. DAMAGE & LIABILITY
+Renter is fully responsible for:
+• Any damage
+• Loss, theft, or vandalism
+• Diminished value
+• Insurance deductibles
+• Towing, storage, or impound fees
+All repair costs not covered by insurance remain the responsibility of the Renter.
+
+8. TICKETS & TOLLS
+Renter is responsible for:
+• Parking tickets
+• Traffic violations
+• Toll charges
+• Administrative penalties
+Unpaid charges will be billed to Renter immediately.
+
+9. GPS DISCLOSURE
+Vehicle may be equipped with a GPS tracking device.
+Tracking may be used for:
+• Theft recovery
+• Payment default
+• Vehicle location in case of breach
+Renter waives privacy claims related to vehicle tracking.
+
+10. DEFAULT & VEHICLE RECOVERY
+If payment is not paid in full:
+• Day 1 after due date – $50 daily late fee begins
+• Day 2 after due date – Vehicle must be returned
+• Day 3 after due date – Vehicle may be towed/recovered at Renter's expense
+Recovery may occur without further notice as permitted under New Jersey law.
+
+11. OPTIONAL PURCHASE OPPORTUNITY AFTER RENTAL PROGRAM
+This Agreement is a rental agreement and not a financing or loan agreement.
+The Renter is not obligated to purchase the Vehicle.
+If the Renter remains in good standing under this Agreement and completes eighteen (18) consecutive months of rental payments, the Renter may become eligible to purchase the Vehicle under the following conditions:
+All weekly rental payments must have been paid in full and on time for the full eighteen (18) month period.
+
+The Renter must not be in default under any term of this Agreement, including but not limited to:
+
+insurance requirements
+
+vehicle inspection requirements
+
+damage obligations
+
+late payment violations.
+
+At the completion of the eighteen (18) month rental period, the Renter may exercise the option to purchase the Vehicle for the agreed purchase price of:
+
+${{OPTIONAL_PURCHASE_PRICE}}
+If the Renter elects to purchase the Vehicle, the following will occur:
+
+• The purchase price must be paid in full.
+
+• Applicable New Jersey sales tax will apply.
+
+• Title transfer fees required by the New Jersey Motor Vehicle Commission must be paid.
+
+• Ownership of the Vehicle will then be transferred to the Renter.
+
+Until the purchase option is exercised and title is transferred, the Vehicle shall remain the sole property of Wheels On Auto INC.
+
+If the Renter chooses not to exercise the purchase option after the eighteen (18) month period, the rental agreement may continue on a week-to-week basis or the Vehicle may be returned to the Owner.
+
+12. INDEMNIFICATION
+Renter agrees to indemnify and hold Wheels On Auto INC harmless from any claims, damages, losses, penalties, or legal expenses arising from use of the Vehicle.
+
+13. GOVERNING LAW
+This Agreement shall be governed by the laws of the State of New Jersey.
+
+14. INSURANCE MONITORING & CONTINUOUS COVERAGE
+Renter agrees to maintain continuous full-coverage automobile insurance on the Vehicle at all times during the term of this Agreement.
+The insurance policy must:
+• list the Renter as the named insured
+• list Wheels On Auto INC as vehicle owner and/or loss payee
+• include liability, collision, and comprehensive coverage.
+Renter authorizes the insurance provider to notify Wheels On Auto INC of any:
+• cancellation
+• lapse
+• non-payment
+• policy change affecting coverage.
+If insurance coverage is canceled, lapses, or becomes invalid for any reason, the Renter shall be considered in immediate default of this Agreement.
+In such case, Wheels On Auto INC may immediately recover the Vehicle without further notice as permitted by New Jersey law.
+Renter shall remain fully responsible for any damages occurring while the Vehicle is uninsured.
+Renter represents and warrants that all insurance information provided to Wheels On Auto INC is true, valid, and issued by a licensed insurance company. If the insurance provided is false, fraudulent, expired, cancelled, forged, or otherwise invalid, Renter shall be solely responsible for any and all damages, injuries, claims, lawsuits, attorney fees, towing, storage, loss of use, diminished value, and any other costs arising from use of the Vehicle. Renter agrees to indemnify and hold Wheels On Auto INC harmless from any such claims. Providing false insurance information constitutes an immediate default under this Agreement and authorizes immediate recovery of the Vehicle.
+
+15. TOTAL LOSS OR INSURANCE CLAIM
+In the event the Vehicle is involved in an accident resulting in a total loss, theft, or insurance settlement, the following terms apply:
+Any insurance payment issued for the loss of the Vehicle shall first be applied toward the value of the Vehicle owed to Wheels On Auto INC.
+
+Because Wheels On Auto INC is listed as vehicle owner and/or loss payee, insurance proceeds shall be payable to Wheels On Auto INC.
+
+If insurance proceeds are insufficient to cover the remaining value of the Vehicle, the Renter remains responsible for the remaining balance.
+
+If insurance proceeds exceed the value owed to Wheels On Auto INC, any remaining amount may be refunded to the Renter.
+
+A total loss does not automatically transfer ownership of the Vehicle to the Renter.
+
+16. ATTORNEY FEES & ENFORCEMENT
+In the event that Wheels On Auto INC must take legal action to enforce any provision of this Agreement, including but not limited to recovery of the Vehicle, collection of unpaid payments, damages, or enforcement of any contractual obligation, the Renter agrees to be responsible for all reasonable costs incurred by Wheels On Auto INC.
+Such costs may include, but are not limited to:
+• attorney fees
+• court filing fees
+• recovery and repossession expenses
+• towing and storage fees
+• administrative costs associated with enforcement of this Agreement.
+If a court of competent jurisdiction determines that the Renter has breached this Agreement, the Renter shall be responsible for reimbursing Wheels On Auto INC for such costs to the fullest extent permitted under the laws of the State of New Jersey.
+
+17. VEHICLE ABANDONMENT
+If the Vehicle is left unattended, returned without notice, or otherwise abandoned by the Renter, Wheels On Auto INC may take immediate possession of the Vehicle.
+A Vehicle shall be considered abandoned if any of the following occur:
+• The Renter leaves the Vehicle at any location without notifying Wheels On Auto INC.
+• The Renter fails to make required payments and does not return the Vehicle as required under this Agreement.
+• The Vehicle is located by Wheels On Auto INC through GPS tracking and appears to be abandoned.
+• The Renter cannot be contacted for a period exceeding seventy-two (72) hours after default.
+In the event of abandonment:
+Wheels On Auto INC may recover the Vehicle without notice.
+
+Any towing, storage, recovery, or administrative costs shall be the responsibility of the Renter.
+
+Any personal property left inside the Vehicle may be removed by Wheels On Auto INC and stored for a period of fourteen (14) days. After this period, unclaimed property may be discarded.
+
+Abandonment of the Vehicle shall constitute a breach of this Agreement and termination of the rental program.
+
+18. AUTHORIZED DRIVER REQUIREMENT
+Only the Renter listed in this Agreement is permitted to operate the Vehicle unless an additional driver is approved in writing by Wheels On Auto INC.
+Any additional driver must:
+• possess a valid driver's license
+• meet insurance eligibility requirements
+• be approved in writing by Wheels On Auto INC prior to operating the Vehicle.
+The Renter shall not allow any person who is not listed and approved under this Agreement to operate the Vehicle.
+If the Vehicle is operated by an unauthorized driver, the Renter shall be fully responsible for any and all damages, losses, liabilities, claims, or expenses arising from such use.
+The Renter acknowledges that operation of the Vehicle by an unauthorized driver may result in denial of insurance coverage, and in such case the Renter shall remain fully liable for all damages and costs.
+Violation of this section constitutes a breach of this Agreement and may result in immediate termination and recovery of the Vehicle.
+
+19. ENTIRE AGREEMENT
+This document represents the entire agreement between the Parties.
+Any modification must be in writing and signed by both Parties.
+
+20. SIGNATURES
+Owner Signature: {{OWNER_SIGNATURE}}
+Name: Khaled Jazzar
+Date: {{OWNER_SIGNATURE_DATE}}
+
+Renter Signature: {{RENTER_SIGNATURE}}
+
+Name: {{RENTER_NAME}}
+
+Date: {{RENTER_SIGNATURE_DATE}}
+
+Phone#: {{RENTER_PHONE}}

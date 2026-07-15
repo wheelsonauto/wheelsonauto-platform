@@ -155,6 +155,9 @@
       });
       form.style.display = 'none';
       show(saved.cloverSubscriptionId ? 'Card saved and recurring subscription created. You can now test manual charge from WheelsonAuto.' : 'Card saved. You can now test manual charge from WheelsonAuto.');
+      if (saved.redirectUrl || config.returnUrl) {
+        window.setTimeout(function () { window.location.href = saved.redirectUrl || config.returnUrl; }, 650);
+      }
     } catch (err) {
       show(String(err && err.message || err), true);
       setButton(false, 'Save card with Clover');

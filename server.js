@@ -3,12 +3,15 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const nativeSite = require('./native-site');
+const onboarding = require('./onboarding-service');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
 const DATA_FILE = path.join(DATA_DIR, 'data.json');
 const SEED_FILE = path.join(ROOT, 'seed.json');
 const VEHICLE_IMPORT_FILE = path.join(ROOT, 'vehicle-import.json');
+const CONTRACT_TEMPLATE_FILE = path.join(ROOT, 'contract-template.txt');
 const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
 const LOGIN_PIN = process.env.WOA_ADMIN_PIN || '';
@@ -31,6 +34,7 @@ const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY ||
 const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || process.env.CLOVER_API_ACCESS_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const CLOVER_WEBHOOK_SECRET = process.env.CLOVER_WEBHOOK_SECRET || process.env.WOA_CLOVER_WEBHOOK_SECRET || '';
+const CLOVER_HCO_WEBHOOK_SECRET = process.env.CLOVER_HCO_WEBHOOK_SECRET || process.env.WOA_CLOVER_HCO_WEBHOOK_SECRET || CLOVER_WEBHOOK_SECRET;
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
@@ -58,12 +62,13 @@ const WOA_EMAIL_FROM = process.env.WOA_EMAIL_FROM || process.env.EMAIL_FROM || '
 const WOA_EMAIL_REPLY_TO = process.env.WOA_EMAIL_REPLY_TO || process.env.EMAIL_REPLY_TO || '';
 const WOA_EMAIL_OWNER_NOTIFY = process.env.WOA_EMAIL_OWNER_NOTIFY || process.env.EMAIL_OWNER_NOTIFY || '';
 const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
+const WOA_PUBLIC_SITE_ENABLED = process.env.WOA_PUBLIC_SITE_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-tolls-49">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-native-onboarding-50">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -452,6 +457,12 @@ function repairWeakCustomerVehicleLabels(data) {
   return repaired;
 }
 function repairDataIds(data) {
+  data.onlineVehicles = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
+  data.eSignatures = Array.isArray(data.eSignatures) ? data.eSignatures : [];
+  data.onboardingSessions = Array.isArray(data.onboardingSessions) ? data.onboardingSessions : [];
+  data.pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
+  data.contractTemplates = Array.isArray(data.contractTemplates) ? data.contractTemplates : [];
+  data.publicSite = data.publicSite && typeof data.publicSite === 'object' ? data.publicSite : {};
   repairDuplicateVehicleIds(data);
   repairDuplicateRecordIds(data, 'contracts');
   repairDuplicateOpenMaintenance(data);
@@ -522,7 +533,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -4777,7 +4788,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'signatureImagePath', 'signatureData'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
@@ -5126,7 +5137,7 @@ function stateForUserWrite(current, incoming, user) {
   return next;
 }
 function auditChangedSections(current = {}, next = {}) {
-  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
+  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
   const details = [];
   keys.forEach(key => {
     const beforeRows = Array.isArray(current[key]) ? auditComparableRows(current[key]) : [];
@@ -5307,7 +5318,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications'].forEach(key => {
+  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {
@@ -5338,6 +5349,26 @@ function stateForUserRead(data, user) {
   return safe;
 }
 async function readBody(req) { let body = ''; for await (const chunk of req) body += chunk; return body; }
+async function readJsonBody(req, maxBytes = 1024 * 1024) {
+  let body = '';
+  let size = 0;
+  for await (const chunk of req) {
+    size += Buffer.byteLength(chunk);
+    if (size > maxBytes) {
+      const error = new Error('Request is larger than the allowed secure upload size.');
+      error.statusCode = 413;
+      throw error;
+    }
+    body += chunk;
+  }
+  try {
+    return body ? JSON.parse(body) : {};
+  } catch {
+    const error = new Error('Request body must be valid JSON.');
+    error.statusCode = 400;
+    throw error;
+  }
+}
 function escapeHtml(value) { return String(value || '').replace(/[&<>\"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;' }[c])); }
 function normalizeLogin(value) {
   return String(value || '').trim().toLowerCase();
@@ -5854,11 +5885,384 @@ customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
   html = html.replace('<article class="customer-panel"><div class="section-head"><h2>Messages</h2>', '<article id="portal-messages" class="customer-panel"><div class="section-head"><h2>Messages</h2>');
   return html;
 };
+function requestBaseUrl(req) {
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+  const protocol = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || (host.includes('localhost') || host.startsWith('127.') ? 'http' : 'https');
+  return host ? protocol + '://' + host : PUBLIC_BASE_URL;
+}
+function nativePublicRoot(req) {
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(':')[0].toLowerCase();
+  return WOA_PUBLIC_SITE_ENABLED || host === 'wheelsonauto.com' || host === 'www.wheelsonauto.com';
+}
+function nativeRenderOptions(req, forcePreview = false) {
+  const livePublicHost = nativePublicRoot(req) && !forcePreview;
+  return { homePath: livePublicHost ? '/' : '/site-preview', noIndex: !livePublicHost };
+}
+function cleanOnlineVehiclePayload(payload = {}, existing = null) {
+  const now = new Date().toISOString();
+  const title = onboarding.text(payload.title || payload.name || existing && existing.title || '', 160);
+  const id = String(payload.id || existing && existing.id || ('online-' + crypto.randomBytes(8).toString('hex'))).trim();
+  const linkedVehicle = onboarding.text(payload.platformVehicleId || existing && existing.platformVehicleId || '', 120);
+  return {
+    id,
+    title: title || 'Online vehicle',
+    slug: nativeSite.slug(payload.slug || payload.handle || existing && existing.slug || title + '-' + id.slice(-6)),
+    platformVehicleId: linkedVehicle,
+    year: onboarding.text(payload.year || existing && existing.year || '', 8),
+    make: onboarding.text(payload.make || existing && existing.make || '', 80),
+    model: onboarding.text(payload.model || existing && existing.model || '', 100),
+    color: onboarding.text(payload.color || existing && existing.color || '', 60),
+    vin: onboarding.text(payload.vin || existing && existing.vin || '', 40),
+    plate: onboarding.text(payload.plate || existing && existing.plate || '', 40),
+    mileage: Math.max(0, Number(payload.mileage === undefined ? existing && existing.mileage : payload.mileage) || 0),
+    weeklyPayment: Math.max(0, Number(payload.weeklyPayment === undefined ? existing && existing.weeklyPayment : payload.weeklyPayment) || 0),
+    downPayment: Math.max(0, Number(payload.downPayment === undefined ? existing && existing.downPayment : payload.downPayment) || 0),
+    optionalPurchasePrice: Math.max(0, Number(payload.optionalPurchasePrice === undefined ? existing && existing.optionalPurchasePrice : payload.optionalPurchasePrice) || 0),
+    dailyMileageAllowance: Math.max(0, Number(payload.dailyMileageAllowance === undefined ? existing && existing.dailyMileageAllowance : payload.dailyMileageAllowance) || 0),
+    excessMileageRate: Math.max(0, Number(payload.excessMileageRate === undefined ? existing && existing.excessMileageRate : payload.excessMileageRate) || 0),
+    contractMonths: 18,
+    imageUrl: onboarding.text(payload.imageUrl || existing && existing.imageUrl || '', 1200),
+    sourceImageUrl: onboarding.text(payload.sourceImageUrl || existing && existing.sourceImageUrl || '', 1200),
+    description: onboarding.text(payload.description || existing && existing.description || '', 3000),
+    availability: onboarding.text(payload.availability || existing && existing.availability || 'Available', 60),
+    published: payload.published === undefined ? !!(existing && existing.published) : payload.published === true || payload.published === 'true' || payload.published === 1,
+    source: onboarding.text(payload.source || existing && existing.source || 'Native WheelsonAuto inventory', 120),
+    sourceProductId: onboarding.text(payload.sourceProductId || existing && existing.sourceProductId || '', 160),
+    sourceHandle: onboarding.text(payload.sourceHandle || existing && existing.sourceHandle || '', 160),
+    createdAt: existing && existing.createdAt || now,
+    updatedAt: now
+  };
+}
+async function cacheNativeImage(imageUrl) {
+  if (!imageUrl) return '';
+  const parsed = new URL(imageUrl);
+  if (!/(^|\.)cdn\.shopify\.com$|(^|\.)wheelsonauto\.com$/i.test(parsed.hostname)) return imageUrl;
+  const response = await fetch(parsed.toString(), { headers: { Accept: 'image/avif,image/webp,image/jpeg,image/png' }, signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error('Vehicle image download failed with ' + response.status + '.');
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  const extension = contentType.includes('png') ? '.png' : contentType.includes('webp') ? '.webp' : contentType.includes('avif') ? '.avif' : '.jpg';
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > 12 * 1024 * 1024) throw new Error('Vehicle image is empty or larger than 12 MB.');
+  const filename = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 28) + extension;
+  const folder = path.join(DATA_DIR, 'native-media');
+  await fs.mkdir(folder, { recursive: true });
+  try { await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' }); } catch (err) { if (err.code !== 'EEXIST') throw err; }
+  return '/native-media/' + filename;
+}
+async function importShopifyCatalog(data) {
+  onboarding.ensureCollections(data);
+  const response = await fetch('https://www.wheelsonauto.com/products.json?limit=250', { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error('Current Shopify inventory returned ' + response.status + '.');
+  const payload = await response.json();
+  const products = Array.isArray(payload.products) ? payload.products : [];
+  const rows = [];
+  for (const product of products) {
+    const title = onboarding.text(product.title, 160);
+    if (!/\b(19|20)\d{2}\b/.test(title)) continue;
+    const handle = onboarding.text(product.handle, 160);
+    const old = data.onlineVehicles.find(row => row.sourceProductId === String(product.id) || row.sourceHandle === handle || normKey(row.title) === normKey(title));
+    const variant = (product.variants || []).find(item => item.available !== false) || (product.variants || [])[0] || {};
+    const imageSource = product.image && product.image.src || product.images && product.images[0] && product.images[0].src || '';
+    let imageUrl = old && old.imageUrl || '';
+    if (imageSource && (!imageUrl || /^https?:/i.test(imageUrl))) {
+      try { imageUrl = await cacheNativeImage(imageSource); } catch { imageUrl = imageSource; }
+    }
+    const parts = title.match(/^((?:19|20)\d{2})\s+([^\s]+)\s+(.+)$/i) || [];
+    const linked = (data.vehicles || []).find(vehicle => normKey(vehicleNameFromParts(vehicle)) === normKey(title)) || {};
+    rows.push(cleanOnlineVehiclePayload({
+      id: old && old.id || ('online-shopify-' + String(product.id)),
+      title,
+      slug: handle,
+      platformVehicleId: old && old.platformVehicleId || linked.id || '',
+      year: old && old.year || parts[1] || linked.year || '',
+      make: old && old.make || parts[2] || linked.make || '',
+      model: old && old.model || parts[3] || linked.model || '',
+      color: old && old.color || linked.color || '',
+      vin: old && old.vin || linked.vin || '',
+      plate: old && old.plate || linked.plate || linked.stock || '',
+      mileage: old && old.mileage || linked.mileage || linked.odometer || 0,
+      weeklyPayment: old && old.weeklyPayment || Number(variant.price || 0) || Number(data.publicSite && data.publicSite.defaultWeeklyPayment || 229),
+      downPayment: old && old.downPayment !== undefined ? old.downPayment : Number(data.publicSite && data.publicSite.defaultDownPayment === undefined ? 485 : data.publicSite.defaultDownPayment),
+      optionalPurchasePrice: old && old.optionalPurchasePrice || linked.optionalPurchasePrice || 0,
+      dailyMileageAllowance: old && old.dailyMileageAllowance || linked.dailyMileageAllowance || 100,
+      excessMileageRate: old && old.excessMileageRate || linked.excessMileageRate || 0,
+      imageUrl,
+      sourceImageUrl: imageSource,
+      description: onboarding.text(product.body_html || old && old.description || '', 3000).replace(/<[^>]+>/g, ' '),
+      availability: (product.variants || []).some(item => item.available !== false) ? 'Available' : 'Unavailable',
+      published: old ? old.published : (product.variants || []).some(item => item.available !== false),
+      source: 'Imported from current Shopify catalog',
+      sourceProductId: String(product.id || ''),
+      sourceHandle: handle
+    }, old));
+  }
+  const importedIds = new Set(rows.map(row => row.id));
+  data.onlineVehicles = rows.concat(data.onlineVehicles.filter(row => !importedIds.has(row.id) && row.source !== 'Imported from current Shopify catalog'));
+  data.publicSite = data.publicSite || {};
+  data.publicSite.lastShopifyMigrationImportAt = new Date().toISOString();
+  data.publicSite.lastShopifyMigrationImportCount = rows.length;
+  return rows;
+}
+async function nativePolicyHtml(data, baseUrl, kind, options = {}) {
+  const settings = nativeSite.publicSettings(data);
+  const titles = { privacy: 'Privacy policy', terms: 'Terms of service', cancellation: 'Cancellation policy' };
+  const content = kind === 'privacy'
+    ? '<p>WheelsonAuto collects application, identity, insurance, payment-reference, vehicle, service, and communication information to review applications and operate customer accounts. Card numbers and CVV values are entered in Clover secure fields and are not stored by WheelsonAuto.</p><p>Driver-license and insurance documents are private and limited to authorized staff review. Contact WheelsonAuto to request access or correction.</p>'
+    : kind === 'cancellation'
+      ? '<p>The rental agreement requires a minimum thirty-day commitment. After that period, cancellation and vehicle return are governed by the signed agreement. A nonrefundable down payment, when required for a vehicle, is identified before signing.</p><p>Contact the office before returning a vehicle so mileage, condition, keys, payments, and insurance can be closed correctly.</p>'
+      : '<p>Vehicle availability, weekly payment, down payment, mileage terms, optional purchase terms, insurance requirements, and pickup date are governed by the agreement created for the selected vehicle.</p><p>Submitting an application does not guarantee approval or reserve a vehicle. Customers must maintain full-coverage insurance and complete staff verification before payment and pickup.</p>';
+  return nativeSite.layout({ title: titles[kind], description: titles[kind] + ' for WheelsonAuto.', canonical: baseUrl + '/' + kind, active: '', settings, body: '<section class="page-intro"><span class="eyebrow">WheelsonAuto policies</span><h1>' + titles[kind] + '</h1></section><section class="site-band"><article class="contract-paper" style="max-height:none">' + content + '<p>Business: Wheels On Auto INC.<br>Office: 329 Linden Ave, Woodlynne, NJ 08107<br>Pickup: 5150 NJ-42, Blackwood, NJ 08012<br>Email: wheelsonauto@gmail.com<br>Phone: (856) 839-1385</p></article></section>', homePath: options.homePath || '/', noIndex: !!options.noIndex });
+}
+function publicApplicationSummary(application = {}) {
+  return {
+    id: application.id || '',
+    name: application.name || '',
+    vehicle: application.vehicle || '',
+    status: application.status || application.stage || 'New',
+    submittedAt: application.submittedAt || ''
+  };
+}
+async function nativeOnboardingContext(data, publicToken) {
+  onboarding.ensureCollections(data);
+  const session = onboarding.findSession(data, publicToken);
+  if (!session) return null;
+  const application = onboarding.applicationForSession(data, session);
+  const vehicle = application && onboarding.findPublicVehicle(data, session.onlineVehicleId || application.onlineVehicleId);
+  if (!application || !vehicle) return null;
+  const template = await onboarding.activeContractTemplate(data, CONTRACT_TEMPLATE_FILE);
+  const contract = onboarding.buildContract(data, application, vehicle, session, template);
+  return { session, application, vehicle, template, contract };
+}
+function addDaysToDateKey(value, days) {
+  const date = new Date(String(value || '').slice(0, 10) + 'T12:00:00Z');
+  if (Number.isNaN(date.getTime())) return '';
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+function nativePaymentPaid(request) {
+  return !!(request && /paid|success/i.test(String(request.status || '')));
+}
+function activeHostedCheckoutHref(request) {
+  const createdAt = Date.parse(request && request.checkoutCreatedAt || '');
+  return request && request.checkoutHref && Number.isFinite(createdAt) && Date.now() - createdAt < 14 * 60 * 1000 ? request.checkoutHref : '';
+}
+function nativeOnboardingRecurring(data, session, application) {
+  return (data.recurringPayments || []).find(row => row.onboardingSessionId === session.id || row.applicationId === application.id) || null;
+}
+function nativeOnboardingPaymentRequests(data, session, application) {
+  return (data.paymentRequests || []).filter(row => row.onboardingSessionId === session.id || row.applicationId === application.id);
+}
+function nativeOnboardingReadyForPickup(data, session, application) {
+  const pricing = application.pricingSnapshot || {};
+  const recurring = nativeOnboardingRecurring(data, session, application);
+  const requests = nativeOnboardingPaymentRequests(data, session, application);
+  const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
+  const firstWeek = requests.find(row => row.paymentType === 'First weekly payment');
+  const cardReady = !!(recurring && (recurring.cloverPaymentSource || recurring.paymentSourceId || /chargeable|active|linked|card saved/i.test(String(recurring.status || recurring.paymentSetup || ''))));
+  return {
+    ready: session.documentReviewStatus === 'Approved' && session.signatureReviewStatus === 'Approved' && cardReady && (Number(pricing.downPayment || 0) <= 0 || nativePaymentPaid(deposit)) && nativePaymentPaid(firstWeek),
+    recurring,
+    deposit,
+    firstWeek
+  };
+}
+function finalizeNativePickup(data, session, application, vehicle, actor = { name: 'WheelsonAuto system', role: 'System' }) {
+  onboarding.ensureCollections(data);
+  const existing = data.pickupAppointments.find(row => row.onboardingSessionId === session.id && !/cancel/i.test(String(row.status || '')));
+  if (existing) return existing;
+  const gate = nativeOnboardingReadyForPickup(data, session, application);
+  if (!gate.ready || !gate.recurring) return null;
+  const settings = nativeSite.publicSettings(data);
+  const dateCheck = onboarding.pickupWindow(settings, session.requestedPickupDate);
+  if (!dateCheck.ok) {
+    session.pickupStatus = 'Needs new date';
+    session.pickupError = dateCheck.error;
+    return null;
+  }
+  if (!onboarding.validatePickupTime(session.requestedPickupTime)) {
+    session.pickupStatus = 'Needs new time';
+    session.pickupError = 'Choose a pickup time from 11:00 AM through 4:00 PM.';
+    return null;
+  }
+  const capacity = Math.max(1, Number(settings.pickupCapacity || 2));
+  const sameSlot = data.pickupAppointments.filter(row => row.date === dateCheck.raw && row.time === session.requestedPickupTime && !/cancel/i.test(String(row.status || ''))).length;
+  if (sameSlot >= capacity) {
+    session.pickupStatus = 'Time needs staff review';
+    session.pickupError = 'That pickup time filled while onboarding was completed. WheelsonAuto will contact the customer with the closest opening.';
+    return null;
+  }
+  const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || {};
+  const vehicleName = nativeSite.vehicleTitle(vehicle);
+  const weekday = dateCheck.weekday || onboarding.pickupWeekday(dateCheck.raw);
+  const nextRecurringDate = addDaysToDateKey(dateCheck.raw, 7);
+  const appointment = {
+    id: 'pickup-' + crypto.randomBytes(8).toString('hex'),
+    applicationId: application.id,
+    onboardingSessionId: session.id,
+    onlineVehicleId: vehicle.id,
+    organizationId: application.organizationId || MAIN_ORG_ID,
+    customer: application.name || '',
+    phone: application.phone || '',
+    email: application.email || '',
+    vehicleId: linkedVehicle.id || vehicle.platformVehicleId || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || linkedVehicle.vin || '',
+    licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+    date: dateCheck.raw,
+    time: session.requestedPickupTime,
+    weekday,
+    durationMinutes: Number(settings.pickupSlotMinutes || 60),
+    address: settings.pickupAddress,
+    status: 'Confirmed - onboarding complete',
+    autopayAnchorDate: dateCheck.raw,
+    nextRecurringCharge: nextRecurringDate,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.name || actor.username || actor.role || 'WheelsonAuto system'
+  };
+  data.pickupAppointments.unshift(appointment);
+  Object.assign(gate.recurring, {
+    applicationId: application.id,
+    onboardingSessionId: session.id,
+    onlineVehicleId: vehicle.id,
+    customer: application.name || '',
+    phone: application.phone || '',
+    email: application.email || '',
+    vehicleId: linkedVehicle.id || vehicle.platformVehicleId || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || linkedVehicle.vin || '',
+    licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+    plate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+    amount: Number(application.pricingSnapshot && application.pricingSnapshot.weeklyPayment || vehicle.weeklyPayment || 0),
+    frequency: 'Weekly',
+    paymentDay: weekday,
+    autopayWeekday: weekday,
+    autopayAnchorDate: dateCheck.raw,
+    nextRun: nextRecurringDate,
+    chargeTime: gate.recurring.chargeTime || '18:00',
+    status: 'Scheduled',
+    tone: 'good',
+    paymentSetup: 'Card linked - first week paid',
+    autoChargeEnabled: true,
+    autopayManagedBy: 'WheelsonAuto',
+    firstWeekCoverageStarts: dateCheck.raw,
+    firstWeekPaymentRequestId: gate.firstWeek && gate.firstWeek.id || '',
+    pickupAppointmentId: appointment.id,
+    updatedAt: new Date().toISOString()
+  });
+  assignAutopayVehicle(data, gate.recurring);
+  Object.assign(session, {
+    status: 'Pickup confirmed',
+    pickupStatus: 'Confirmed',
+    pickupAppointmentId: appointment.id,
+    pickupConfirmedAt: new Date().toISOString(),
+    autopayWeekday: weekday,
+    autopayAnchorDate: dateCheck.raw,
+    nextRecurringCharge: nextRecurringDate,
+    completedAt: new Date().toISOString()
+  });
+  Object.assign(application, {
+    status: 'Approved - pickup confirmed',
+    stage: 'Ready for pickup',
+    requestedPickupDate: dateCheck.raw,
+    requestedPickupTime: session.requestedPickupTime,
+    recurringPaymentId: gate.recurring.id,
+    pickupAppointmentId: appointment.id,
+    updatedAt: new Date().toISOString()
+  });
+  Object.assign(vehicle, {
+    availability: 'Held - pickup scheduled',
+    published: false,
+    heldFor: application.name || '',
+    heldApplicationId: application.id,
+    pickupAppointmentId: appointment.id,
+    updatedAt: new Date().toISOString()
+  });
+  if (linkedVehicle.id) {
+    Object.assign(linkedVehicle, {
+      status: 'Pending pickup',
+      reservedFor: application.name || '',
+      pendingApplicant: application.name || '',
+      pendingApplicationId: application.id,
+      pickupAppointmentId: appointment.id,
+      updatedAt: new Date().toISOString()
+    });
+  }
+  const account = onboarding.createPendingCustomerAccount(data, application, {
+    recurringPaymentId: gate.recurring.id,
+    vehicleId: linkedVehicle.id || vehicle.platformVehicleId || ''
+  });
+  data.customers = Array.isArray(data.customers) ? data.customers : [];
+  let customer = data.customers.find(row => normKey(row.name || row.customer) === normKey(application.name));
+  const customerPatch = {
+    name: application.name || '',
+    customer: application.name || '',
+    phone: application.phone || '',
+    email: application.email || '',
+    applicationId: application.id,
+    customerAccountId: account.id,
+    recurringPaymentId: gate.recurring.id,
+    vehicleId: linkedVehicle.id || vehicle.platformVehicleId || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || linkedVehicle.vin || '',
+    licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+    status: 'Approved - awaiting pickup',
+    source: 'Native WheelsonAuto onboarding',
+    updatedAt: new Date().toISOString()
+  };
+  if (customer) Object.assign(customer, customerPatch);
+  else {
+    customer = { id: 'cus-native-' + crypto.randomBytes(7).toString('hex'), createdAt: new Date().toISOString(), ...customerPatch };
+    data.customers.unshift(customer);
+  }
+  const signature = (data.eSignatures || []).find(row => row.onboardingSessionId === session.id);
+  data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
+  let contract = data.contracts.find(row => row.onboardingSessionId === session.id);
+  const contractPatch = {
+    applicationId: application.id,
+    onboardingSessionId: session.id,
+    customer: application.name || '',
+    phone: application.phone || '',
+    email: application.email || '',
+    customerId: customer.id,
+    vehicleId: linkedVehicle.id || vehicle.platformVehicleId || '',
+    vehicle: vehicleName,
+    vin: vehicle.vin || linkedVehicle.vin || '',
+    licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+    weekly: Number(application.pricingSnapshot && application.pricingSnapshot.weeklyPayment || 0),
+    down: Number(application.pricingSnapshot && application.pricingSnapshot.downPayment || 0),
+    rentalStartDate: dateCheck.raw,
+    autopayWeekday: weekday,
+    contractVersion: signature && signature.contractVersion || '',
+    contractTemplateHash: signature && signature.templateHash || '',
+    signedDocumentHash: signature && signature.documentHash || '',
+    signatureId: signature && signature.id || '',
+    status: 'Signed - awaiting pickup',
+    updatedAt: new Date().toISOString()
+  };
+  if (contract) Object.assign(contract, contractPatch);
+  else {
+    contract = { id: 'contract-native-' + crypto.randomBytes(7).toString('hex'), createdAt: new Date().toISOString(), ...contractPatch };
+    data.contracts.unshift(contract);
+  }
+  application.contractId = contract.id;
+  return appointment;
+}
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
   const serverDataVersion = await dataVersion();
   const clientData = publicMode ? {
-    vehicles: (data.vehicles || []).filter(v => ['Ready', 'Available', 'Coming soon', 'Pending application'].includes(v.status)),
+    vehicles: [],
+    onlineVehicles: nativeSite.publishedVehicles(data).map(vehicle => ({
+      id: vehicle.id,
+      title: nativeSite.vehicleTitle(vehicle),
+      slug: nativeSite.publicVehicleSlug(vehicle),
+      imageUrl: vehicle.imageUrl || vehicle.photoUrl || '',
+      weeklyPayment: Number(vehicle.weeklyPayment || 0),
+      downPayment: Number(vehicle.downPayment || 0),
+      availability: vehicle.availability || 'Available',
+      color: vehicle.color || '',
+      mileage: Number(vehicle.mileage || 0)
+    })),
     business: data.business || { name: 'WheelsonAuto', website: 'wheelsonauto.com' },
     applications: [],
     customers: [],
@@ -5869,7 +6273,8 @@ async function appHtml({ publicMode = false, user = null } = {}) {
     tasks: [],
     documents: [],
     websiteLeads: [],
-    integrations: { clover: {}, shopify: { store: 'wheelsonauto.com', embedPath: '/apply' } }
+    publicSite: data.publicSite || {},
+    integrations: { clover: {}, shopify: {} }
   } : stateForUserRead(data, user || { role: 'Owner' });
   if (!publicMode) {
     clientData.integrations = clientData.integrations || {};
@@ -5882,7 +6287,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
 }
 async function staticFile(res, pathname) {
   const clean = pathname.replace(/^\//, '');
-  if (!['styles.css', 'app.js', 'card-setup.js', 'ifleet-prototype.html'].includes(clean)) return false;
+  if (!['styles.css', 'app.js', 'card-setup.js', 'native-site.css', 'native-site-client.js', 'ifleet-prototype.html'].includes(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : (clean.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8');
   send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': 'no-store' });
   return true;
@@ -7539,13 +7944,60 @@ function resolveClaimCustomerLinks(data) {
   });
   return matched;
 }
-async function recordCloverWebhookEvent(event = {}) {
+function verifyCloverHostedCheckoutWebhook(rawBody, headers = {}) {
+  if (!CLOVER_HCO_WEBHOOK_SECRET) return false;
+  const values = Object.fromEntries(String(headers['clover-signature'] || '').split(',').map(part => part.trim().split('=')).filter(parts => parts.length === 2));
+  const timestamp = Number(values.t || 0);
+  const signature = String(values.v1 || '');
+  if (!timestamp || !signature || Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
+  const expected = crypto.createHmac('sha256', CLOVER_HCO_WEBHOOK_SECRET).update(String(timestamp) + '.' + String(rawBody || '')).digest('hex');
+  return secureWebhookValueMatch(signature.toLowerCase(), expected.toLowerCase());
+}
+function hostedCheckoutWebhookDetails(event = {}) {
+  const eventData = event.Data === undefined ? event.data : event.Data;
+  const checkoutSessionId = typeof eventData === 'string'
+    ? eventData
+    : String(eventData && (eventData.checkoutSessionId || eventData.checkout_session_id || eventData.id) || event.checkoutSessionId || event.checkout_session_id || '');
+  return {
+    checkoutSessionId,
+    paymentId: String(event.Id || event.id || event.paymentId || event.payment_id || ''),
+    status: String(event.Status || event.status || '').toUpperCase(),
+    type: String(event.Type || event.type || '').toUpperCase()
+  };
+}
+function applyHostedCheckoutWebhook(data, event = {}) {
+  const details = hostedCheckoutWebhookDetails(event);
+  if (!details.checkoutSessionId || details.type && details.type !== 'PAYMENT') return { matched: false, ...details };
+  const request = (data.paymentRequests || []).find(row => String(row.checkoutSessionId || '') === details.checkoutSessionId);
+  if (!request) return { matched: false, ...details };
+  if (details.status === 'APPROVED') {
+    recordHostedCheckoutPayment(data, request, { paidAt: new Date().toISOString(), cloverPaymentId: details.paymentId, webhookEvent: event });
+    return { matched: true, approved: true, paymentRequestId: request.id, ...details };
+  }
+  if (/DECLINED|FAILED|CANCELLED|CANCELED/.test(details.status)) {
+    request.status = 'Failed or incomplete';
+    request.failedAt = new Date().toISOString();
+    request.cloverPaymentId = details.paymentId || request.cloverPaymentId || '';
+    request.webhookVerifiedAt = new Date().toISOString();
+    const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
+    if (session) {
+      session.status = (request.paymentType || 'Payment') + ' failed or incomplete';
+      session.lastPaymentErrorAt = request.failedAt;
+    }
+    return { matched: true, approved: false, paymentRequestId: request.id, ...details };
+  }
+  request.status = 'Awaiting signed Clover confirmation';
+  request.webhookVerifiedAt = new Date().toISOString();
+  return { matched: true, approved: false, paymentRequestId: request.id, ...details };
+}
+async function recordCloverWebhookEvent(event = {}, options = {}) {
   const data = await readData();
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
   data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), event });
   const previous = JSON.parse(JSON.stringify(data));
+  const hostedCheckout = options.verifiedHostedCheckout ? applyHostedCheckoutWebhook(data, event) : { matched: false };
   const disputeClaim = cloverWebhookDisputeClaim(event);
   let createdClaimId = '';
   if (disputeClaim) {
@@ -7562,7 +8014,7 @@ async function recordCloverWebhookEvent(event = {}) {
   await writeData(data);
   const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), WEBHOOK_AUTO_SYNC_DELAY_MS);
   if (webhookSyncTimer.unref) webhookSyncTimer.unref();
-  return { ok: true, disputeClaimId: createdClaimId };
+  return { ok: true, disputeClaimId: createdClaimId, hostedCheckout };
 }
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
@@ -7592,8 +8044,11 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   await writeDataQueue.catch(() => {});
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  const deletedIds = options.deletedIds || {};
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
+    const removed = new Set((deletedIds[key] || []).map(String));
+    if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
   });
   data.customers = preferIncoming ? upsertById(data.customers, latest.customers) : upsertById(latest.customers, data.customers);
   data.payments = preferIncoming ? upsertById(data.payments, latest.payments) : upsertById(latest.payments, data.payments);
@@ -7673,7 +8128,9 @@ async function runAutoSync(options = {}) {
       lastStartedAt: autoSyncStatus.lastStartedAt,
       lastSource: autoSyncStatus.lastSource
     };
+    const holdCleanup = onboarding.releaseExpiredHolds(data);
     const result = await syncCloverIntoData(data);
+    result.onboardingHolds = holdCleanup;
     result.vehicleSheet = await mergeVehicleImport(data);
     autoSyncStatus.lastFinishedAt = new Date().toISOString();
     autoSyncStatus.lastResult = result;
@@ -7712,6 +8169,9 @@ function cleanAutopayPayload(payload) {
   const amount = Number(payload.amount || 0);
   return {
     id: payload.id || ('rec-' + Date.now()),
+    applicationId: String(payload.applicationId || '').trim(),
+    onboardingSessionId: String(payload.onboardingSessionId || '').trim(),
+    onlineVehicleId: String(payload.onlineVehicleId || '').trim(),
     organizationId: String(payload.organizationId || payload.orgId || payload.companyId || MAIN_ORG_ID).trim(),
     customer: String(payload.customer || '').trim(),
     phone: String(payload.phone || '').trim(),
@@ -8332,8 +8792,8 @@ function publicPayHtml(request, message = '') {
   const vehicle = escapeHtml(request.vehicle || 'WheelsonAuto recurring payment');
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on Clover secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit">Pay securely with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
 }
-function paymentResultHtml(title, message) {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></section></main></div></body></html>';
+function paymentResultHtml(title, message, returnUrl = 'https://www.wheelsonauto.com/', returnLabel = 'Back to WheelsonAuto') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></section></main></div></body></html>';
 }
 function createPaymentRequest(data, payload) {
   const recurring = (data.recurringPayments || []).find(p => p.id === payload.recurringPaymentId) || {};
@@ -8345,6 +8805,9 @@ function createPaymentRequest(data, payload) {
   const request = {
     id: 'plink-' + crypto.randomBytes(12).toString('hex'),
     recurringPaymentId: payload.recurringPaymentId || recurring.id || '',
+    applicationId: payload.applicationId || recurring.applicationId || '',
+    onboardingSessionId: payload.onboardingSessionId || recurring.onboardingSessionId || '',
+    onlineVehicleId: payload.onlineVehicleId || recurring.onlineVehicleId || '',
     organizationId: payload.organizationId || recurring.organizationId || MAIN_ORG_ID,
     customer,
     phone: payload.phone || recurring.phone || '',
@@ -8357,6 +8820,10 @@ function createPaymentRequest(data, payload) {
     tracker: trackerName(vehicle) || trackerName(payload) || trackerName(recurring),
     amount,
     frequency: payload.frequency || recurring.frequency || 'Weekly',
+    paymentType: String(payload.paymentType || payload.reason || '').trim(),
+    reason: String(payload.reason || payload.paymentType || '').trim(),
+    notes: String(payload.notes || '').trim(),
+    onboardingReturnUrl: String(payload.onboardingReturnUrl || '').trim(),
     status: 'Open',
     source: 'WheelsonAuto hosted checkout',
     createdAt: new Date().toISOString(),
@@ -8392,6 +8859,9 @@ function createCardSetupRequest(data, payload) {
     id: 'setup-' + crypto.randomBytes(12).toString('hex'),
     organizationId: autopay.organizationId || MAIN_ORG_ID,
     recurringPaymentId: autopay.id,
+    applicationId: String(payload.applicationId || autopay.applicationId || '').trim(),
+    onboardingSessionId: String(payload.onboardingSessionId || autopay.onboardingSessionId || '').trim(),
+    onlineVehicleId: String(payload.onlineVehicleId || autopay.onlineVehicleId || '').trim(),
     customer: autopay.customer,
     phone: autopay.phone,
     email: autopay.email,
@@ -8410,6 +8880,10 @@ function createCardSetupRequest(data, payload) {
     status: 'Open',
     source: 'WheelsonAuto card setup',
     createdAt: new Date().toISOString(),
+    autopayConsentAt: String(payload.autopayConsentAt || '').trim(),
+    autopayConsentIp: String(payload.autopayConsentIp || '').trim(),
+    autopayConsentUserAgent: String(payload.autopayConsentUserAgent || '').trim(),
+    onboardingReturnUrl: String(payload.onboardingReturnUrl || '').trim(),
     url: ''
   };
   request.url = PUBLIC_BASE_URL + '/setup-card/' + request.id;
@@ -8418,7 +8892,7 @@ function createCardSetupRequest(data, payload) {
   autopay.cardSetupUrl = request.url;
   autopay.cloverPlanId = request.cloverPlanId;
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
-  if (!cardOnlyUpdate) assignAutopayVehicle(data, autopay);
+  if (!cardOnlyUpdate && !payload.deferVehicleAssignment) assignAutopayVehicle(data, autopay);
   if (cardOnlyUpdate) {
     Object.assign(cardTarget, {
       cardSetupRequestId: request.id,
@@ -8452,7 +8926,8 @@ function setupCardHtml(request, message = '') {
     merchantId: CLOVER_MERCHANT_ID,
     sdkUrl,
     tokenUrl: tokenBase + '/v1/tokens',
-    submitUrl: '/api/public/card-setup/' + encodeURIComponent(request.id) + '/complete'
+    submitUrl: '/api/public/card-setup/' + encodeURIComponent(request.id) + '/complete',
+    returnUrl: request.onboardingReturnUrl || ''
   };
   const disabled = setupReady ? '' : ' disabled';
   const amount = '$' + Number(request.amount || 0).toLocaleString();
@@ -8485,6 +8960,12 @@ async function completeCardSetup(data, request, payload) {
   request.cloverPaymentSource = cardSource || token;
   request.cloverCardId = String(savedCard.id || savedCard || '');
   request.cloverSubscriptionId = subscription && subscription.id || request.cloverSubscriptionId || '';
+  const onboardingSession = (data.onboardingSessions || []).find(session => session.id === request.onboardingSessionId);
+  if (onboardingSession) {
+    onboardingSession.cardCompletedAt = request.completedAt;
+    onboardingSession.autopayConsentAt = request.autopayConsentAt || request.completedAt;
+    onboardingSession.status = 'Card linked';
+  }
   data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
@@ -8997,11 +9478,13 @@ async function runWheelsonAutoAutopay(options = {}) {
 }
 async function attachCloverCheckout(data, request) {
   const name = splitName(request.customer);
+  const itemName = ['WheelsonAuto', request.paymentType || request.frequency || 'payment', request.customer].filter(Boolean).join(' - ');
+  const itemNote = [request.vehicle || 'WheelsonAuto account', request.vin ? 'VIN ' + request.vin : '', request.licensePlate ? 'Tag ' + request.licensePlate : ''].filter(Boolean).join(' | ');
   const checkout = await cloverPostCheckout({
     ...(CLOVER_HCO_PAGE_CONFIG_UUID ? { pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID } : {}),
     customer: { email: request.email || undefined, firstName: name.firstName, lastName: name.lastName, phoneNumber: request.phone || undefined },
-    redirectUrls: { success: PUBLIC_BASE_URL + '/pay/' + request.id + '/success', failure: PUBLIC_BASE_URL + '/pay/' + request.id + '/failure' },
-    shoppingCart: { lineItems: [{ name: 'WheelsonAuto ' + (request.frequency || 'recurring') + ' payment', note: request.vehicle || 'Recurring payment', price: cents(request.amount), unitQty: 1 }] }
+    redirectUrls: { success: PUBLIC_BASE_URL + '/pay/' + request.id + '/success?session_id={CHECKOUT_SESSION_ID}', failure: PUBLIC_BASE_URL + '/pay/' + request.id + '/failure' },
+    shoppingCart: { lineItems: [{ name: itemName, note: itemNote, price: cents(request.amount), unitQty: 1 }] }
   });
   request.status = 'Clover checkout ready';
   request.checkoutSessionId = checkout.checkoutSessionId || '';
@@ -9009,6 +9492,35 @@ async function attachCloverCheckout(data, request) {
   request.checkoutCreatedAt = new Date().toISOString();
   await writeData(data);
   return checkout;
+}
+function recordHostedCheckoutPayment(data, request, details = {}) {
+  const paidAt = details.paidAt || new Date().toISOString();
+  request.status = 'Paid through verified Clover webhook';
+  request.paidAt = request.paidAt || paidAt;
+  request.cloverPaymentId = details.cloverPaymentId || request.cloverPaymentId || '';
+  request.webhookVerifiedAt = paidAt;
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
+    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: 'Clover Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: 'Clover Hosted Checkout verified webhook' });
+  }
+  const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
+  if (recurring) {
+    recurring.status = request.onboardingSessionId ? 'Card linked - onboarding payments' : 'Active';
+    recurring.tone = 'good';
+    recurring.lastPaymentAt = request.paidAt;
+  }
+  data.documents = Array.isArray(data.documents) ? data.documents : [];
+  if (!data.documents.some(document => document.paymentRequestId === request.id && document.kind === 'Receipt')) {
+    data.documents.unshift({ id: 'receipt-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', customer: request.customer || '', vehicle: request.vehicle || '', vehicleId: request.vehicleId || '', vin: request.vin || '', licensePlate: request.licensePlate || '', title: (request.paymentType || 'Payment') + ' receipt', type: request.paymentType || 'Payment receipt', kind: 'Receipt', amount: Number(request.amount || 0), method: 'Clover Hosted Checkout', status: 'Paid', date: request.paidAt, customerVisible: true, portalVisible: true, source: 'Clover Hosted Checkout verified webhook' });
+  }
+  if (request.onboardingSessionId) {
+    const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
+    const application = (data.applications || []).find(row => row.id === request.applicationId);
+    const vehicle = application && onboarding.findPublicVehicle(data, request.onlineVehicleId || application.onlineVehicleId);
+    if (session) session.status = (request.paymentType || 'Payment') + ' paid';
+    if (session && application && vehicle) finalizeNativePickup(data, session, application, vehicle);
+  }
+  return request;
 }
 
 function telnyxWebhookEventType(payload = {}) {
@@ -9300,6 +9812,62 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
     if (await staticFile(res, url.pathname)) return;
+    if (url.pathname.startsWith('/native-media/') && req.method === 'GET') {
+      const filename = String(url.pathname.split('/').pop() || '');
+      if (!/^[a-f0-9]{20,64}\.(?:jpg|jpeg|png|webp|avif)$/i.test(filename)) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
+      const mediaPath = path.join(DATA_DIR, 'native-media', filename);
+      try {
+        const body = await fs.readFile(mediaPath);
+        const type = filename.endsWith('.png') ? 'image/png' : filename.endsWith('.webp') ? 'image/webp' : filename.endsWith('.avif') ? 'image/avif' : 'image/jpeg';
+        return send(res, 200, body, type, { 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+      } catch {
+        return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
+      }
+    }
+    if (url.pathname === '/staff/login' && req.method === 'GET') return send(res, 302, '', 'text/plain', { Location: '/login' });
+    if (req.method === 'GET' && (url.pathname === '/site-preview' || url.pathname === '/' && nativePublicRoot(req))) {
+      const data = await readData();
+      return send(res, 200, nativeSite.homeHtml(data, 'https://www.wheelsonauto.com', nativeRenderOptions(req, url.pathname === '/site-preview')), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/inventory' && req.method === 'GET') {
+      const data = await readData();
+      return send(res, 200, nativeSite.inventoryHtml(data, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname.startsWith('/vehicles/') && req.method === 'GET') {
+      const data = await readData();
+      const vehicle = onboarding.findPublicVehicle(data, decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || ''));
+      if (!vehicle || !nativeSite.publishedVehicles(data).some(row => row.id === vehicle.id)) return send(res, 404, paymentResultHtml('Vehicle not available', 'This vehicle is not currently published. Browse the current WheelsonAuto inventory for available cars.'));
+      return send(res, 200, nativeSite.vehicleHtml(data, vehicle, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname.startsWith('/apply/') && req.method === 'GET') {
+      const data = await readData();
+      const vehicle = onboarding.findPublicVehicle(data, decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || ''));
+      if (!vehicle || !nativeSite.publishedVehicles(data).some(row => row.id === vehicle.id)) return send(res, 404, paymentResultHtml('Vehicle not available', 'This vehicle is not accepting online applications right now.'));
+      return send(res, 200, nativeSite.applicationHtml(data, vehicle, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+    }
+    if (url.pathname.startsWith('/onboard/') && req.method === 'GET') {
+      const publicToken = decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || '');
+      const data = await readData();
+      const context = await nativeOnboardingContext(data, publicToken);
+      if (!context) return send(res, 404, paymentResultHtml('Onboarding link not found', 'This secure link is invalid, expired, or replaced. Contact WheelsonAuto for a fresh link.'));
+      const appointment = finalizeNativePickup(data, context.session, context.application, context.vehicle);
+      if (appointment) await writeData(data);
+      const refreshedContract = onboarding.buildContract(data, context.application, context.vehicle, context.session, context.template);
+      return send(res, 200, nativeSite.onboardingHtml(data, context.session, context.application, context.vehicle, context.template, refreshedContract.body, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'no-referrer' });
+    }
+    if (['/privacy', '/terms', '/cancellation'].includes(url.pathname) && req.method === 'GET') {
+      const data = await readData();
+      return send(res, 200, await nativePolicyHtml(data, 'https://www.wheelsonauto.com', url.pathname.slice(1), nativeRenderOptions(req)), 'text/html; charset=utf-8');
+    }
+    if (url.pathname === '/robots.txt' && req.method === 'GET') {
+      return send(res, 200, 'User-agent: *\nAllow: /\nDisallow: /onboard/\nDisallow: /apply/\nDisallow: /staff/\nDisallow: /api/\nSitemap: https://www.wheelsonauto.com/sitemap.xml\n', 'text/plain; charset=utf-8');
+    }
+    if (url.pathname === '/sitemap.xml' && req.method === 'GET') {
+      const data = await readData();
+      const paths = ['/', '/inventory', '/privacy', '/terms', '/cancellation'].concat(nativeSite.publishedVehicles(data).map(vehicle => '/vehicles/' + nativeSite.publicVehicleSlug(vehicle)));
+      const xml = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + paths.map(item => '<url><loc>https://www.wheelsonauto.com' + escapeHtml(item) + '</loc></url>').join('') + '</urlset>';
+      return send(res, 200, xml, 'application/xml; charset=utf-8');
+    }
     if (url.pathname.startsWith('/toll-receipt/') && req.method === 'GET') {
       const token = String(url.pathname.split('/').filter(Boolean)[1] || '');
       const data = await readData();
@@ -9327,22 +9895,30 @@ const server = http.createServer(async (req, res) => {
       const request = data.paymentRequests.find(item => item.id === requestId);
       if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
       if (parts[2] === 'success') {
-        request.status = 'Paid through Clover checkout';
-        request.paidAt = new Date().toISOString();
-        data.payments = Array.isArray(data.payments) ? data.payments : [];
-        if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
-          data.payments.unshift({ id: 'pay-' + Date.now(), paymentRequestId: request.id, date: new Date().toLocaleString('en-US'), customer: request.customer, method: 'Clover Hosted Checkout', amount: request.amount, status: 'Paid', tone: 'good', source: 'Clover Hosted Checkout' });
+        if (nativePaymentPaid(request)) {
+          if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
+          return send(res, 200, paymentResultHtml('Payment received', 'Clover verified this payment and WheelsonAuto updated the customer account.'));
         }
-        const recurring = (data.recurringPayments || []).find(p => p.id === request.recurringPaymentId);
-        if (recurring) { recurring.status = 'Active'; recurring.tone = 'good'; recurring.lastPaymentAt = new Date().toISOString(); }
+        const returnedSessionId = String(url.searchParams.get('session_id') || '');
+        if (returnedSessionId && request.checkoutSessionId && returnedSessionId !== request.checkoutSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned Clover checkout did not match this WheelsonAuto payment request. No payment was recorded.'));
+        request.status = 'Awaiting signed Clover confirmation';
+        request.checkoutReturnedAt = new Date().toISOString();
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return send(res, 200, paymentResultHtml('Payment received', 'Thank you. Clover has returned this payment as successful, and WheelsonAuto can now update your account.'));
+        return send(res, 200, paymentResultHtml('Payment submitted', 'Clover returned the checkout successfully. WheelsonAuto is waiting for Clover\'s signed confirmation before marking money paid.', request.onboardingReturnUrl || request.url || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Check payment status'));
       }
       if (parts[2] === 'failure') {
         request.status = 'Failed or incomplete';
         request.failedAt = new Date().toISOString();
         const recurring = (data.recurringPayments || []).find(p => p.id === request.recurringPaymentId);
-        if (recurring) { recurring.status = 'Failed retry'; recurring.tone = 'bad'; }
+        if (recurring && !request.onboardingSessionId) { recurring.status = 'Failed retry'; recurring.tone = 'bad'; }
+        if (request.onboardingSessionId) {
+          const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
+          if (session) {
+            session.status = (request.paymentType || 'Payment') + ' failed or incomplete';
+            session.lastPaymentErrorAt = request.failedAt;
+          }
+        }
         await writeData(data);
         return send(res, 200, publicPayHtml(request, 'That payment did not complete. You can try again below, or contact WheelsonAuto for help.'));
       }
@@ -9354,26 +9930,72 @@ const server = http.createServer(async (req, res) => {
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       const request = data.paymentRequests.find(item => item.id === requestId);
       if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
+      if (nativePaymentPaid(request)) return send(res, 200, paymentResultHtml('Already paid', 'This payment request has already been verified by Clover. No second checkout was opened.', request.onboardingReturnUrl || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Back to WheelsonAuto'));
+      const currentCheckout = activeHostedCheckoutHref(request);
+      if (currentCheckout) return send(res, 302, '', 'text/plain', { Location: currentCheckout });
       const checkout = await attachCloverCheckout(data, request);
       return send(res, 302, '', 'text/plain', { Location: checkout.href });
     }
     if (url.pathname === '/api/public/applications' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req, 256 * 1024);
       const data = await readData();
-      const app = { id: payload.id || ('app-' + Date.now()), submittedAt: payload.submittedAt || new Date().toISOString(), stage: 'New', status: 'New', score: payload.score || scoreApplication(payload), ...payload };
+      onboarding.ensureCollections(data);
+      const selectedVehicle = onboarding.findPublicVehicle(data, onboarding.text(payload.onlineVehicleId, 120));
+      if (!selectedVehicle || !nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
+      const firstName = onboarding.text(payload.firstName, 80);
+      const lastName = onboarding.text(payload.lastName, 80);
+      const name = [firstName, lastName].filter(Boolean).join(' ').trim();
+      const phone = String(payload.phone || '').replace(/\D/g, '').slice(-10);
+      const email = onboarding.text(payload.email, 180).toLowerCase();
+      const passwordError = passwordPolicyError(payload.password, 'Customer password');
+      if (!name || phone.length !== 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { ok: false, error: 'Legal name, a valid 10-digit phone number, and a valid email are required.' });
+      if (passwordError) return json(res, 400, { ok: false, error: passwordError });
+      if (payload.applicationConsent !== true) return json(res, 400, { ok: false, error: 'Application authorization is required.' });
+      const required = ['address', 'city', 'state', 'postalCode', 'dateOfBirth', 'driverLicenseId', 'driverLicenseExpires', 'employer'];
+      if (required.some(field => !onboarding.text(payload[field], 300))) return json(res, 400, { ok: false, error: 'Complete every required application field.' });
+      const pricing = onboarding.pricingSnapshot(selectedVehicle);
+      const password = createPasswordRecord(payload.password);
+      const submittedAt = new Date().toISOString();
+      const app = {
+        id: 'app-native-' + crypto.randomBytes(8).toString('hex'),
+        submittedAt,
+        updatedAt: submittedAt,
+        stage: 'New',
+        status: 'New - staff review',
+        organizationId: selectedVehicle.organizationId || MAIN_ORG_ID,
+        source: 'Native WheelsonAuto website',
+        name,
+        firstName,
+        lastName,
+        phone,
+        email,
+        address: onboarding.text(payload.address, 220),
+        city: onboarding.text(payload.city, 100),
+        state: onboarding.text(payload.state, 40).toUpperCase(),
+        postalCode: onboarding.text(payload.postalCode, 20),
+        dateOfBirth: onboarding.text(payload.dateOfBirth, 20),
+        driverLicenseId: onboarding.text(payload.driverLicenseId, 80),
+        driverLicenseExpires: onboarding.text(payload.driverLicenseExpires, 20),
+        employer: onboarding.text(payload.employer, 160),
+        income: Math.max(0, Number(payload.income || 0)),
+        onlineVehicleId: selectedVehicle.id,
+        vehicleId: selectedVehicle.platformVehicleId || '',
+        vehicle: nativeSite.vehicleTitle(selectedVehicle),
+        pricingSnapshot: pricing,
+        weekly: pricing.weeklyPayment,
+        down: pricing.downPayment,
+        applicationConsentAt: submittedAt,
+        applicationConsentIp: requestIp(req),
+        applicationConsentUserAgent: onboarding.text(req.headers['user-agent'], 400),
+        pendingPasswordHash: password.passwordHash,
+        pendingPasswordSalt: password.passwordSalt,
+        pendingPasswordUpdatedAt: password.passwordUpdatedAt
+      };
+      app.score = scoreApplication(app);
       data.applications = Array.isArray(data.applications) ? data.applications : [];
       data.websiteLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
-      data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
-      if (!data.applications.some(existing => existing.id === app.id)) data.applications.unshift(app);
-      const selectedVehicle = data.vehicles.find(vehicle => vehicle.id === app.vehicleId);
-      if (selectedVehicle && ['Ready', 'Available', 'Coming soon', 'Pending application'].includes(selectedVehicle.status)) {
-        selectedVehicle.status = 'Pending application';
-        selectedVehicle.pendingApplicant = app.name || '';
-        selectedVehicle.pendingApplicationId = app.id;
-        selectedVehicle.lastLeadAt = app.submittedAt;
-        selectedVehicle.notes = [selectedVehicle.notes, 'Website application submitted by ' + (app.name || 'applicant') + ' on ' + app.submittedAt].filter(Boolean).join('\n');
-      }
-      if (!data.websiteLeads.some(existing => existing.applicationId === app.id)) data.websiteLeads.unshift({ id: 'lead-' + Date.now(), applicationId: app.id, source: 'wheelsonauto.com/apply', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, created: 'Just now', status: 'Submitted' });
+      data.applications.unshift(app);
+      data.websiteLeads.unshift({ id: 'lead-native-' + crypto.randomBytes(7).toString('hex'), applicationId: app.id, organizationId: app.organizationId, source: 'wheelsonauto.com native application', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, onlineVehicleId: app.onlineVehicleId, created: 'Just now', createdAt: submittedAt, status: 'Submitted' });
       await queueOwnerEmailNotification(data, 'application_submitted', {
         customer: app.name || 'New applicant',
         subject: 'New WheelsonAuto application - ' + (app.name || 'Applicant'),
@@ -9382,7 +10004,7 @@ const server = http.createServer(async (req, res) => {
           'Applicant: ' + (app.name || 'Not provided'),
           'Phone: ' + (app.phone || 'Not provided'),
           'Email: ' + (app.email || 'Not provided'),
-          'Vehicle: ' + (app.vehicle || (selectedVehicle && vehicleNameFromParts(selectedVehicle)) || 'Not selected'),
+          'Vehicle: ' + app.vehicle,
           'Score: ' + (app.score || 'Not scored'),
           'Income: $' + Number(app.income || 0).toLocaleString(),
           'Down payment: $' + Number(app.down || 0).toLocaleString()
@@ -9390,7 +10012,233 @@ const server = http.createServer(async (req, res) => {
       });
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, application: app });
+      return json(res, 201, { ok: true, application: publicApplicationSummary(app) });
+    }
+    if (url.pathname.startsWith('/api/public/onboarding/') && req.method === 'POST') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      const publicToken = decodeURIComponent(parts[3] || '');
+      const action = String(parts[4] || '');
+      const maxBytes = action === 'documents' ? 20 * 1024 * 1024 : action === 'signature' ? 2 * 1024 * 1024 : 512 * 1024;
+      const payload = await readJsonBody(req, maxBytes);
+      const data = await readData();
+      const context = await nativeOnboardingContext(data, publicToken);
+      if (!context) return json(res, 404, { ok: false, error: 'This secure onboarding link is invalid, expired, or replaced.' });
+      const { session, application, vehicle, template } = context;
+      const returnUrl = requestBaseUrl(req).replace(/\/+$/, '') + '/onboard/' + encodeURIComponent(publicToken);
+      if (action === 'profile') {
+        if ((data.eSignatures || []).some(row => row.onboardingSessionId === session.id)) return json(res, 409, { ok: false, error: 'The signed agreement has already locked the profile and pickup date. Contact WheelsonAuto to request a correction.' });
+        const settings = nativeSite.publicSettings(data);
+        const pickup = onboarding.pickupWindow(settings, payload.requestedPickupDate);
+        if (!pickup.ok) return json(res, 400, { ok: false, error: pickup.error });
+        if (!onboarding.validatePickupTime(payload.requestedPickupTime)) return json(res, 400, { ok: false, error: 'Choose a pickup time from 11:00 AM through 4:00 PM.' });
+        if (payload.pickupAutopayConsent !== true) return json(res, 400, { ok: false, error: 'Confirm that the pickup date becomes the weekly autopay weekday.' });
+        const required = ['address', 'city', 'state', 'postalCode', 'driverLicenseId', 'driverLicenseExpires', 'insuranceProvider', 'insurancePolicyNumber'];
+        if (required.some(field => !onboarding.text(payload[field], 240))) return json(res, 400, { ok: false, error: 'Complete every profile, license, and insurance field.' });
+        Object.assign(application, {
+          address: onboarding.text(payload.address, 220),
+          city: onboarding.text(payload.city, 100),
+          state: onboarding.text(payload.state, 40).toUpperCase(),
+          postalCode: onboarding.text(payload.postalCode, 20),
+          driverLicenseId: onboarding.text(payload.driverLicenseId, 80),
+          driverLicenseExpires: onboarding.text(payload.driverLicenseExpires, 20),
+          insuranceProvider: onboarding.text(payload.insuranceProvider, 160),
+          insurancePolicyNumber: onboarding.text(payload.insurancePolicyNumber, 120),
+          requestedPickupDate: pickup.raw,
+          requestedPickupTime: onboarding.text(payload.requestedPickupTime, 30),
+          onboardingStatus: 'Profile and pickup request complete',
+          updatedAt: new Date().toISOString()
+        });
+        Object.assign(session, {
+          profileCompletedAt: new Date().toISOString(),
+          requestedPickupDate: pickup.raw,
+          requestedPickupTime: onboarding.text(payload.requestedPickupTime, 30),
+          requestedPickupWeekday: pickup.weekday,
+          pickupAutopayConsentAt: new Date().toISOString(),
+          pickupAutopayConsentIp: requestIp(req),
+          pickupAutopayConsentUserAgent: onboarding.text(req.headers['user-agent'], 400),
+          status: 'Profile complete'
+        });
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, message: 'Profile and pickup request saved. Your pickup date is now the proposed weekly billing weekday.' });
+      }
+      if (action === 'documents') {
+        if (!session.profileCompletedAt) return json(res, 409, { ok: false, error: 'Complete the profile and pickup request first.' });
+        const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR);
+        session.documentReviewStatus = 'Waiting on staff';
+        session.signatureReviewStatus = 'Waiting on customer';
+        session.reviewStatus = 'Documents waiting';
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 201, { ok: true, message: 'License and insurance received for private staff review.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
+      }
+      if (action === 'signature') {
+        if (session.documentReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the driver license and full-coverage insurance before the agreement can be signed.' });
+        if ((data.eSignatures || []).some(row => row.onboardingSessionId === session.id && !/rejected|void/i.test(String(row.status || '')))) return json(res, 409, { ok: false, error: 'This agreement has already been signed.' });
+        if (normKey(payload.typedName) !== normKey(application.name)) return json(res, 400, { ok: false, error: 'Type the same full legal name used on the application.' });
+        if (payload.electronicConsent !== true || payload.signatureMatchConsent !== true) return json(res, 400, { ok: false, error: 'Electronic-signature and signature-match confirmations are both required.' });
+        const signedAt = new Date().toISOString();
+        const signedContract = onboarding.buildContract(data, application, vehicle, session, template, { signedAt });
+        const signatureImage = await onboarding.saveSignatureImage(payload.signatureData, session, DATA_DIR);
+        const signature = {
+          id: 'esign-' + crypto.randomBytes(9).toString('hex'),
+          applicationId: application.id,
+          onboardingSessionId: session.id,
+          onlineVehicleId: vehicle.id,
+          organizationId: application.organizationId || MAIN_ORG_ID,
+          customer: application.name || '',
+          typedName: onboarding.text(payload.typedName, 160),
+          contractVersion: template.version || 1,
+          templateId: template.id || '',
+          templateHash: signedContract.templateHash,
+          documentHash: signedContract.documentHash,
+          contractBody: signedContract.body,
+          contractValues: signedContract.values,
+          pricingSnapshot: application.pricingSnapshot || {},
+          signatureImageId: signatureImage.id,
+          signatureImageHash: signatureImage.sha256,
+          signatureImagePath: signatureImage.storagePath,
+          signatureImageContentType: signatureImage.contentType,
+          signatureImageSize: signatureImage.size,
+          electronicConsent: true,
+          signatureMatchConsent: true,
+          signedAt,
+          signedIp: requestIp(req),
+          signedUserAgent: onboarding.text(req.headers['user-agent'], 400),
+          status: 'Signed - staff comparison required',
+          verificationStatus: 'Waiting on staff'
+        };
+        data.eSignatures.unshift(signature);
+        Object.assign(session, {
+          signatureId: signature.id,
+          signedAt,
+          signatureReviewStatus: 'Waiting on staff',
+          reviewStatus: 'Signature waiting',
+          status: 'Agreement signed'
+        });
+        application.onboardingStatus = 'Signature waiting for comparison';
+        application.updatedAt = signedAt;
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 201, { ok: true, message: 'Agreement signed and locked. WheelsonAuto will compare the signature with the driver license.' });
+      }
+      if (action === 'card') {
+        if (session.signatureReviewStatus !== 'Approved' || session.reviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the license-signature comparison before card setup.' });
+        if (payload.autopayConsent !== true) return json(res, 400, { ok: false, error: 'Card-on-file and weekly autopay authorization is required.' });
+        const existingRecurring = nativeOnboardingRecurring(data, session, application);
+        if (existingRecurring && (existingRecurring.cloverPaymentSource || /linked|card saved|chargeable/i.test(String(existingRecurring.paymentSetup || existingRecurring.status || '')))) return json(res, 200, { ok: true, message: 'Card is already linked. Continue to the required payments.' });
+        const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && !/saved|complete|cancel|failed/i.test(String(row.status || '')));
+        if (openSetup) return json(res, 200, { ok: true, redirectUrl: openSetup.url, message: 'Opening the existing secure Clover card setup.' });
+        const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || {};
+        const consentAt = new Date().toISOString();
+        const setup = createCardSetupRequest(data, {
+          applicationId: application.id,
+          onboardingSessionId: session.id,
+          onlineVehicleId: vehicle.id,
+          organizationId: application.organizationId || MAIN_ORG_ID,
+          customer: application.name,
+          phone: application.phone,
+          email: application.email,
+          vehicleId: linkedVehicle.id || vehicle.platformVehicleId || '',
+          vehicle: nativeSite.vehicleTitle(vehicle),
+          vin: vehicle.vin || linkedVehicle.vin || '',
+          licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+          amount: Number(application.pricingSnapshot && application.pricingSnapshot.weeklyPayment || vehicle.weeklyPayment || 0),
+          frequency: 'Weekly',
+          firstRun: addDaysToDateKey(session.requestedPickupDate, 7),
+          chargeTime: '18:00',
+          deferVehicleAssignment: true,
+          autopayConsentAt: consentAt,
+          autopayConsentIp: requestIp(req),
+          autopayConsentUserAgent: onboarding.text(req.headers['user-agent'], 400),
+          onboardingReturnUrl: returnUrl,
+          notes: 'Customer authorized card on file and weekly autopay anchored to pickup date ' + session.requestedPickupDate + '.'
+        });
+        Object.assign(session, {
+          autopayConsentAt: consentAt,
+          autopayConsentIp: requestIp(req),
+          autopayConsentUserAgent: onboarding.text(req.headers['user-agent'], 400),
+          autopayConsentVersion: 'Pickup weekday weekly autopay v1',
+          cardSetupRequestId: setup.request.id,
+          status: 'Card setup opened'
+        });
+        application.recurringPaymentId = setup.autopay.id;
+        application.cardSetupRequestId = setup.request.id;
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 201, { ok: true, redirectUrl: setup.request.url, message: 'Opening Clover secure card setup.' });
+      }
+      if (action === 'payment') {
+        const recurring = nativeOnboardingRecurring(data, session, application);
+        const cardReady = !!(recurring && (recurring.cloverPaymentSource || /linked|card saved|chargeable|active/i.test(String(recurring.paymentSetup || recurring.status || ''))));
+        if (!cardReady) return json(res, 409, { ok: false, error: 'Complete Clover card setup before making the required payments.' });
+        const kind = payload.paymentType === 'deposit' ? 'deposit' : payload.paymentType === 'first_week' ? 'first_week' : '';
+        if (!kind) return json(res, 400, { ok: false, error: 'Choose the deposit or first weekly payment.' });
+        const pricing = application.pricingSnapshot || onboarding.pricingSnapshot(vehicle);
+        const requests = nativeOnboardingPaymentRequests(data, session, application);
+        const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
+        if (kind === 'first_week' && Number(pricing.downPayment || 0) > 0 && !nativePaymentPaid(deposit)) return json(res, 409, { ok: false, error: 'The nonrefundable down payment must complete before the first weekly payment.' });
+        const label = kind === 'deposit' ? 'Nonrefundable down payment' : 'First weekly payment';
+        const amount = Number(kind === 'deposit' ? pricing.downPayment : pricing.weeklyPayment);
+        if (kind === 'deposit' && amount <= 0) return json(res, 200, { ok: true, message: 'No down payment is required. Continue to the first weekly payment.' });
+        const existing = requests.find(row => row.paymentType === label && !/failed|cancel|expired/i.test(String(row.status || '')));
+        if (nativePaymentPaid(existing)) return json(res, 200, { ok: true, message: label + ' is already paid.' });
+        const existingCheckout = activeHostedCheckoutHref(existing);
+        if (existingCheckout) return json(res, 200, { ok: true, redirectUrl: existingCheckout, paymentRequest: { id: existing.id, paymentType: existing.paymentType, amount: existing.amount } });
+        if (existing) {
+          try {
+            const refreshedCheckout = await attachCloverCheckout(data, existing);
+            return json(res, 200, { ok: true, redirectUrl: refreshedCheckout.href, paymentRequest: { id: existing.id, paymentType: existing.paymentType, amount: existing.amount } });
+          } catch (err) {
+            existing.status = 'Checkout setup failed';
+            existing.lastError = String(err && err.message || err);
+            await protectConcurrentLocalWrites(data, { preferIncoming: true });
+            await writeData(data);
+            return json(res, Number(err && err.statusCode || 502), { ok: false, error: existing.lastError });
+          }
+        }
+        const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || {};
+        const request = createPaymentRequest(data, {
+          recurringPaymentId: recurring.id,
+          applicationId: application.id,
+          onboardingSessionId: session.id,
+          onlineVehicleId: vehicle.id,
+          organizationId: application.organizationId || MAIN_ORG_ID,
+          customer: application.name,
+          phone: application.phone,
+          email: application.email,
+          vehicleId: linkedVehicle.id || vehicle.platformVehicleId || '',
+          vehicle: nativeSite.vehicleTitle(vehicle),
+          vin: vehicle.vin || linkedVehicle.vin || '',
+          licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
+          amount,
+          frequency: kind === 'deposit' ? 'One time' : 'First week',
+          paymentType: label,
+          reason: label,
+          notes: label + ' for ' + application.name + ' - ' + nativeSite.vehicleTitle(vehicle),
+          onboardingReturnUrl: returnUrl
+        });
+        data.paymentRequests.unshift(request);
+        session.status = label + ' checkout opened';
+        try {
+          const checkout = await attachCloverCheckout(data, request);
+          return json(res, 201, { ok: true, redirectUrl: checkout.href, paymentRequest: { id: request.id, paymentType: request.paymentType, amount: request.amount } });
+        } catch (err) {
+          request.status = 'Checkout setup failed';
+          request.lastError = String(err && err.message || err);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+          return json(res, Number(err && err.statusCode || 502), { ok: false, error: request.lastError });
+        }
+      }
+      if (action === 'pickup') {
+        const appointment = finalizeNativePickup(data, session, application, vehicle);
+        if (!appointment) return json(res, 409, { ok: false, error: session.pickupError || 'Card setup, staff approvals, and both required payments must be complete before pickup can be confirmed.' });
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 201, { ok: true, message: 'Pickup confirmed. ' + appointment.weekday + ' is the weekly autopay weekday.' });
+      }
+      return json(res, 404, { ok: false, error: 'Unknown onboarding step.' });
     }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
       const requestId = url.pathname.split('/').filter(Boolean)[3];
@@ -9401,7 +10249,7 @@ const server = http.createServer(async (req, res) => {
       if (!request) return json(res, 404, { ok: false, error: 'Card setup link was not found.' });
       try {
         const result = await completeCardSetup(data, request, payload);
-        return json(res, 201, { ok: true, recurring: result.recurring, cloverCustomerId: request.cloverCustomerId, cloverSubscriptionId: request.cloverSubscriptionId });
+        return json(res, 201, { ok: true, recurring: result.recurring, cloverCustomerId: request.cloverCustomerId, cloverSubscriptionId: request.cloverSubscriptionId, redirectUrl: request.onboardingReturnUrl || '' });
       } catch (err) {
         request.status = 'Card setup failed';
         request.lastError = String(err && err.message || err);
@@ -9513,11 +10361,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
-      if (CLOVER_WEBHOOK_SECRET && url.searchParams.get('secret') !== CLOVER_WEBHOOK_SECRET && req.headers['x-woa-webhook-secret'] !== CLOVER_WEBHOOK_SECRET && req.headers['x-clover-webhook-secret'] !== CLOVER_WEBHOOK_SECRET) {
-        return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
-      }
-      const event = JSON.parse(await readBody(req) || '{}');
-      return json(res, 200, await recordCloverWebhookEvent(event));
+      const rawBody = await readBody(req);
+      const sharedSecretValid = !!(CLOVER_WEBHOOK_SECRET && (secureWebhookValueMatch(url.searchParams.get('secret'), CLOVER_WEBHOOK_SECRET) || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], CLOVER_WEBHOOK_SECRET) || secureWebhookValueMatch(req.headers['x-clover-webhook-secret'], CLOVER_WEBHOOK_SECRET)));
+      const hostedSignatureValid = verifyCloverHostedCheckoutWebhook(rawBody, req.headers);
+      if (!sharedSecretValid && !hostedSignatureValid) return json(res, CLOVER_HCO_WEBHOOK_SECRET ? 401 : 503, { ok: false, error: CLOVER_HCO_WEBHOOK_SECRET ? 'Unauthorized Clover webhook.' : 'Clover webhook signing secret is not configured.' });
+      let event;
+      try { event = JSON.parse(rawBody || '{}'); } catch { return json(res, 400, { ok: false, error: 'Clover webhook body must be valid JSON.' }); }
+      return json(res, 200, await recordCloverWebhookEvent(event, { verifiedHostedCheckout: true, authorization: hostedSignatureValid ? 'Clover-Signature' : 'WheelsonAuto shared secret' }));
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
@@ -10457,6 +11307,229 @@ const server = http.createServer(async (req, res) => {
     const user = sessionUser(req);
     if (!user) return send(res, 200, loginPage());
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
+    if (url.pathname === '/api/online-vehicles' && req.method === 'POST') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can manage online inventory.' });
+      const payload = await readJsonBody(req, 512 * 1024);
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      const existing = data.onlineVehicles.find(row => row.id === payload.id) || null;
+      if (existing && !rowVisibleToUserOrganization(existing, user)) return json(res, 403, { ok: false, error: 'That vehicle belongs to another company.' });
+      const requestedPlatformVehicleId = String(payload.platformVehicleId || existing && existing.platformVehicleId || '');
+      const duplicateLink = requestedPlatformVehicleId && data.onlineVehicles.find(row => row.id !== (existing && existing.id || payload.id) && row.platformVehicleId === requestedPlatformVehicleId);
+      if (duplicateLink) return json(res, 409, { ok: false, error: 'That internal fleet car is already connected to another online vehicle record.' });
+      const linked = (data.vehicles || []).find(row => row.id === requestedPlatformVehicleId);
+      if (payload.published === true && linked && /rented|active contract|assigned|removed/i.test(String(linked.status || ''))) return json(res, 409, { ok: false, error: 'Assigned or rented vehicles cannot be published online.' });
+      const clean = cleanOnlineVehiclePayload({ ...payload, organizationId: existing && existing.organizationId || userOrganizationId(user) }, existing);
+      clean.organizationId = existing && existing.organizationId || userOrganizationId(user);
+      if (linked) {
+        clean.platformVehicleId = linked.id;
+        clean.vin = clean.vin || linked.vin || '';
+        clean.plate = clean.plate || linked.plate || linked.stock || '';
+        clean.year = clean.year || linked.year || '';
+        clean.make = clean.make || linked.make || '';
+        clean.model = clean.model || linked.model || '';
+        clean.color = clean.color || linked.color || '';
+        clean.mileage = clean.mileage || Number(linked.mileage || linked.odometer || 0);
+      }
+      if (existing) Object.assign(existing, clean);
+      else data.onlineVehicles.unshift(clean);
+      appendAuditLog(data, user, existing ? 'Online vehicle updated' : 'Online vehicle created', [clean.title, clean.published ? 'Published' : 'Draft', moneyText(clean.weeklyPayment) + ' weekly', moneyText(clean.downPayment) + ' down']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, existing ? 200 : 201, { ok: true, vehicle: clean });
+    }
+    if (url.pathname.startsWith('/api/online-vehicles/') && req.method === 'DELETE') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can remove online inventory.' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
+      const data = await readData();
+      const vehicle = (data.onlineVehicles || []).find(row => row.id === id);
+      if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) return json(res, 404, { ok: false, error: 'Online vehicle not found.' });
+      if ((data.onboardingSessions || []).some(row => row.onlineVehicleId === id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')))) return json(res, 409, { ok: false, error: 'This vehicle has an active onboarding file. Unpublish it instead of deleting it.' });
+      data.onlineVehicles = data.onlineVehicles.filter(row => row.id !== id);
+      appendAuditLog(data, user, 'Online vehicle removed', [vehicle.title || vehicle.id]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, deletedIds: { onlineVehicles: [id] } });
+      await writeData(data);
+      return json(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/online-vehicles/bulk-pricing' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change pricing across multiple online vehicles.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const data = await readData();
+      const ids = new Set(Array.isArray(payload.ids) ? payload.ids.map(String) : []);
+      const all = payload.applyTo === 'all';
+      const weekly = Math.max(0, Number(payload.weeklyPayment || 0));
+      const down = Math.max(0, Number(payload.downPayment || 0));
+      let updated = 0;
+      (data.onlineVehicles || []).forEach(vehicle => {
+        if (!all && !ids.has(String(vehicle.id))) return;
+        vehicle.weeklyPayment = weekly;
+        vehicle.downPayment = down;
+        vehicle.updatedAt = new Date().toISOString();
+        updated += 1;
+      });
+      data.publicSite = data.publicSite || {};
+      if (all) {
+        data.publicSite.defaultWeeklyPayment = weekly;
+        data.publicSite.defaultDownPayment = down;
+      }
+      appendAuditLog(data, user, 'Online inventory bulk pricing updated', [updated + ' vehicle(s)', moneyText(weekly) + ' weekly', moneyText(down) + ' nonrefundable down']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, updated });
+    }
+    if (url.pathname === '/api/online-vehicles/import-shopify' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can run the one-time Shopify catalog import.' });
+      const data = await readData();
+      const imported = await importShopifyCatalog(data);
+      appendAuditLog(data, user, 'Shopify catalog imported to native website', [imported.length + ' vehicle(s)', 'Images and pricing copied into native online inventory']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, imported: imported.length });
+    }
+    if (url.pathname === '/api/public-site/settings' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can update public-site defaults.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const data = await readData();
+      data.publicSite = {
+        ...(data.publicSite || {}),
+        defaultWeeklyPayment: Math.max(0, Number(payload.defaultWeeklyPayment === undefined ? data.publicSite && data.publicSite.defaultWeeklyPayment || 229 : payload.defaultWeeklyPayment)),
+        defaultDownPayment: Math.max(0, Number(payload.defaultDownPayment === undefined ? data.publicSite && data.publicSite.defaultDownPayment || 0 : payload.defaultDownPayment)),
+        pickupSlotMinutes: [30, 60].includes(Number(payload.pickupSlotMinutes)) ? Number(payload.pickupSlotMinutes) : Number(data.publicSite && data.publicSite.pickupSlotMinutes || 60),
+        pickupCapacity: Math.max(1, Math.min(4, Number(payload.pickupCapacity || data.publicSite && data.publicSite.pickupCapacity || 2))),
+        minimumPickupDays: 1,
+        maximumVehicleHoldDays: 7,
+        contractMonths: 18,
+        pickupAddress: '5150 NJ-42, Blackwood, NJ 08012',
+        businessHours: 'Monday-Saturday, 11:00 AM-5:00 PM',
+        updatedAt: new Date().toISOString(),
+        updatedBy: user.name || user.username || 'Owner'
+      };
+      appendAuditLog(data, user, 'Public website defaults updated', [moneyText(data.publicSite.defaultWeeklyPayment) + ' weekly', moneyText(data.publicSite.defaultDownPayment) + ' down', data.publicSite.pickupSlotMinutes + '-minute pickup slots']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, publicSite: data.publicSite });
+    }
+    if (url.pathname === '/api/onboarding/links' && req.method === 'POST') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can approve an application and create onboarding.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      onboarding.releaseExpiredHolds(data);
+      const application = (data.applications || []).find(row => row.id === String(payload.applicationId || ''));
+      if (!application || !rowVisibleToUserOrganization(application, user)) return json(res, 404, { ok: false, error: 'Application not found.' });
+      const vehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
+      if (!vehicle) return json(res, 409, { ok: false, error: 'The application is not connected to a native online vehicle.' });
+      const competingSession = data.onboardingSessions.find(row => row.onlineVehicleId === vehicle.id && row.applicationId !== application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
+      if (competingSession || vehicle.heldApplicationId && vehicle.heldApplicationId !== application.id) return json(res, 409, { ok: false, error: 'This vehicle is already held in another active onboarding file. Resolve that file before approving a second customer.' });
+      const session = onboarding.createSession(data, application, user, requestBaseUrl(req));
+      const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
+      Object.assign(application, { stage: 'Approved', status: 'Approved - onboarding sent', approvedAt: new Date().toISOString(), approvedBy: user.name || user.username || user.role, pricingSnapshot: application.pricingSnapshot || onboarding.pricingSnapshot(vehicle) });
+      Object.assign(vehicle, { published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
+      if (linkedVehicle) Object.assign(linkedVehicle, { holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready', status: 'Pending application', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.messages.unshift({ id: 'msg-onboarding-' + crypto.randomBytes(7).toString('hex'), applicationId: application.id, customer: application.name || '', phone: application.phone || '', email: application.email || '', direction: 'Draft', channel: 'SMS', template: 'Application approved', subject: 'Application approved', status: 'Ready to send', tone: 'blue', body: 'Hi ' + (application.firstName || application.name || 'there') + ', your WheelsonAuto application for the ' + nativeSite.vehicleTitle(vehicle) + ' was approved. Complete your secure onboarding within seven days: ' + session.publicUrl, createdAt: new Date().toISOString(), source: 'Native onboarding' });
+      appendAuditLog(data, user, 'Application approved and onboarding created', [application.name || 'Applicant', nativeSite.vehicleTitle(vehicle), session.id]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 201, { ok: true, onboarding: { id: session.id, url: session.publicUrl, expiresAt: session.expiresAt, status: session.status } });
+    }
+    if (url.pathname === '/api/onboarding/review' && req.method === 'POST') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can review customer onboarding.' });
+      const payload = await readJsonBody(req, 256 * 1024);
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      const session = data.onboardingSessions.find(row => row.id === String(payload.onboardingSessionId || ''));
+      if (!session || !rowVisibleToUserOrganization(session, user)) return json(res, 404, { ok: false, error: 'Onboarding file not found.' });
+      const application = onboarding.applicationForSession(data, session);
+      const decision = payload.decision === 'approve' ? 'approve' : payload.decision === 'request_correction' ? 'request_correction' : '';
+      if (!decision) return json(res, 400, { ok: false, error: 'Choose approve or request correction.' });
+      const reviewedAt = new Date().toISOString();
+      const reviewer = user.name || user.username || user.role || 'Staff';
+      if (payload.stage === 'documents') {
+        const documents = (data.documents || []).filter(row => row.onboardingSessionId === session.id);
+        const kinds = new Set(documents.map(row => row.documentKind));
+        if (!['driver_license_front', 'driver_license_back', 'insurance'].every(kind => kinds.has(kind))) return json(res, 409, { ok: false, error: 'License front, license back, and insurance proof must all be uploaded.' });
+        if (decision === 'approve' && payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm identity, license validity, and full-coverage insurance before approval.' });
+        session.documentReviewStatus = decision === 'approve' ? 'Approved' : 'Correction requested';
+        session.documentsReviewedAt = reviewedAt;
+        session.documentsReviewedBy = reviewer;
+        session.documentReviewNotes = onboarding.text(payload.notes, 1600);
+        session.reviewStatus = decision === 'approve' ? 'Documents approved - signature ready' : 'Document correction requested';
+        documents.forEach(document => {
+          document.status = decision === 'approve' ? 'Verified' : 'Correction requested';
+          document.verifiedAt = reviewedAt;
+          document.verifiedBy = reviewer;
+          document.reviewNotes = onboarding.text(payload.notes, 1600);
+        });
+        if (application) application.onboardingStatus = session.reviewStatus;
+      } else if (payload.stage === 'signature') {
+        const signature = (data.eSignatures || []).find(row => row.onboardingSessionId === session.id && !/void/i.test(String(row.status || '')));
+        if (!signature) return json(res, 409, { ok: false, error: 'The customer has not signed the agreement yet.' });
+        if (decision === 'approve' && payload.signatureMatchConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the drawn signature was manually compared with the driver-license signature.' });
+        session.signatureReviewStatus = decision === 'approve' ? 'Approved' : 'Correction requested';
+        session.signatureReviewedAt = reviewedAt;
+        session.signatureReviewedBy = reviewer;
+        session.signatureReviewNotes = onboarding.text(payload.notes, 1600);
+        session.reviewStatus = decision === 'approve' ? 'Approved' : 'Signature correction requested';
+        session.status = decision === 'approve' ? 'Approved for card setup' : 'Signature correction requested';
+        Object.assign(signature, { verificationStatus: decision === 'approve' ? 'Accepted - manual license comparison complete' : 'Correction requested', verifiedAt: reviewedAt, verifiedBy: reviewer, signatureMatchConfirmed: decision === 'approve', verifiedDocumentHash: signature.documentHash, reviewNotes: onboarding.text(payload.notes, 1600), status: decision === 'approve' ? 'Signed and accepted' : 'Signature correction requested' });
+        if (application) {
+          application.onboardingStatus = session.status;
+          application.updatedAt = reviewedAt;
+        }
+      } else return json(res, 400, { ok: false, error: 'Review stage must be documents or signature.' });
+      appendAuditLog(data, user, 'Onboarding ' + payload.stage + ' review', [application && application.name || session.applicationId, decision === 'approve' ? 'Approved' : 'Correction requested', session.id]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, status: session.status, documentReviewStatus: session.documentReviewStatus, signatureReviewStatus: session.signatureReviewStatus });
+    }
+    if (url.pathname.startsWith('/api/onboarding/documents/') && req.method === 'GET') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can view private identity documents.' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[3] || '');
+      const data = await readData();
+      const document = (data.documents || []).find(row => row.id === id);
+      if (!document || !rowVisibleToUserOrganization(document, user) || !document.storagePath) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
+      const root = path.resolve(DATA_DIR, 'onboarding-uploads');
+      const filePath = path.resolve(DATA_DIR, document.storagePath);
+      if (!filePath.startsWith(root + path.sep)) return send(res, 403, 'Invalid document path', 'text/plain; charset=utf-8');
+      const body = await fs.readFile(filePath);
+      return send(res, 200, body, document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+    }
+    if (url.pathname.startsWith('/api/onboarding/signatures/') && req.method === 'GET') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can view private signatures.' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[3] || '');
+      const data = await readData();
+      const signature = (data.eSignatures || []).find(row => row.id === id);
+      if (!signature || !rowVisibleToUserOrganization(signature, user) || !signature.signatureImagePath) return send(res, 404, 'Signature not found', 'text/plain; charset=utf-8');
+      const root = path.resolve(DATA_DIR, 'onboarding-uploads');
+      const filePath = path.resolve(DATA_DIR, signature.signatureImagePath);
+      if (!filePath.startsWith(root + path.sep)) return send(res, 403, 'Invalid signature path', 'text/plain; charset=utf-8');
+      return send(res, 200, await fs.readFile(filePath), 'image/png', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+    }
+    if (url.pathname === '/api/contract-template' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view the editable legal template.' });
+      const data = await readData();
+      const template = await onboarding.activeContractTemplate(data, CONTRACT_TEMPLATE_FILE);
+      return json(res, 200, { ok: true, template: { id: template.id, name: template.name, version: template.version, hash: template.hash, status: template.status, body: template.body } });
+    }
+    if (url.pathname === '/api/contract-template' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can create a new contract version.' });
+      const payload = await readJsonBody(req, 512 * 1024);
+      const body = String(payload.body || '').trim();
+      const requiredTokens = ['{{RENTER_NAME}}', '{{VEHICLE_VIN}}', '{{RENTAL_START_DATE}}', '{{WEEKLY_PAYMENT}}', '{{DOWN_PAYMENT}}'];
+      if (body.length < 1000 || requiredTokens.some(token => !body.includes(token))) return json(res, 400, { ok: false, error: 'The contract must keep the renter, VIN, rental date, weekly payment, and down-payment placeholders.' });
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      const current = await onboarding.activeContractTemplate(data, CONTRACT_TEMPLATE_FILE);
+      const version = Math.max(Number(current.version || 0), ...data.contractTemplates.map(row => Number(row.version || 0)), 0) + 1;
+      const template = { id: 'contract-template-v' + version + '-' + crypto.randomBytes(5).toString('hex'), name: onboarding.text(payload.name || current.name, 180), version, status: 'Active', body, hash: nativeSite.contractTemplateHash(body), source: 'Owner versioned edit', createdAt: new Date().toISOString(), createdBy: user.name || user.username || 'Owner' };
+      data.contractTemplates.forEach(row => { if (row.status === 'Active') row.status = 'Superseded'; });
+      data.contractTemplates.unshift(template);
+      appendAuditLog(data, user, 'Contract template version created', ['Version ' + version, template.hash, 'Existing signed documents unchanged']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 201, { ok: true, template: { id: template.id, name: template.name, version: template.version, hash: template.hash, status: template.status } });
+    }
     if (url.pathname === '/api/state/version' && req.method === 'GET') return json(res, 200, { ok: true, version: await dataVersion() });
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
     if (url.pathname === '/api/state' && req.method === 'PUT') {
@@ -11386,7 +12459,10 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 200, await appHtml({ publicMode: false, user }), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
   } catch (err) {
-    send(res, 500, 'Server error: ' + String(err && err.message || err), 'text/plain; charset=utf-8');
+    const status = Math.max(400, Math.min(599, Number(err && err.statusCode || 500)));
+    const message = String(err && err.message || err);
+    if (String(req.url || '').startsWith('/api/')) return json(res, status, { ok: false, error: message });
+    send(res, status, 'Server error: ' + message, 'text/plain; charset=utf-8');
   }
 });
 if (require.main === module) {
@@ -11470,6 +12546,13 @@ module.exports = {
   tollReceiptText,
   tollReceiptHtml,
   rematchSavedTollClaims,
+  verifyCloverHostedCheckoutWebhook,
+  hostedCheckoutWebhookDetails,
+  applyHostedCheckoutWebhook,
+  recordHostedCheckoutPayment,
+  nativeOnboardingReadyForPickup,
+  finalizeNativePickup,
+  activeHostedCheckoutHref,
   apiProviderLaunchGuidance,
   apiProviderRows,
   apiProviderReviewRows

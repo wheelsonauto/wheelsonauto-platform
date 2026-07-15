@@ -59,6 +59,10 @@ requireText('Focused Companies workspace', 'Companies is a focused workspace: on
 requireText('Companies phone tab grid', '.view-companies>.company-tabs{');
 requireText('Companies compact overview', '.companies-overview-grid{');
 requireText('Solid mobile modal footer', 'background:#111820!important');
+requireText('Website command full-width guard', '.view-website>.native-site-command{grid-column:1/-1!important}');
+requireText('Website inventory desktop span', '.view-website>.native-inventory-board{grid-column:1/8!important;margin:0}');
+requireText('Website applications desktop span', '.view-website>.native-website-apps{grid-column:8/-1!important;margin:0}');
+requireText('Applications workspace full-width guard', '.view-applications>.native-applications-board{grid-column:1/-1!important;margin:0}');
 requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
 requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', '#111820', 'border-color:rgba(240,184,58,.42)', '!important']);
