@@ -412,7 +412,7 @@ async function managerInteractionSmoke() {
   const context = makeContext({ name: 'Manager Interaction', role: 'Manager', homeView: 'Manager Portal', access: 'Manager access' });
   await dispatchClick(context, { view: 'Messages' });
   assert(context.view === 'Messages', 'Manager should be able to open Messages.');
-  assertHealthy('Manager clicked Messages', html(context), ['Messages', 'message-inbox-layout', 'Reply']);
+  assertHealthy('Manager clicked Messages', html(context), ['Messages', 'message-inbox-shell', 'message-empty-state']);
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
   assertHealthy('Manager compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
   context.closeModal();
@@ -503,8 +503,8 @@ function ownerSmoke() {
     ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board'], true],
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
-    ['Messages Star', 'Messages', 'Star', ['Messages', 'Star AI', 'Ask Star', 'Star AI control', 'Customer requests', 'Auto-ready replies', 'Needs admin approval', 'message-thread-grid'], true],
-    ['Messages queue', 'Messages', 'Queue', ['Messages', 'Customer requests', 'Follow-up queue'], true],
+    ['Messages Star', 'Messages', 'Star', ['Messages', 'Ask Star', 'Review queue', 'message-star-focused', 'message-thread-grid'], false],
+    ['Messages queue', 'Messages', 'Queue', ['Messages', 'Follow-up', 'message-focused-list'], false],
     ['Documents', 'Documents', undefined, ['Documents', 'Customer requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
     ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Toll follow-up route', 'Open recovery', 'Match review', 'Ready to collect', 'toll-recovery-list'], true],
     ['Tolls match review', 'Tolls', 'Match review', ['Tolls', 'Match review tolls and violations', 'Search tolls by customer', 'Provider setup'], true],
@@ -540,16 +540,19 @@ function managerSmoke() {
     ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
     ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
     ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
-    ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-layout', 'message-conversation-panel', 'Reply'], true],
+    ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-shell', 'message-conversation-panel', 'message-empty-state'], false],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Operations snapshot'], false],
     ['Manager applications', 'Applications', 'Active', ['Applications', 'Approval handoff', 'table-wrap'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
     else assertHealthy(label, output, required);
-    assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="new-toll"', 'data-action="new-toll-import"', 'data-action="send-claim-link"', 'data-action="save-clover"', 'data-view="Settings"']);
+    assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="new-toll"', 'data-action="new-toll-import"', 'data-action="send-claim-link"', 'data-action="save-clover"']);
   });
   assertNo('Manager portal duplicate queue', html(context), ['Manager command queue']);
+  const managerAccount = renderView(context, 'Settings', 'Account');
+  assertHealthy('Manager Account settings', managerAccount, ['Settings', 'Account access', 'Reset password', 'Log out']);
+  assertNo('Manager Account settings', managerAccount, ['Clover connection', 'Staff accounts', 'Customer portal logins', 'Website connection']);
 }
 
 function mechanicSmoke() {
@@ -571,6 +574,9 @@ function mechanicSmoke() {
   const blocked = renderView(context, 'Messages', 'Inbox');
   assertHealthy('Mechanic blocked Messages redirect', blocked, ['Mechanic Portal']);
   assertNo('Mechanic blocked Messages redirect', blocked, ['message-inbox-layout', 'New text/email']);
+  const mechanicAccount = renderView(context, 'Settings', 'Account');
+  assertHealthy('Mechanic Account settings', mechanicAccount, ['Settings', 'Account access', 'Reset password', 'Log out']);
+  assertNo('Mechanic Account settings', mechanicAccount, ['Clover connection', 'Staff accounts', 'Customer portal logins', 'Website connection']);
 }
 
 function publicSmoke() {
@@ -599,23 +605,23 @@ function heavyMessagesReportsSmoke() {
   });
   const started = Date.now();
   const inbox = renderView(context, 'Messages', 'Inbox');
-  assertHealthy('Heavy Messages inbox', inbox, ['Messages', 'Showing latest 24', 'message-inbox-layout', 'message-conversation-panel']);
+  assertHealthy('Heavy Messages inbox', inbox, ['Messages', 'message-inbox-shell', 'message-conversation-panel', 'message-thread-row']);
   assert(inbox.length < 220000, 'Heavy Messages inbox rendered too much HTML at once.');
   const history = renderView(context, 'Messages', 'History');
-  assertHealthy('Heavy Messages history', history, ['Message history', 'Showing latest 80']);
+  assertHealthy('Heavy Messages history', history, ['Message history', 'saved inbound, outbound, email, SMS, draft, and Star records']);
   assert(history.length < 220000, 'Heavy Messages history rendered too much HTML at once.');
   const star = renderView(context, 'Messages', 'Star');
-  assertHealthy('Heavy Messages Star', star, ['Star AI', 'Auto-ready replies', 'Needs admin approval']);
+  assertHealthy('Heavy Messages Star', star, ['Ask Star', 'Review queue', 'Money and account changes remain approval-only']);
   assert(star.length < 240000, 'Heavy Messages Star rendered too much HTML at once.');
   const queueStarted = Date.now();
   const queue = renderView(context, 'Messages', 'Queue');
   const firstQueueMs = Date.now() - queueStarted;
-  assertHealthy('Heavy Messages queue', queue, ['Follow-up queue']);
+  assertHealthy('Heavy Messages queue', queue, ['Follow-up', 'Failed payments, card setup, open links']);
   assert(queue.length < 220000, 'Heavy Messages queue rendered too much HTML at once.');
   const cachedQueueStarted = Date.now();
   const cachedQueue = renderView(context, 'Messages', 'Queue');
   const cachedQueueMs = Date.now() - cachedQueueStarted;
-  assertHealthy('Cached heavy Messages queue', cachedQueue, ['Follow-up queue']);
+  assertHealthy('Cached heavy Messages queue', cachedQueue, ['Follow-up', 'Failed payments, card setup, open links']);
   assert(cachedQueueMs <= Math.max(250, firstQueueMs), 'Messages queue cache did not make repeated navigation proportional to visible work.');
   ['Summary', 'Accounting', 'Risk', 'Pipeline'].forEach(tabName => {
     const report = renderView(context, 'Reports', tabName);

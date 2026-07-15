@@ -69,6 +69,8 @@ const navForRole = finalFunctionSlice(app, 'navForRole');
 const navSections = finalFunctionSlice(app, 'navSections');
 const mobileQuickbar = finalFunctionSlice(app, 'mobileQuickbar');
 const actionAllowed = finalFunctionSlice(app, 'actionAllowed');
+const settingsFocused = finalFunctionSlice(app, 'SettingsFocused');
+const settingsAccountPanel = finalFunctionSlice(app, 'settingsAccountPanel');
 const textCustomerButton = finalFunctionSlice(app, 'textCustomerButton');
 const accessCommandPanel = finalFunctionSlice(app, 'accessCommandPanel');
 const managerCommandItems = finalFunctionSlice(app, 'managerCommandItems');
@@ -90,20 +92,33 @@ if (!dataScopedToOrganization) fail('Could not find organization scoping helper.
 const mechanicNav = roleReturnArray(navForRole, 'mechanic');
 const managerNav = roleReturnArray(navForRole, 'manager');
 const ownerNav = roleReturnArray(navForRole, 'owner');
-assertIncludes('Mechanic nav', mechanicNav, ['Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
-assertExcludes('Mechanic nav', mechanicNav, ['Messages', 'Payments', 'Reports', 'Settings', 'Website', 'Companies', 'API Roadmap']);
-assertIncludes('Manager nav', managerNav, ['Manager Portal', 'Customers', 'Operations', 'Messages', 'Reports']);
-assertExcludes('Manager nav', managerNav, ['Settings', 'Website', 'Companies', 'API Roadmap', 'Payments']);
+assertIncludes('Mechanic nav', mechanicNav, ['Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues', 'Settings']);
+assertExcludes('Mechanic nav', mechanicNav, ['Messages', 'Payments', 'Reports', 'Website', 'Companies', 'API Roadmap']);
+assertIncludes('Manager nav', managerNav, ['Manager Portal', 'Customers', 'Operations', 'Messages', 'Reports', 'Settings']);
+assertExcludes('Manager nav', managerNav, ['Website', 'Companies', 'API Roadmap', 'Payments']);
 assertIncludes('Owner nav', ownerNav, ['Dashboard', 'Payments', 'Operations', 'Messages', 'Reports', 'Website', 'Settings', 'Companies', 'API Roadmap']);
 
 const mechanicSidebar = roleTernarySection(navSections, 'mechanic', 'manager');
 const managerSidebar = roleTernarySection(navSections, 'manager');
 const mechanicQuickbar = roleTernarySection(mobileQuickbar, 'mechanic', 'manager');
 const managerQuickbar = roleTernarySection(mobileQuickbar, 'manager');
-assertExcludes('Mechanic sidebar', mechanicSidebar, ['Messages', 'Payments', 'Reports', 'Settings']);
-assertIncludes('Manager sidebar', managerSidebar, ['Messages', 'Reports']);
-assertExcludes('Mechanic mobile quickbar', mechanicQuickbar, ['Messages', 'Payments', 'Settings']);
-assertIncludes('Manager mobile quickbar', managerQuickbar, ['Messages', 'Reports']);
+assertIncludes('Mechanic sidebar', mechanicSidebar, ['Settings']);
+assertExcludes('Mechanic sidebar', mechanicSidebar, ['Messages', 'Payments', 'Reports']);
+assertIncludes('Manager sidebar', managerSidebar, ['Messages', 'Reports', 'Settings']);
+assertIncludes('Mechanic mobile quickbar', mechanicQuickbar, ['Settings']);
+assertExcludes('Mechanic mobile quickbar', mechanicQuickbar, ['Messages', 'Payments']);
+assertIncludes('Manager mobile quickbar', managerQuickbar, ['Messages', 'Reports', 'Settings']);
+
+if (!settingsFocused || !settingsAccountPanel) fail('Could not find focused role-safe Account settings.');
+if (!/allowed=isOwner\(\)\?\['Connections','Staff','CustomerLogins','Security','Website','Account'\]:\['Account'\]/.test(settingsFocused)) {
+  fail('Non-owner Settings must be restricted to the Account tab.');
+}
+['Account access', 'Reset password', '/logout'].forEach(text => {
+  if (!settingsAccountPanel.includes(text)) fail('Account settings panel is missing: ' + text);
+});
+['Clover connection', 'Staff accounts', 'Website connection', 'Customer portal logins'].forEach(text => {
+  if (settingsAccountPanel.includes(text)) fail('Account settings panel should not include: ' + text);
+});
 
 assertIncludes('Owner-only blocked actions', strings(actionAllowed), [
   'sync-all',

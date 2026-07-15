@@ -536,6 +536,7 @@ assertIncludes('Manager portal surface', managerPortal, [
 ]);
 
 const messages = finalFunctionSlice(app, 'Messages');
+const messagesFocused = finalFunctionSlice(app, 'MessagesFocused');
 const communicationCommandItems = finalFunctionSlice(app, 'communicationCommandItems');
 const communicationCommandBoard = finalFunctionSlice(app, 'communicationCommandBoard');
 assertIncludes('Messages and Star surface', messages, [
@@ -555,6 +556,19 @@ assertIncludes('Messages and Star surface', messages, [
   'starAiLane',
   'Search customer, phone, email, VIN, tag, payment, or text',
   'Approval'
+]);
+assertIncludes('Focused Messages workspace', messagesFocused + app + css, [
+  'messageFocusedTabs',
+  'message-inbox-shell',
+  'messageFocusedConversation',
+  'messageFocusedStarWorkspace',
+  'messageFocusedQueueWorkspace',
+  'messageFocusedTemplatesWorkspace',
+  'messageFocusedHistoryWorkspace',
+  'message-mobile-thread-open',
+  'message-mobile-back',
+  'Showing the latest ',
+  'Sensitive payment and account changes still need admin approval.'
 ]);
 assertIncludes('Communication command board', messages + communicationCommandItems + communicationCommandBoard + app + css, [
   'Communication command',
@@ -846,8 +860,8 @@ assertExcludes('Mobile quickbar raw letter labels', quickbar, ["['Dashboard','D'
 const nav = finalFunctionSlice(app, 'navForRole');
 assertIncludes('Frontend staff status helper', app, ['function staffStatusActive(staff)', 'disabled|removed|closed|inactive']);
 assertIncludes('Role navigation', nav, [
-  "if(r==='mechanic')return['Mechanic Portal','Maintenance','Fleet','Claims & Issues']",
-  "if(r==='manager')return['Manager Portal','Today','Customers','Applications','Operations','Fleet','Dispatch','Maintenance','Documents','Tolls','Insurance','Claims & Issues','Messages','Reports']"
+  "if(r==='mechanic')return['Mechanic Portal','Maintenance','Fleet','Claims & Issues','Settings']",
+  "if(r==='manager')return['Manager Portal','Today','Customers','Applications','Operations','Fleet','Dispatch','Maintenance','Documents','Tolls','Insurance','Claims & Issues','Messages','Reports','Settings']"
 ]);
 
 const localSearch = finalFunctionSlice(app, 'hydrateLocalSearches');
