@@ -219,7 +219,7 @@ async function main() {
       vehicles: [{ id: 'veh-direct-alias', name: '2014 Nissan Rogue', vin: 'DIRECTALIASVIN1', plate: 'ALIAS-1', status: 'Rented', currentCustomer: 'Ronel Babey nfor' }],
       customers: [{ id: 'cus-direct-alias', name: 'Ronel Babey nfor', vehicle: '2014 Nissan Rogue', vehicleId: 'veh-direct-alias', vin: 'DIRECTALIASVIN1', licensePlate: 'ALIAS-1', status: 'Active' }],
       contracts: [{ id: 'con-direct-alias', customer: 'Ronel Babey nfor', vehicle: '2014 Nissan Rogue', vehicleId: 'veh-direct-alias', vin: 'DIRECTALIASVIN1', licensePlate: 'ALIAS-1', status: 'Active' }],
-      recurringPayments: [{ id: 'rec-direct-alias', customer: 'Rone Nfoe', amount: 230, status: 'Active' }],
+      recurringPayments: [{ id: 'rec-direct-alias', customer: 'Rone Nfoe', phone: '(929) 622-1629', email: 'ronel@example.com', cloverCustomerId: 'direct-clover-alias', amount: 230, status: 'Active' }],
       maintenance: [], claims: [], payments: [], paymentRequests: [], tasks: [], documents: [], applications: [], messages: [], staffAccounts: [], customerAccounts: [], organizations: [], auditLogs: [],
       integrations: { clover: { recurringPlanMembers: [] } }
     };

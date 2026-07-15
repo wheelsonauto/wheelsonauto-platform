@@ -68,7 +68,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-native-onboarding-51">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-native-onboarding-52">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -4491,27 +4491,32 @@ function enrichLinkedProfiles(data) {
   data.vehicles.forEach(row => profiles.push(rowProfile({ ...row, customer: row.currentCustomer || row.customer || '', vehicle: vehicleNameFromParts(row), amount: row.rate || row.price || row.weeklyAmount || 0 })));
   const richness = item => ['customer', 'phone', 'email', 'vehicle', 'vin', 'licensePlate', 'tempTag', 'tracker', 'cloverPaymentSource', 'cardLast4'].reduce((sum, field) => sum + (weakValue(field, item[field]) ? 0 : 1), 0);
   const richest = candidates => candidates.filter(Boolean).sort((a, b) => richness(b) - richness(a))[0] || null;
+  const addsMissingProfileData = (candidate, profile) => ['phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverPaymentSource', 'cardLabel', 'cardLast4'].some(field => {
+    const currentMissing = field === 'vehicle' ? !String(profile.vehicle || '').trim() : weakValue(field, profile[field]);
+    const candidateHasValue = field === 'vehicle' ? !!String(candidate.vehicle || '').trim() : !weakValue(field, candidate[field]);
+    return currentMissing && candidateHasValue;
+  });
   function bestMatch(row) {
     const profile = rowProfile(row);
     const cid = String(profile.cloverCustomerId || '').trim();
     if (cid) {
-      const hit = richest(profiles.filter(item => String(item.cloverCustomerId || '').trim() === cid && (item.phone || item.email || item.vehicle || item.cloverPaymentSource)));
+      const hit = richest(profiles.filter(item => String(item.cloverCustomerId || '').trim() === cid && addsMissingProfileData(item, profile)));
       if (hit) return hit;
     }
     const phone = phoneKey(profile.phone);
     if (phone) {
-      const hit = richest(profiles.filter(item => phoneKey(item.phone) === phone && (item.customer || item.vehicle || item.email || item.cloverPaymentSource)));
+      const hit = richest(profiles.filter(item => phoneKey(item.phone) === phone && addsMissingProfileData(item, profile)));
       if (hit) return hit;
     }
     const email = emailKey(profile.email);
     if (email) {
-      const hit = richest(profiles.filter(item => emailKey(item.email) === email && (item.customer || item.vehicle || item.phone || item.cloverPaymentSource)));
+      const hit = richest(profiles.filter(item => emailKey(item.email) === email && addsMissingProfileData(item, profile)));
       if (hit) return hit;
     }
     if (profile.customer) {
-      const exactName = richest(profiles.filter(item => item.customer && normKey(item.customer) === normKey(profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource)));
+      const exactName = richest(profiles.filter(item => item.customer && normKey(item.customer) === normKey(profile.customer) && addsMissingProfileData(item, profile)));
       if (exactName) return exactName;
-      const softMatches = profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && (item.phone || item.email || item.vehicle || item.vin || item.cloverPaymentSource));
+      const softMatches = profiles.filter(item => item.customer && softNameMatch(item.customer, profile.customer) && addsMissingProfileData(item, profile));
       const sameVehicle = richest(softMatches.filter(item => sameProfileVehicle(item, profile)));
       if (sameVehicle) return sameVehicle;
       const profileHasVehicle = !!(profile.vehicleId || profile.vin || profile.licensePlate || profile.plate || profile.vehicle);
