@@ -875,7 +875,8 @@ async function main() {
     assert(managerRefundPrepare.status === 403, 'Manager must not prepare customer refunds.');
     const preparedRefund = await request(server, 'POST', '/api/integrations/clover/refunds/prepare', { cookie: ownerCookie, json: { paymentId: 'clover-payment-direct-dispute', amount: 50, reason: 'Direct partial refund test' } });
     assert(preparedRefund.status === 201 && preparedRefund.json.refund.status === 'Clover POS action required', 'Partial or POS refund should create a tracked Clover action instead of pretending it was sent.');
-    assert(preparedRefund.json.refund.organizationId === 'org-wheelsonauto' && preparedRefund.json.refund.customer === 'Direct Dispute Customer', 'Prepared refund should preserve company and customer identity.');
+    assert(preparedRefund.json.refund.organizationId === 'org-wheelsonauto', 'Prepared refund should preserve company scope: ' + JSON.stringify(preparedRefund.json.refund));
+    assert(preparedRefund.json.refund.customer === 'Direct Dispute Customer', 'Prepared refund should preserve customer identity: ' + JSON.stringify(preparedRefund.json.refund));
     const duplicateRefund = await request(server, 'POST', '/api/integrations/clover/refunds/prepare', { cookie: ownerCookie, json: { paymentId: 'clover-payment-direct-dispute', amount: 50, reason: 'Direct partial refund test' } });
     assert(duplicateRefund.status === 200 && duplicateRefund.json.created === false && duplicateRefund.json.refund.id === preparedRefund.json.refund.id, 'Repeated refund preparation should be idempotent.');
     const unconfirmedRefund = await request(server, 'POST', '/api/integrations/clover/refunds/execute', { cookie: ownerCookie, json: { refundId: preparedRefund.json.refund.id } });

@@ -64,7 +64,7 @@ function vehicleTitle(vehicle = {}) {
 }
 
 function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
-  const raw = text(record.status || record.providerStatus).toLowerCase();
+  const raw = text(record.manualDecision || record.providerStatus || record.status).toLowerCase();
   const expires = dateKey(record.expiresAt || record.expires || record.expirationDate);
   if (/cancel|closed/.test(raw)) return 'Closed';
   if (/reject|fail|invalid|fraud|mismatch/.test(raw)) return 'Rejected';
@@ -76,7 +76,7 @@ function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
   }
   if (/verified|approved|clear|passed|active/.test(raw)) return 'Verified';
   if (/provider setup|required|not connected/.test(raw)) return 'Provider setup needed';
-  if (/submitted|processing|pending provider/.test(raw)) return 'Provider pending';
+  if (/submitted|processing|provider pending|pending provider/.test(raw)) return 'Provider pending';
   if (/correction|more information|resubmit/.test(raw)) return 'Correction requested';
   return 'Needs staff review';
 }

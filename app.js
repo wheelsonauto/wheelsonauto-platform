@@ -1,6 +1,6 @@
 window.__woaBootReady=false;
 if(window.history&&'scrollRestoration' in window.history)window.history.scrollRestoration='manual';
-var fallbackData={vehicles:[],applications:[],customers:[],contracts:[],payments:[],maintenance:[],claims:[],messages:[],messageTemplates:[],staffAccounts:[],customerAccounts:[],organizations:[],recurringPayments:[],tasks:[],documents:[],dailyCloseouts:[],websiteLeads:[],apiProviders:[],business:{name:'WheelsonAuto',website:'wheelsonauto.com'},integrations:{clover:{connected:false,environment:'sandbox'},shopify:{connected:false,store:'wheelsonauto.com',embedPath:'/apply'},messaging:{provider:'not_configured',voiceMode:'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.'}}};
+var fallbackData={vehicles:[],onlineVehicles:[],applications:[],customers:[],contracts:[],payments:[],maintenance:[],claims:[],messages:[],messageTemplates:[],staffAccounts:[],customerAccounts:[],organizations:[],recurringPayments:[],tasks:[],documents:[],onboardingSessions:[],pickupAppointments:[],refundRequests:[],verificationCases:[],ledgerEntries:[],calendarEvents:[],dailyCloseouts:[],websiteLeads:[],apiProviders:[],business:{name:'WheelsonAuto',website:'wheelsonauto.com'},integrations:{clover:{connected:false,environment:'sandbox'},shopify:{connected:false,store:'wheelsonauto.com',embedPath:'/apply'},messaging:{provider:'not_configured',voiceMode:'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.'}}};
 var isPublic=!!window.__PUBLIC_MODE__;var currentUser=window.__CURRENT_USER__||{name:'Owner admin',role:'Owner',homeView:'Dashboard',access:'Full platform access'};var db=normalize(window.__SERVER_DATA__||fallbackData);var nav=navForRole();var view=isPublic?'Apply':(currentUser.homeView||nav[0]||'Dashboard');var tab='Board';var dashboardTab='Dues';var activeMessageThreadKey=localStorage.getItem('woa-active-message-thread')||'';var pendingThreadReplyDraft=null;var stages=['New','Docs needed','Approved','Contract'];var root=document.getElementById('root');var LIVE_REFRESH_MS=5000;var API_AUTO_SYNC_MS=60000;var syncInFlight=false;var lastApiAutoSync=Number(localStorage.getItem('woa-last-api-auto-sync')||0);var lastDataFingerprint=JSON.stringify(db);
 
 function normalize(d){d=Object.assign({},fallbackData,d||{});d.integrations=Object.assign({},fallbackData.integrations,d.integrations||{});d.integrations.clover=Object.assign({},fallbackData.integrations.clover,d.integrations.clover||{});d.integrations.shopify=Object.assign({},fallbackData.integrations.shopify,d.integrations.shopify||{});d.integrations.messaging=Object.assign({},fallbackData.integrations.messaging,d.integrations.messaging||{});d.vehicles=(d.vehicles||[]).map(function(v,i){var p=(v.name||'').split(' ');v.id=v.id||'veh-'+i;v.year=v.year||p[0]||'';v.make=v.make||p[1]||'';v.model=v.model||p.slice(2).join(' ')||'';v.price=v.price||((v.rate||229)*110);v.mileage=v.mileage||v.odometer||0;v.stock=v.stock||v.plate||('STK-'+(i+1));v.status=v.status==='Available'?'Ready':(v.status||'Ready');return v});d.applications=(d.applications||[]).map(function(a,i){var st=a.stage||a.status||'New';if(st==='Needs review')st='New';if(st==='Docs requested')st='Docs needed';a.id=a.id||'app-'+i;a.name=a.name||a.customer||'Applicant';a.stage=st;a.status=st;a.down=Number(a.down==null?0:a.down);a.income=Number(a.income)||0;a.score=a.score||estimate(a.income,a.down);a.submittedAt=a.submittedAt||a.date||'Today';return a});return d}
@@ -2877,4 +2877,279 @@ document.addEventListener('click',async function(event){
   if(action==='native-review-documents'||action==='native-review-signature'||action==='native-request-correction'){var stage=action==='native-review-documents'?'documents':action==='native-review-signature'?'signature':b.dataset.stage,approve=action!=='native-request-correction',payload={onboardingSessionId:id,stage:stage,decision:approve?'approve':'request_correction',notes:val('nativeReviewNotes')};if(stage==='documents')payload.identityConfirmed=!!(document.getElementById('nativeIdentityConfirmed')&&document.getElementById('nativeIdentityConfirmed').checked);if(stage==='signature')payload.signatureMatchConfirmed=!!(document.getElementById('nativeSignatureConfirmed')&&document.getElementById('nativeSignatureConfirmed').checked);var reviewed=await post('/api/onboarding/review',payload);if(!reviewed.ok){notify(reviewed.error||'Review did not save');return}await refreshData(true);var session=(db.onboardingSessions||[]).find(function(s){return s.id===id});if(session)openNativeApplication(session.applicationId);notify(approve?'Review approved':'Correction requested');return}
   if(action==='native-edit-contract'){var contract=await fetch('/api/contract-template',{headers:{Accept:'application/json'}}).then(function(r){return r.json()});if(!contract.ok){notify(contract.error||'Contract could not load');return}openModal('Contract template v'+contract.template.version,'<div class="notice">Saving creates a new version. Existing signed agreements never change.</div><div class="field span2"><label>Template name</label><input id="nativeContractName" value="'+esc(contract.template.name||'')+'"></div><div class="field span2"><label>Agreement text</label><textarea id="nativeContractBody" class="native-contract-editor">'+esc(contract.template.body||'')+'</textarea></div><div class="actions"><button class="btn primary" data-action="native-save-contract">Save as new version</button></div>');return}
   if(action==='native-save-contract'){var version=await post('/api/contract-template',{name:val('nativeContractName'),body:val('nativeContractBody')});if(!version.ok){notify(version.error||'New contract version did not save');return}await refreshData(true);closeModal();notify('Contract version '+version.template.version+' is now active');return}
+},true);
+
+// Provider-neutral operations workspaces. These replace the older stacked
+// boards with one selected workflow per page while keeping authoritative
+// provider actions behind explicit owner confirmation.
+var integrationUiCache={};
+var integrationUiLoading={};
+
+function integrationTone(value){
+  var text=String(value||'').toLowerCase();
+  if(/verified|approved|paid|refunded|manual complete|won|ready|connected|synced|confirmed/.test(text))return'good';
+  if(/reject|failed|lost|expired|missing|unmatched|needs payment/.test(text))return'bad';
+  if(/pending|review|setup|expiring|correction|action required|submitted|open/.test(text))return'warn';
+  return'blue'
+}
+
+function integrationVehicle(row){
+  row=row||{};
+  return findVehicle(row.vehicleId)||(row.customer?findVehicleByCustomer(row.customer):null)||{}
+}
+
+function integrationVehicleIdentity(row){
+  row=row||{};var car=integrationVehicle(row),vehicle=car.id?vehicleName(car):(row.vehicle||'No vehicle linked'),vin=car.vin||row.vin||'',tag=car.plate||car.stock||row.plate||row.licensePlate||'',tracker=car.tracker||row.tracker||'';
+  return[vehicle,vin?'VIN '+vin:'VIN missing',tag?'Tag '+tag:'Tag missing',tracker?'Tracker '+tracker:''].filter(Boolean).join(' | ')
+}
+
+async function integrationFetchJson(url){
+  try{
+    var response=await fetch(url,{headers:{Accept:'application/json'},cache:'no-store'}),payload=await response.json().catch(function(){return{}});
+    payload.ok=payload.ok!==false&&response.ok;payload.status=response.status;
+    if(!payload.ok&&!payload.error)payload.error='That live workflow could not be loaded.';
+    return payload
+  }catch(error){return{ok:false,error:String(error)}}
+}
+
+async function integrationLoadCache(key,url,repaintView){
+  if(integrationUiLoading[key])return;
+  integrationUiLoading[key]=true;
+  var payload=await integrationFetchJson(url);
+  integrationUiLoading[key]=false;
+  integrationUiCache[key]=payload;
+  if(payload.ok&&key==='accounting')db.ledgerEntries=payload.entries||[];
+  if(payload.ok&&key==='pickups')integrationUiCache.pickupEvents=payload.events||[];
+  if(view===repaintView)queueRender()
+}
+
+function integrationScheduleCache(key,url,repaintView){
+  if(Object.prototype.hasOwnProperty.call(integrationUiCache,key)||integrationUiLoading[key])return;
+  integrationUiLoading[key]=true;
+  setTimeout(async function(){
+    integrationUiLoading[key]=false;
+    await integrationLoadCache(key,url,repaintView)
+  },0)
+}
+
+function integrationMetric(label,value,detail,toneName){
+  return '<div class="integration-metric '+esc(toneName||'blue')+'"><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong><small>'+esc(detail||'')+'</small></div>'
+}
+
+function cloverDisputeRows(){
+  return(db.claims||[]).filter(function(row){return/clover|dispute|chargeback/i.test(String([row.type,row.source,row.provider,row.agency].filter(Boolean).join(' ')))})
+}
+
+function cloverRefundablePayments(){
+  return(db.payments||[]).filter(function(row){
+    var provider=/clover/i.test(String([row.source,row.method,row.provider,row.cloverPaymentId,row.cloverChargeId].filter(Boolean).join(' '))),paid=typeof isCollectedPayment==='function'?isCollectedPayment(row):/paid|approved|complete|succeed/i.test(String(row.status||'')),remaining=Number(row.amount||0)-Number(row.refundedAmount||0);
+    return provider&&paid&&remaining>0
+  }).sort(function(a,b){return String(b.date||b.createdAt||'').localeCompare(String(a.date||a.createdAt||''))})
+}
+
+function integratedDisputeRow(row){
+  var matched=String(row.customerMatchStatus||'')!=='Needs payment/customer match'&&row.customer&&String(row.customer).toLowerCase()!=='unassigned',identity=integrationVehicleIdentity(row),status=row.disputeWorkflowStatus||row.status||'Open',actions='<button class="btn primary" data-action="open-claim" data-id="'+esc(row.id)+'">Open file</button>';
+  if(isOwner())actions+='<button class="btn gold" data-action="integrated-open-dispute" data-id="'+esc(row.id)+'">Response status</button>';
+  if(row.customer&&String(row.customer).toLowerCase()!=='unassigned')actions+=customerFileButton(row.customer,'Customer');
+  return '<article class="integration-row '+esc(matched?'':'attention')+'"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||'Unmatched Clover dispute')+'</strong>'+badge(status,integrationTone(status))+'</div><span>'+esc(identity)+'</span><small>'+esc([row.type||'Clover dispute',row.externalId||row.disputeId||row.caseId||row.paymentId||row.cloverPaymentId||'No provider ID',row.deadline?'Deadline '+row.deadline:''].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount">'+money(row.amount||0)+'</div><div class="actions">'+actions+'</div></article>'
+}
+
+function integratedRefundRow(row){
+  var status=row.status||'Prepared',actions='<button class="btn" data-action="integrated-open-refund-record" data-id="'+esc(row.id)+'">Open</button>';
+  if(row.customer)actions+=customerFileButton(row.customer,'Customer');
+  return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||'Customer refund')+'</strong>'+badge(status,integrationTone(status))+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([row.reason||'Customer refund',row.providerRefundId?'Clover ref '+row.providerRefundId:'Source '+(row.sourcePaymentId||'not linked'),row.createdAt||''].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount debit">-'+money(row.amount||0)+'</div><div class="actions">'+actions+'</div></article>'
+}
+
+function integratedRefundPaymentRow(row){
+  var customer=transactionCustomerName(row,recurringRoster()),remaining=Math.max(0,Number(row.amount||0)-Number(row.refundedAmount||0)),actions=customer&&customer!=='Customer match needed'?customerFileButton(customer,'Customer'):'';
+  if(isOwner())actions='<button class="btn gold" data-action="integrated-open-refund" data-id="'+esc(row.id)+'">Prepare refund</button>'+actions;
+  return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(customer||'Customer match needed')+'</strong>'+badge(row.refundStatus||row.status||'Paid',integrationTone(row.refundStatus||row.status))+'</div><span>'+esc(integrationVehicleIdentity(Object.assign({},row,{customer:customer})))+'</span><small>'+esc([row.date||row.createdAt||'',row.method||row.source||'Clover',row.cloverPaymentId||row.cloverChargeId||'No provider ID'].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount">'+money(remaining)+'</div><div class="actions">'+actions+'</div></article>'
+}
+
+function integratedCloverWorkspace(){
+  integrationScheduleCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');
+  var disputes=cloverDisputeRows(),refunds=(db.refundRequests||[]).slice(),payments=cloverRefundablePayments(),cache=integrationUiCache.clover&&integrationUiCache.clover.ok?integrationUiCache.clover:null,webhooks=cache?cache.counts.webhookEvents:Number((((db.integrations||{}).clover||{}).webhookEvents||[]).length),unmatched=cache?cache.counts.unmatchedPayments:(db.payments||[]).filter(function(row){return transactionCustomerName(row,recurringRoster())==='Customer match needed'}).length,needAction=refunds.filter(function(row){return!/refunded|complete|cancelled/i.test(String(row.status||''))}).length,webhookReady=cache?cache.signedWebhookReady:!!((db.integrations||{}).clover||{}).webhookSecretConfigured;
+  var list=disputes.map(integratedDisputeRow).concat(refunds.map(integratedRefundRow)).concat(payments.slice(0,20).map(integratedRefundPaymentRow));
+  return '<section class="card section integration-workspace" data-limit="18"><div class="section-head"><div><h2>Clover reconciliation</h2><p>Signed events, disputes, refunds, unmatched payments, and refundable transactions in one owner-reviewed queue.</p></div><button class="btn" data-action="integrated-refresh-clover">Refresh</button></div><div class="integration-metrics">'+integrationMetric('Webhook',webhookReady?'Signed':'Setup',webhooks+' event(s)',webhookReady?'good':'warn')+integrationMetric('Disputes',disputes.length,'Customer/payment evidence',disputes.some(function(row){return String(row.customerMatchStatus||'')==='Needs payment/customer match'})?'bad':'blue')+integrationMetric('Refunds',refunds.length,needAction+' need action',needAction?'warn':'good')+integrationMetric('Unmatched',unmatched,'Payments to identify',unmatched?'bad':'good')+'</div>'+localSearch('Search customer, payment ID, Clover case, VIN, tag, refund, amount, or status')+'<div class="integration-list">'+(list.length?list.join(''):'<div class="item">No Clover dispute, refund, or refundable payment records need review.</div>')+'</div><div class="notice">Refunds and dispute status changes require owner confirmation. Partial or POS refunds stay tracked here until the Clover reference is confirmed.</div></section>'
+}
+
+function IntegratedClaimsIssues(){
+  var mechanic=roleName()==='mechanic',claims=(db.claims||[]).filter(function(row){return!mechanic||isMechanicVisibleClaim(row)}),open=claims.filter(function(row){return!/paid|closed|resolved|cancelled/i.test(String(row.status||'Open'))}),history=claims.filter(function(row){return open.indexOf(row)<0}),allowed=mechanic?['Open','History']:['Open','Clover','History'],selected=allowed.indexOf(tab)>=0?tab:'Open',shown=selected==='History'?history:open;
+  var tabs=fastWorkspaceTabs(mechanic?[['Open','Open',open.length],['History','History',history.length]]:[['Open','Open',open.length],['Clover','Clover',cloverDisputeRows().length+(db.refundRequests||[]).length],['History','History',history.length]],selected,'staff-tabs');
+  var body=tabs;
+  if(selected==='Clover')body+=integratedCloverWorkspace();
+  else body+='<section class="card section compact-claims-board staff-card-board" data-limit="12"><div class="section-head"><div><h2>'+esc(selected==='Open'?(mechanic?'Open vehicle issues':'Open claims, tolls & issues'):'Issue history')+'</h2><p>'+esc(mechanic?'Vehicle identity, issue notes, proof, and service follow-up.':'Customer, vehicle, evidence, money, and follow-up kept together.')+'</p></div><div class="actions">'+(isOwner()?'<button class="btn gold" data-action="new-toll-import">Import tolls</button>':'')+'<button class="btn primary" data-action="new-claim">Add issue</button></div></div>'+localSearch(mechanic?'Search vehicle, customer, VIN, tag, proof, or issue':'Search customer, vehicle, VIN, tag, claim, toll, proof, or status')+staffCardGrid(shown.map(staffClaimCard),'No '+selected.toLowerCase()+' issues yet.')+'</section>';
+  shell('Claims & Issues',mechanic?'Vehicle issue tracking without payment controls.':'Claims, tolls, Clover disputes, and refunds without repeated boards.',body,'')
+}
+
+function integratedOpenRefund(paymentId){
+  var payment=(db.payments||[]).find(function(row){return row.id===paymentId});if(!payment)return notify('That payment was not found.');
+  var remaining=Math.max(0,Number(payment.amount||0)-Number(payment.refundedAmount||0)),customer=transactionCustomerName(payment,recurringRoster());
+  openModal('Prepare refund','<div class="integration-modal-summary"><strong>'+esc(customer||'Customer')+'</strong><span>'+esc(integrationVehicleIdentity(Object.assign({},payment,{customer:customer})))+'</span><small>Original '+money(payment.amount||0)+' | Remaining '+money(remaining)+' | '+esc(payment.cloverPaymentId||payment.cloverChargeId||'Clover reference not linked')+'</small></div><div class="notice">Preparing does not move money. A second owner-confirmed step executes a full Ecommerce refund or records the completed Clover POS reference.</div><div class="form"><div class="field"><label>Refund amount</label><input id="integratedRefundAmount" type="number" min="0.01" max="'+esc(remaining)+'" step="0.01" value="'+esc(remaining)+'"></div><div class="field"><label>Reason</label><input id="integratedRefundReason" placeholder="Duplicate charge, adjustment, cancellation..."></div><div class="field span2"><label>Internal notes</label><textarea id="integratedRefundNotes"></textarea></div></div><div class="actions"><button class="btn primary" data-action="integrated-prepare-refund" data-id="'+esc(payment.id)+'">Prepare refund</button></div>')
+}
+
+function integratedOpenRefundRecord(refundId){
+  var row=(db.refundRequests||[]).find(function(item){return item.id===refundId});if(!row)return notify('That refund record was not found.');
+  var complete=/refunded|manual complete|complete/i.test(String(row.status||'')),body='<div class="integration-modal-summary"><strong>'+esc(row.customer||'Customer refund')+'</strong><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+money(row.amount||0)+' | '+esc(row.status||'Prepared')+' | '+esc(row.providerRefundId||row.sourcePaymentId||'No provider reference')+'</small></div><div class="notice">'+esc(row.fullRefund&&row.cloverChargeId?'This full Ecommerce refund can be sent to Clover after the confirmation below.':'Complete this refund in Clover POS/Dashboard, then record its reference below.')+'</div>';
+  if(!complete&&row.fullRefund&&row.cloverChargeId)body+='<label class="native-confirm"><input id="integratedRefundConfirm" type="checkbox"> I reviewed the customer, payment, amount, and Clover charge and approve this live refund.</label><div class="actions"><button class="btn danger" data-action="integrated-execute-refund" data-id="'+esc(row.id)+'">Send refund to Clover</button></div>';
+  if(!complete&&(!row.fullRefund||!row.cloverChargeId))body+='<div class="form"><div class="field span2"><label>Clover refund ID / dashboard reference</label><input id="integratedManualRefundId" placeholder="Required after Clover shows completed"></div><div class="field span2"><label>Completion note</label><textarea id="integratedManualRefundNotes"></textarea></div></div><label class="native-confirm"><input id="integratedManualRefundConfirm" type="checkbox"> I confirm Clover shows this refund as completed.</label><div class="actions"><button class="btn primary" data-action="integrated-complete-refund" data-id="'+esc(row.id)+'">Record completed refund</button></div>';
+  if(complete)body+='<div class="actions"><button class="btn" onclick="closeModal()">Close</button></div>';
+  openModal('Refund record',body)
+}
+
+function integratedOpenDispute(claimId){
+  var row=(db.claims||[]).find(function(item){return item.id===claimId});if(!row)return notify('That dispute was not found.');
+  openModal('Clover dispute status','<div class="integration-modal-summary"><strong>'+esc(row.customer||'Unmatched dispute')+'</strong><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+money(row.amount||0)+' | '+esc(row.externalId||row.disputeId||row.paymentId||row.cloverPaymentId||'No Clover/payment ID')+'</small></div><div class="form"><div class="field"><label>Response stage</label><select id="integratedDisputeAction"><option value="evidence_ready">Evidence ready</option><option value="submitted">Response submitted</option><option value="won">Won</option><option value="lost">Lost</option><option value="closed">Closed</option></select></div><div class="field span2"><label>Review note</label><textarea id="integratedDisputeNotes">'+esc(row.notes||'')+'</textarea></div></div><label class="native-confirm"><input id="integratedDisputeConfirm" type="checkbox"> I reviewed the matched customer, payment, vehicle, and evidence before changing this status.</label><div class="actions"><button class="btn primary" data-action="integrated-save-dispute" data-id="'+esc(row.id)+'">Save dispute status</button></div>')
+}
+
+function verificationNewCaseClear(customer,type){
+  return(db.verificationCases||[]).some(function(row){return normName(row.customer)===normName(customer)&&row.type===type&&/verified|approved|clear|active/i.test(String(row.status||''))})
+}
+
+function verificationMissingRows(type){
+  var oldType=type==='insurance'?'insurance':'background';
+  return activeCustomerFiles().filter(function(row){return!verificationNewCaseClear(row.customer,type)&&!verificationDocClearedForCustomer(row.customer,oldType)})
+}
+
+function integratedVerificationCaseRow(row){
+  var status=row.status||'Needs staff review',actions='<button class="btn primary" data-action="integrated-open-verification" data-id="'+esc(row.id)+'">Review</button>';
+  if(row.customer)actions+=customerFileButton(row.customer,'Customer');
+  return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||'Customer')+'</strong>'+badge(status,integrationTone(status))+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([String(row.type||'Verification').replace('_',' '),row.provider||'Manual',row.expiresAt?'Expires '+row.expiresAt:'No expiration',row.policyNumberLast4?'Policy ending '+row.policyNumberLast4:'',row.referenceLast4?'Reference ending '+row.referenceLast4:''].filter(Boolean).join(' | '))+'</small></div><div class="actions">'+actions+'</div></article>'
+}
+
+function integratedVerificationDocumentRow(row){
+  var status=row.status||'Needs verification',actions='<button class="btn primary" data-action="open-document" data-id="'+esc(row.id)+'">Open proof</button>';
+  if(row.customer)actions+=customerFileButton(row.customer,'Customer');
+  return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||'Customer')+'</strong>'+badge(status,verificationStatusTone(row))+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([row.type||'Document',row.provider||row.agency||'Manual proof',row.expires||row.due?'Expires '+(row.expires||row.due):'No expiration'].filter(Boolean).join(' | '))+'</small></div><div class="actions">'+actions+'</div></article>'
+}
+
+function integratedMissingVerificationRow(row,type){
+  return '<article class="integration-row attention"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||'Customer')+'</strong>'+badge(type==='insurance'?'Insurance needed':'ID/license needed','bad')+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>No verified '+esc(type==='insurance'?'insurance policy':'identity or driver-license')+' case is linked.</small></div><div class="actions"><button class="btn primary" data-action="integrated-new-verification" data-type="'+esc(type)+'" data-customer="'+esc(row.customer||'')+'">Start review</button>'+customerFileButton(row.customer,'Customer')+'</div></article>'
+}
+
+function IntegratedInsurance(){
+  var selected=['Review','Insurance','Identity'].indexOf(tab)>=0?tab:'Review',cases=db.verificationCases||[],insuranceCases=cases.filter(function(row){return row.type==='insurance'}),identityCases=cases.filter(function(row){return row.type==='identity'||row.type==='driver_license'}),insuranceDocs=verificationDocs('insurance').filter(function(row){return!row.system}),identityDocs=verificationDocs('background').filter(function(row){return!row.system}),missingInsurance=verificationMissingRows('insurance'),missingIdentity=verificationMissingRows('driver_license'),reviewCases=cases.filter(function(row){return!/verified|closed/i.test(String(row.status||''))}),items=[];
+  if(selected==='Review')items=reviewCases.map(integratedVerificationCaseRow).concat(missingInsurance.map(function(row){return integratedMissingVerificationRow(row,'insurance')})).concat(missingIdentity.map(function(row){return integratedMissingVerificationRow(row,'driver_license')}));
+  if(selected==='Insurance')items=insuranceCases.map(integratedVerificationCaseRow).concat(insuranceDocs.map(integratedVerificationDocumentRow));
+  if(selected==='Identity')items=identityCases.map(integratedVerificationCaseRow).concat(identityDocs.map(integratedVerificationDocumentRow));
+  var tabs=fastWorkspaceTabs([['Review','Review',reviewCases.length+missingInsurance.length+missingIdentity.length],['Insurance','Insurance',insuranceCases.length+insuranceDocs.length],['Identity','ID & license',identityCases.length+identityDocs.length]],selected,'staff-tabs');
+  var body=tabs+'<section class="card section integration-workspace" data-limit="16"><div class="section-head"><div><h2>'+esc(selected==='Review'?'Verification review':selected==='Insurance'?'Insurance verification':'Identity & driver license')+'</h2><p>Manual review works now; authoritative outside results can enter through the signed provider adapter.</p></div><div class="actions"><button class="btn primary" data-action="integrated-new-verification" data-type="'+esc(selected==='Identity'?'driver_license':'insurance')+'">Add '+esc(selected==='Identity'?'ID / license':'insurance')+'</button><button class="btn" data-view="Claims & Issues">Claims</button></div></div>'+localSearch('Search customer, vehicle, VIN, tag, provider, expiration, or status')+'<div class="integration-list">'+(items.length?items.join(''):'<div class="item">No '+esc(selected.toLowerCase())+' verification records need attention.</div>')+'</div><div class="notice">WheelsonAuto stores only the last four characters of license/policy references in verification cases. Sensitive documents remain in the document workflow.</div></section>';
+  shell('Insurance','Insurance, identity, and license verification without repeated boards.',body,'')
+}
+
+function integratedOpenVerificationForm(type,customer){
+  type=type||'insurance';var profile=existingCustomerProfile(customer||'')||{},vehicleId=profile.vehicleId||'';
+  openModal(type==='insurance'?'Add insurance verification':'Add ID / driver-license verification','<div class="form"><div class="field span2"><label>Customer</label><select id="integratedVerificationCustomer">'+customerOptions(customer||'')+'</select></div><div class="field span2"><label>Vehicle</label><select id="integratedVerificationVehicle"><option value="">Infer from customer file</option>'+vehicleOptions(vehicleId)+'</select></div><div class="field"><label>Verification type</label><select id="integratedVerificationType"><option value="insurance" '+(type==='insurance'?'selected':'')+'>Insurance</option><option value="identity" '+(type==='identity'?'selected':'')+'>Identity</option><option value="driver_license" '+(type==='driver_license'?'selected':'')+'>Driver license</option></select></div><div class="field"><label>Provider</label><input id="integratedVerificationProvider" value="Manual" placeholder="Manual or provider name"></div><div class="field"><label>License/policy reference</label><input id="integratedVerificationReference" autocomplete="off" placeholder="Only last 4 will be stored"></div><div class="field"><label>Expiration</label><input id="integratedVerificationExpires" type="date"></div><div class="field span2"><label>External provider case ID</label><input id="integratedVerificationExternal" placeholder="Leave blank for staff review"></div><div class="field span2"><label>Review notes</label><textarea id="integratedVerificationNotes"></textarea></div></div><div class="actions"><button class="btn primary" data-action="integrated-create-verification">Create verification case</button></div>')
+}
+
+function integratedOpenVerificationReview(caseId){
+  var row=(db.verificationCases||[]).find(function(item){return item.id===caseId});if(!row)return notify('That verification case was not found.');
+  openModal('Review verification','<div class="integration-modal-summary"><strong>'+esc(row.customer||'Customer')+'</strong><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([String(row.type||'Verification').replace('_',' '),row.provider||'Manual',row.status||'Needs review',row.expiresAt?'Expires '+row.expiresAt:'No expiration'].join(' | '))+'</small></div><div class="form"><div class="field"><label>Expiration</label><input id="integratedReviewExpires" type="date" value="'+esc(row.expiresAt||'')+'"></div><div class="field span2"><label>Review notes</label><textarea id="integratedReviewNotes">'+esc(row.notes||'')+'</textarea></div></div><div class="actions"><button class="btn primary" data-action="integrated-review-verification" data-id="'+esc(row.id)+'" data-decision="approve">Approve</button><button class="btn" data-action="integrated-review-verification" data-id="'+esc(row.id)+'" data-decision="request_correction">Request correction</button><button class="btn danger" data-action="integrated-review-verification" data-id="'+esc(row.id)+'" data-decision="reject">Reject</button></div>')
+}
+
+function integratedLedgerWorkspace(){
+  integrationScheduleCache('accounting','/api/accounting/ledger','Reports');
+  var payload=integrationUiCache.accounting&&integrationUiCache.accounting.ok?integrationUiCache.accounting:null,entries=payload?payload.entries:(db.ledgerEntries||[]),credits=entries.filter(function(row){return row.direction==='credit'}).reduce(function(sum,row){return sum+Number(row.amount||0)},0),debits=entries.filter(function(row){return row.direction==='debit'}).reduce(function(sum,row){return sum+Number(row.amount||0)},0),unsynced=entries.filter(function(row){return!/synced/i.test(String(row.quickBooksStatus||''))}).length,qb=payload&&payload.quickBooks||{configured:false,status:'Provider setup needed'},rows=entries.slice(0,60).map(function(row){var actions=row.customer?customerFileButton(row.customer,'Customer'):'';return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||row.category||'Accounting entry')+'</strong>'+badge(row.category||row.status,integrationTone(row.status))+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([row.date,row.method,row.reference,row.quickBooksStatus||'Not synced',row.sourceKey].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount '+(row.direction==='debit'?'debit':'')+'">'+(row.direction==='debit'?'-':'+')+money(row.amount||0)+'</div><div class="actions">'+actions+'</div></article>'});
+  return '<section class="card section integration-workspace" data-limit="24"><div class="section-head"><div><h2>Source-linked accounting ledger</h2><p>Payments, refunds, maintenance cost, and recovered claims stay tied to customer, vehicle, VIN/tag, and provider reference.</p></div><div class="actions"><a class="btn" href="/api/accounting/export.csv">Export CSV</a><button class="btn" data-action="integrated-refresh-accounting">Refresh</button>'+(isOwner()?'<button class="btn gold" data-action="integrated-rebuild-accounting">Rebuild ledger</button>':'')+'</div></div><div class="integration-metrics">'+integrationMetric('Credits',money(credits),entries.filter(function(row){return row.direction==='credit'}).length+' entries','good')+integrationMetric('Debits',money(debits),entries.filter(function(row){return row.direction==='debit'}).length+' entries',debits?'warn':'blue')+integrationMetric('Net',money(credits-debits),'Source-linked total',credits-debits<0?'bad':'blue')+integrationMetric('QuickBooks',qb.configured?'Ready':'Setup',unsynced+' not synced',qb.configured?'blue':'warn')+'</div>'+localSearch('Search ledger by customer, vehicle, VIN, tag, payment, refund, claim, amount, or reference')+'<div class="integration-list">'+(rows.length?rows.join(''):'<div class="item">'+(integrationUiLoading.accounting?'Loading the source-linked ledger...':'No accounting entries were built yet. Use Rebuild ledger.')+'</div>')+'</div><div class="notice">The internal ledger and CSV are live now. QuickBooks stays marked setup-required until its OAuth connection is completed and tested.</div></section>'
+}
+
+function IntegratedReports(){
+  if(tab!=='Accounting')return ReportsFocused();
+  var body=fastWorkspaceTabs([['Summary','Summary'],['Closeout','Closeout'],['Accounting','Accounting'],['Risk','Risk'],['Pipeline','Pipeline']],'Accounting','report-tabs')+integratedLedgerWorkspace();
+  shell('Reports',roleName()==='manager'?'Operational reporting with a source-linked accounting view.':'Owner reporting with a source-linked accounting view.',body,'')
+}
+
+function pickupCalendarEventFor(appointment){
+  var rows=(integrationUiCache.pickupEvents||[]).concat(db.calendarEvents||[]);
+  return rows.find(function(row){return row.appointmentId===appointment.id})||null
+}
+
+function integratedPickupCard(appointment){
+  var event=pickupCalendarEventFor(appointment),identity=integrationVehicleIdentity(Object.assign({},appointment,{plate:appointment.licensePlate||appointment.plate})),mapsUrl=event&&event.mapsUrl||('https://www.google.com/maps/dir/?api=1&destination='+encodeURIComponent(appointment.address||'5150 NJ-42, Blackwood, NJ 08012')),actions='<a class="btn" href="'+esc(mapsUrl)+'" target="_blank" rel="noopener">Directions</a>';
+  if(event&&event.googleCalendarUrl)actions+='<a class="btn gold" href="'+esc(event.googleCalendarUrl)+'" target="_blank" rel="noopener">Add to Google</a><a class="btn" href="/api/pickups/'+encodeURIComponent(appointment.id)+'/calendar.ics">ICS</a>';
+  else actions+='<button class="btn primary" data-action="integrated-prepare-pickup" data-id="'+esc(appointment.id)+'">Prepare calendar</button>';
+  if(appointment.customer)actions+=customerFileButton(appointment.customer,'Customer');
+  return '<article class="integration-row pickup"><div class="integration-row-main"><div class="item-row"><strong>'+esc(appointment.customer||'Customer pickup')+'</strong>'+badge(appointment.status||'Scheduled',integrationTone(appointment.status))+'</div><span>'+esc(identity)+'</span><small>'+esc([appointment.date,appointment.time,appointment.durationMinutes?appointment.durationMinutes+' minutes':'',appointment.address||'5150 NJ-42, Blackwood, NJ 08012','Autopay anchor '+(appointment.autopayAnchorDate||appointment.date||'not set')].filter(Boolean).join(' | '))+'</small></div><div class="actions">'+actions+'</div></article>'
+}
+
+function integratedPickupWorkspace(){
+  integrationScheduleCache('pickups','/api/pickups/calendar','Applications');
+  var appointments=(db.pickupAppointments||[]).slice().sort(function(a,b){return String(a.date+' '+a.time).localeCompare(String(b.date+' '+b.time))});
+  return '<section class="card section integration-workspace" data-limit="20"><div class="section-head"><div><h2>Pickup schedule</h2><p>5150 NJ-42, Blackwood, NJ 08012 | Monday-Saturday, 11 AM-5 PM | next-day minimum.</p></div>'+badge(appointments.length+' scheduled','blue')+'</div>'+localSearch('Search pickup by customer, car, VIN, tag, date, time, or status')+'<div class="integration-list">'+(appointments.length?appointments.map(integratedPickupCard).join(''):'<div class="item">No completed onboarding pickup appointments are scheduled yet.</div>')+'</div><div class="notice">Pickup date becomes the recurring autopay weekday. Same-day pickups stay a manual phone appointment.</div></section>'
+}
+
+function integratedApplicationTabs(selected){
+  var apps=db.applications||[];
+  return fastWorkspaceTabs([['Pipeline','New applications',apps.filter(function(row){return!nativeSessionForApplication(row)&&!/denied|removed/i.test(String(row.status||row.stage||''))}).length],['Onboarding','Onboarding',(db.onboardingSessions||[]).filter(function(row){return!/completed|cancelled|expired|replaced/i.test(String(row.status||''))}).length],['Pickups','Pickups',(db.pickupAppointments||[]).length],['History','History',apps.filter(function(row){return/denied|removed|cancelled|pickup confirmed/i.test(String(row.status||row.stage||''))}).length]],selected,'staff-tabs')
+}
+
+function IntegratedApplications(){
+  if(tab==='Pickups'){
+    shell('Applications','Applicant, onboarding, and pickup work without stacked boards.',integratedApplicationTabs('Pickups')+integratedPickupWorkspace(),'');return
+  }
+  ApplicationsNative();
+  var bar=document.querySelector('.main.view-applications .tabs');
+  if(bar&&!bar.querySelector('[data-tab="Pickups"]')){
+    var button=document.createElement('button');button.dataset.tab='Pickups';button.textContent='Pickups '+(db.pickupAppointments||[]).length;
+    var history=bar.querySelector('[data-tab="History"]');if(history)bar.insertBefore(button,history);else bar.appendChild(button)
+  }
+}
+
+var __woaOpenNativeApplicationWithPickup=openNativeApplication;
+openNativeApplication=function(id,createdLink){
+  __woaOpenNativeApplicationWithPickup(id,createdLink);
+  var appointment=(db.pickupAppointments||[]).find(function(row){return row.applicationId===id}),actions=document.querySelector('#modalBody .native-file-actions');
+  if(!appointment||!actions||document.querySelector('#modalBody .native-pickup-context'))return;
+  var wrap=document.createElement('div');wrap.className='native-pickup-context';wrap.innerHTML='<strong>Pickup confirmed</strong><span>'+esc(appointment.date+' at '+appointment.time)+'</span><small>'+esc(integrationVehicleIdentity(Object.assign({},appointment,{plate:appointment.licensePlate||appointment.plate})))+'</small><div class="actions"><button class="btn" data-view="Applications" data-tab="Pickups">Open pickup schedule</button></div>';
+  actions.parentNode.insertBefore(wrap,actions)
+};
+
+ClaimsIssues=IntegratedClaimsIssues;
+Insurance=IntegratedInsurance;
+Reports=IntegratedReports;
+ReportsFast=IntegratedReports;
+Applications=IntegratedApplications;
+
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action]');if(!button)return;
+  var actionName=button.dataset.action||'',handled=['integrated-refresh-clover','integrated-open-refund','integrated-prepare-refund','integrated-open-refund-record','integrated-execute-refund','integrated-complete-refund','integrated-open-dispute','integrated-save-dispute','integrated-new-verification','integrated-create-verification','integrated-open-verification','integrated-review-verification','integrated-refresh-accounting','integrated-rebuild-accounting','integrated-prepare-pickup'];
+  if(handled.indexOf(actionName)<0)return;
+  event.preventDefault();event.stopImmediatePropagation();
+  if(button.disabled)return;button.disabled=true;button.classList.add('is-loading');var original=button.textContent;
+  try{
+    if(actionName==='integrated-refresh-clover'){delete integrationUiCache.clover;await integrationLoadCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');notify(integrationUiCache.clover&&integrationUiCache.clover.ok?'Clover reconciliation refreshed':integrationUiCache.clover&&integrationUiCache.clover.error||'Reconciliation needs attention');return}
+    if(actionName==='integrated-open-refund'){integratedOpenRefund(button.dataset.id);return}
+    if(actionName==='integrated-prepare-refund'){
+      var prepared=await post('/api/integrations/clover/refunds/prepare',{paymentId:button.dataset.id,amount:Number(val('integratedRefundAmount')||0),reason:val('integratedRefundReason'),notes:val('integratedRefundNotes')});
+      if(!prepared.ok){notify(prepared.error||'Refund could not be prepared');return}await refreshData(true);integratedOpenRefundRecord(prepared.refund.id);notify(prepared.created?'Refund prepared':'Existing refund opened');return
+    }
+    if(actionName==='integrated-open-refund-record'){integratedOpenRefundRecord(button.dataset.id);return}
+    if(actionName==='integrated-execute-refund'){
+      if(!(document.getElementById('integratedRefundConfirm')&&document.getElementById('integratedRefundConfirm').checked)){notify('Confirm the live refund review first');return}
+      var executed=await post('/api/integrations/clover/refunds/execute',{refundId:button.dataset.id,confirmed:true});if(!executed.ok){notify(executed.error||'Clover refund failed');return}await refreshData(true);closeModal();queueRender();notify('Refund completed in Clover');return
+    }
+    if(actionName==='integrated-complete-refund'){
+      if(!(document.getElementById('integratedManualRefundConfirm')&&document.getElementById('integratedManualRefundConfirm').checked)){notify('Confirm Clover shows the completed refund first');return}
+      var completed=await post('/api/integrations/clover/refunds/complete-manual',{refundId:button.dataset.id,providerRefundId:val('integratedManualRefundId'),notes:val('integratedManualRefundNotes'),confirmed:true});if(!completed.ok){notify(completed.error||'Refund completion did not save');return}await refreshData(true);closeModal();queueRender();notify('Completed Clover refund recorded');return
+    }
+    if(actionName==='integrated-open-dispute'){integratedOpenDispute(button.dataset.id);return}
+    if(actionName==='integrated-save-dispute'){
+      var confirmed=!!(document.getElementById('integratedDisputeConfirm')&&document.getElementById('integratedDisputeConfirm').checked),dispute=await post('/api/integrations/clover/disputes/action',{claimId:button.dataset.id,action:val('integratedDisputeAction'),notes:val('integratedDisputeNotes'),confirmed:confirmed});if(!dispute.ok){notify(dispute.error||'Dispute status did not save');return}await refreshData(true);closeModal();queueRender();notify('Dispute status updated');return
+    }
+    if(actionName==='integrated-new-verification'){integratedOpenVerificationForm(button.dataset.type||'insurance',button.dataset.customer||'');return}
+    if(actionName==='integrated-create-verification'){
+      var created=await post('/api/verification/cases',{type:val('integratedVerificationType'),customer:val('integratedVerificationCustomer'),vehicleId:val('integratedVerificationVehicle'),provider:val('integratedVerificationProvider')||'Manual',reference:val('integratedVerificationReference'),expiresAt:val('integratedVerificationExpires'),externalCaseId:val('integratedVerificationExternal'),notes:val('integratedVerificationNotes')});if(!created.ok){notify(created.error||'Verification case did not save');return}await refreshData(true);closeModal();tab='Review';queueRender();notify(created.created?'Verification case created':'Existing open case found');return
+    }
+    if(actionName==='integrated-open-verification'){integratedOpenVerificationReview(button.dataset.id);return}
+    if(actionName==='integrated-review-verification'){
+      var reviewed=await post('/api/verification/cases/review',{caseId:button.dataset.id,decision:button.dataset.decision,expiresAt:val('integratedReviewExpires'),notes:val('integratedReviewNotes')});if(!reviewed.ok){notify(reviewed.error||'Verification review did not save');return}await refreshData(true);closeModal();queueRender();notify('Verification review saved');return
+    }
+    if(actionName==='integrated-refresh-accounting'){delete integrationUiCache.accounting;await integrationLoadCache('accounting','/api/accounting/ledger','Reports');notify(integrationUiCache.accounting&&integrationUiCache.accounting.ok?'Accounting ledger refreshed':integrationUiCache.accounting&&integrationUiCache.accounting.error||'Ledger needs attention');return}
+    if(actionName==='integrated-rebuild-accounting'){
+      var rebuilt=await post('/api/accounting/ledger/rebuild',{});if(!rebuilt.ok){notify(rebuilt.error||'Ledger did not rebuild');return}delete integrationUiCache.accounting;await refreshData(true);await integrationLoadCache('accounting','/api/accounting/ledger','Reports');notify('Ledger rebuilt from '+rebuilt.rebuilt+' source record(s)');return
+    }
+    if(actionName==='integrated-prepare-pickup'){
+      var calendar=await post('/api/pickups/'+encodeURIComponent(button.dataset.id)+'/calendar',{});if(!calendar.ok){notify(calendar.error||'Pickup calendar could not be prepared');return}await refreshData(true);delete integrationUiCache.pickups;integrationUiCache.pickupEvents=null;await integrationLoadCache('pickups','/api/pickups/calendar','Applications');notify('Pickup calendar and directions are ready');return
+    }
+  }finally{button.disabled=false;button.classList.remove('is-loading');if(document.body.contains(button))button.textContent=original}
 },true);

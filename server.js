@@ -78,7 +78,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-charcoal-19-months-53">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-operations-integrations-55">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -6904,8 +6904,16 @@ async function cloverPostFullRefund(chargeId, idempotencyKey) {
   return body;
 }
 function refundPaymentRecord(data, payload = {}) {
-  const ids = [payload.paymentId, payload.cloverPaymentId, payload.cloverChargeId, payload.sourcePaymentId].map(String).filter(Boolean);
-  return (data.payments || []).find(payment => ids.some(id => [payment.id, payment.cloverPaymentId, payment.cloverChargeId, payment.providerPaymentId, payment.externalReferenceId].map(String).includes(id))) || null;
+  const ids = [payload.paymentId, payload.cloverPaymentId, payload.cloverChargeId, payload.sourcePaymentId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!ids.length) return null;
+  return (data.payments || []).find(payment => {
+    const paymentIds = [payment.id, payment.cloverPaymentId, payment.cloverChargeId, payment.providerPaymentId, payment.externalReferenceId]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    return ids.some(id => paymentIds.includes(id));
+  }) || null;
 }
 function preparedRefundRequest(data, payload = {}, user = {}) {
   const payment = refundPaymentRecord(data, payload);
