@@ -130,6 +130,8 @@ async function main() {
   process.env.WOA_SESSION_SECRET = 'native-onboarding-session-secret';
   process.env.CLOVER_WEBHOOK_SECRET = webhookSecret;
   process.env.CLOVER_HCO_WEBHOOK_SECRET = webhookSecret;
+  process.env.CLOVER_MERCHANT_ID = 'KJ7PNEZR6QVP1';
+  process.env.WOA_PAYMENT_PROVIDER = 'clover';
   process.env.WOA_AUTO_SYNC_MS = '3600000';
   process.env.WOA_AUTOPAY_MS = '3600000';
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
@@ -233,7 +235,7 @@ async function main() {
     session.status = 'Card linked';
     const paymentBase = { recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, onlineVehicleId: 'online-native-1', organizationId: 'org-wheelsonauto', customer: 'Native Applicant', phone: '8565550107', email: 'native.applicant@example.com', vehicleId: 'veh-native-1', vehicle: '2016 Ford Focus', vin: '1FADP3K24GL123456', licensePlate: 'A19-WWM', method: 'Clover Hosted Checkout', source: 'WheelsonAuto native onboarding', checkoutCreatedAt: new Date().toISOString(), onboardingReturnUrl: 'http://127.0.0.1:4181/onboard/' + token };
     saved.paymentRequests.unshift(
-      { ...paymentBase, id: 'plink-native-first', amount: 229, frequency: 'First week', paymentType: 'First weekly payment', reason: 'First weekly payment', status: 'Clover checkout ready', checkoutSessionId: 'checkout-native-first', checkoutHref: 'https://checkout.clover.test/first', createdAt: new Date().toISOString() },
+      { ...paymentBase, id: 'plink-native-first', amount: 229, frequency: 'First week', paymentType: 'First weekly payment', reason: 'First weekly payment', status: 'Unpaid - Clover checkout ready', checkoutSessionId: 'checkout-native-first', checkoutHref: 'https://checkout.clover.test/first', createdAt: new Date().toISOString() },
       { ...paymentBase, id: 'plink-native-deposit', amount: 485, frequency: 'One time', paymentType: 'Nonrefundable down payment', reason: 'Nonrefundable down payment', status: 'Clover checkout ready', checkoutSessionId: 'checkout-native-deposit', checkoutHref: 'https://checkout.clover.test/deposit', createdAt: new Date().toISOString() }
     );
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
@@ -241,18 +243,24 @@ async function main() {
     const invalidWebhook = await request(server, 'POST', '/api/webhooks/clover', { raw: JSON.stringify({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'clover-payment-deposit' }), headers: { 'content-type': 'application/json', 'clover-signature': 't=1,v1=invalid' } });
     assert(invalidWebhook.status === 401, 'Unsigned or invalid Clover callbacks must not change payment state.');
     async function signedWebhook(event) {
-      const raw = JSON.stringify(event);
+      const raw = JSON.stringify({ MerchantId: process.env.CLOVER_MERCHANT_ID, ...event });
       return request(server, 'POST', '/api/webhooks/clover', { raw, headers: { 'content-type': 'application/json', 'clover-signature': cloverSignature(webhookSecret, raw) } });
     }
+    const wrongMerchantWebhook = await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'wrong-merchant-payment', MerchantId: 'WRONGMERCHANT' });
+    assert(wrongMerchantWebhook.status === 200 && !wrongMerchantWebhook.json.hostedCheckout.matched && /merchant/i.test(wrongMerchantWebhook.json.hostedCheckout.reason || ''), 'A validly signed event for another merchant must not reconcile a WheelsonAuto payment.');
     const depositWebhook = await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'clover-payment-deposit' });
     assert(depositWebhook.status === 200 && depositWebhook.json.hostedCheckout.approved, 'Signed Clover deposit webhook should verify the first transaction.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(saved.pickupAppointments.length === 0, 'Deposit alone must not confirm pickup before the first weekly payment.');
     assert(saved.payments.filter(row => row.onboardingSessionId === onboardingId).length === 1, 'Deposit should create exactly one payment record.');
     assert(saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt').length === 1, 'Deposit should create its own receipt.');
+    const providerNeutralDepositRequest = saved.paymentRequests.find(row => row.id === 'plink-native-deposit');
+    const providerNeutralDepositPayment = saved.payments.find(row => row.paymentRequestId === 'plink-native-deposit');
+    assert(providerNeutralDepositRequest.paymentProvider === 'clover' && providerNeutralDepositRequest.providerCheckoutSessionId === 'checkout-native-deposit' && providerNeutralDepositRequest.providerPaymentId === 'clover-payment-deposit', 'Legacy Clover request IDs should be mirrored into provider-neutral checkout/payment fields.');
+    assert(providerNeutralDepositPayment.paymentProvider === 'clover' && providerNeutralDepositPayment.providerPaymentId === 'clover-payment-deposit', 'Verified payment history should retain provider-neutral identity for a future Stripe adapter.');
 
     const redirectOnly = await request(server, 'GET', '/pay/plink-native-first/success?session_id=checkout-native-first');
-    assert(redirectOnly.status === 200 && /waiting for Clover's signed confirmation/i.test(redirectOnly.text), 'Clover success redirect alone must not be treated as payment proof.');
+    assert(redirectOnly.status === 200 && /waiting for the signed provider confirmation/i.test(redirectOnly.text), 'Provider success redirect alone must not be treated as payment proof.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(!/paid|success/i.test(saved.paymentRequests.find(row => row.id === 'plink-native-first').status), 'Unverified redirect must keep the first weekly payment unpaid.');
 
@@ -272,10 +280,12 @@ async function main() {
     assert(!JSON.stringify(saved).includes('NativeTest123'), 'Final customer data must still contain no plaintext password.');
 
     await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });
+    await signedWebhook({ Type: 'PAYMENT', Status: 'DECLINED', Data: 'checkout-native-first', Id: 'clover-payment-first-late-decline' });
     const idempotent = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(idempotent.pickupAppointments.filter(row => row.onboardingSessionId === onboardingId).length === 1, 'Repeated Clover webhook must not duplicate the pickup appointment.');
     assert(idempotent.payments.filter(row => row.paymentRequestId === 'plink-native-first').length === 1, 'Repeated Clover webhook must not duplicate payment history.');
     assert(idempotent.documents.filter(row => row.paymentRequestId === 'plink-native-first' && row.kind === 'Receipt').length === 1, 'Repeated Clover webhook must not duplicate receipts.');
+    assert(/paid/i.test(idempotent.paymentRequests.find(row => row.id === 'plink-native-first').status), 'A late duplicate decline must never downgrade an already-verified paid request.');
 
     console.log('Native onboarding check passed: published inventory, application security, document/signature gates, card consent, signed Clover reconciliation, separate receipts, pickup, and pickup-anchored weekly autopay are connected.');
   } finally {

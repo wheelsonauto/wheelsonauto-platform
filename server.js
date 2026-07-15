@@ -35,6 +35,7 @@ const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || p
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const CLOVER_WEBHOOK_SECRET = process.env.CLOVER_WEBHOOK_SECRET || process.env.WOA_CLOVER_WEBHOOK_SECRET || '';
 const CLOVER_HCO_WEBHOOK_SECRET = process.env.CLOVER_HCO_WEBHOOK_SECRET || process.env.WOA_CLOVER_HCO_WEBHOOK_SECRET || CLOVER_WEBHOOK_SECRET;
+const WOA_PAYMENT_PROVIDER = String(process.env.WOA_PAYMENT_PROVIDER || 'clover').trim().toLowerCase();
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
@@ -2645,7 +2646,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Toll/violation recovery', tollRecoveryAmount, tollRecovery.length ? (tollMatchReview.length ? 'Review' : 'Open') : 'Clean', 'Star QA', tollRecovery.length + ' open toll/violation item(s), ' + tollMatchReview.length + ' need customer/vehicle/plate review before charge or message');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'Review' : 'Clean', 'Star QA', apiProviderReview.length ? apiProviderReview.map(provider => (provider.name || provider.group || 'API provider') + ' - ' + (provider.status || 'Needs setup')).slice(0, 8).join(' | ') : 'Provider dependency matrix is clean or intentionally not created yet');
   if (isOwnerUser(user)) addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Messaging webhook secret', MESSAGING_WEBHOOK_SECRET ? 0 : 1, MESSAGING_WEBHOOK_SECRET ? 'Clean' : 'Review', 'Star QA', MESSAGING_WEBHOOK_SECRET ? 'WOA_MESSAGING_WEBHOOK_SECRET is configured for inbound SMS/email callbacks' : 'Set WOA_MESSAGING_WEBHOOK_SECRET before live SMS/email inbound webhooks are connected');
-  if (isOwnerUser(user)) addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Clover webhook secret', CLOVER_WEBHOOK_SECRET ? 0 : 1, CLOVER_WEBHOOK_SECRET ? 'Clean' : 'Review', 'Star QA', CLOVER_WEBHOOK_SECRET ? 'CLOVER_WEBHOOK_SECRET or WOA_CLOVER_WEBHOOK_SECRET is configured for payment auto-sync callbacks' : 'Set CLOVER_WEBHOOK_SECRET or WOA_CLOVER_WEBHOOK_SECRET before Clover webhook auto-sync is connected');
+  if (isOwnerUser(user)) addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Clover Hosted Checkout signing secret', CLOVER_HCO_WEBHOOK_SECRET ? 0 : 1, CLOVER_HCO_WEBHOOK_SECRET ? 'Clean' : 'Review', 'Star QA', CLOVER_HCO_WEBHOOK_SECRET ? 'CLOVER_HCO_WEBHOOK_SECRET is configured for signed Hosted Checkout reconciliation' : 'Generate the Hosted Checkout signing secret in Clover and set CLOVER_HCO_WEBHOOK_SECRET before payment reconciliation is connected');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Missing contact', missingContact.length, missingContact.length ? 'Review' : 'Clean', 'Star QA', 'Customers without phone or email cannot receive Star follow-up');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Verification inbox', verificationItems.length, verificationItems.length ? 'Review' : 'Clean', 'Star QA', 'Customer proof, paid-outside, service, toll, claim, and document reviews waiting');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Open card setup links', openCardSetupRequests.length, openCardSetupRequests.length ? 'Review' : 'Clean', 'Star QA', staleCardSetupRequests.length ? staleCardSetupRequests.length + ' card setup link(s) are older than 24 hours and need follow-up' : 'Open card setup/change links waiting for customers to save cards');
@@ -2766,7 +2767,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   if (isOwnerUser(user)) issue(21, 'api_provider_readiness', 'API provider readiness', apiProviderReview.length, apiProviderReview.length ? 'warn' : 'good', 'API Roadmap', '', 'Provider dependency matrix needs env keys, endpoint, live test plan, and last test result before Star or workflows can rely on it.');
   if (isOwnerUser(user)) issue(22, 'session_signing_secret', 'Session signing secret', SESSION_SIGNING_SECRET_CONFIGURED ? 0 : 1, SESSION_SIGNING_SECRET_CONFIGURED ? 'good' : 'warn', 'Settings', '', 'Set WOA_SESSION_SECRET or WOA_COOKIE_SECRET in Render so signed staff/customer sessions use an intentional stable secret across deploys.');
   if (isOwnerUser(user)) issue(23, 'messaging_webhook_secret', 'Messaging webhook secret', MESSAGING_WEBHOOK_SECRET ? 0 : 1, MESSAGING_WEBHOOK_SECRET ? 'good' : 'warn', 'Messages', 'Setup', 'Set WOA_MESSAGING_WEBHOOK_SECRET in Render before live SMS/email inbound webhooks are connected.');
-  if (isOwnerUser(user)) issue(24, 'clover_webhook_secret', 'Clover webhook secret', CLOVER_WEBHOOK_SECRET ? 0 : 1, CLOVER_WEBHOOK_SECRET ? 'good' : 'warn', 'API Roadmap', '', 'Set CLOVER_WEBHOOK_SECRET or WOA_CLOVER_WEBHOOK_SECRET in Render before Clover webhook auto-sync is connected.');
+  if (isOwnerUser(user)) issue(24, 'clover_webhook_secret', 'Clover Hosted Checkout signing secret', CLOVER_HCO_WEBHOOK_SECRET ? 0 : 1, CLOVER_HCO_WEBHOOK_SECRET ? 'good' : 'warn', 'API Roadmap', '', 'Generate the Hosted Checkout signing secret in Clover and set CLOVER_HCO_WEBHOOK_SECRET in Render before signed payment reconciliation is connected.');
   if (isOwnerUser(user)) issue(22, 'sensitive_changes', 'Sensitive changes', auditToday.length, auditToday.length ? 'blue' : 'good', 'Reports', '', 'Owner/staff changes logged today for closeout review.');
   const badCount = issues.filter(row => row.tone === 'bad' && Number(row.count || 0) > 0).length;
   const warnCount = issues.filter(row => row.tone === 'warn' && Number(row.count || 0) > 0).length;
@@ -5350,8 +5351,8 @@ function stateForUserRead(data, user) {
   safe.integrations.messaging = { ...(safe.integrations.messaging || {}), ...publicMessagingStatus(data) };
   if (owner) {
     safe.integrations.clover = safe.integrations.clover || {};
-    safe.integrations.clover.webhookSecretConfigured = !!CLOVER_WEBHOOK_SECRET;
-    safe.integrations.clover.webhookSecretStatus = CLOVER_WEBHOOK_SECRET ? 'Configured' : 'Needs shared secret';
+    safe.integrations.clover.webhookSecretConfigured = !!CLOVER_HCO_WEBHOOK_SECRET;
+    safe.integrations.clover.webhookSecretStatus = CLOVER_HCO_WEBHOOK_SECRET ? 'Hosted Checkout signing secret configured' : 'Needs Hosted Checkout signing secret';
     safe.integrations.apiProviderRuntime = apiProviderRows(safe);
   }
   if (owner) return safe;
@@ -6087,7 +6088,18 @@ function addDaysToDateKey(value, days) {
   return date.toISOString().slice(0, 10);
 }
 function nativePaymentPaid(request) {
-  return !!(request && /paid|success/i.test(String(request.status || '')));
+  const status = String(request && request.status || '').trim().toLowerCase();
+  if (!status || /unpaid|not paid|failed|declined|cancel|incomplete|awaiting|pending/.test(status)) return false;
+  return status === 'paid' || status.startsWith('paid through verified ') || /success|succeeded|completed/.test(status);
+}
+function normalizedPaymentProvider(value) {
+  return String(value || WOA_PAYMENT_PROVIDER || 'clover').trim().toLowerCase();
+}
+function paymentProviderLabel(value) {
+  const provider = normalizedPaymentProvider(value);
+  if (provider === 'clover') return 'Clover';
+  if (provider === 'stripe') return 'Stripe';
+  return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment provider';
 }
 function activeHostedCheckoutHref(request) {
   const createdAt = Date.parse(request && request.checkoutCreatedAt || '');
@@ -6385,15 +6397,24 @@ async function cloverEcommerceFetch(pathname, options = {}) {
   return last;
 }
 function checkoutStatus() {
+  const provider = normalizedPaymentProvider();
+  const adapterReady = provider === 'clover' && !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
   return {
-    ok: !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID),
+    ok: adapterReady,
+    paymentProvider: provider,
+    paymentProviderLabel: paymentProviderLabel(provider),
+    adapterReady,
     environment: CLOVER_ENV,
     merchantId: CLOVER_MERCHANT_ID ? 'stored in Render' : '',
     ecommercePrivateKey: CLOVER_ECOMMERCE_PRIVATE_KEY ? 'stored in Render' : '',
     ecommercePublicKey: CLOVER_ECOMMERCE_PUBLIC_KEY ? 'stored in Render' : '',
     pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID ? 'stored in Render' : '',
     publicBaseUrl: PUBLIC_BASE_URL,
-    message: CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID ? 'Hosted Checkout is ready to create Clover payment sessions.' : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.'
+    message: adapterReady
+      ? 'Hosted Checkout is ready to create Clover payment sessions through the provider adapter.'
+      : (provider === 'stripe'
+        ? 'Stripe is selected, but its checkout/webhook adapter is not connected yet. Keep WOA_PAYMENT_PROVIDER=clover until Stripe keys and a controlled live test are ready.'
+        : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.')
   };
 }
 function systemReadiness(data, user = { role: 'Owner' }) {
@@ -6407,6 +6428,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_MERCHANT_ID', env('CLOVER_MERCHANT_ID'), 'Clover merchant account'],
     ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
     ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
+    ['CLOVER_HCO_WEBHOOK_SECRET', CLOVER_HCO_WEBHOOK_SECRET ? 'Set' : 'Missing', 'Signed Hosted Checkout payment reconciliation'],
+    ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
     ['PUBLIC_BASE_URL', PUBLIC_BASE_URL ? 'Set' : 'Missing', 'Customer payment/card setup links'],
     ['WOA_SESSION_SECRET', SESSION_SIGNING_SECRET_CONFIGURED ? 'Set' : 'Missing', 'Stable signed staff/customer session cookies'],
     ['WOA_AUTOPAY_MS', process.env.WOA_AUTOPAY_MS ? 'Set' : 'Default', 'WheelsonAuto autopay monitor interval']
@@ -6549,7 +6572,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     truthCheck('toll_violation_recovery', 'Toll/violation recovery', tollRecovery.length, tollMatchReview.length ? 'critical' : 'warning', 'Open tolls/violations total ' + moneyText(tollRecoveryAmount) + '; each row needs customer, vehicle, plate/VIN, proof, and payment-link follow-up before charging.', 'Claims & Issues'),
     truthCheck('api_provider_readiness', 'API provider readiness', apiProviderReview.length, 'warning', 'Provider records need env keys, endpoint/route, live test plan, and last test result before Star, messages, EZPass, insurance, tracker, accounting, or disputes can rely on them.', 'API Roadmap'),
     truthCheck('messaging_webhook_secret', 'Messaging webhook secret', MESSAGING_WEBHOOK_SECRET ? 0 : 1, 'warning', 'Set WOA_MESSAGING_WEBHOOK_SECRET in Render before live SMS/email inbound webhooks are connected.', 'Messages', 'Setup'),
-    truthCheck('clover_webhook_secret', 'Clover webhook secret', CLOVER_WEBHOOK_SECRET ? 0 : 1, 'warning', 'Set CLOVER_WEBHOOK_SECRET or WOA_CLOVER_WEBHOOK_SECRET in Render before Clover webhook auto-sync is connected.', 'API Roadmap'),
+    truthCheck('clover_webhook_secret', 'Clover Hosted Checkout signing secret', CLOVER_HCO_WEBHOOK_SECRET ? 0 : 1, 'warning', 'Generate the Hosted Checkout signing secret in Clover and set CLOVER_HCO_WEBHOOK_SECRET in Render before signed payment reconciliation is connected.', 'API Roadmap'),
     truthCheck('verification_inbox', 'Verification inbox', verificationItems.length, 'warning', 'Customer proof, paid-outside, service, toll, claim, and document items need staff review.', 'Documents')
   ];
   const dataCriticalIssues = truthChecks.filter(item => item.severity === 'critical' && item.count > 0);
@@ -7480,9 +7503,9 @@ function defaultApiProviderRows(data = {}) {
 	      id: 'clover-webhooks',
 	      name: 'Clover Webhooks',
 	      group: 'Money',
-	      status: CLOVER_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
+	      status: CLOVER_HCO_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
 	      owner: 'Owner',
-	      envKeys: 'CLOVER_WEBHOOK_SECRET or WOA_CLOVER_WEBHOOK_SECRET, Clover app webhook URL',
+	      envKeys: 'CLOVER_HCO_WEBHOOK_SECRET, Clover Hosted Checkout webhook URL',
 	      endpoint: '/api/webhooks/clover',
 	      liveTest: 'Trigger Clover payment webhook and confirm payment history / dashboard auto-sync updates.'
 	    },
@@ -7566,10 +7589,10 @@ function apiProviderTruthOverrides(data = {}) {
       : 'Clover Ecommerce public/private keys and merchant ID are not complete.');
   const cloverWebhookEvents = Array.isArray(clover.webhookEvents) ? clover.webhookEvents : [];
   const latestCloverWebhook = cloverWebhookEvents[0] || {};
-  const cloverWebhookLive = !!(CLOVER_WEBHOOK_SECRET && cloverWebhookEvents.length);
+  const cloverWebhookLive = !!(CLOVER_HCO_WEBHOOK_SECRET && cloverWebhookEvents.length);
   const cloverWebhookResult = cloverWebhookLive
     ? cloverWebhookEvents.length + ' Clover webhook event(s) have been accepted by the signed callback route.'
-    : (CLOVER_WEBHOOK_SECRET ? 'Clover webhook secret is stored; a signed live Clover event is still required.' : 'Clover webhook shared secret is not configured.');
+    : (CLOVER_HCO_WEBHOOK_SECRET ? 'Clover Hosted Checkout signing secret is stored; a signed live payment event is still required.' : 'Clover Hosted Checkout signing secret is not configured.');
   const savedAutopay = data.integrations && data.integrations.wheelsonAutoAutopay || {};
   const autopayEvidence = {
     ...woaAutopayStatus,
@@ -7612,7 +7635,7 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: ecommerceResult
     },
     'clover-webhooks': {
-      status: cloverWebhookLive ? 'Connected' : (CLOVER_WEBHOOK_SECRET ? 'Testing - live event needed' : 'Ready for credentials'),
+      status: cloverWebhookLive ? 'Connected' : (CLOVER_HCO_WEBHOOK_SECRET ? 'Testing - live event needed' : 'Ready for credentials'),
       lastTestAt: latestCloverWebhook.receivedAt || latestCloverWebhook.createdAt || latestCloverWebhook.at || '',
       lastTestResult: cloverWebhookResult
     },
@@ -8008,23 +8031,30 @@ function hostedCheckoutWebhookDetails(event = {}) {
   return {
     checkoutSessionId,
     paymentId: String(event.Id || event.id || event.paymentId || event.payment_id || ''),
+    merchantId: String(event.MerchantId || event.merchantId || event.merchant_id || ''),
+    createdTime: String(event.CreatedTime || event.createdTime || event.created_time || ''),
     status: String(event.Status || event.status || '').toUpperCase(),
     type: String(event.Type || event.type || '').toUpperCase()
   };
 }
 function applyHostedCheckoutWebhook(data, event = {}) {
   const details = hostedCheckoutWebhookDetails(event);
-  if (!details.checkoutSessionId || details.type && details.type !== 'PAYMENT') return { matched: false, ...details };
-  const request = (data.paymentRequests || []).find(row => String(row.checkoutSessionId || '') === details.checkoutSessionId);
+  if (!details.checkoutSessionId || details.type !== 'PAYMENT') return { matched: false, reason: 'Not a Hosted Checkout payment event', ...details };
+  if (CLOVER_MERCHANT_ID && details.merchantId && details.merchantId !== CLOVER_MERCHANT_ID) return { matched: false, reason: 'Merchant ID mismatch', ...details };
+  const request = (data.paymentRequests || []).find(row => normalizedPaymentProvider(row.paymentProvider || 'clover') === 'clover' && String(row.providerCheckoutSessionId || row.checkoutSessionId || '') === details.checkoutSessionId);
   if (!request) return { matched: false, ...details };
+  request.paymentProvider = 'clover';
+  request.providerCheckoutSessionId = request.providerCheckoutSessionId || request.checkoutSessionId || details.checkoutSessionId;
+  if (nativePaymentPaid(request)) return { matched: true, approved: true, duplicate: true, paymentRequestId: request.id, ...details };
   if (details.status === 'APPROVED') {
-    recordHostedCheckoutPayment(data, request, { paidAt: new Date().toISOString(), cloverPaymentId: details.paymentId, webhookEvent: event });
+    recordHostedCheckoutPayment(data, request, { paidAt: new Date().toISOString(), provider: 'clover', providerPaymentId: details.paymentId, cloverPaymentId: details.paymentId, webhookEvent: event });
     return { matched: true, approved: true, paymentRequestId: request.id, ...details };
   }
   if (/DECLINED|FAILED|CANCELLED|CANCELED/.test(details.status)) {
     request.status = 'Failed or incomplete';
     request.failedAt = new Date().toISOString();
     request.cloverPaymentId = details.paymentId || request.cloverPaymentId || '';
+    request.providerPaymentId = details.paymentId || request.providerPaymentId || '';
     request.webhookVerifiedAt = new Date().toISOString();
     const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
     if (session) {
@@ -8042,7 +8072,8 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
-  data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), event });
+  data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), authorization: options.authorization || 'Unknown', event });
+  data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents.slice(0, 250);
   const previous = JSON.parse(JSON.stringify(data));
   const hostedCheckout = options.verifiedHostedCheckout ? applyHostedCheckoutWebhook(data, event) : { matched: false };
   const disputeClaim = cloverWebhookDisputeClaim(event);
@@ -8837,10 +8868,11 @@ function publicPayHtml(request, message = '') {
   const safeName = escapeHtml(request.customer || 'Customer');
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   const vehicle = escapeHtml(request.vehicle || 'WheelsonAuto recurring payment');
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on Clover secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit">Pay securely with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
+  const provider = paymentProviderLabel(request.paymentProvider);
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit">Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
 }
 function paymentResultHtml(title, message, returnUrl = 'https://www.wheelsonauto.com/', returnLabel = 'Back to WheelsonAuto') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Clover payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></section></main></div></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></section></main></div></body></html>';
 }
 function createPaymentRequest(data, payload) {
   const recurring = (data.recurringPayments || []).find(p => p.id === payload.recurringPaymentId) || {};
@@ -8871,6 +8903,7 @@ function createPaymentRequest(data, payload) {
     reason: String(payload.reason || payload.paymentType || '').trim(),
     notes: String(payload.notes || '').trim(),
     onboardingReturnUrl: String(payload.onboardingReturnUrl || '').trim(),
+    paymentProvider: normalizedPaymentProvider(payload.paymentProvider || WOA_PAYMENT_PROVIDER),
     status: 'Open',
     source: 'WheelsonAuto hosted checkout',
     createdAt: new Date().toISOString(),
@@ -9534,21 +9567,36 @@ async function attachCloverCheckout(data, request) {
     shoppingCart: { lineItems: [{ name: itemName, note: itemNote, price: cents(request.amount), unitQty: 1 }] }
   });
   request.status = 'Clover checkout ready';
+  request.paymentProvider = 'clover';
   request.checkoutSessionId = checkout.checkoutSessionId || '';
+  request.providerCheckoutSessionId = request.checkoutSessionId;
   request.checkoutHref = checkout.href;
   request.checkoutCreatedAt = new Date().toISOString();
   await writeData(data);
   return checkout;
 }
+async function attachHostedCheckout(data, request) {
+  const provider = normalizedPaymentProvider(request && request.paymentProvider || WOA_PAYMENT_PROVIDER);
+  if (provider === 'clover') return attachCloverCheckout(data, request);
+  const error = new Error(provider === 'stripe'
+    ? 'Stripe is selected, but its Checkout, webhook, saved-card, and charge adapters are not connected yet. Keep WOA_PAYMENT_PROVIDER=clover until Stripe is configured and live-tested.'
+    : 'Unsupported payment provider: ' + provider + '.');
+  error.statusCode = 503;
+  throw error;
+}
 function recordHostedCheckoutPayment(data, request, details = {}) {
   const paidAt = details.paidAt || new Date().toISOString();
-  request.status = 'Paid through verified Clover webhook';
+  const provider = normalizedPaymentProvider(details.provider || request.paymentProvider || 'clover');
+  const providerName = paymentProviderLabel(provider);
+  request.status = 'Paid through verified ' + providerName + ' webhook';
+  request.paymentProvider = provider;
   request.paidAt = request.paidAt || paidAt;
   request.cloverPaymentId = details.cloverPaymentId || request.cloverPaymentId || '';
+  request.providerPaymentId = details.providerPaymentId || request.providerPaymentId || request.cloverPaymentId || '';
   request.webhookVerifiedAt = paidAt;
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
-    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: 'Clover Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: 'Clover Hosted Checkout verified webhook' });
+    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' });
   }
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
   if (recurring) {
@@ -9558,7 +9606,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   }
   data.documents = Array.isArray(data.documents) ? data.documents : [];
   if (!data.documents.some(document => document.paymentRequestId === request.id && document.kind === 'Receipt')) {
-    data.documents.unshift({ id: 'receipt-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', customer: request.customer || '', vehicle: request.vehicle || '', vehicleId: request.vehicleId || '', vin: request.vin || '', licensePlate: request.licensePlate || '', title: (request.paymentType || 'Payment') + ' receipt', type: request.paymentType || 'Payment receipt', kind: 'Receipt', amount: Number(request.amount || 0), method: 'Clover Hosted Checkout', status: 'Paid', date: request.paidAt, customerVisible: true, portalVisible: true, source: 'Clover Hosted Checkout verified webhook' });
+    data.documents.unshift({ id: 'receipt-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', customer: request.customer || '', vehicle: request.vehicle || '', vehicleId: request.vehicleId || '', vin: request.vin || '', licensePlate: request.licensePlate || '', title: (request.paymentType || 'Payment') + ' receipt', type: request.paymentType || 'Payment receipt', kind: 'Receipt', amount: Number(request.amount || 0), method: providerName + ' Hosted Checkout', status: 'Paid', date: request.paidAt, customerVisible: true, portalVisible: true, source: providerName + ' Hosted Checkout verified webhook' });
   }
   if (request.onboardingSessionId) {
     const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
@@ -9944,15 +9992,16 @@ const server = http.createServer(async (req, res) => {
       if (parts[2] === 'success') {
         if (nativePaymentPaid(request)) {
           if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
-          return send(res, 200, paymentResultHtml('Payment received', 'Clover verified this payment and WheelsonAuto updated the customer account.'));
+          return send(res, 200, paymentResultHtml('Payment received', paymentProviderLabel(request.paymentProvider) + ' verified this payment and WheelsonAuto updated the customer account.'));
         }
         const returnedSessionId = String(url.searchParams.get('session_id') || '');
-        if (returnedSessionId && request.checkoutSessionId && returnedSessionId !== request.checkoutSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned Clover checkout did not match this WheelsonAuto payment request. No payment was recorded.'));
-        request.status = 'Awaiting signed Clover confirmation';
+        const expectedSessionId = String(request.providerCheckoutSessionId || request.checkoutSessionId || '');
+        if (returnedSessionId && expectedSessionId && returnedSessionId !== expectedSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned secure checkout did not match this WheelsonAuto payment request. No payment was recorded.'));
+        request.status = 'Awaiting signed ' + paymentProviderLabel(request.paymentProvider) + ' confirmation';
         request.checkoutReturnedAt = new Date().toISOString();
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return send(res, 200, paymentResultHtml('Payment submitted', 'Clover returned the checkout successfully. WheelsonAuto is waiting for Clover\'s signed confirmation before marking money paid.', request.onboardingReturnUrl || request.url || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Check payment status'));
+        return send(res, 200, paymentResultHtml('Payment submitted', paymentProviderLabel(request.paymentProvider) + ' returned the checkout successfully. WheelsonAuto is waiting for the signed provider confirmation before marking money paid.', request.onboardingReturnUrl || request.url || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Check payment status'));
       }
       if (parts[2] === 'failure') {
         request.status = 'Failed or incomplete';
@@ -9977,10 +10026,10 @@ const server = http.createServer(async (req, res) => {
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       const request = data.paymentRequests.find(item => item.id === requestId);
       if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
-      if (nativePaymentPaid(request)) return send(res, 200, paymentResultHtml('Already paid', 'This payment request has already been verified by Clover. No second checkout was opened.', request.onboardingReturnUrl || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Back to WheelsonAuto'));
+      if (nativePaymentPaid(request)) return send(res, 200, paymentResultHtml('Already paid', 'This payment request has already been verified by ' + paymentProviderLabel(request.paymentProvider) + '. No second checkout was opened.', request.onboardingReturnUrl || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Back to WheelsonAuto'));
       const currentCheckout = activeHostedCheckoutHref(request);
       if (currentCheckout) return send(res, 302, '', 'text/plain', { Location: currentCheckout });
-      const checkout = await attachCloverCheckout(data, request);
+      const checkout = await attachHostedCheckout(data, request);
       return send(res, 302, '', 'text/plain', { Location: checkout.href });
     }
     if (url.pathname === '/api/public/applications' && req.method === 'POST') {
@@ -10234,7 +10283,7 @@ const server = http.createServer(async (req, res) => {
         if (existingCheckout) return json(res, 200, { ok: true, redirectUrl: existingCheckout, paymentRequest: { id: existing.id, paymentType: existing.paymentType, amount: existing.amount } });
         if (existing) {
           try {
-            const refreshedCheckout = await attachCloverCheckout(data, existing);
+            const refreshedCheckout = await attachHostedCheckout(data, existing);
             return json(res, 200, { ok: true, redirectUrl: refreshedCheckout.href, paymentRequest: { id: existing.id, paymentType: existing.paymentType, amount: existing.amount } });
           } catch (err) {
             existing.status = 'Checkout setup failed';
@@ -10268,7 +10317,7 @@ const server = http.createServer(async (req, res) => {
         data.paymentRequests.unshift(request);
         session.status = label + ' checkout opened';
         try {
-          const checkout = await attachCloverCheckout(data, request);
+          const checkout = await attachHostedCheckout(data, request);
           return json(res, 201, { ok: true, redirectUrl: checkout.href, paymentRequest: { id: request.id, paymentType: request.paymentType, amount: request.amount } });
         } catch (err) {
           request.status = 'Checkout setup failed';
@@ -12498,7 +12547,7 @@ const server = http.createServer(async (req, res) => {
       }
       appendAuditLog(data, user, 'Payment link created', [request.customer || 'Unknown customer', moneyText(request.amount || 0), request.reason || request.notes || 'Payment request', request.url || 'No URL']);
       if (payload.createCheckout) {
-        await attachCloverCheckout(data, request);
+        await attachHostedCheckout(data, request);
       } else {
         await writeData(data);
       }
