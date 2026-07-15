@@ -6058,6 +6058,10 @@ function shopifyModelMatches(productModel, fleetModel) {
   if (left === right || left.startsWith(right + ' ') || right.startsWith(left + ' ')) return true;
   return oneEditApart(left.split(' ')[0], right.split(' ')[0]);
 }
+function shopifyMakeKey(value) {
+  const key = normKey(value);
+  return key === 'chevy' ? 'chevrolet' : key;
+}
 function mapShopifyCatalogProducts(data, products = []) {
   onboarding.ensureCollections(data);
   if (!Array.isArray(products) || !products.length) throw new Error('Shopify returned an empty product catalog. No inventory was changed.');
@@ -6116,9 +6120,10 @@ function mapShopifyCatalogProducts(data, products = []) {
     }) : [];
     const oldLinked = old && old.platformVehicleId ? fleetById.get(String(old.platformVehicleId)) : null;
     const titleFleetMatches = fleetByTitle.get(normKey(title)) || [];
-    const identityMatches = parts.length ? fleet.filter(vehicle => String(vehicle.year || '') === String(parts[1] || '')
-      && normKey(vehicle.make) === normKey(parts[2])
-      && shopifyModelMatches(parts[3], vehicle.model)) : [];
+    const sameYearMake = parts.length ? fleet.filter(vehicle => String(vehicle.year || '') === String(parts[1] || '')
+      && shopifyMakeKey(vehicle.make) === shopifyMakeKey(parts[2])) : [];
+    const exactModelMatches = sameYearMake.filter(vehicle => normKey(vehicle.model) === normKey(parts[3]));
+    const identityMatches = exactModelMatches.length ? exactModelMatches : sameYearMake.filter(vehicle => shopifyModelMatches(parts[3], vehicle.model));
     let linked = linkedByVin || (linkedByVinSuffix.length === 1 ? linkedByVinSuffix[0] : null);
     if (!linked && productVin && oldLinked) {
       const oldLinkedVin = String(oldLinked.vin || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();

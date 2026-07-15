@@ -74,4 +74,14 @@ const legacyReport = mapShopifyCatalogProducts({
 assert.strictEqual(legacyReport.rows.find(row => row.sourceProductId === 'c').platformVehicleId, 'mirage-short-vin', 'A unique legacy VIN suffix should link safely.');
 assert.strictEqual(legacyReport.rows.find(row => row.sourceProductId === 'd').platformVehicleId, 'mirage-typo', 'A unique same-year/make one-letter model typo should link safely.');
 
+const makeAliasReport = mapShopifyCatalogProducts({
+  publicSite: {},
+  onlineVehicles: [],
+  vehicles: [
+    { id: 'sonic-sedan', year: '2014', make: 'Chevy', model: 'Sonic', vin: '' },
+    { id: 'sonic-hatch', year: '2014', make: 'Chevy', model: 'Sonic Hatch', vin: '' }
+  ]
+}, [{ ...product('e', '2014 Chevrolet Sonic', '1G1JC6SB7E4207183', 'https://cdn.shopify.com/e.jpg'), body_html: '<p>2014 inventory listing</p>' }]);
+assert.strictEqual(makeAliasReport.rows[0].platformVehicleId, 'sonic-sedan', 'Chevy/Chevrolet aliases should prefer the unique exact model over a similar hatchback.');
+
 console.log('Shopify inventory import checks passed.');
