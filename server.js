@@ -6399,19 +6399,25 @@ async function cloverEcommerceFetch(pathname, options = {}) {
 function checkoutStatus() {
   const provider = normalizedPaymentProvider();
   const adapterReady = provider === 'clover' && !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
+  const signedWebhookReady = provider === 'clover' && !!CLOVER_HCO_WEBHOOK_SECRET;
+  const verifiedPaymentPipelineReady = adapterReady && signedWebhookReady;
   return {
-    ok: adapterReady,
+    ok: verifiedPaymentPipelineReady,
     paymentProvider: provider,
     paymentProviderLabel: paymentProviderLabel(provider),
     adapterReady,
+    signedWebhookReady,
+    verifiedPaymentPipelineReady,
     environment: CLOVER_ENV,
     merchantId: CLOVER_MERCHANT_ID ? 'stored in Render' : '',
     ecommercePrivateKey: CLOVER_ECOMMERCE_PRIVATE_KEY ? 'stored in Render' : '',
     ecommercePublicKey: CLOVER_ECOMMERCE_PUBLIC_KEY ? 'stored in Render' : '',
     pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID ? 'stored in Render' : '',
     publicBaseUrl: PUBLIC_BASE_URL,
-    message: adapterReady
-      ? 'Hosted Checkout is ready to create Clover payment sessions through the provider adapter.'
+    message: verifiedPaymentPipelineReady
+      ? 'Hosted Checkout and signed Clover payment reconciliation are ready through the provider adapter.'
+      : adapterReady && !signedWebhookReady
+        ? 'Clover can create checkout sessions, but verified payment reconciliation is not ready until CLOVER_HCO_WEBHOOK_SECRET is configured.'
       : (provider === 'stripe'
         ? 'Stripe is selected, but its checkout/webhook adapter is not connected yet. Keep WOA_PAYMENT_PROVIDER=clover until Stripe keys and a controlled live test are ready.'
         : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.')
@@ -12140,6 +12146,9 @@ const server = http.createServer(async (req, res) => {
       await writeData(data); return json(res, 200, { ok: true, clover: data.integrations.clover });
     }
     if (url.pathname === '/api/integrations/clover/checkout-status' && req.method === 'POST') {
+      return json(res, 200, checkoutStatus());
+    }
+    if (url.pathname === '/api/integrations/payments/checkout-status' && req.method === 'POST') {
       return json(res, 200, checkoutStatus());
     }
     if (url.pathname === '/api/integrations/clover/ecommerce-diagnostics' && req.method === 'POST') {

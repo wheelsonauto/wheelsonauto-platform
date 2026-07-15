@@ -142,6 +142,7 @@ async function main() {
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
   process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
+  process.env.CLOVER_HCO_WEBHOOK_SECRET = 'direct-clover-hosted-checkout-secret';
   process.env.CLOVER_ACCESS_TOKEN = 'direct-clover-token';
   process.env.CLOVER_MERCHANT_ID = 'direct-clover-merchant';
   process.env.CLOVER_ECOMMERCE_PUBLIC_KEY = 'direct-clover-public-key';
@@ -295,6 +296,10 @@ async function main() {
     assert(throttledCustomerLogin.status === 429 && throttledCustomerLogin.text.includes('Too many failed login attempts') && String(throttledCustomerLogin.headers['Retry-After'] || '').length, 'Repeated bad customer login should be throttled with retry guidance.');
 
     const ownerCookie = await login(server, { pin: adminPin });
+    const paymentCheckoutStatus = await request(server, 'POST', '/api/integrations/payments/checkout-status', { cookie: ownerCookie, json: {} });
+    assert(paymentCheckoutStatus.status === 200 && paymentCheckoutStatus.json && paymentCheckoutStatus.json.adapterReady && paymentCheckoutStatus.json.signedWebhookReady && paymentCheckoutStatus.json.verifiedPaymentPipelineReady && paymentCheckoutStatus.json.ok, 'Provider-neutral checkout readiness should require both checkout credentials and signed payment reconciliation.');
+    const legacyCheckoutStatus = await request(server, 'POST', '/api/integrations/clover/checkout-status', { cookie: ownerCookie, json: {} });
+    assert(legacyCheckoutStatus.status === 200 && legacyCheckoutStatus.json.verifiedPaymentPipelineReady, 'Legacy Clover checkout status route should mirror the provider-neutral readiness result.');
     const missingTwilioSetup = await request(server, 'POST', '/api/integrations/twilio/configure', { cookie: ownerCookie, json: {} });
     assert(missingTwilioSetup.status === 409 && /saved in Render/i.test(missingTwilioSetup.json.error || ''), 'Twilio setup route should clearly report missing Render credentials without faking a connection.');
     const tamperedOwnerCookie = ownerCookie.replace(/\.[^.]+$/, '.bad-signature');
