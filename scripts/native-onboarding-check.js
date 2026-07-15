@@ -246,6 +246,11 @@ async function main() {
       const raw = JSON.stringify({ MerchantId: process.env.CLOVER_MERCHANT_ID, ...event });
       return request(server, 'POST', '/api/webhooks/clover', { raw, headers: { 'content-type': 'application/json', 'clover-signature': cloverSignature(webhookSecret, raw) } });
     }
+    const beforeVerificationOnly = await fs.readFile(path.join(dataDir, 'data.json'), 'utf8');
+    const verificationOnlyRaw = JSON.stringify({ Type: 'TEST', Status: 'APPROVED', Message: 'Clover Hosted Checkout URL verification' });
+    const verificationOnly = await request(server, 'POST', '/api/webhooks/clover?verify_only=1', { raw: verificationOnlyRaw, headers: { 'content-type': 'application/json', 'clover-signature': cloverSignature(webhookSecret, verificationOnlyRaw) } });
+    const afterVerificationOnly = await fs.readFile(path.join(dataDir, 'data.json'), 'utf8');
+    assert(verificationOnly.status === 200 && verificationOnly.json.verified && verificationOnly.json.dryRun && beforeVerificationOnly === afterVerificationOnly, 'Signed Clover URL verification must prove delivery without writing a fake event into business data.');
     const wrongMerchantWebhook = await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'wrong-merchant-payment', MerchantId: 'WRONGMERCHANT' });
     assert(wrongMerchantWebhook.status === 200 && !wrongMerchantWebhook.json.hostedCheckout.matched && /merchant/i.test(wrongMerchantWebhook.json.hostedCheckout.reason || ''), 'A validly signed event for another merchant must not reconcile a WheelsonAuto payment.');
     const depositWebhook = await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'clover-payment-deposit' });

@@ -10469,6 +10469,10 @@ const server = http.createServer(async (req, res) => {
       if (!sharedSecretValid && !hostedSignatureValid) return json(res, CLOVER_HCO_WEBHOOK_SECRET ? 401 : 503, { ok: false, error: CLOVER_HCO_WEBHOOK_SECRET ? 'Unauthorized Clover webhook.' : 'Clover webhook signing secret is not configured.' });
       let event;
       try { event = JSON.parse(rawBody || '{}'); } catch { return json(res, 400, { ok: false, error: 'Clover webhook body must be valid JSON.' }); }
+      if (hostedSignatureValid && url.searchParams.get('verify_only') === '1') {
+        const details = hostedCheckoutWebhookDetails(event);
+        return json(res, 200, { ok: true, verified: true, dryRun: true, authorization: 'Clover-Signature', type: details.type || 'TEST' });
+      }
       return json(res, 200, await recordCloverWebhookEvent(event, { verifiedHostedCheckout: true, authorization: hostedSignatureValid ? 'Clover-Signature' : 'WheelsonAuto shared secret' }));
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
