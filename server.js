@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const nativeSite = require('./native-site');
 const onboarding = require('./onboarding-service');
+const integrationEngine = require('./integration-engine');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -35,6 +36,14 @@ const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || p
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
 const CLOVER_WEBHOOK_SECRET = process.env.CLOVER_WEBHOOK_SECRET || process.env.WOA_CLOVER_WEBHOOK_SECRET || '';
 const CLOVER_HCO_WEBHOOK_SECRET = process.env.CLOVER_HCO_WEBHOOK_SECRET || process.env.WOA_CLOVER_HCO_WEBHOOK_SECRET || CLOVER_WEBHOOK_SECRET;
+const VERIFICATION_WEBHOOK_SECRET = process.env.WOA_VERIFICATION_WEBHOOK_SECRET || process.env.VERIFICATION_WEBHOOK_SECRET || '';
+const IDENTITY_PROVIDER = String(process.env.WOA_IDENTITY_PROVIDER || 'manual').trim().toLowerCase();
+const INSURANCE_PROVIDER = String(process.env.WOA_INSURANCE_PROVIDER || 'manual').trim().toLowerCase();
+const QUICKBOOKS_REALM_ID = process.env.QUICKBOOKS_REALM_ID || '';
+const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
+const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
+const GOOGLE_CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || '';
+const GOOGLE_CALENDAR_ACCESS_TOKEN = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN || '';
 const WOA_PAYMENT_PROVIDER = String(process.env.WOA_PAYMENT_PROVIDER || 'clover').trim().toLowerCase();
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
@@ -463,6 +472,10 @@ function repairDataIds(data) {
   data.onboardingSessions = Array.isArray(data.onboardingSessions) ? data.onboardingSessions : [];
   data.pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
   data.contractTemplates = Array.isArray(data.contractTemplates) ? data.contractTemplates : [];
+  data.refundRequests = Array.isArray(data.refundRequests) ? data.refundRequests : [];
+  data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
+  data.ledgerEntries = Array.isArray(data.ledgerEntries) ? data.ledgerEntries : [];
+  data.calendarEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
   data.publicSite = data.publicSite && typeof data.publicSite === 'object' ? data.publicSite : {};
   repairDuplicateVehicleIds(data);
   repairDuplicateRecordIds(data, 'contracts');
@@ -534,7 +547,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -5384,7 +5397,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates'].forEach(key => {
+  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {
@@ -6588,6 +6601,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
     ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
     ['CLOVER_HCO_WEBHOOK_SECRET', CLOVER_HCO_WEBHOOK_SECRET ? 'Set' : 'Missing', 'Signed Hosted Checkout payment reconciliation'],
+    ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed identity and insurance provider callbacks; staff review remains live without a provider'],
+    ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Identity and driver-license verification adapter'],
+    ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
+    ['QUICKBOOKS_*', QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Set' : 'Manual-live', 'QuickBooks OAuth connection; internal accounting ledger and CSV remain live without it'],
+    ['GOOGLE_CALENDAR_*', GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Set' : 'Manual-live', 'Automatic Google Calendar sync; ICS, add-to-calendar, and maps links remain live without it'],
     ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
     ['PUBLIC_BASE_URL', PUBLIC_BASE_URL ? 'Set' : 'Missing', 'Customer payment/card setup links'],
     ['WOA_SESSION_SECRET', SESSION_SIGNING_SECRET_CONFIGURED ? 'Set' : 'Missing', 'Stable signed staff/customer session cookies'],
@@ -6635,8 +6653,23 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/system/launch-readiness/tasks', 'Launch readiness Dispatch task sync'),
     route('POST', '/api/verification/document', 'Staff document proof verification'),
     route('POST', '/api/verification/paid-outside', 'Owner paid-outside payment verification'),
+    route('GET', '/api/verification/status', 'Identity, driver-license, and insurance verification cases'),
+    route('POST', '/api/verification/cases', 'Create provider-neutral verification case'),
+    route('POST', '/api/verification/cases/review', 'Owner/manager verification review'),
+    route('POST', '/api/webhooks/verification', 'Signed provider verification callback'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
+    route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
+    route('POST', '/api/integrations/clover/refunds/prepare', 'Owner-approved refund preparation'),
+    route('POST', '/api/integrations/clover/refunds/execute', 'Idempotent Clover Ecommerce full refund'),
+    route('POST', '/api/integrations/clover/refunds/complete-manual', 'Confirm Clover POS/manual refund reference'),
+    route('POST', '/api/integrations/clover/disputes/action', 'Owner dispute evidence and outcome workflow'),
+    route('GET', '/api/accounting/ledger', 'Source-linked accounting ledger'),
+    route('POST', '/api/accounting/ledger/rebuild', 'Rebuild ledger without losing provider sync references'),
+    route('GET', '/api/accounting/export.csv', 'QuickBooks-ready accounting CSV'),
+    route('GET', '/api/pickups/calendar', 'Pickup calendar, ICS, and maps records'),
+    route('POST', '/api/pickups/:id/calendar', 'Prepare deterministic pickup calendar record'),
+    route('GET', '/api/pickups/:id/calendar.ics', 'Download pickup appointment calendar file'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
     route('POST', '/api/webhooks/clover', 'Clover webhook intake'),
     route('POST', '/api/webhooks/messages', 'Inbound SMS webhook intake'),
@@ -6651,7 +6684,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     recurringPayments: (scoped.recurringPayments || []).length,
     apiProviders: (scoped.apiProviders || []).length,
     tasks: (scoped.tasks || []).length,
-    documents: (scoped.documents || []).length
+    documents: (scoped.documents || []).length,
+    verificationCases: (scoped.verificationCases || []).length,
+    refundRequests: (scoped.refundRequests || []).length,
+    ledgerEntries: (scoped.ledgerEntries || []).length,
+    pickupAppointments: (scoped.pickupAppointments || []).length
   };
   const recurring = allRecurringRows(scoped);
   const payments = uniqueCloseoutPayments(scoped.payments || []);
@@ -6847,6 +6884,105 @@ async function cloverPostCharge(payload, req) {
   });
   if (!response.ok) throw new Error('Clover saved-card charge ' + response.status + ': ' + cloverErrorMessage(body, text));
   return body;
+}
+async function cloverPostFullRefund(chargeId, idempotencyKey) {
+  if (!chargeId) throw new Error('This payment does not have a Clover Ecommerce charge ID. Use the prepared refund record to complete the refund in Clover POS.');
+  const { response, text, body } = await cloverEcommerceFetch('/v1/refunds', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'WheelsonAuto/1.0',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID,
+      'Idempotency-Key': idempotencyKey
+    },
+    body: JSON.stringify({ charge: chargeId })
+  });
+  if (!response.ok) throw new Error('Clover refund ' + response.status + ': ' + cloverErrorMessage(body, text));
+  const status = String(body.status || body.result || '').toLowerCase();
+  if (status && !/succeed|paid|complete|refund/.test(status)) throw new Error('Clover returned refund status "' + status + '". Review it in Clover before marking the customer refunded.');
+  return body;
+}
+function refundPaymentRecord(data, payload = {}) {
+  const ids = [payload.paymentId, payload.cloverPaymentId, payload.cloverChargeId, payload.sourcePaymentId].map(String).filter(Boolean);
+  return (data.payments || []).find(payment => ids.some(id => [payment.id, payment.cloverPaymentId, payment.cloverChargeId, payment.providerPaymentId, payment.externalReferenceId].map(String).includes(id))) || null;
+}
+function preparedRefundRequest(data, payload = {}, user = {}) {
+  const payment = refundPaymentRecord(data, payload);
+  if (!payment) throw new Error('Choose a saved WheelsonAuto/Clover payment before preparing a refund.');
+  const paidAmount = Number(payment.amount || 0);
+  if (!paidAmount || paidAmount <= 0) throw new Error('The selected payment has no refundable amount.');
+  const completed = (data.refundRequests || []).filter(row => row.sourcePaymentId === payment.id && /succeed|complete|refunded|manual complete/i.test(String(row.status || '')));
+  const alreadyRefunded = completed.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const remaining = Math.max(0, Math.round((paidAmount - alreadyRefunded) * 100) / 100);
+  const amount = Math.round(Number(payload.amount || remaining) * 100) / 100;
+  if (!amount || amount <= 0 || amount > remaining) throw new Error('Refund amount must be between $0.01 and the remaining ' + moneyText(remaining) + '.');
+  const chargeId = String(payment.cloverChargeId || payment.providerChargeId || (/Clover saved-card charge/i.test(String(payment.source || payment.method || '')) ? payment.cloverPaymentId : '') || '');
+  const fullRefund = Math.abs(amount - remaining) < 0.01;
+  const now = new Date().toISOString();
+  const idempotencyKey = integrationEngine.stableId('woa-refund', [payment.id, amount, payload.reason || '', completed.length]);
+  const existing = (data.refundRequests || []).find(row => row.idempotencyKey === idempotencyKey && !/failed|cancelled/i.test(String(row.status || '')));
+  if (existing) return { request: existing, payment, created: false };
+  const request = {
+    id: integrationEngine.stableId('refund', [idempotencyKey]),
+    idempotencyKey,
+    organizationId: rowOrganizationId(payment),
+    sourcePaymentId: payment.id,
+    cloverPaymentId: payment.cloverPaymentId || '',
+    cloverChargeId: chargeId,
+    customer: payment.customer || payload.customer || '',
+    vehicle: payment.vehicle || '',
+    vehicleId: payment.vehicleId || '',
+    vin: payment.vin || '',
+    plate: payment.plate || payment.licensePlate || '',
+    amount,
+    originalAmount: paidAmount,
+    remainingBeforeRefund: remaining,
+    fullRefund,
+    reason: String(payload.reason || '').trim(),
+    notes: String(payload.notes || '').trim(),
+    status: chargeId && fullRefund ? 'Ready for owner execution' : 'Clover POS action required',
+    provider: 'Clover',
+    providerPath: chargeId ? '/v1/refunds' : 'Clover POS / Dashboard',
+    createdAt: now,
+    createdBy: String(user.name || user.username || user.role || 'Owner'),
+    history: [{ at: now, action: 'Refund prepared', status: chargeId && fullRefund ? 'Ready for owner execution' : 'Clover POS action required', by: String(user.name || user.role || 'Owner') }]
+  };
+  data.refundRequests = Array.isArray(data.refundRequests) ? data.refundRequests : [];
+  data.refundRequests.unshift(request);
+  return { request, payment, created: true };
+}
+async function executePreparedRefund(data, request, user = {}) {
+  if (!request) throw new Error('Refund request was not found.');
+  if (/succeed|complete|refunded|manual complete/i.test(String(request.status || ''))) return request;
+  if (!request.fullRefund) throw new Error('Clover Ecommerce partial refunds are not executed automatically here. Complete this prepared request in Clover, then mark it complete with the provider refund ID.');
+  if (!request.cloverChargeId) throw new Error('This payment needs a Clover POS/Dashboard refund because no Ecommerce charge ID is linked.');
+  const now = new Date().toISOString();
+  try {
+    const result = await cloverPostFullRefund(request.cloverChargeId, request.idempotencyKey);
+    request.providerRefundId = String(result.id || result.refund || result.refundId || '');
+    request.providerStatus = String(result.status || result.result || 'succeeded');
+    request.status = 'Refunded';
+    request.completedAt = now;
+    request.completedBy = String(user.name || user.username || user.role || 'Owner');
+    request.history = Array.isArray(request.history) ? request.history : [];
+    request.history.push({ at: now, action: 'Clover refund executed', status: request.status, by: request.completedBy, providerRefundId: request.providerRefundId });
+    const payment = (data.payments || []).find(row => row.id === request.sourcePaymentId);
+    if (payment) {
+      payment.refundedAmount = Math.round((Number(payment.refundedAmount || 0) + Number(request.amount || 0)) * 100) / 100;
+      payment.refundStatus = payment.refundedAmount >= Number(payment.amount || 0) ? 'Refunded' : 'Partially refunded';
+      payment.lastRefundId = request.providerRefundId || request.id;
+      payment.lastRefundAt = now;
+    }
+    return request;
+  } catch (err) {
+    request.status = 'Refund failed';
+    request.lastError = String(err && err.message || err);
+    request.lastAttemptAt = now;
+    request.history = Array.isArray(request.history) ? request.history : [];
+    request.history.push({ at: now, action: 'Clover refund failed', status: request.status, by: String(user.name || user.role || 'Owner'), error: request.lastError });
+    throw err;
+  }
 }
 async function cloverPostCardCustomer(payload) {
   cloverChargeReady();
@@ -8282,7 +8418,7 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
@@ -10641,6 +10777,24 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, await recordCloverWebhookEvent(event, { verifiedHostedCheckout: true, authorization: hostedSignatureValid ? 'Clover-Signature' : 'WheelsonAuto shared secret' }));
     }
+    if (url.pathname === '/api/webhooks/verification' && req.method === 'POST') {
+      if (!VERIFICATION_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Verification webhook secret is not configured.' });
+      const authorized = secureWebhookValueMatch(url.searchParams.get('secret'), VERIFICATION_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], VERIFICATION_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-verification-webhook-secret'], VERIFICATION_WEBHOOK_SECRET);
+      if (!authorized) return json(res, 401, { ok: false, error: 'Unauthorized verification webhook.' });
+      const event = await readJsonBody(req, 256 * 1024);
+      const externalId = String(event.externalCaseId || event.providerCaseId || event.caseId || event.id || '').trim();
+      if (!externalId) return json(res, 400, { ok: false, error: 'Verification event needs an external case ID.' });
+      const data = await readData();
+      const record = (data.verificationCases || []).find(row => [row.externalCaseId, row.providerCaseId, row.id].map(String).includes(externalId));
+      if (!record) return json(res, 404, { ok: false, error: 'Verification case was not found.' });
+      integrationEngine.applyVerificationEvent(record, event);
+      appendAuditLog(data, { name: event.provider || record.provider || 'Verification provider', role: 'System' }, 'Verification provider update', [record.customer, record.type, record.status, record.externalCaseId]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, verificationCase: record });
+    }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req));
@@ -11594,6 +11748,219 @@ const server = http.createServer(async (req, res) => {
     const user = sessionUser(req);
     if (!user) return send(res, 200, loginPage());
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
+    if (url.pathname === '/api/integrations/clover/reconciliation' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view Clover reconciliation controls.' });
+      const data = await readData();
+      const disputes = (data.claims || []).filter(row => /clover|dispute|chargeback/i.test(String([row.type, row.source, row.provider].filter(Boolean).join(' '))));
+      const refunds = data.refundRequests || [];
+      const unmatched = (data.payments || []).filter(payment => closeoutPaymentCustomerName(data, payment, allRecurringRows(data)) === 'Unmatched payment');
+      const webhookEvents = (((data.integrations || {}).clover || {}).webhookEvents || []);
+      return json(res, 200, {
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        signedWebhookReady: !!CLOVER_HCO_WEBHOOK_SECRET,
+        refundAdapterReady: !!CLOVER_ECOMMERCE_PRIVATE_KEY,
+        counts: {
+          webhookEvents: webhookEvents.length,
+          disputes: disputes.length,
+          disputesNeedingMatch: disputes.filter(row => String(row.customerMatchStatus || '') === 'Needs payment/customer match').length,
+          refunds: refunds.length,
+          refundsNeedingAction: refunds.filter(row => !/refunded|complete|cancelled/i.test(String(row.status || ''))).length,
+          unmatchedPayments: unmatched.length
+        },
+        disputes: disputes.slice(0, 100),
+        refunds: refunds.slice(0, 100),
+        unmatchedPayments: unmatched.slice(0, 100)
+      });
+    }
+    if (url.pathname === '/api/integrations/clover/refunds/prepare' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can prepare refunds.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const data = await readData();
+      const prepared = preparedRefundRequest(data, payload, user);
+      if (prepared.created) appendAuditLog(data, user, 'Clover refund prepared', [prepared.request.customer || 'Unknown customer', moneyText(prepared.request.amount), prepared.request.status, prepared.request.sourcePaymentId]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, prepared.created ? 201 : 200, { ok: true, created: prepared.created, refund: prepared.request });
+    }
+    if (url.pathname === '/api/integrations/clover/refunds/execute' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can execute refunds.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required immediately before sending a live refund to Clover.' });
+      const data = await readData();
+      const request = (data.refundRequests || []).find(row => row.id === payload.refundId);
+      if (!request) return json(res, 404, { ok: false, error: 'Refund request was not found.' });
+      try {
+        await executePreparedRefund(data, request, user);
+        appendAuditLog(data, user, 'Clover refund executed', [request.customer || 'Unknown customer', moneyText(request.amount), request.providerRefundId || request.id]);
+        data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, refund: request });
+      } catch (err) {
+        appendAuditLog(data, user, 'Clover refund failed', [request.customer || 'Unknown customer', moneyText(request.amount), String(err && err.message || err)]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 400, { ok: false, error: String(err && err.message || err), refund: request });
+      }
+    }
+    if (url.pathname === '/api/integrations/clover/refunds/complete-manual' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can close a manually completed refund.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that Clover shows the refund as completed before closing this record.' });
+      const data = await readData();
+      const request = (data.refundRequests || []).find(row => row.id === payload.refundId);
+      if (!request) return json(res, 404, { ok: false, error: 'Refund request was not found.' });
+      const providerRefundId = String(payload.providerRefundId || '').trim();
+      if (!providerRefundId) return json(res, 400, { ok: false, error: 'Enter the Clover refund ID or dashboard reference.' });
+      const now = new Date().toISOString();
+      request.providerRefundId = providerRefundId;
+      request.status = 'Manual complete';
+      request.completedAt = now;
+      request.completedBy = String(user.name || user.username || 'Owner');
+      request.notes = [request.notes, String(payload.notes || '').trim()].filter(Boolean).join(' | ');
+      request.history = Array.isArray(request.history) ? request.history : [];
+      request.history.push({ at: now, action: 'Manual Clover refund confirmed', status: request.status, by: request.completedBy, providerRefundId });
+      const payment = (data.payments || []).find(row => row.id === request.sourcePaymentId);
+      if (payment && payment.lastRefundId !== providerRefundId) {
+        payment.refundedAmount = Math.round((Number(payment.refundedAmount || 0) + Number(request.amount || 0)) * 100) / 100;
+        payment.refundStatus = payment.refundedAmount >= Number(payment.amount || 0) ? 'Refunded' : 'Partially refunded';
+        payment.lastRefundId = providerRefundId;
+        payment.lastRefundAt = now;
+      }
+      data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+      appendAuditLog(data, user, 'Manual Clover refund confirmed', [request.customer || 'Unknown customer', moneyText(request.amount), providerRefundId]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, refund: request });
+    }
+    if (url.pathname === '/api/integrations/clover/disputes/action' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change a dispute response status.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required before changing a dispute response status.' });
+      const data = await readData();
+      const claim = (data.claims || []).find(row => row.id === payload.claimId && /clover|dispute|chargeback/i.test(String([row.type, row.source, row.provider].filter(Boolean).join(' '))));
+      if (!claim) return json(res, 404, { ok: false, error: 'Clover dispute case was not found.' });
+      const action = String(payload.action || '').toLowerCase();
+      const statuses = { evidence_ready: 'Evidence ready', submitted: 'Response submitted', won: 'Won', lost: 'Lost', closed: 'Closed' };
+      if (!statuses[action]) return json(res, 400, { ok: false, error: 'Choose evidence_ready, submitted, won, lost, or closed.' });
+      if (action === 'evidence_ready' && (String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !claim.customer || !claim.paymentId && !claim.cloverPaymentId)) return json(res, 409, { ok: false, error: 'Match the customer and Clover payment before marking the evidence package ready.' });
+      const now = new Date().toISOString();
+      claim.status = statuses[action];
+      claim.disputeWorkflowStatus = statuses[action];
+      claim.disputeUpdatedAt = now;
+      claim.disputeUpdatedBy = String(user.name || user.username || 'Owner');
+      claim.notes = [claim.notes, String(payload.notes || '').trim()].filter(Boolean).join(' | ');
+      claim.workflowHistory = Array.isArray(claim.workflowHistory) ? claim.workflowHistory : [];
+      claim.workflowHistory.push({ at: now, action, status: claim.status, by: claim.disputeUpdatedBy, notes: String(payload.notes || '').trim() });
+      appendAuditLog(data, user, 'Clover dispute status updated', [claim.customer || 'Unassigned', claim.reference || claim.disputeId || claim.id, claim.status]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, dispute: claim });
+    }
+    if (url.pathname === '/api/verification/status' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view verification cases.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const cases = (scoped.verificationCases || []).map(row => ({ ...row, status: integrationEngine.verificationCaseStatus(row) }));
+      return json(res, 200, { ok: true, providers: { identity: IDENTITY_PROVIDER, insurance: INSURANCE_PROVIDER, signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET }, cases });
+    }
+    if (url.pathname === '/api/verification/cases' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can create verification cases.' });
+      const payload = await readJsonBody(req, 256 * 1024);
+      const data = await readData();
+      data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
+      const created = integrationEngine.verificationCase(data, { ...payload, organizationId: userOrganizationId(user) }, user);
+      if (created.created) {
+        created.record.organizationId = userOrganizationId(user);
+        data.verificationCases.unshift(created.record);
+        appendAuditLog(data, user, 'Verification case created', [created.record.customer, created.record.type, created.record.status, created.record.vehicle || 'No vehicle linked']);
+      }
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, created.created ? 201 : 200, { ok: true, created: created.created, verificationCase: created.record });
+    }
+    if (url.pathname === '/api/verification/cases/review' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can review verification cases.' });
+      const payload = await readJsonBody(req, 256 * 1024);
+      const data = await readData();
+      const record = (data.verificationCases || []).find(row => row.id === payload.caseId && rowVisibleToUserOrganization(row, user));
+      if (!record) return json(res, 404, { ok: false, error: 'Verification case was not found.' });
+      integrationEngine.reviewVerificationCase(record, payload, user);
+      appendAuditLog(data, user, 'Verification case reviewed', [record.customer, record.type, record.status, record.vehicle || 'No vehicle linked']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, verificationCase: record });
+    }
+    if (url.pathname === '/api/accounting/ledger' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view accounting records.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
+      return json(res, 200, { ok: true, generatedAt: new Date().toISOString(), quickBooks: { configured: !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET), realmId: QUICKBOOKS_REALM_ID ? 'stored in Render' : '', status: QUICKBOOKS_REALM_ID ? 'Credentials saved - OAuth connection still required' : 'Provider setup needed' }, entries });
+    }
+    if (url.pathname === '/api/accounting/ledger/rebuild' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can rebuild the accounting ledger.' });
+      const data = await readData();
+      data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+      appendAuditLog(data, user, 'Accounting ledger rebuilt', [data.ledgerEntries.length + ' source-linked entries', 'QuickBooks sync status preserved']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, entries: data.ledgerEntries, rebuilt: data.ledgerEntries.length });
+    }
+    if (url.pathname === '/api/accounting/export.csv' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can export accounting records.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
+      const rows = [['Date', 'Category', 'Direction', 'Amount', 'Customer', 'Vehicle', 'VIN', 'Tag', 'Method', 'Status', 'Reference', 'QuickBooks status', 'Source key']]
+        .concat(entries.map(row => [row.date, row.category, row.direction, row.amount, row.customer, row.vehicle, row.vin, row.plate, row.method, row.status, row.reference, row.quickBooksStatus, row.sourceKey]));
+      return send(res, 200, rows.map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n', 'text/csv; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-accounting-ledger.csv"', 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/api/pickups/calendar' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view pickup scheduling.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const events = integrationEngine.buildPickupCalendarEvents(scoped).map(event => { const safe = { ...event }; delete safe.ics; return safe; });
+      return json(res, 200, { ok: true, googleCalendar: { configured: !!(GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN), status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'API credentials saved' : 'Manual calendar links live; provider setup needed for automatic sync' }, events });
+    }
+    const pickupIcsMatch = /^\/api\/pickups\/([^/]+)\/calendar\.ics$/.exec(url.pathname);
+    if (pickupIcsMatch && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can download pickup calendars.' });
+      const data = await readData();
+      const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupIcsMatch[1]) && rowVisibleToUserOrganization(row, user));
+      if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
+      const event = integrationEngine.pickupCalendarEvent(appointment, data.publicSite || {});
+      return send(res, 200, event.ics, 'text/calendar; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-pickup-' + integrationEngine.dateKey(appointment.date) + '.ics"', 'Cache-Control': 'no-store' });
+    }
+    const pickupCalendarMatch = /^\/api\/pickups\/([^/]+)\/calendar$/.exec(url.pathname);
+    if (pickupCalendarMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can prepare pickup calendar events.' });
+      const data = await readData();
+      const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupCalendarMatch[1]) && rowVisibleToUserOrganization(row, user));
+      if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
+      const event = integrationEngine.pickupCalendarEvent(appointment, data.publicSite || {});
+      data.calendarEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
+      const existing = data.calendarEvents.find(row => row.appointmentId === appointment.id);
+      const record = { ...(existing || {}), ...event, ics: undefined, organizationId: rowOrganizationId(appointment), status: existing && existing.status || 'Manual-live', updatedAt: new Date().toISOString(), createdAt: existing && existing.createdAt || new Date().toISOString() };
+      if (existing) Object.assign(existing, record);
+      else data.calendarEvents.unshift(record);
+      appointment.calendarEventId = record.id;
+      appointment.calendarPreparedAt = record.updatedAt;
+      appointment.mapsUrl = record.mapsUrl;
+      appendAuditLog(data, user, 'Pickup calendar prepared', [appointment.customer || 'Customer', appointment.date + ' ' + appointment.time, appointment.vehicle || 'No vehicle linked']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, calendarEvent: record, icsUrl: '/api/pickups/' + encodeURIComponent(appointment.id) + '/calendar.ics' });
+    }
     if (url.pathname === '/api/online-vehicles' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can manage online inventory.' });
       const payload = await readJsonBody(req, 512 * 1024);

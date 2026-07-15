@@ -148,6 +148,7 @@ async function main() {
   process.env.CLOVER_ECOMMERCE_PUBLIC_KEY = 'direct-clover-public-key';
   process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'direct-clover-private-key';
   process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
+  process.env.WOA_VERIFICATION_WEBHOOK_SECRET = 'direct-verification-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
   delete require.cache[require.resolve('../server.js')];
@@ -327,6 +328,7 @@ async function main() {
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
     duplicateState.customerAccounts = duplicateState.customerAccounts || [];
     duplicateState.maintenance = duplicateState.maintenance || [];
+    duplicateState.pickupAppointments = duplicateState.pickupAppointments || [];
     duplicateState.payments = duplicateState.payments.filter(payment => payment.id !== 'pay-signal-alpha-983' && payment.cloverPaymentId !== 'charge-signal-alpha-983');
     duplicateState.claims = duplicateState.claims.filter(claim => claim.id !== 'claim-signal-text-dispute');
     duplicateState.apiProviders = duplicateState.apiProviders || [];
@@ -355,6 +357,7 @@ async function main() {
       { id: 'mnt-direct-exact-copy-a', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', customer: 'Direct Dispute Customer', type: 'Monthly inspection / oil change', issue: 'Exact duplicate repair test', due: '2026-07-29', nextDue: '2026-07-29', status: 'Scheduled' },
       { id: 'mnt-direct-exact-copy-b', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', customer: 'Direct Dispute Customer', type: 'Monthly inspection / oil change', issue: 'Exact duplicate repair test', due: '2026-07-29', nextDue: '2026-07-29', status: 'Scheduled' }
     );
+    duplicateState.pickupAppointments.unshift({ id: 'pickup-direct-calendar', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', customer: 'Direct Pickup Customer', phone: '3135550177', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', date: '2026-07-20', time: '11:30 AM', durationMinutes: 30, address: '5150 NJ-42, Blackwood, NJ 08012', status: 'Confirmed' });
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
@@ -862,6 +865,75 @@ async function main() {
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+
+    const ownerReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: ownerCookie });
+    assert(ownerReconciliation.status === 200 && ownerReconciliation.json.ok && ownerReconciliation.json.counts.disputes >= 1, 'Owner Clover reconciliation should expose disputes, refunds, webhook events, and unmatched payments.');
+    const managerReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: managerCookie });
+    assert(managerReconciliation.status === 403, 'Manager must not access Clover reconciliation or money controls.');
+
+    const managerRefundPrepare = await request(server, 'POST', '/api/integrations/clover/refunds/prepare', { cookie: managerCookie, json: { paymentId: 'clover-payment-direct-dispute', amount: 50, reason: 'Direct role test' } });
+    assert(managerRefundPrepare.status === 403, 'Manager must not prepare customer refunds.');
+    const preparedRefund = await request(server, 'POST', '/api/integrations/clover/refunds/prepare', { cookie: ownerCookie, json: { paymentId: 'clover-payment-direct-dispute', amount: 50, reason: 'Direct partial refund test' } });
+    assert(preparedRefund.status === 201 && preparedRefund.json.refund.status === 'Clover POS action required', 'Partial or POS refund should create a tracked Clover action instead of pretending it was sent.');
+    assert(preparedRefund.json.refund.organizationId === 'org-wheelsonauto' && preparedRefund.json.refund.customer === 'Direct Dispute Customer', 'Prepared refund should preserve company and customer identity.');
+    const duplicateRefund = await request(server, 'POST', '/api/integrations/clover/refunds/prepare', { cookie: ownerCookie, json: { paymentId: 'clover-payment-direct-dispute', amount: 50, reason: 'Direct partial refund test' } });
+    assert(duplicateRefund.status === 200 && duplicateRefund.json.created === false && duplicateRefund.json.refund.id === preparedRefund.json.refund.id, 'Repeated refund preparation should be idempotent.');
+    const unconfirmedRefund = await request(server, 'POST', '/api/integrations/clover/refunds/execute', { cookie: ownerCookie, json: { refundId: preparedRefund.json.refund.id } });
+    assert(unconfirmedRefund.status === 409, 'Live Clover refund execution must require immediate owner confirmation.');
+    const unconfirmedManualRefund = await request(server, 'POST', '/api/integrations/clover/refunds/complete-manual', { cookie: ownerCookie, json: { refundId: preparedRefund.json.refund.id, providerRefundId: 'refund-direct-manual' } });
+    assert(unconfirmedManualRefund.status === 409, 'Manual Clover refund completion must require owner confirmation.');
+    const completedManualRefund = await request(server, 'POST', '/api/integrations/clover/refunds/complete-manual', { cookie: ownerCookie, json: { refundId: preparedRefund.json.refund.id, providerRefundId: 'refund-direct-manual', confirmed: true } });
+    assert(completedManualRefund.status === 200 && completedManualRefund.json.refund.status === 'Manual complete', 'Owner should be able to close a refund only after confirming the Clover reference.');
+    const repeatManualRefund = await request(server, 'POST', '/api/integrations/clover/refunds/complete-manual', { cookie: ownerCookie, json: { refundId: preparedRefund.json.refund.id, providerRefundId: 'refund-direct-manual', confirmed: true } });
+    assert(repeatManualRefund.status === 200, 'Repeating the same manual refund confirmation should remain safe.');
+    const refundState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(Number((refundState.json.payments || []).find(row => row.id === 'clover-payment-direct-dispute').refundedAmount) === 50, 'Idempotent manual refund confirmation must not double-count the refunded amount.');
+
+    const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });
+    assert(managerDisputeAction.status === 403, 'Manager must not change Clover dispute response status.');
+    const unmatchedDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: ownerCookie, json: { claimId: 'claim-direct-unmatched-dispute', action: 'evidence_ready', confirmed: true } });
+    assert(unmatchedDisputeAction.status === 409, 'Dispute evidence must stay blocked until customer and payment are matched.');
+    const matchedDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: ownerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true, notes: 'Direct smoke packet reviewed.' } });
+    assert(matchedDisputeAction.status === 200 && matchedDisputeAction.json.dispute.status === 'Evidence ready', 'Matched Clover dispute should advance through the owner-confirmed response workflow.');
+
+    const mechanicVerificationCreate = await request(server, 'POST', '/api/verification/cases', { cookie: mechanicCookie, json: { type: 'identity', customer: 'Blocked Mechanic Verification' } });
+    assert(mechanicVerificationCreate.status === 403, 'Mechanic must not create identity or insurance verification cases.');
+    const providerVerification = await request(server, 'POST', '/api/verification/cases', { cookie: managerCookie, json: { type: 'driver_license', customer: 'Direct Dispute Customer', vehicleId: 'veh-direct-dispute-car', provider: 'Direct Identity Adapter', externalCaseId: 'identity-direct-provider-1', reference: 'D12345678901234', expiresAt: '2030-01-15' } });
+    assert(providerVerification.status === 201 && providerVerification.json.verificationCase.status === 'Provider pending', 'Manager should be able to open a provider-neutral driver-license verification case.');
+    assert(providerVerification.json.verificationCase.referenceLast4 === '1234' && !JSON.stringify(providerVerification.json).includes('D12345678901234'), 'Verification records must retain only the last four characters of sensitive identity references.');
+    const blockedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-webhook-secret': 'wrong-secret' }, json: { externalCaseId: 'identity-direct-provider-1', status: 'verified' } });
+    assert(blockedVerificationWebhook.status === 401, 'Verification provider webhook must reject an invalid signature secret.');
+    const acceptedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-webhook-secret': 'direct-verification-secret' }, json: { externalCaseId: 'identity-direct-provider-1', status: 'verified', provider: 'Direct Identity Adapter', reference: 'verification-event-1' } });
+    assert(acceptedVerificationWebhook.status === 200 && acceptedVerificationWebhook.json.verificationCase.status === 'Verified', 'Signed verification provider result should update the linked case.');
+    const manualInsurance = await request(server, 'POST', '/api/verification/cases', { cookie: managerCookie, json: { type: 'insurance', customer: 'Direct Dispute Customer', vehicleId: 'veh-direct-dispute-car', provider: 'Manual', reference: 'POLICY-DIRECT-9876', expiresAt: '2030-02-01' } });
+    assert(manualInsurance.status === 201 && manualInsurance.json.verificationCase.status === 'Needs staff review' && manualInsurance.json.verificationCase.policyNumberLast4 === '9876', 'Manual insurance verification should enter the staff review queue without retaining the full policy number.');
+    const approvedInsurance = await request(server, 'POST', '/api/verification/cases/review', { cookie: managerCookie, json: { caseId: manualInsurance.json.verificationCase.id, decision: 'approve', notes: 'Insurance card and vehicle identity reviewed.' } });
+    assert(approvedInsurance.status === 200 && approvedInsurance.json.verificationCase.status === 'Verified', 'Manager should be able to approve a reviewed insurance case.');
+    const verificationStatus = await request(server, 'GET', '/api/verification/status', { cookie: managerCookie });
+    assert(verificationStatus.status === 200 && verificationStatus.json.cases.some(row => row.id === providerVerification.json.verificationCase.id && row.status === 'Verified'), 'Verification status should show signed provider outcomes to managers.');
+    const mechanicVerificationStatus = await request(server, 'GET', '/api/verification/status', { cookie: mechanicCookie });
+    assert(mechanicVerificationStatus.status === 403, 'Mechanic must not view customer identity or insurance verification cases.');
+
+    const managerLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: managerCookie });
+    assert(managerLedger.status === 200 && managerLedger.json.entries.some(row => row.customer === 'Direct Dispute Customer'), 'Manager accounting view should contain source-linked customer and vehicle records.');
+    const mechanicLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: mechanicCookie });
+    assert(mechanicLedger.status === 403, 'Mechanic must not view accounting records.');
+    const managerLedgerRebuild = await request(server, 'POST', '/api/accounting/ledger/rebuild', { cookie: managerCookie, json: {} });
+    assert(managerLedgerRebuild.status === 403, 'Only the owner can rebuild accounting records.');
+    const rebuiltLedger = await request(server, 'POST', '/api/accounting/ledger/rebuild', { cookie: ownerCookie, json: {} });
+    assert(rebuiltLedger.status === 200 && rebuiltLedger.json.entries.some(row => row.sourceKey === 'refund:' + preparedRefund.json.refund.id && row.direction === 'debit'), 'Accounting ledger should include the completed customer refund as a debit.');
+    const accountingCsv = await request(server, 'GET', '/api/accounting/export.csv', { cookie: managerCookie });
+    assert(accountingCsv.status === 200 && /text\/csv/.test(accountingCsv.headers['Content-Type'] || accountingCsv.headers['content-type'] || '') && accountingCsv.text.includes('Direct Dispute Customer') && accountingCsv.text.includes('DIRECTDISPUTEVIN'), 'QuickBooks-ready accounting CSV should retain customer, vehicle, and VIN context.');
+
+    const managerPickupCalendar = await request(server, 'GET', '/api/pickups/calendar', { cookie: managerCookie });
+    assert(managerPickupCalendar.status === 200 && managerPickupCalendar.json.events.some(row => row.appointmentId === 'pickup-direct-calendar' && /calendar\.google\.com/.test(row.googleCalendarUrl) && /google\.com\/maps/.test(row.mapsUrl)), 'Manager pickup calendar should include deterministic Google Calendar and Maps links.');
+    const mechanicPickupCalendar = await request(server, 'GET', '/api/pickups/calendar', { cookie: mechanicCookie });
+    assert(mechanicPickupCalendar.status === 403, 'Mechanic must not access customer pickup scheduling.');
+    const preparedPickupCalendar = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/calendar', { cookie: managerCookie, json: {} });
+    assert(preparedPickupCalendar.status === 200 && preparedPickupCalendar.json.calendarEvent.appointmentId === 'pickup-direct-calendar' && preparedPickupCalendar.json.icsUrl, 'Manager should be able to prepare a reusable pickup calendar record.');
+    const pickupIcs = await request(server, 'GET', '/api/pickups/pickup-direct-calendar/calendar.ics', { cookie: managerCookie });
+    assert(pickupIcs.status === 200 && /text\/calendar/.test(pickupIcs.headers['Content-Type'] || pickupIcs.headers['content-type'] || '') && pickupIcs.text.includes('DTSTART;TZID=America/New_York:20260720T113000') && pickupIcs.text.includes('DIRECTDISPUTEVIN'), 'Pickup ICS should contain the local appointment time and vehicle identity.');
+
     const tollSeedRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const tollSeedState = JSON.parse(JSON.stringify(tollSeedRead.json));
     tollSeedState.vehicles = tollSeedState.vehicles || [];
