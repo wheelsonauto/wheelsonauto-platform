@@ -2982,10 +2982,12 @@ function integratedRefundPaymentRow(row){
 }
 
 function cloverQueuePaymentKey(row){
-  var ids=paymentRecordIds(row||{});
-  return String(row&&(
-    row.cloverPaymentId||row.cloverChargeId||row.paymentId||row.externalReferenceId||row.external_reference_id||ids[0]||row.id
-  )||'').trim()
+  row=row||{};
+  var external=String(row.externalReferenceId||row.external_reference_id||row.external_reference||row.paymentRequestId||'').trim();
+  if(external)return external;
+  var ids=paymentRecordIds(row);
+  if(ids.length)return ids[0];
+  return[dateKeyFrom(row.date||row.createdAt),normName(row.customer),Number(row.amount||0),String(row.method||row.type||''),String(row.source||''),String(row.status||'')].join('|')
 }
 
 function integratedCloverWorkspace(){
