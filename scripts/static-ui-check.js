@@ -286,7 +286,8 @@ const criticalActionRequirements = [
   ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['/api/pickups/', '/complete', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
-assertIncludes('Clover refund eligibility guard', app, ['function cloverPaymentRefundable(row)', 'provider&&paid&&remaining>0', 'isOwner()&&cloverPaymentRefundable(row)']);
+assertIncludes('Clover refund eligibility guard', app, ['function cloverPaymentRefundable(row)', 'provider&&paid&&remaining>0', 'isOwner()&&!needsMatch&&cloverPaymentRefundable(row)']);
+assertIncludes('Server-authoritative unmatched Clover queue', app, ['_cloverNeedsMatch:true', 'row._cloverNeedsMatch===true', "customer='Customer match needed'"]);
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
 ['repairAshleyDodgeTransfer', 'Ashley restored', 'Dodge Journey WHITE', 'Felicia V Gadson'].forEach(text => {
