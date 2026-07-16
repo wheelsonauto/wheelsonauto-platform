@@ -5836,7 +5836,52 @@ function dataScopedToOrganization(data = {}, organizationId = MAIN_ORG_ID) {
   }
   return scoped;
 }
-function customerPortalIdentity(account = {}, context = {}) {
+function customerPortalApplicationPending(account = {}, application = {}) {
+  if (!application.id) return false;
+  const status = [account.portalStage, application.stage, application.status].filter(Boolean).join(' ').toLowerCase();
+  return !/active customer|vehicle picked up|picked up|completed/.test(status);
+}
+function customerPortalApplicationContext(scopedData = {}, account = {}, application = {}, pendingApplication = false) {
+  const applicationId = String(account.applicationId || application.id || '');
+  const recurring = allRecurringRows(scopedData).find(row => row.id === account.recurringPaymentId || applicationId && row.applicationId === applicationId) || null;
+  const customer = (scopedData.customers || []).find(row => row.id === account.customerId || applicationId && row.applicationId === applicationId) || null;
+  const contract = (scopedData.contracts || []).find(row => row.id === account.contractId || applicationId && row.applicationId === applicationId) || null;
+  const vehicleId = account.vehicleId || recurring && recurring.vehicleId || customer && customer.vehicleId || contract && contract.vehicleId || '';
+  const vehicle = !pendingApplication && vehicleId ? (scopedData.vehicles || []).find(row => row.id === vehicleId) || null : null;
+  const recordIsExplicit = row => {
+    if (!row) return false;
+    if (row.customerAccountId && row.customerAccountId === account.id) return true;
+    if (applicationId && row.applicationId === applicationId) return true;
+    if (recurring && row.recurringPaymentId === recurring.id) return true;
+    return false;
+  };
+  const payments = (scopedData.payments || []).filter(recordIsExplicit);
+  const claims = (scopedData.claims || []).filter(recordIsExplicit);
+  return {
+    contact: { name: application.name || account.customer || account.name || '', phone: application.phone || account.phone || '', email: application.email || account.email || '' },
+    customerName: application.name || account.customer || account.name || '',
+    organizationId: account.organizationId || application.organizationId || MAIN_ORG_ID,
+    phone: application.phone || account.phone || '',
+    email: application.email || account.email || '',
+    recurring,
+    customer,
+    contract,
+    vehicle,
+    vehicleName: vehicle ? vehicleNameFromParts(vehicle) : application.vehicle || recurring && recurring.vehicle || customer && customer.vehicle || contract && contract.vehicle || '',
+    latestPayment: payments.sort((a, b) => String(b.createdAt || b.date || '').localeCompare(String(a.createdAt || a.date || '')))[0] || null,
+    maintenance: (scopedData.maintenance || []).filter(recordIsExplicit).slice(0, 6),
+    claims: claims.slice(0, 8),
+    openClaims: claims.filter(row => !/paid|closed|done|removed/i.test(String(row.status || 'Open')) && Number(row.amount || 0) > 0).slice(0, 8),
+    documents: (scopedData.documents || []).filter(recordIsExplicit).slice(0, 10),
+    applications: application.id ? [application] : [],
+    tasks: (scopedData.tasks || []).filter(recordIsExplicit).slice(0, 8),
+    portalAccount: account,
+    paymentRequests: (scopedData.paymentRequests || []).filter(row => isOpenCustomerPaymentRequest(row) && recordIsExplicit(row)).slice(0, 6),
+    cardSetupRequests: (scopedData.cardSetupRequests || []).filter(row => isOpenCardSetupRequest(row) && recordIsExplicit(row)).slice(0, 6),
+    latestMessages: (scopedData.messages || []).filter(recordIsExplicit).slice(0, 8)
+  };
+}
+function customerPortalIdentity(account = {}, context = {}, options = {}) {
   const recurring = context.recurring || {};
   const customer = context.customer || {};
   const contract = context.contract || {};
@@ -5845,23 +5890,39 @@ function customerPortalIdentity(account = {}, context = {}) {
   const phones = [account.phone, context.phone, recurring.phone, customer.phone, contract.phone].map(phoneKey).filter(Boolean);
   const emails = [account.email, context.email, recurring.email, customer.email, contract.email].map(emailKey).filter(Boolean);
   const ids = {
+    customerAccountId: account.id || '',
+    applicationId: account.applicationId || '',
     customerId: account.customerId || customer.id || '',
     contractId: account.contractId || contract.id || '',
     recurringPaymentId: account.recurringPaymentId || recurring.id || '',
     vehicleId: account.vehicleId || recurring.vehicleId || customer.vehicleId || contract.vehicleId || vehicle.id || '',
     cloverCustomerId: account.cloverCustomerId || recurring.cloverCustomerId || customer.cloverCustomerId || ''
   };
-  return { names: [...new Set(names)], phones: [...new Set(phones)], emails: [...new Set(emails)], ids };
+  return {
+    names: [...new Set(names)],
+    phones: [...new Set(phones)],
+    emails: [...new Set(emails)],
+    ids,
+    pendingApplication: !!options.pendingApplication,
+    applicationScoped: !!ids.applicationId
+  };
 }
 function customerPortalRecordMatches(row = {}, identity = {}, kind = '') {
   const ids = identity.ids || {};
+  if (ids.customerAccountId && row.customerAccountId === ids.customerAccountId) return true;
+  if (ids.applicationId && row.applicationId === ids.applicationId) return true;
   if (kind === 'customer' && ids.customerId && row.id === ids.customerId) return true;
   if (kind === 'contract' && ids.contractId && row.id === ids.contractId) return true;
   if (kind === 'recurring' && ids.recurringPaymentId && row.id === ids.recurringPaymentId) return true;
   if (kind === 'vehicle' && ids.vehicleId && row.id === ids.vehicleId) return true;
-  if (ids.vehicleId && row.vehicleId === ids.vehicleId) return true;
+  if (ids.vehicleId && row.vehicleId === ids.vehicleId && (!identity.pendingApplication || kind === 'vehicle')) return true;
   if (ids.recurringPaymentId && row.recurringPaymentId === ids.recurringPaymentId) return true;
   if (ids.cloverCustomerId && String(row.cloverCustomerId || row.customerId || '') === String(ids.cloverCustomerId)) return true;
+  if (identity.pendingApplication) return false;
+  if (identity.applicationScoped) {
+    const rowNames = [row.customer, row.name, row.currentCustomer, row.cardholderName, row.customerName].map(normKey).filter(Boolean);
+    return rowNames.some(name => identity.names.some(wanted => softNameMatch(name, wanted)));
+  }
   const rowPhone = phoneKey(row.phone || row.from || row.to || '');
   if (rowPhone && identity.phones.includes(rowPhone)) return true;
   const rowEmail = emailKey(row.email || row.from || row.to || '');
@@ -6039,14 +6100,15 @@ function customerPortalState(data, account) {
   const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
   enrichLinkedProfiles(scopedData);
   const application = (scopedData.applications || []).find(row => row.id === account.applicationId) || {};
-  const context = aiFindCustomerContext(scopedData, {
+  const pendingApplication = customerPortalApplicationPending(account, application);
+  const context = application.id ? customerPortalApplicationContext(scopedData, account, application, pendingApplication) : aiFindCustomerContext(scopedData, {
     customer: account.customer || account.name,
     phone: account.phone,
     email: account.email,
     recurringPaymentId: account.recurringPaymentId,
     id: account.recurringPaymentId
   });
-  const identity = customerPortalIdentity(account, context);
+  const identity = customerPortalIdentity(account, context, { pendingApplication });
   const vehicles = (scopedData.vehicles || []).filter(row => customerPortalRecordMatches(row, identity, 'vehicle'));
   const customers = (scopedData.customers || []).filter(row => customerPortalRecordMatches(row, identity, 'customer'));
   const contracts = (scopedData.contracts || []).filter(row => customerPortalRecordMatches(row, identity, 'contract'));
@@ -6061,16 +6123,19 @@ function customerPortalState(data, account) {
   const primaryRecurring = recurringPayments[0] || context.recurring || {};
   const namedVehicle = (scopedData.vehicles || []).find(row => [primaryRecurring.vehicle, customers[0] && customers[0].vehicle, contracts[0] && contracts[0].vehicle, context.vehicleName].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || null;
   const applicationVehicle = (scopedData.onlineVehicles || []).find(row => row.id === application.onlineVehicleId || row.platformVehicleId && row.platformVehicleId === application.vehicleId) || {};
-  const primaryVehicle = vehicles[0] || namedVehicle || (context.vehicle && context.vehicle.id ? context.vehicle : null) || applicationVehicle || {};
+  const primaryVehicle = pendingApplication ? applicationVehicle : vehicles[0] || namedVehicle || (context.vehicle && context.vehicle.id ? context.vehicle : null) || applicationVehicle || {};
+  const summary = aiContextSummary({ ...context, recurring: primaryRecurring, vehicle: primaryVehicle });
+  delete summary.modules;
+  delete summary.systemHealth;
   return {
     account: safeCustomerAccount(account),
     application: stripPrivateCustomerFields(application),
-    summary: aiContextSummary({ ...context, recurring: primaryRecurring, vehicle: primaryVehicle }),
+    summary,
     customer: stripPrivateCustomerFields(customers[0] || context.customer || {}),
     contract: stripPrivateCustomerFields(contracts[0] || context.contract || {}),
     recurring: stripPrivateCustomerFields(primaryRecurring),
     vehicle: stripPrivateCustomerFields(primaryVehicle),
-    vehicles: vehicles.map(stripPrivateCustomerFields),
+    vehicles: (pendingApplication ? (applicationVehicle.id ? [applicationVehicle] : []) : vehicles).map(stripPrivateCustomerFields),
     payments: payments.map(stripCustomerPortalPayment),
     maintenance: maintenance.map(stripPrivateCustomerFields),
     claims: claims.map(stripPrivateCustomerFields),

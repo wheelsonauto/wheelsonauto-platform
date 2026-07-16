@@ -358,13 +358,9 @@ function pickupAvailability(data = {}, settings = {}, requestedDate, options = {
 
 function createPendingCustomerAccount(data, application, links = {}) {
   ensureCollections(data);
-  const applicationEmail = String(application.email || '').trim().toLowerCase();
-  const applicationPhone = String(application.phone || '').replace(/\D/g, '').slice(-10);
-  let account = data.customerAccounts.find(item => {
-    if (item.applicationId === application.id) return true;
-    if (applicationEmail && String(item.email || '').trim().toLowerCase() === applicationEmail) return true;
-    return !!(applicationPhone && String(item.phone || item.username || '').replace(/\D/g, '').slice(-10) === applicationPhone);
-  });
+  // A phone number or email can be shared or recycled. Only the application ID
+  // is strong enough to reuse a pending portal account without crossing records.
+  let account = data.customerAccounts.find(item => item.applicationId === application.id);
   const base = {
     customer: application.name,
     name: application.name,

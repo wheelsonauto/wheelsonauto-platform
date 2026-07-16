@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const onboarding = require('../onboarding-service.js');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
@@ -184,6 +185,26 @@ async function main() {
   } = require('../server.js');
 
   try {
+    const sharedContactAccountData = {
+      customerAccounts: [{
+        id: 'customer-account-existing-shared-contact',
+        applicationId: 'application-existing-shared-contact',
+        customer: 'Existing Shared Contact',
+        name: 'Existing Shared Contact',
+        phone: '3135550147',
+        email: 'shared-contact@example.com'
+      }]
+    };
+    const isolatedPendingAccount = onboarding.createPendingCustomerAccount(sharedContactAccountData, {
+      id: 'application-new-shared-contact',
+      name: 'New Shared Contact Applicant',
+      phone: '3135550147',
+      email: 'shared-contact@example.com',
+      organizationId: 'org-wheelsonauto'
+    });
+    assert(isolatedPendingAccount.id !== 'customer-account-existing-shared-contact' && sharedContactAccountData.customerAccounts.length === 2, 'A pending application must create its own portal account when an older account shares its phone or email.');
+    assert(sharedContactAccountData.customerAccounts.find(row => row.id === 'customer-account-existing-shared-contact').customer === 'Existing Shared Contact', 'Creating a pending applicant must not overwrite the older shared-contact portal account.');
+
     const pathologicalNotes = {
       customers: [{ id: 'direct-note-customer', name: 'Direct Note Customer', notes: Array(3000).fill('Vehicle reassigned through WheelsonAuto autopay.').join('\n') }],
       contracts: [{ id: 'direct-note-contract', customer: 'Direct Note Customer', notes: Array(3000).fill('Vehicle reassigned through WheelsonAuto autopay.').join('\n') }]
@@ -629,6 +650,33 @@ async function main() {
       json: nativePublicApplicationPayload()
     });
     assert(repeatedPublicApplication.status === 200 && repeatedPublicApplication.json.duplicate === true && repeatedPublicApplication.json.application.id === publicApplication.json.application.id, 'A repeated same-person/same-car submission must return the existing application instead of creating a duplicate.');
+    const sharedPhoneState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    sharedPhoneState.json.customers.unshift({ id: 'cus-direct-shared-phone-old', organizationId: 'org-wheelsonauto', name: 'Old Shared Phone Customer', phone: '3135550147', vehicleId: 'veh-direct-shared-phone-old', vehicle: '2014 Private Old Car', vin: 'PRIVATEOLDVIN001', status: 'History' });
+    sharedPhoneState.json.vehicles.unshift({ id: 'veh-direct-shared-phone-old', organizationId: 'org-wheelsonauto', name: '2014 Private Old Car', vin: 'PRIVATEOLDVIN001', plate: 'OLD-PRIVATE', currentCustomer: 'Old Shared Phone Customer', status: 'Rented' });
+    sharedPhoneState.json.recurringPayments.unshift({ id: 'rec-direct-shared-phone-old', organizationId: 'org-wheelsonauto', customer: 'Old Shared Phone Customer', phone: '3135550147', vehicleId: 'veh-direct-shared-phone-old', vehicle: '2014 Private Old Car', vin: 'PRIVATEOLDVIN001', amount: 888, cardLast4: '9098', cloverPaymentSource: 'secret-shared-phone-source', status: 'Removed' });
+    sharedPhoneState.json.payments.unshift({ id: 'pay-direct-shared-phone-old', organizationId: 'org-wheelsonauto', customer: 'Old Shared Phone Customer', phone: '3135550147', recurringPaymentId: 'rec-direct-shared-phone-old', vehicleId: 'veh-direct-shared-phone-old', vin: 'PRIVATEOLDVIN001', amount: 888, status: 'Paid', source: 'Private old payment' });
+    const sharedPhoneWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: sharedPhoneState.json });
+    assert(sharedPhoneWrite.status === 200 && sharedPhoneWrite.json.ok, 'Owner could not seed the shared-phone portal isolation scenario.');
+    const isolatedApplication = await request(server, 'POST', '/api/public/applications', {
+      headers: { 'x-forwarded-for': '198.51.100.88' },
+      json: nativePublicApplicationPayload({
+        onlineVehicleId: 'online-direct-002',
+        firstName: 'Isolated',
+        lastName: 'Applicant',
+        phone: '3135550147',
+        email: 'isolated-applicant@example.com',
+        password: 'IsolatedApplicant123!'
+      })
+    });
+    assert(isolatedApplication.status === 201 && isolatedApplication.json.ok, 'Shared-phone applicant should create a separate pending portal account.');
+    const isolatedPortalLogin = await request(server, 'POST', '/customer/login', { form: { username: 'isolated-applicant@example.com', password: 'IsolatedApplicant123!' } });
+    assert(isolatedPortalLogin.status === 302, 'Shared-phone pending applicant could not log in to the customer portal.');
+    const isolatedPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(isolatedPortalLogin.cookie) });
+    const isolatedPortalText = JSON.stringify(isolatedPortalState.json && isolatedPortalState.json.portal || {});
+    assert(isolatedPortalState.status === 200 && isolatedPortalState.json.ok, 'Shared-phone pending applicant portal state did not load.');
+    assert(isolatedPortalState.json.portal.application.id === isolatedApplication.json.application.id && /2017 Ford Fusion/i.test(isolatedPortalState.json.portal.summary.vehicle || ''), 'Pending applicant portal should show only its own application and selected public vehicle.');
+    assert(!isolatedPortalText.includes('Old Shared Phone Customer') && !isolatedPortalText.includes('PRIVATEOLDVIN001') && !isolatedPortalText.includes('OLD-PRIVATE') && !isolatedPortalText.includes('9098') && !isolatedPortalText.includes('pay-direct-shared-phone-old'), 'A pending applicant must not inherit another customer file, vehicle, saved card, or payment through a shared phone.');
+    assert(!isolatedPortalText.includes('systemHealth') && !isolatedPortalText.includes('platformModules'), 'Customer portal state must not expose internal platform health or module counts.');
     for (let i = 0; i < 8; i += 1) {
       const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
       assert([400, 409].includes(limitedApplicationAttempt.status), 'Public application attempts should validate normally before the per-IP submission limit.');
