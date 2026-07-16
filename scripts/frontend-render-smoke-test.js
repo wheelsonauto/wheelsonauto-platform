@@ -454,6 +454,16 @@ function ownerSmoke() {
   assert(context.apiProviders().find(row => row.id === 'background-checks').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point background screening to the shared secure verification adapter.');
   assert(context.apiProviders().find(row => row.id === 'background-checks').status === 'Ready - manual review', 'Background screening must be honestly usable for manual review while an authoritative provider remains optional.');
   assert(context.apiProviders().find(row => row.id === 'tracker-gps').endpoint.includes('/api/webhooks/tracker'), 'Client fallback provider rows must expose the live tracker adapter and signed callback.');
+  assert(context.apiProviders().find(row => row.id === 'marketing').endpoint.includes('/api/webhooks/marketing'), 'Client fallback provider rows must expose the live marketing lead adapter and signed callback.');
+  context.db.applications = context.db.applications || [];
+  context.db.websiteLeads = context.db.websiteLeads || [];
+  context.db.applications.unshift({ id: 'app-marketing-render', name: 'Marketing Render Lead', stage: 'New', phone: '8565550181' });
+  context.db.websiteLeads.unshift(
+    { id: 'lead-marketing-render-new', applicationId: 'app-marketing-render', source: 'Newest provider source', campaign: 'Latest campaign', status: 'Application submitted', createdAt: '2026-07-16T15:00:00.000Z' },
+    { id: 'lead-marketing-render-old', applicationId: 'app-marketing-render', source: 'Older provider source', status: 'Submitted', createdAt: '2026-07-15T15:00:00.000Z' }
+  );
+  const renderedMarketingLead = context.marketingLeadCommandItems().find(row => row.id === 'app-marketing-render');
+  assert(renderedMarketingLead && renderedMarketingLead.source.includes('Newest provider source') && renderedMarketingLead.source.includes('Latest campaign') && !renderedMarketingLead.source.includes('Older provider source'), 'The Marketing board should show the newest linked provider attribution without duplicating the application card.');
   assert(context.apiProviders().find(row => row.id === 'accounting').endpoint.includes('/api/accounting/quickbooks.csv'), 'Client fallback provider rows must expose the balanced QuickBooks journal export.');
   assert(context.apiProviders().find(row => row.id === 'pickup-calendar').endpoint.includes('/api/pickups/calendar'), 'Client fallback provider rows must expose pickup calendar and maps routes.');
   const detailedProviderForm = context.apiProviderForm({ id: 'clover-ecommerce', name: 'Clover Ecommerce', status: 'Testing - live charge needed' });

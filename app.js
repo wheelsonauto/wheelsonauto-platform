@@ -1217,19 +1217,26 @@ function apiProviderLaunchQueue(){
 }
 function marketingLeadCommandItems(){
   var leads=db.websiteLeads||[],apps=db.applications||[],byLead={};
-  leads.forEach(function(l){if(l.applicationId)byLead[l.applicationId]=l});
+  leads.forEach(function(l){if(l.applicationId&&!byLead[l.applicationId])byLead[l.applicationId]=l});
   return apps.concat(leads.filter(function(l){return !l.applicationId})).map(function(x){
-    var isApplication=!!(x.stage||String(x.id||'').indexOf('app-')===0),app=isApplication?x:null,lead=app?byLead[app.id]||{}:x,status=app?(app.stage||app.status||'New'):(lead.status||'Submitted'),vehicle=(app&&app.vehicle)||lead.vehicle||lead.vehicleInterest||'Any vehicle',tone=applicationTone(status),next='Review application';
-    if(/approved/i.test(status))next='Send approval + contract/autopay setup';
+    var isApplication=!!(x.stage||String(x.id||'').indexOf('app-')===0),app=isApplication?x:null,lead=app?byLead[app.id]||{}:x,status=app?(app.stage||app.status||lead.status||'New'):(lead.status||'New'),vehicle=(app&&app.vehicle)||lead.vehicle||lead.vehicleInterest||'Any vehicle',tone=applicationTone(status),next=app?'Review application':'Contact this lead';
+    if(/review|conflict/i.test(String(status)+' '+String(lead.matchStatus||'')))next=lead.matchReason||'Review conflicting or incomplete lead details';
+    else if(/converted/i.test(status))next='Conversion linked to customer file';
+    else if(/application submitted|approved/i.test(status))next=app?'Review application and continue approval':'Open Applications and verify submission';
+    else if(/application started/i.test(status))next='Follow up to complete the application';
+    else if(/qualified/i.test(status))next='Confirm vehicle and start application';
+    else if(/contacted/i.test(status))next='Continue follow-up';
+    else if(/closed|denied|removed/i.test(status))next='History only - no active follow-up';
     else if(/docs/i.test(status))next='Ask for missing documents';
-    else if(/denied|removed/i.test(status))next='Keep in history, no active follow-up';
     else if(!vehicle||vehicle==='Any vehicle')next='Confirm vehicle interest';
-    return{id:(app&&app.id)||lead.id||'',name:(app&&app.name)||lead.name||lead.customer||'Lead',phone:(app&&app.phone)||lead.phone||'',email:(app&&app.email)||lead.email||'',vehicle:vehicle,source:lead.source||((app&&app.source)||'wheelsonauto.com/apply'),status:status,tone:tone,next:next,submitted:(app&&app.submittedAt)||lead.created||lead.date||'',isApp:!!app}
+    if(/converted/i.test(status))tone='good';else if(/conflict/i.test(String(lead.matchStatus||'')))tone='bad';else if(/review/i.test(String(status)+' '+String(lead.matchStatus||'')))tone='warn';else if(/closed/i.test(status))tone='bad';
+    var source=[lead.source||((app&&app.source)||'wheelsonauto.com/apply'),lead.campaign,lead.matchStatus&&lead.matchStatus!=='Lead'?lead.matchStatus:''].filter(Boolean).join(' | ');
+    return{id:(app&&app.id)||lead.id||'',name:(app&&app.name)||lead.name||lead.customer||'Lead',phone:(app&&app.phone)||lead.phone||'',email:(app&&app.email)||lead.email||'',vehicle:vehicle,source:source,status:status,tone:tone,next:next,submitted:(app&&app.submittedAt)||lead.createdAt||lead.created||lead.date||'',isApp:!!app}
   }).sort(function(a,b){var w={warn:0,blue:1,good:2,bad:3};return(w[a.tone]||1)-(w[b.tone]||1)||String(b.submitted).localeCompare(String(a.submitted))}).slice(0,18)
 }
 function marketingFollowupBoard(){
   var items=marketingLeadCommandItems(),needs=items.filter(function(i){return i.tone==='warn'||i.tone==='blue'}).length,approved=items.filter(function(i){return /approved/i.test(i.status)}).length,missing=items.filter(function(i){return /docs/i.test(i.status)}).length;
-  return '<section class="card section marketing-followup-board" data-limit="12"><div class="section-head"><div><h2>Lead follow-up command</h2><p>Every website lead and application gets a next step before marketing APIs or automated campaigns are connected.</p></div><div class="star-command-stats"><span class="warn">'+needs+' follow-up</span><span class="blue">'+approved+' approved</span><span class="bad">'+missing+' docs</span></div></div>'+localSearch('Search follow-up by customer, phone, email, car, source, status, or next step')+'<div class="message-thread-grid">'+(items.length?items.map(function(i){return '<div class="message-thread-card marketing-lead-card '+esc(i.tone)+'"><div class="message-thread-head"><div><strong>'+esc(i.name)+'</strong><small>'+esc([i.phone,i.email].filter(Boolean).join(' / ')||'No contact saved')+'</small></div>'+badge(i.status,i.tone)+'</div><div class="muted">'+esc([i.vehicle,i.source,i.submitted].filter(Boolean).join(' | '))+'</div><div class="message-thread-body">'+esc(i.next)+'</div><div class="actions">'+(i.isApp?'<button class="btn primary" data-action="open-app" data-id="'+esc(i.id)+'">Review</button>':'<button class="btn primary" data-view="Applications">Applications</button>')+'<button class="btn gold" data-view="Messages" data-tab="Queue">Message</button><button class="btn" data-view="Website">Website</button></div></div>'}).join(''):'<div class="item">No lead follow-up is waiting. Public applications will appear here automatically.</div>')+'</div><div class="notice">Manual-live marketing: follow up from Applications and Messages now. Later SMS/email, lead-source, referral, and campaign APIs can feed this same board.</div></section>'
+  return '<section class="card section marketing-followup-board" data-limit="12"><div class="section-head"><div><h2>Lead follow-up command</h2><p>Website applications and outside lead sources share one conversion trail.</p></div><div class="star-command-stats"><span class="warn">'+needs+' follow-up</span><span class="blue">'+approved+' approved</span><span class="bad">'+missing+' docs</span></div></div>'+localSearch('Search follow-up by customer, phone, email, car, source, campaign, status, or next step')+'<div class="message-thread-grid">'+(items.length?items.map(function(i){return '<div class="message-thread-card marketing-lead-card '+esc(i.tone)+'"><div class="message-thread-head"><div><strong>'+esc(i.name)+'</strong><small>'+esc([i.phone,i.email].filter(Boolean).join(' / ')||'No contact saved')+'</small></div>'+badge(i.status,i.tone)+'</div><div class="muted">'+esc([i.vehicle,i.source,i.submitted].filter(Boolean).join(' | '))+'</div><div class="message-thread-body">'+esc(i.next)+'</div><div class="actions">'+(i.isApp?'<button class="btn primary" data-action="open-app" data-id="'+esc(i.id)+'">Review</button>':'')+'<button class="btn gold" data-view="Messages" data-tab="Queue">Message</button><button class="btn" data-view="Website">Website</button></div></div>'}).join(''):'<div class="item">No lead follow-up is waiting. Public applications and provider leads will appear here automatically.</div>')+'</div><div class="notice">Lead adapter is live: staff sync, duplicate protection, company scope, exact application/customer/vehicle matching, and a signed provider callback all feed this board. External campaign delivery stays unverified until a real provider event passes.</div></section>'
 }
 var __woaMarketingFollowupBase=Marketing;
 Marketing=function(){
@@ -1462,6 +1469,8 @@ queueRender=function(){
 
 renderQueued=false;
 document.body.classList.remove('fast-tab-switch');
+var __woaMarketingProviderDefaults=apiProviderDefaults;
+apiProviderDefaults=function(){return __woaMarketingProviderDefaults().map(function(p){return p.id==='marketing'?Object.assign({},p,{status:'Ready - manual adapter',envKeys:'WOA_MARKETING_PROVIDER, WOA_MARKETING_WEBHOOK_SECRET',endpoint:'/api/integrations/marketing/status, /api/integrations/marketing/sync, /api/webhooks/marketing',liveTest:'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.',notes:'Website applications and outside lead sources feed the same board.'}):p})};
 render();
 var __woaReportsDefensePacketTrueFinalBase=Reports;
 Reports=function(){

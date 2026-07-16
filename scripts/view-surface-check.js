@@ -307,12 +307,12 @@ assertIncludes('Marketing surface', marketing, [
   'marketingFollowupBoard',
   'Marketing command',
   'Lead follow-up command',
-  'Manual-live marketing',
+  'Lead adapter is live',
   'marketing-followup-board',
   'marketing-lead-card',
-  'Send approval + contract/autopay setup',
+  'Conversion linked to customer file',
   'Lead board',
-  'Search follow-up by customer, phone, email, car, source, status, or next step',
+  'Search follow-up by customer, phone, email, car, source, campaign, status, or next step',
   'Search leads by customer, phone, email, car, source, or status',
   'Website tools',
   'Message queue',
@@ -424,6 +424,17 @@ assertIncludes('Tracker provider-neutral adapter', app + server, [
   '/api/webhooks/tracker',
   'Missing file',
   'scrubPreciseTrackerLocation'
+]);
+
+assertIncludes('Marketing provider-neutral adapter', app + server, [
+  'WOA_MARKETING_PROVIDER',
+  'WOA_MARKETING_WEBHOOK_SECRET',
+  '/api/integrations/marketing/status',
+  '/api/integrations/marketing/sync',
+  '/api/webhooks/marketing',
+  'applyMarketingLead',
+  'duplicate protection',
+  'exact application/customer/vehicle linking'
 ]);
 
 const paymentRecurringCard = finalFunctionSlice(app, 'paymentRecurringCard');

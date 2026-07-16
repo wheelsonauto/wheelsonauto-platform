@@ -161,6 +161,8 @@ async function main() {
   process.env.WOA_VERIFICATION_WEBHOOK_SECRET = 'direct-verification-secret';
   process.env.WOA_TRACKER_PROVIDER = 'direct-tracker-adapter';
   process.env.WOA_TRACKER_WEBHOOK_SECRET = 'direct-tracker-secret';
+  process.env.WOA_MARKETING_PROVIDER = 'direct-marketing-adapter';
+  process.env.WOA_MARKETING_WEBHOOK_SECRET = 'direct-marketing-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
   delete require.cache[require.resolve('../server.js')];
@@ -233,6 +235,7 @@ async function main() {
     assert(providerEvidence.get('insurance').endpoint.includes('/api/verification/cases') && !/future/i.test(providerEvidence.get('insurance').endpoint), 'Insurance provider readiness must point to the live provider-neutral verification routes.');
     assert(providerEvidence.get('identity-verification').endpoint.includes('/api/webhooks/verification') && /last-four/i.test(providerEvidence.get('identity-verification').lastTestResult), 'Identity provider readiness must expose the signed callback and last-four retention truth.');
     assert(providerEvidence.get('tracker-gps').endpoint.includes('/api/webhooks/tracker') && /manual updates are live/i.test(providerEvidence.get('tracker-gps').lastTestResult), 'Tracker readiness must expose the provider-neutral signed adapter without pretending a provider event has passed.');
+    assert(providerEvidence.get('marketing').endpoint.includes('/api/webhooks/marketing') && /duplicate protection/i.test(providerEvidence.get('marketing').lastTestResult), 'Marketing readiness must expose the exact-match lead adapter without pretending a signed provider event has passed.');
     assert(providerEvidence.get('accounting').endpoint.includes('/api/accounting/quickbooks.csv') && /balanced QuickBooks journal/i.test(providerEvidence.get('accounting').lastTestResult), 'Accounting provider readiness must expose the live balanced journal path without pretending OAuth is connected.');
     assert(providerEvidence.get('pickup-calendar').endpoint.includes('/api/pickups/calendar') && /Google add-to-calendar/i.test(providerEvidence.get('pickup-calendar').lastTestResult), 'Pickup provider readiness must expose the live manual calendar and maps path.');
     assert(/controlled saved-card charge/i.test(apiProviderLaunchGuidance({ id: 'clover-ecommerce', status: 'Testing - live charge needed' }).nextAction), 'Clover Ecommerce guidance should name the controlled saved-card charge required before connection.');
@@ -1171,6 +1174,37 @@ async function main() {
     assert(repeatedTrackerWebhook.status === 200 && repeatedTrackerWebhook.json.duplicates === 1 && repeatedTrackerWebhook.json.received === 0, 'Repeated signed tracker events must be idempotent.');
     const mechanicTrackerPrivacy = await request(server, 'GET', '/api/state', { cookie: mechanicCookie });
     assert(!JSON.stringify(mechanicTrackerPrivacy.json).includes('Signed provider private location') && !JSON.stringify(mechanicTrackerPrivacy.json).includes('Customer portal private tracker location') && !JSON.stringify(mechanicTrackerPrivacy.json).includes('39.753'), 'Mechanic state must retain tracker health without exposing exact locations or coordinates.');
+
+    const mechanicMarketingStatus = await request(server, 'GET', '/api/integrations/marketing/status', { cookie: mechanicCookie });
+    assert(mechanicMarketingStatus.status === 403, 'Mechanic must not receive marketing leads or customer contact details.');
+    const managerMarketingSync = await request(server, 'POST', '/api/integrations/marketing/sync', {
+      cookie: managerCookie,
+      json: {
+        eventId: 'marketing-direct-manual-1',
+        leadId: 'marketing-direct-lead-1',
+        applicationId: 'application-direct-calendar',
+        campaign: 'Direct inventory campaign',
+        source: 'Direct lead adapter',
+        status: 'qualified'
+      }
+    });
+    assert(managerMarketingSync.status === 200 && managerMarketingSync.json.created === 1 && managerMarketingSync.json.results[0].customerId === 'cus-direct-pickup' && managerMarketingSync.json.results[0].vehicleId === 'veh-direct-pickup-car' && managerMarketingSync.json.results[0].status === 'Converted', 'Manager marketing sync should link an exact application to its customer and vehicle conversion.');
+    const duplicateMarketingSync = await request(server, 'POST', '/api/integrations/marketing/sync', { cookie: managerCookie, json: { eventId: 'marketing-direct-manual-1', leadId: 'marketing-direct-lead-1', applicationId: 'application-direct-calendar' } });
+    assert(duplicateMarketingSync.status === 200 && duplicateMarketingSync.json.duplicates === 1 && duplicateMarketingSync.json.received === 0, 'Repeated marketing event IDs must remain idempotent through the server route.');
+    const reviewMarketingSync = await request(server, 'POST', '/api/integrations/marketing/sync', { cookie: managerCookie, json: { eventId: 'marketing-direct-review-1', leadId: 'marketing-direct-review-lead', source: 'Incomplete provider lead' } });
+    assert(reviewMarketingSync.status === 200 && reviewMarketingSync.json.results[0].status === 'Needs review' && reviewMarketingSync.json.results[0].matchStatus === 'Needs review', 'Incomplete provider leads should enter the existing Marketing review board instead of disappearing or matching loosely.');
+    const marketingStatus = await request(server, 'GET', '/api/integrations/marketing/status', { cookie: managerCookie });
+    assert(marketingStatus.status === 200 && marketingStatus.json.leads.some(row => row.externalLeadId === 'marketing-direct-lead-1' && row.applicationId === 'application-direct-calendar') && marketingStatus.json.counts.review >= 1, 'Manager marketing status should expose exact conversion links and the needs-review queue.');
+    const blockedMarketingWebhook = await request(server, 'POST', '/api/webhooks/marketing', { headers: { 'x-marketing-webhook-secret': 'wrong-secret' }, json: { eventId: 'marketing-provider-blocked', leadId: 'marketing-direct-lead-1' } });
+    assert(blockedMarketingWebhook.status === 401, 'Marketing provider webhook must reject invalid credentials.');
+    const signedMarketingPayload = { eventId: 'marketing-provider-signed-1', leadId: 'marketing-direct-lead-1', organizationId: 'org-wheelsonauto', provider: 'direct-marketing-adapter', applicationId: 'application-direct-calendar', campaign: 'Signed campaign attribution', status: 'converted' };
+    const signedMarketingBody = JSON.stringify(signedMarketingPayload);
+    const marketingTimestamp = String(Math.floor(Date.now() / 1000));
+    const marketingSignature = crypto.createHmac('sha256', 'direct-marketing-secret').update(marketingTimestamp + '.' + signedMarketingBody).digest('hex');
+    const signedMarketingWebhook = await request(server, 'POST', '/api/webhooks/marketing', { headers: { 'x-marketing-timestamp': marketingTimestamp, 'x-marketing-signature': 'sha256=' + marketingSignature }, json: signedMarketingPayload });
+    assert(signedMarketingWebhook.status === 200 && signedMarketingWebhook.json.authorization === 'HMAC-SHA256' && signedMarketingWebhook.json.updated === 1, 'Timestamped HMAC marketing update should advance the existing exact lead conversion.');
+    const repeatedMarketingWebhook = await request(server, 'POST', '/api/webhooks/marketing', { headers: { 'x-marketing-timestamp': marketingTimestamp, 'x-marketing-signature': 'sha256=' + marketingSignature }, json: signedMarketingPayload });
+    assert(repeatedMarketingWebhook.status === 200 && repeatedMarketingWebhook.json.duplicates === 1 && repeatedMarketingWebhook.json.received === 0, 'Repeated signed marketing events must remain idempotent.');
 
     const managerLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: managerCookie });
     assert(managerLedger.status === 200 && managerLedger.json.entries.some(row => row.customer === 'Direct Dispute Customer'), 'Manager accounting view should contain source-linked customer and vehicle records.');

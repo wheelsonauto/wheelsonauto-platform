@@ -117,6 +117,76 @@ const trackerConflict = engine.applyTrackerUpdate(trackerData, {
 assert.equal(trackerConflict.conflict, true, 'Conflicting exact vehicle and tracker identifiers must enter review instead of updating either car.');
 assert.equal(trackerData.vehicles[1].trackerStatus, undefined);
 
+const marketingData = {
+  websiteLeads: [],
+  marketingEvents: [],
+  applications: [
+    { id: 'app-marketing-1', organizationId: 'org-wheelsonauto', name: 'Marketing Lead', email: 'lead@example.com', phone: '8565550101', vehicleId: 'vehicle-marketing-1', vehicle: '2024 Marketing Car' },
+    { id: 'app-marketing-conflict', organizationId: 'org-wheelsonauto', name: 'Different Lead', email: 'different@example.com', phone: '8565550199' },
+    { id: 'app-franchise-lead', organizationId: 'org-franchise', name: 'Franchise Lead', email: 'lead@example.com', phone: '8565550101' }
+  ],
+  customers: [{ id: 'customer-marketing-1', organizationId: 'org-wheelsonauto', applicationId: 'app-marketing-1', name: 'Marketing Lead', email: 'lead@example.com', phone: '8565550101', vehicleId: 'vehicle-marketing-1' }],
+  vehicles: [{ id: 'vehicle-marketing-1', organizationId: 'org-wheelsonauto', year: 2024, make: 'Marketing', model: 'Car', vin: 'MARKETINGVIN001', plate: 'MKT-001' }],
+  onlineVehicles: []
+};
+const marketingCreated = engine.applyMarketingLead(marketingData, {
+  eventId: 'marketing-event-1',
+  leadId: 'provider-lead-1',
+  organizationId: 'org-wheelsonauto',
+  provider: 'Provider adapter',
+  email: 'lead@example.com',
+  phone: '(856) 555-0101',
+  campaign: 'Summer inventory',
+  status: 'application submitted',
+  rawPayload: { secret: 'must-not-be-stored' }
+}, { name: 'Manager', organizationId: 'org-wheelsonauto' });
+assert.equal(marketingCreated.created, true);
+assert.equal(marketingCreated.record.applicationId, 'app-marketing-1');
+assert.equal(marketingCreated.record.customerId, 'customer-marketing-1');
+assert.equal(marketingCreated.record.vehicleId, 'vehicle-marketing-1');
+assert.equal(marketingCreated.record.status, 'Converted', 'An exact existing customer match should record the lead conversion.');
+assert.equal(JSON.stringify(marketingCreated).includes('must-not-be-stored'), false, 'Marketing ingestion must never retain the raw provider payload.');
+const marketingDuplicate = engine.applyMarketingLead(marketingData, { eventId: 'marketing-event-1', leadId: 'provider-lead-1', organizationId: 'org-wheelsonauto', provider: 'Provider adapter' });
+assert.equal(marketingDuplicate.duplicate, true, 'Repeated marketing provider event IDs must be idempotent.');
+assert.equal(marketingData.websiteLeads.length, 1);
+assert.equal(marketingData.marketingEvents.length, 1);
+
+const marketingUpdated = engine.applyMarketingLead(marketingData, {
+  eventId: 'marketing-event-2',
+  leadId: 'provider-lead-1',
+  organizationId: 'org-wheelsonauto',
+  provider: 'Provider adapter',
+  email: 'lead@example.com',
+  status: 'contacted'
+});
+assert.equal(marketingUpdated.created, false, 'A new event for the same provider lead should update its conversion trail instead of creating another lead.');
+assert.equal(marketingData.websiteLeads.length, 1);
+assert.equal(marketingData.marketingEvents.length, 2);
+
+const marketingConflict = engine.applyMarketingLead(marketingData, {
+  eventId: 'marketing-event-conflict',
+  leadId: 'provider-lead-conflict',
+  organizationId: 'org-wheelsonauto',
+  provider: 'Provider adapter',
+  email: 'lead@example.com',
+  phone: '8565550199'
+});
+assert.equal(marketingConflict.conflict, true, 'Email and phone pointing to different applications must enter review instead of attaching to either file.');
+assert.equal(marketingConflict.record.status, 'Needs review');
+assert.equal(marketingConflict.record.applicationId, '');
+
+const franchiseMarketing = engine.applyMarketingLead(marketingData, {
+  eventId: 'marketing-event-franchise',
+  leadId: 'provider-lead-franchise',
+  organizationId: 'org-franchise',
+  provider: 'Provider adapter',
+  email: 'lead@example.com',
+  phone: '8565550101',
+  status: 'application submitted'
+});
+assert.equal(franchiseMarketing.record.applicationId, 'app-franchise-lead', 'Exact contact matching must stay inside the supplied company scope.');
+assert.notEqual(franchiseMarketing.record.customerId, 'customer-marketing-1', 'A franchise lead must never link to the main-company customer.');
+
 const ledger = engine.buildAccountingLedger(data, [{ sourceKey: 'payment:payment-1', quickBooksStatus: 'Synced', quickBooksEntityId: 'qb-1' }]);
 assert.equal(ledger.filter(row => row.sourceKey === 'payment:payment-1').length, 1);
 assert.equal(ledger.some(row => row.sourceKey === 'payment:payment-failed'), false, 'Failed payments must not enter the accounting ledger.');

@@ -219,6 +219,225 @@ function applyTrackerUpdate(data = {}, event = {}, actor = {}, options = {}) {
   return { duplicate: false, matched: !!match.vehicle, conflict: match.conflict, reason: match.reason, record, vehicle: match.vehicle || null };
 }
 
+function marketingPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length >= 7 ? digits.slice(-10) : '';
+}
+
+function marketingEmail(value) {
+  const normalized = text(value).toLowerCase();
+  return normalized.includes('@') ? normalized.slice(0, 240) : '';
+}
+
+function marketingLeadStatus(event = {}) {
+  const raw = text(event.status || event.stage || event.lifecycleStage || event.eventType || 'New').toLowerCase();
+  if (/closed|lost|unsubscribed|spam|deleted|disqualified/.test(raw)) return 'Closed';
+  if (/convert|customer|won|rented|picked.?up/.test(raw)) return 'Converted';
+  if (/application.?submitted|applied|submitted/.test(raw)) return 'Application submitted';
+  if (/application.?started|started.?application/.test(raw)) return 'Application started';
+  if (/qualified|appointment|scheduled/.test(raw)) return 'Qualified';
+  if (/contacted|replied|responded|follow.?up/.test(raw)) return 'Contacted';
+  return 'New';
+}
+
+function marketingOrganizationRows(rows = [], organizationId = '') {
+  return rows.filter(row => {
+    if (!organizationId) return true;
+    const rowOrganizationId = text(row && (row.organizationId || row.companyId));
+    return rowOrganizationId === organizationId || (!rowOrganizationId && organizationId === 'org-wheelsonauto');
+  });
+}
+
+function uniqueMarketingMatch(rows = [], criteria = []) {
+  let selected = null;
+  const matchedBy = [];
+  for (const criterion of criteria) {
+    if (!criterion.value) continue;
+    const matches = rows.filter(criterion.matches);
+    if (matches.length > 1) return { record: null, conflict: true, matchedBy, reason: 'Multiple records share the supplied ' + criterion.name + '.' };
+    if (!matches.length) continue;
+    if (selected && text(selected.id) !== text(matches[0].id)) {
+      return { record: null, conflict: true, matchedBy, reason: 'Lead identifiers point to different records.' };
+    }
+    selected = matches[0];
+    matchedBy.push(criterion.name);
+  }
+  return { record: selected, conflict: false, matchedBy, reason: '' };
+}
+
+function marketingVehicleMatch(data = {}, event = {}, application = null, organizationId = '') {
+  const vehicles = marketingOrganizationRows(data.vehicles || [], organizationId);
+  const onlineVehicles = marketingOrganizationRows(data.onlineVehicles || [], organizationId);
+  const requestedVehicleId = text(event.vehicleId);
+  const requestedOnlineVehicleId = text(event.onlineVehicleId);
+  const applicationVehicleId = text(application && application.vehicleId);
+  const criteria = [
+    {
+      name: 'vehicle ID',
+      value: requestedVehicleId,
+      matches: vehicle => text(vehicle.id) === requestedVehicleId
+    },
+    {
+      name: 'application vehicle ID',
+      value: applicationVehicleId,
+      matches: vehicle => text(vehicle.id) === applicationVehicleId
+    },
+    {
+      name: 'VIN',
+      value: key(event.vin),
+      matches: vehicle => key(vehicle.vin) === key(event.vin)
+    },
+    {
+      name: 'tag',
+      value: key(event.plate || event.licensePlate || event.tag || event.tempTag),
+      matches: vehicle => {
+        const expected = key(event.plate || event.licensePlate || event.tag || event.tempTag);
+        return expected && [vehicle.plate, vehicle.licensePlate, vehicle.tag, vehicle.tempTag, vehicle.stock, vehicle.oldTempTag].map(key).includes(expected);
+      }
+    }
+  ];
+  const matched = uniqueMarketingMatch(vehicles, criteria);
+  if (matched.conflict || matched.record) return matched;
+  if (requestedOnlineVehicleId || text(application && application.onlineVehicleId)) {
+    const onlineId = requestedOnlineVehicleId || text(application && application.onlineVehicleId);
+    const online = onlineVehicles.find(row => text(row.id) === onlineId);
+    if (online && online.platformVehicleId) {
+      const vehicle = vehicles.find(row => text(row.id) === text(online.platformVehicleId));
+      if (vehicle) return { record: vehicle, conflict: false, matchedBy: ['online vehicle ID'], reason: '' };
+    }
+  }
+  return { record: null, conflict: false, matchedBy: [], reason: '' };
+}
+
+function applyMarketingLead(data = {}, event = {}, actor = {}, options = {}) {
+  data.websiteLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
+  data.marketingEvents = Array.isArray(data.marketingEvents) ? data.marketingEvents : [];
+  const organizationId = text(options.organizationId || event.organizationId || event.companyId || actor.organizationId || 'org-wheelsonauto');
+  const provider = text(event.provider || options.provider || 'manual').slice(0, 120) || 'manual';
+  const providerEventId = text(event.eventId || event.providerEventId || event.webhookEventId || event.id).slice(0, 240);
+  const externalLeadId = text(event.leadId || event.externalLeadId || event.contactId || event.prospectId).slice(0, 240);
+  const occurredAt = text(event.occurredAt || event.timestamp || event.createdAt || event.date) || new Date().toISOString();
+  const email = marketingEmail(event.email || event.emailAddress);
+  const phone = marketingPhone(event.phone || event.phoneNumber || event.mobile);
+  const suppliedName = text(event.name || event.fullName || [event.firstName, event.lastName].filter(Boolean).join(' ')).slice(0, 180);
+  const eventId = providerEventId
+    ? stableId('marketing-event', [organizationId, provider, providerEventId])
+    : stableId('marketing-event', [organizationId, provider, externalLeadId, email, phone, event.status || event.stage, occurredAt]);
+  const duplicateEvent = data.marketingEvents.find(row => text(row.id) === eventId || (providerEventId && text(row.organizationId) === organizationId && key(row.provider) === key(provider) && text(row.providerEventId) === providerEventId));
+  if (duplicateEvent) {
+    const duplicateLead = data.websiteLeads.find(row => text(row.id) === text(duplicateEvent.leadId));
+    return { duplicate: true, created: false, conflict: false, record: duplicateLead || null, event: duplicateEvent };
+  }
+
+  const applications = marketingOrganizationRows(data.applications || [], organizationId);
+  const applicationMatch = uniqueMarketingMatch(applications, [
+    {
+      name: 'application ID',
+      value: text(event.applicationId),
+      matches: row => text(row.id) === text(event.applicationId)
+    },
+    {
+      name: 'email',
+      value: email,
+      matches: row => marketingEmail(row.email) === email
+    },
+    {
+      name: 'phone',
+      value: phone,
+      matches: row => marketingPhone(row.phone) === phone
+    }
+  ]);
+  const customers = marketingOrganizationRows(data.customers || [], organizationId);
+  const customerMatch = uniqueMarketingMatch(customers, [
+    {
+      name: 'customer ID',
+      value: text(event.customerId),
+      matches: row => text(row.id) === text(event.customerId)
+    },
+    {
+      name: 'customer email',
+      value: email,
+      matches: row => marketingEmail(row.email) === email
+    },
+    {
+      name: 'customer phone',
+      value: phone,
+      matches: row => marketingPhone(row.phone) === phone
+    }
+  ]);
+  const application = applicationMatch.record;
+  const customer = customerMatch.record || (application && customers.find(row => text(row.applicationId) === text(application.id))) || null;
+  const vehicleMatch = marketingVehicleMatch(data, event, application, organizationId);
+  const conflict = applicationMatch.conflict || customerMatch.conflict || vehicleMatch.conflict;
+  const conflictReason = [applicationMatch.reason, customerMatch.reason, vehicleMatch.reason].filter(Boolean).join(' ');
+  const vehicle = conflict ? null : vehicleMatch.record;
+  const missingContact = !suppliedName && !email && !phone && !application && !customer;
+  const now = new Date().toISOString();
+  const existing = data.websiteLeads.find(row => {
+    if (text(row.organizationId || 'org-wheelsonauto') !== organizationId || key(row.provider) !== key(provider)) return false;
+    if (externalLeadId && text(row.externalLeadId) === externalLeadId) return true;
+    return false;
+  });
+  let status = marketingLeadStatus(event);
+  if (customer && status !== 'Closed') status = 'Converted';
+  else if (application && ['New', 'Contacted', 'Qualified', 'Application started'].includes(status)) status = 'Application submitted';
+  if (conflict || missingContact) status = 'Needs review';
+  const record = existing || {
+    id: stableId('lead', [organizationId, provider, externalLeadId || email || phone || suppliedName, occurredAt]),
+    organizationId,
+    provider,
+    externalLeadId,
+    createdAt: occurredAt,
+    providerEventIds: []
+  };
+  const applicationName = text(application && application.name);
+  const customerName = text(customer && (customer.name || customer.customer));
+  Object.assign(record, {
+    organizationId,
+    provider,
+    externalLeadId: externalLeadId || text(record.externalLeadId),
+    applicationId: conflict ? text(record.applicationId) : text(application && application.id || event.applicationId || record.applicationId),
+    customerId: conflict ? text(record.customerId) : text(customer && customer.id || event.customerId || record.customerId),
+    name: suppliedName || applicationName || customerName || text(record.name) || 'Lead needs review',
+    phone: phone || marketingPhone(application && application.phone) || marketingPhone(customer && customer.phone) || text(record.phone),
+    email: email || marketingEmail(application && application.email) || marketingEmail(customer && customer.email) || text(record.email),
+    source: text(event.source || event.channel || event.referrer || record.source || provider).slice(0, 180),
+    campaign: text(event.campaign || event.campaignName || record.campaign).slice(0, 180),
+    adGroup: text(event.adGroup || event.adSet || event.adGroupName || record.adGroup).slice(0, 180),
+    vehicleId: conflict ? text(record.vehicleId) : text(vehicle && vehicle.id || application && application.vehicleId || event.vehicleId || record.vehicleId),
+    onlineVehicleId: conflict ? text(record.onlineVehicleId) : text(event.onlineVehicleId || application && application.onlineVehicleId || record.onlineVehicleId),
+    vehicle: conflict ? text(record.vehicle) : text(event.vehicle || event.vehicleInterest || application && application.vehicle || vehicleTitle(vehicle || {}) || record.vehicle || 'Any vehicle'),
+    vin: conflict ? text(record.vin) : text(event.vin || vehicle && vehicle.vin || record.vin),
+    plate: conflict ? text(record.plate) : text(event.plate || event.licensePlate || event.tag || vehicle && (vehicle.plate || vehicle.licensePlate || vehicle.tag || vehicle.tempTag || vehicle.stock) || record.plate),
+    status,
+    matchStatus: conflict ? 'Conflict' : (customer ? 'Matched customer' : application ? 'Matched application' : vehicle ? 'Matched vehicle' : missingContact ? 'Needs review' : 'Lead'),
+    matchReason: conflictReason || (missingContact ? 'No customer name, email, phone, or local record was supplied.' : ''),
+    matchedBy: conflict ? '' : [...applicationMatch.matchedBy, ...customerMatch.matchedBy, ...vehicleMatch.matchedBy].join(', '),
+    notes: text(event.notes || event.note || record.notes).slice(0, 1000),
+    updatedAt: now
+  });
+  record.providerEventIds = [...new Set([providerEventId || eventId, ...(record.providerEventIds || [])].filter(Boolean))].slice(0, 100);
+  if (!existing) data.websiteLeads.unshift(record);
+  data.websiteLeads = data.websiteLeads.slice(0, 2000);
+  const eventRecord = {
+    id: eventId,
+    providerEventId: providerEventId || eventId,
+    externalLeadId,
+    organizationId,
+    provider,
+    leadId: record.id,
+    applicationId: record.applicationId || '',
+    customerId: record.customerId || '',
+    status: record.status,
+    matchStatus: record.matchStatus,
+    occurredAt,
+    receivedAt: now
+  };
+  data.marketingEvents.unshift(eventRecord);
+  data.marketingEvents = data.marketingEvents.slice(0, 1000);
+  return { duplicate: false, created: !existing, conflict, reason: record.matchReason, record, event: eventRecord };
+}
+
 function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
   const raw = text(record.providerStatus || record.manualDecision || record.status).toLowerCase();
   const expires = dateKey(record.expiresAt || record.expires || record.expirationDate);
@@ -547,6 +766,8 @@ module.exports = {
   trackerTokens,
   trackerVehicleMatch,
   applyTrackerUpdate,
+  marketingLeadStatus,
+  applyMarketingLead,
   verificationCaseStatus,
   verificationCase,
   reviewVerificationCase,

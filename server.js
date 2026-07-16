@@ -44,6 +44,8 @@ const INSURANCE_PROVIDER = String(process.env.WOA_INSURANCE_PROVIDER || 'manual'
 const BACKGROUND_PROVIDER = String(process.env.WOA_BACKGROUND_PROVIDER || 'manual').trim().toLowerCase();
 const TRACKER_PROVIDER = String(process.env.WOA_TRACKER_PROVIDER || 'manual').trim().toLowerCase();
 const TRACKER_WEBHOOK_SECRET = process.env.WOA_TRACKER_WEBHOOK_SECRET || process.env.TRACKER_WEBHOOK_SECRET || '';
+const MARKETING_PROVIDER = String(process.env.WOA_MARKETING_PROVIDER || 'manual').trim().toLowerCase();
+const MARKETING_WEBHOOK_SECRET = process.env.WOA_MARKETING_WEBHOOK_SECRET || process.env.MARKETING_WEBHOOK_SECRET || '';
 const QUICKBOOKS_REALM_ID = process.env.QUICKBOOKS_REALM_ID || '';
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
 const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
@@ -83,7 +85,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-tracker-adapter-73">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-marketing-adapter-74">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -599,7 +601,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -1150,6 +1152,20 @@ function verifyTrackerWebhook(rawBody, headers = {}) {
   const signedBody = timestamp + '.' + String(rawBody || '');
   const expectedHex = crypto.createHmac('sha256', TRACKER_WEBHOOK_SECRET).update(signedBody).digest('hex');
   const expectedBase64 = crypto.createHmac('sha256', TRACKER_WEBHOOK_SECRET).update(signedBody).digest('base64');
+  return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
+    const value = part.replace(/^(?:sha256=|v1=)/i, '');
+    return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
+  });
+}
+function verifyMarketingWebhook(rawBody, headers = {}) {
+  if (!MARKETING_WEBHOOK_SECRET) return false;
+  const timestamp = String(headers['x-marketing-timestamp'] || headers['x-woa-webhook-timestamp'] || '');
+  const unixSeconds = Number(timestamp);
+  const supplied = String(headers['x-marketing-signature'] || headers['x-woa-webhook-signature'] || '');
+  if (!unixSeconds || !supplied || Math.abs(Date.now() / 1000 - unixSeconds) > 300) return false;
+  const signedBody = timestamp + '.' + String(rawBody || '');
+  const expectedHex = crypto.createHmac('sha256', MARKETING_WEBHOOK_SECRET).update(signedBody).digest('hex');
+  const expectedBase64 = crypto.createHmac('sha256', MARKETING_WEBHOOK_SECRET).update(signedBody).digest('base64');
   return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
     const value = part.replace(/^(?:sha256=|v1=)/i, '');
     return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
@@ -5581,7 +5597,7 @@ function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
   if (!['manager', 'mechanic'].includes(role)) return false;
-  if (role === 'manager' && pathname.startsWith('/api/integrations/tracker')) return true;
+  if (role === 'manager' && (pathname.startsWith('/api/integrations/tracker') || pathname.startsWith('/api/integrations/marketing'))) return true;
   const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications', '/api/reset'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
@@ -5618,7 +5634,7 @@ function stateForUserWrite(current, incoming, user) {
   return next;
 }
 function auditChangedSections(current = {}, next = {}) {
-  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
+  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'websiteLeads', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
   const details = [];
   keys.forEach(key => {
     const beforeRows = Array.isArray(current[key]) ? auditComparableRows(current[key]) : [];
@@ -5803,7 +5819,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents', 'trackerEvents', 'trackerUnmatched'].forEach(key => {
+  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'websiteLeads', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents', 'trackerEvents', 'trackerUnmatched', 'marketingEvents'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {
@@ -7167,6 +7183,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['WOA_BACKGROUND_PROVIDER', BACKGROUND_PROVIDER || 'manual', 'Background-screening verification adapter'],
     ['WOA_TRACKER_PROVIDER', TRACKER_PROVIDER || 'manual', 'Vehicle tracker/GPS provider adapter'],
     ['WOA_TRACKER_WEBHOOK_SECRET', TRACKER_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed tracker/GPS provider callbacks; manager updates remain live without a provider'],
+    ['WOA_MARKETING_PROVIDER', MARKETING_PROVIDER || 'manual', 'Marketing and lead-source provider adapter'],
+    ['WOA_MARKETING_WEBHOOK_SECRET', MARKETING_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed marketing provider callbacks; staff lead sync remains live without a provider'],
     ['QUICKBOOKS_*', QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Set' : 'Manual-live', 'QuickBooks OAuth connection; internal accounting ledger and CSV remain live without it'],
     ['GOOGLE_CALENDAR_*', GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Set' : 'Manual-live', 'Automatic Google Calendar sync; ICS, add-to-calendar, and maps links remain live without it'],
     ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
@@ -7225,6 +7243,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/api/integrations/tracker/status', 'Owner/manager tracker health, vehicle matches, and missing-file queue'),
     route('POST', '/api/integrations/tracker/sync', 'Owner/manager tracker update adapter'),
     route('POST', '/api/webhooks/tracker', 'Signed tracker/GPS provider callback'),
+    route('GET', '/api/integrations/marketing/status', 'Owner/manager lead-source health, conversion links, and review queue'),
+    route('POST', '/api/integrations/marketing/sync', 'Owner/manager marketing lead adapter'),
+    route('POST', '/api/webhooks/marketing', 'Signed marketing and lead-source provider callback'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
@@ -7258,6 +7279,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     verificationCases: (scoped.verificationCases || []).length,
     trackerEvents: (scoped.trackerEvents || []).length,
     trackerUnmatched: (scoped.trackerUnmatched || []).length,
+    websiteLeads: (scoped.websiteLeads || []).length,
+    marketingEvents: (scoped.marketingEvents || []).length,
     refundRequests: (scoped.refundRequests || []).length,
     ledgerEntries: (scoped.ledgerEntries || []).length,
     pickupAppointments: (scoped.pickupAppointments || []).length
@@ -8615,7 +8638,7 @@ function defaultApiProviderRows(data = {}) {
     { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET', endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker', liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.' },
     { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
     { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
-    { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: 'API needed', owner: 'Manager', envKeys: 'MARKETING_PROVIDER_KEY', endpoint: 'Future /api/integrations/marketing/sync', liveTest: 'Import lead source, follow-up status, and conversion into Marketing board.' },
+    { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_MARKETING_PROVIDER, WOA_MARKETING_WEBHOOK_SECRET', endpoint: '/api/integrations/marketing/status, /api/integrations/marketing/sync, /api/webhooks/marketing', liveTest: 'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.' },
     { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: 'Architecture ready', owner: 'Owner', envKeys: 'BILLING_PROVIDER_KEY', endpoint: 'Future /api/billing/subscriptions', liveTest: 'Create company account, staff, fleet, separate provider credentials, subscription status.' }
   ];
 }
@@ -8705,6 +8728,12 @@ function apiProviderTruthOverrides(data = {}) {
   const trackerVehicleCount = (data.vehicles || []).filter(vehicle => vehicle.tracker && (vehicle.trackerStatus || vehicle.trackerLastPing)).length;
   const trackerProviderReady = !!(TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual');
   const trackerProviderLive = trackerProviderReady && trackerEvents.some(row => row.authorization === 'HMAC-SHA256');
+  const marketingLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
+  const marketingEvents = Array.isArray(data.marketingEvents) ? data.marketingEvents : [];
+  const marketingProviderReady = !!(MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual');
+  const marketingProviderLive = marketingProviderReady && marketingEvents.some(row => row.authorization === 'HMAC-SHA256');
+  const marketingReviewCount = marketingLeads.filter(row => /review|conflict/i.test(String(row.status || '') + ' ' + String(row.matchStatus || ''))).length;
+  const marketingConvertedCount = marketingLeads.filter(row => /converted/i.test(String(row.status || '')) || row.customerId).length;
   const accountingEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
   const quickBooksReady = !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET);
   const pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
@@ -8786,6 +8815,15 @@ function apiProviderTruthOverrides(data = {}) {
       liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.',
       lastTestAt: newestEvidenceAt(trackerEvents.map(row => row.receivedAt || row.lastPing)),
       lastTestResult: trackerVehicleCount + ' vehicle tracker(s) expose status/last-ping evidence; ' + trackerUnmatched.length + ' update(s) remain in Missing file.' + (trackerProviderLive ? ' A signed provider event was accepted.' : ' Manual updates are live; provider-backed location remains unverified until one signed event is accepted.')
+    },
+    marketing: {
+      name: 'Marketing / Lead Sources',
+      status: marketingProviderLive ? 'Connected' : (marketingProviderReady ? 'Testing - signed event needed' : 'Ready - manual adapter'),
+      envKeys: 'WOA_MARKETING_PROVIDER, WOA_MARKETING_WEBHOOK_SECRET',
+      endpoint: '/api/integrations/marketing/status, /api/integrations/marketing/sync, /api/webhooks/marketing',
+      liveTest: 'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.',
+      lastTestAt: newestEvidenceAt(marketingEvents.map(row => row.receivedAt || row.occurredAt).concat(marketingLeads.map(row => row.updatedAt || row.createdAt))),
+      lastTestResult: marketingLeads.length + ' lead(s) feed the existing Marketing board; ' + marketingConvertedCount + ' converted and ' + marketingReviewCount + ' need review. Duplicate protection, organization scope, and exact application/customer/vehicle linking are live.' + (marketingProviderLive ? ' A signed provider event was accepted.' : ' External campaign attribution remains unverified until one signed provider event is accepted.')
     },
     accounting: {
       name: 'Accounting / QuickBooks',
@@ -9349,7 +9387,7 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
@@ -11824,6 +11862,46 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, authorization: signed ? 'HMAC-SHA256' : 'Shared secret', ...summary, eventIds: results.map(result => result.record && result.record.id).filter(Boolean) });
     }
+    if (url.pathname === '/api/webhooks/marketing' && req.method === 'POST') {
+      if (!MARKETING_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Marketing webhook secret is not configured.' });
+      const rawBody = await readBody(req, 512 * 1024);
+      const signed = verifyMarketingWebhook(rawBody, req.headers);
+      const authorized = signed || secureWebhookValueMatch(url.searchParams.get('secret'), MARKETING_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], MARKETING_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-marketing-webhook-secret'], MARKETING_WEBHOOK_SECRET);
+      if (!authorized) return json(res, 401, { ok: false, error: 'Unauthorized marketing webhook.' });
+      let payload;
+      try { payload = rawBody ? JSON.parse(rawBody) : {}; } catch { return json(res, 400, { ok: false, error: 'Marketing webhook body must be valid JSON.' }); }
+      const events = Array.isArray(payload.events) ? payload.events : [payload];
+      if (!events.length || events.length > 500) return json(res, 400, { ok: false, error: 'Marketing webhook must include between 1 and 500 events.' });
+      const data = await readData();
+      const results = events.map(event => {
+        const organizationId = String(event && (event.organizationId || event.companyId) || MAIN_ORG_ID);
+        return integrationEngine.applyMarketingLead(data, event || {}, {
+          name: String(event && event.provider || MARKETING_PROVIDER || 'Marketing provider'),
+          role: 'System',
+          organizationId
+        }, {
+          organizationId,
+          provider: String(event && event.provider || MARKETING_PROVIDER || 'marketing')
+        });
+      });
+      results.forEach(result => {
+        if (result.event && !result.duplicate) result.event.authorization = signed ? 'HMAC-SHA256' : 'Shared secret';
+      });
+      const summary = {
+        received: results.filter(result => !result.duplicate).length,
+        created: results.filter(result => result.created && !result.duplicate).length,
+        updated: results.filter(result => !result.created && !result.duplicate).length,
+        conflicts: results.filter(result => result.conflict && !result.duplicate).length,
+        duplicates: results.filter(result => result.duplicate).length
+      };
+      const auditOrganizationId = String(events[0] && (events[0].organizationId || events[0].companyId) || MAIN_ORG_ID);
+      appendAuditLog(data, { name: MARKETING_PROVIDER || 'Marketing provider', role: 'System', organizationId: auditOrganizationId }, 'Marketing provider update', [summary.received + ' received', summary.created + ' created', summary.updated + ' updated', summary.conflicts + ' conflicts', summary.duplicates + ' duplicate', signed ? 'HMAC signed' : 'Shared secret']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, authorization: signed ? 'HMAC-SHA256' : 'Shared secret', ...summary, leadIds: results.map(result => result.record && result.record.id).filter(Boolean) });
+    }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
@@ -13007,6 +13085,67 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, ...summary, results: results.map(result => ({ id: result.record && result.record.id, vehicleId: result.record && result.record.vehicleId, matchStatus: result.record && result.record.matchStatus, duplicate: result.duplicate, reason: result.reason || '' })) });
+    }
+    if (url.pathname === '/api/integrations/marketing/status' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view marketing lead status.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const leads = (scoped.websiteLeads || []).slice(0, 500).map(scrubPrivateOperationalFields);
+      const events = (scoped.marketingEvents || []).slice(0, 500).map(scrubPrivateOperationalFields);
+      return json(res, 200, {
+        ok: true,
+        provider: MARKETING_PROVIDER,
+        signedWebhookReady: !!MARKETING_WEBHOOK_SECRET,
+        status: MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual' ? 'Testing - signed provider event needed' : 'Ready - manual adapter',
+        counts: {
+          leads: leads.length,
+          converted: leads.filter(row => /converted/i.test(String(row.status || '')) || row.customerId).length,
+          review: leads.filter(row => /review|conflict/i.test(String(row.status || '') + ' ' + String(row.matchStatus || ''))).length,
+          events: events.length
+        },
+        leads,
+        events,
+        generatedAt: new Date().toISOString()
+      });
+    }
+    if (url.pathname === '/api/integrations/marketing/sync' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can synchronize marketing leads.' });
+      const payload = await readJsonBody(req, 512 * 1024);
+      const updates = Array.isArray(payload.leads) ? payload.leads : (Array.isArray(payload.events) ? payload.events : [payload]);
+      if (!updates.length || updates.length > 500) return json(res, 400, { ok: false, error: 'Marketing sync must include between 1 and 500 leads.' });
+      const data = await readData();
+      const results = updates.map(event => {
+        const organizationId = isOwnerUser(user)
+          ? String(event.organizationId || event.companyId || userOrganizationId(user))
+          : userOrganizationId(user);
+        return integrationEngine.applyMarketingLead(data, { ...event, organizationId }, user, { organizationId, provider: String(event.provider || MARKETING_PROVIDER || 'manual') });
+      });
+      const summary = {
+        received: results.filter(result => !result.duplicate).length,
+        created: results.filter(result => result.created && !result.duplicate).length,
+        updated: results.filter(result => !result.created && !result.duplicate).length,
+        conflicts: results.filter(result => result.conflict && !result.duplicate).length,
+        duplicates: results.filter(result => result.duplicate).length
+      };
+      appendAuditLog(data, user, 'Marketing leads synchronized', [summary.received + ' received', summary.created + ' created', summary.updated + ' updated', summary.conflicts + ' conflicts', summary.duplicates + ' duplicate']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, {
+        ok: true,
+        ...summary,
+        results: results.map(result => ({
+          id: result.record && result.record.id,
+          applicationId: result.record && result.record.applicationId,
+          customerId: result.record && result.record.customerId,
+          vehicleId: result.record && result.record.vehicleId,
+          status: result.record && result.record.status,
+          matchStatus: result.record && result.record.matchStatus,
+          duplicate: result.duplicate,
+          reason: result.reason || ''
+        }))
+      });
     }
     if (url.pathname === '/api/verification/status' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
