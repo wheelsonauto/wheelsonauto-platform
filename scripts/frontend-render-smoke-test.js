@@ -511,6 +511,12 @@ function ownerSmoke() {
     vehicleId: 'veh-003',
     cloverPaymentId: 'smoke-clover-receipt'
   });
+  context.db.payments.unshift(
+    { id: 'smoke-clover-duplicate-a', customer: 'Unmatched Clover payment', date: '2000-01-01', method: 'Clover', source: 'Clover', amount: 77, status: 'Paid', cloverPaymentId: 'smoke-clover-provider-duplicate' },
+    { id: 'smoke-clover-duplicate-b', customer: 'Customer match needed', date: '2000-01-01', method: 'Clover', source: 'Clover', amount: 77, status: 'Paid', cloverPaymentId: 'smoke-clover-provider-duplicate' }
+  );
+  const dedupedCloverWorkspace = renderView(context, 'Claims & Issues', 'Clover');
+  assert(countOf(dedupedCloverWorkspace, 'smoke-clover-provider-duplicate') === 1, 'Clover reconciliation UI must render a provider payment id only once after duplicate sync rows merge.');
   const ownerDashboard = renderView(context, 'Dashboard', 'Board');
   assertCompactBoard('Owner dashboard', ownerDashboard, ['Dashboard', 'Customer intake', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
   assertNo('Owner dashboard', ownerDashboard, ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);

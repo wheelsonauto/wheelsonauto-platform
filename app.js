@@ -2950,7 +2950,7 @@ function cloverDisputeRows(){
 }
 
 function cloverRefundablePayments(){
-  return(db.payments||[]).filter(function(row){
+  return uniquePayments(db.payments||[]).filter(function(row){
     var provider=/clover/i.test(String([row.source,row.method,row.provider,row.cloverPaymentId,row.cloverChargeId].filter(Boolean).join(' '))),paid=typeof isCollectedPayment==='function'?isCollectedPayment(row):/paid|approved|complete|succeed/i.test(String(row.status||'')),remaining=Number(row.amount||0)-Number(row.refundedAmount||0);
     return provider&&paid&&remaining>0
   }).sort(function(a,b){return String(b.date||b.createdAt||'').localeCompare(String(a.date||a.createdAt||''))})

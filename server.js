@@ -11872,7 +11872,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const disputes = (data.claims || []).filter(row => /clover|dispute|chargeback/i.test(String([row.type, row.source, row.provider].filter(Boolean).join(' '))));
       const refunds = data.refundRequests || [];
-      const unmatched = (data.payments || []).filter(payment => closeoutPaymentCustomerName(data, payment, allRecurringRows(data)) === 'Unmatched payment');
+      const unmatched = uniqueCloseoutPayments(data.payments || []).filter(payment => closeoutPaymentCustomerName(data, payment, allRecurringRows(data)) === 'Unmatched payment');
       const webhookEvents = (((data.integrations || {}).clover || {}).webhookEvents || []);
       return json(res, 200, {
         ok: true,

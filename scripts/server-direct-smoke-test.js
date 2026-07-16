@@ -355,6 +355,8 @@ async function main() {
     });
     duplicateState.payments.unshift(
       { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-dispute-customer@example.com' },
+      { id: 'clover-payment-direct-unmatched-a', cloverPaymentId: 'pay-direct-unmatched-duplicate', customer: 'Unmatched Clover payment', date: 'Today', method: 'Clover', amount: 7788.88, status: 'Paid', source: 'Clover' },
+      { id: 'clover-payment-direct-unmatched-b', cloverPaymentId: 'pay-direct-unmatched-duplicate', customer: 'Customer match needed', date: 'Today', method: 'Clover', amount: 7788.88, status: 'Paid', source: 'Clover' },
       { id: 'pay-signal-alpha-983', cloverPaymentId: 'charge-signal-alpha-983', customer: 'Signal Match Person', date: 'Today', method: 'Clover', amount: 144, status: 'Paid', source: 'Clover', vehicleId: 'veh-signal-text-car', vehicle: '2024 Signal Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tracker: 'TRK-SIG', phone: '3135550201', email: 'signal-match@example.com' },
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
@@ -878,6 +880,8 @@ async function main() {
 
     const ownerReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: ownerCookie });
     assert(ownerReconciliation.status === 200 && ownerReconciliation.json.ok && ownerReconciliation.json.counts.disputes >= 1, 'Owner Clover reconciliation should expose disputes, refunds, webhook events, and unmatched payments.');
+    assert(ownerReconciliation.json.unmatchedPayments.filter(row => row.cloverPaymentId === 'pay-direct-unmatched-duplicate').length === 1, 'Clover reconciliation must merge duplicate unmatched rows by provider payment id.');
+    assert(ownerReconciliation.json.counts.unmatchedPayments === ownerReconciliation.json.unmatchedPayments.length, 'Clover reconciliation count must reflect the deduplicated unmatched queue.');
     const managerReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: managerCookie });
     assert(managerReconciliation.status === 403, 'Manager must not access Clover reconciliation or money controls.');
 
