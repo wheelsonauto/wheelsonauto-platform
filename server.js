@@ -8382,11 +8382,11 @@ function defaultApiProviderRows(data = {}) {
 	      id: 'clover-webhooks',
 	      name: 'Clover Webhooks',
 	      group: 'Money',
-	      status: CLOVER_HCO_WEBHOOK_SECRET && CLOVER_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
+	      status: CLOVER_HCO_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
 	      owner: 'Owner',
-	      envKeys: 'CLOVER_HCO_WEBHOOK_SECRET, CLOVER_APP_AUTH_CODE (or CLOVER_WEBHOOK_SECRET), Clover webhook URLs',
+	      envKeys: 'CLOVER_HCO_WEBHOOK_SECRET, Clover Hosted Checkout webhook URL; CLOVER_APP_AUTH_CODE optional for a future developer app',
 	      endpoint: '/api/webhooks/clover',
-	      liveTest: 'Verify Hosted Checkout signature plus X-Clover-Auth payment/customer events, then confirm named history and dashboard auto-sync.'
+	      liveTest: 'Verify the Hosted Checkout signature, then confirm merchant-token polling keeps named Clover customers and payments synchronized.'
 	    },
 	    {
 	      id: 'woa-autopay',
@@ -8472,13 +8472,10 @@ function apiProviderTruthOverrides(data = {}) {
   const hostedCheckoutWebhookEvents = cloverWebhookEvents.filter(row => row.kind === 'Hosted Checkout' || row.authorization === 'Clover-Signature');
   const cloverAppWebhookEvents = cloverWebhookEvents.filter(row => row.kind === 'Clover app event' || row.authorization === 'X-Clover-Auth');
   const latestCloverWebhook = cloverWebhookEvents[0] || {};
-  const cloverWebhookLive = !!(CLOVER_HCO_WEBHOOK_SECRET && CLOVER_WEBHOOK_SECRET && hostedCheckoutWebhookEvents.length && cloverAppWebhookEvents.length);
+  const cloverWebhookLive = !!(CLOVER_HCO_WEBHOOK_SECRET && hostedCheckoutWebhookEvents.length);
   const cloverWebhookResult = cloverWebhookLive
-    ? hostedCheckoutWebhookEvents.length + ' signed Hosted Checkout event(s) and ' + cloverAppWebhookEvents.length + ' authenticated Clover app event(s) have been accepted.'
-    : [
-        CLOVER_HCO_WEBHOOK_SECRET ? (hostedCheckoutWebhookEvents.length ? 'Hosted Checkout signed event verified.' : 'Hosted Checkout secret stored; live signed payment event needed.') : 'Hosted Checkout signing secret missing.',
-        CLOVER_WEBHOOK_SECRET ? (cloverAppWebhookEvents.length ? 'Clover app event verified.' : 'Clover app auth code stored; live payment/customer event needed.') : 'Clover app X-Clover-Auth code missing.'
-      ].join(' ');
+    ? hostedCheckoutWebhookEvents.length + ' signed Hosted Checkout event(s) accepted. Clover Core merchant-token polling keeps POS payments and customers synchronized.' + (cloverAppWebhookEvents.length ? ' ' + cloverAppWebhookEvents.length + ' optional developer-app event(s) were also accepted.' : '')
+    : (CLOVER_HCO_WEBHOOK_SECRET ? 'Hosted Checkout signing secret is stored; one signed URL test or live payment event is still required.' : 'Hosted Checkout signing secret is missing.');
   const savedAutopay = data.integrations && data.integrations.wheelsonAutoAutopay || {};
   const autopayEvidence = {
     ...woaAutopayStatus,
@@ -8537,7 +8534,7 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: ecommerceResult
     },
     'clover-webhooks': {
-      status: cloverWebhookLive ? 'Connected' : (CLOVER_HCO_WEBHOOK_SECRET && CLOVER_WEBHOOK_SECRET ? 'Testing - live events needed' : 'Ready for credentials'),
+      status: cloverWebhookLive ? 'Connected' : (CLOVER_HCO_WEBHOOK_SECRET ? 'Testing - signed event needed' : 'Ready for credentials'),
       lastTestAt: latestCloverWebhook.receivedAt || latestCloverWebhook.createdAt || latestCloverWebhook.at || '',
       lastTestResult: cloverWebhookResult
     },
@@ -8617,7 +8614,7 @@ function apiProviderLaunchGuidance(provider = {}) {
       : ['Run one controlled saved-card charge from a named customer file, then confirm Paid in WheelsonAuto and the same customer name in Clover.', 'Successful Clover payment ID, customer name, amount, timestamp, and saved-card source match.'],
     'clover-webhooks': connected
       ? ['Monitor signed webhook receipts and confirm payment history continues refreshing automatically.', 'Accepted signed Clover event plus the matching payment/history sync timestamp.']
-      : ['Add the Hosted Checkout signing secret and Clover X-Clover-Auth code in Render, register /api/webhooks/clover for both Clover webhook systems, then trigger one payment event in each.', 'Accepted Hosted Checkout signature, authenticated payment/customer event, and updated WheelsonAuto customer/payment sync timestamps.'],
+      : ['Add the Hosted Checkout signing secret in Render, register /api/webhooks/clover in Clover Hosted Checkout, then run TEST URL. A Clover developer account is optional because merchant-token polling handles POS payment/customer updates.', 'Accepted Hosted Checkout signature plus updated WheelsonAuto customer/payment sync timestamps.'],
     'woa-autopay': connected
       ? ['Keep the monitor running and review only customer declines, payment-not-found, or retry outcomes.', 'Completed monitor run with next-run time and named charged/failed/skipped results.']
       : ['Run the autopay monitor with one managed saved-card schedule and verify charge, retry, failure, and next-run tracking.', 'Completed monitor result tied to a named customer and saved-card schedule.'],
