@@ -80,7 +80,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-application-review-66">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-telnyx-readiness-67">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -749,9 +749,14 @@ function telnyxCarrierReadiness(data = {}, provider = '') {
   const latest = records[0] || {};
   const status = String(latest.providerStatus || latest.status || '').toLowerCase();
   const errorCode = String(latest.providerErrorCode || '').trim();
+  const registration = (((data.integrations || {}).messaging || {}).telnyx10dlc) || {};
+  const registrationVerified = !!(registration.numberAssigned && registration.campaignActive);
   return {
     carrierDeliveryVerified: status === 'delivered',
-    carrierRegistrationRequired: errorCode === '40010',
+    carrierRegistrationRequired: errorCode === '40010' && !registrationVerified,
+    carrierRegistrationVerified: registrationVerified,
+    carrierRegistrationStatus: registration.summary || registration.campaignStatus || '',
+    carrierRegistrationCheckedAt: registration.checkedAt || '',
     carrierDeliveryStatus: status || (records.length ? 'unconfirmed' : 'not_tested'),
     carrierDeliveryErrorCode: errorCode,
     carrierDeliveryError: String(latest.providerErrorMessage || '').trim()
@@ -1413,6 +1418,46 @@ async function configureTelnyxMessagingProfile(options = {}) {
     smsMethod: 'POST',
     signedWebhooks: true,
     assigned
+  };
+}
+async function checkTelnyx10dlcReadiness(options = {}) {
+  const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
+  const phoneNumber = cleanPhone(options.phoneNumber || MESSAGING_FROM_NUMBER || '');
+  const fetchImpl = options.fetchImpl || fetch;
+  if (!apiKey || !phoneKey(phoneNumber)) {
+    const error = new Error('Telnyx API key and SMS number must be saved in Render first.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const assignmentBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/phoneNumberCampaign?filter[phoneNumber]=' + encodeURIComponent(phoneNumber) + '&page[size]=50');
+  const assignmentRows = Array.isArray(assignmentBody.data) ? assignmentBody.data : Array.isArray(assignmentBody.records) ? assignmentBody.records : assignmentBody.data ? [assignmentBody.data] : [];
+  const assignment = assignmentRows.find(row => phoneKey(row && (row.phoneNumber || row.phone_number)) === phoneKey(phoneNumber)) || assignmentRows[0] || {};
+  const campaignId = String(assignment.campaignId || assignment.campaign_id || '').trim();
+  const assignmentStatus = String(assignment.status || assignment.assignmentStatus || assignment.assignment_status || '').trim();
+  let campaign = {};
+  let campaignStatus = '';
+  if (campaignId) {
+    const campaignBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder/' + encodeURIComponent(campaignId));
+    campaign = campaignBody.data || campaignBody || {};
+    campaignStatus = String(campaign.status || campaign.campaignStatus || campaign.campaign_status || '').trim().toUpperCase();
+  }
+  const numberAssigned = !!campaignId && !/failed|rejected|unassigned|removed/i.test(assignmentStatus);
+  const campaignActive = campaignStatus === 'ACTIVE' || campaignStatus === 'TCR_ACCEPTED' || campaignStatus === 'APPROVED';
+  const summary = !numberAssigned
+    ? 'Telnyx number is not attached to a 10DLC campaign.'
+    : !campaignActive
+      ? 'Telnyx campaign is assigned but currently ' + (campaignStatus || assignmentStatus || 'under review') + '.'
+      : 'Telnyx 10DLC campaign is active and the SMS number is assigned. Run one outbound delivery test.';
+  return {
+    checkedAt: new Date().toISOString(),
+    phoneNumber: maskPhone(phoneNumber),
+    numberAssigned,
+    assignmentStatus: assignmentStatus || (numberAssigned ? 'Assigned' : 'Not assigned'),
+    campaignId: campaignId ? 'stored securely' : '',
+    campaignStatus: campaignStatus || 'Not found',
+    campaignActive,
+    readyForDeliveryTest: numberAssigned && campaignActive,
+    summary
   };
 }
 async function autoConfigureTelnyxMessagingProfile() {
@@ -6979,6 +7024,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/messages/settings', 'Owner toggles for messaging and Star AI'),
     route('POST', '/api/integrations/twilio/configure', 'Owner connects Twilio inbound SMS webhook'),
     route('POST', '/api/integrations/telnyx/configure', 'Owner connects Telnyx signed inbound SMS webhook'),
+    route('POST', '/api/integrations/telnyx/readiness', 'Owner checks Telnyx 10DLC campaign and number assignment'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
     route('POST', '/api/notifications/daily-closeout', 'Send or draft daily closeout notification'),
@@ -8293,7 +8339,9 @@ function apiProviderTruthOverrides(data = {}) {
     ? 'Carrier delivery verified.'
     : (status.carrierRegistrationRequired
       ? (status.carrierDeliveryError || 'Telnyx is configured, but outbound SMS is blocked until account upgrade and 10DLC approval are complete.')
-      : (status.configured ? 'Provider credentials are stored; carrier delivery has not been verified.' : 'Hosted SMS provider credentials are not complete.'));
+      : (status.carrierRegistrationVerified
+        ? 'Telnyx 10DLC campaign is active and the number is assigned; carrier delivery has not been verified yet.'
+        : (status.configured ? 'Provider credentials are stored; carrier delivery has not been verified.' : 'Hosted SMS provider credentials are not complete.')));
   const emailResult = status.emailOutboundVerified
     ? (status.emailInboundVerified ? 'Outbound and inbound email are verified.' : 'Outbound email is verified; inbound email webhook/reply delivery is still pending.')
     : (status.emailConfigured ? 'Email provider is configured; a successful outbound test is still required.' : 'Email provider credentials are not complete.');
@@ -8342,7 +8390,7 @@ function apiProviderTruthOverrides(data = {}) {
     },
     'sms-phone': {
       status: status.smsDeliveryLive ? 'Connected' : (status.carrierRegistrationRequired ? 'Blocked - 10DLC approval' : (status.configured ? 'Testing - delivery pending' : 'Provider needed')),
-      lastTestAt: status.deliveryLastCheckedAt || status.smsWebhookConfiguredAt || '',
+      lastTestAt: status.carrierRegistrationCheckedAt || status.deliveryLastCheckedAt || status.smsWebhookConfiguredAt || '',
       lastTestResult: smsResult
     },
     email: {
@@ -12983,6 +13031,30 @@ const server = http.createServer(async (req, res) => {
         return json(res, Number(err && err.statusCode || 502), { ok: false, error, messaging: publicMessagingStatus(data) });
       }
     }
+    if (url.pathname === '/api/integrations/telnyx/readiness' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can check Telnyx carrier registration.' });
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.messaging = data.integrations.messaging || {};
+      try {
+        const readiness = await checkTelnyx10dlcReadiness();
+        data.integrations.messaging.telnyx10dlc = readiness;
+        data.integrations.messaging.lastTestAt = readiness.checkedAt;
+        data.integrations.messaging.lastTestResult = readiness.summary;
+        appendAuditLog(data, user, 'Telnyx 10DLC readiness checked', [readiness.summary, readiness.assignmentStatus, readiness.campaignStatus]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, readiness, messaging: publicMessagingStatus(data) });
+      } catch (err) {
+        const error = String(err && err.message || err);
+        data.integrations.messaging.telnyx10dlc = { checkedAt: new Date().toISOString(), numberAssigned: false, campaignActive: false, readyForDeliveryTest: false, summary: error };
+        data.integrations.messaging.lastTestAt = data.integrations.messaging.telnyx10dlc.checkedAt;
+        data.integrations.messaging.lastTestResult = error;
+        appendAuditLog(data, user, 'Telnyx 10DLC readiness failed', [error]);
+        await writeData(data);
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error, messaging: publicMessagingStatus(data) });
+      }
+    }
     if (url.pathname === '/api/notifications/email/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change email notification settings.' });
       const payload = await readJsonBody(req);
@@ -13823,6 +13895,7 @@ module.exports = {
   configureTwilioSmsWebhook,
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,
+  checkTelnyx10dlcReadiness,
   autoConfigureTelnyxMessagingProfile,
   applyTelnyxDeliveryEvent,
   mergeTelnyxDeliveryUpdates,

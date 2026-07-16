@@ -19,7 +19,8 @@ const {
   telnyxCarrierReadiness,
   mergeTelnyxDeliveryUpdates,
   reconcileTelnyxDeliveryRecords,
-  configureTelnyxMessagingProfile
+  configureTelnyxMessagingProfile,
+  checkTelnyx10dlcReadiness
 } = require('../server');
 
 function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000))) {
@@ -171,7 +172,37 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(profileBody.smart_encoding, true);
   assert(calls.some(call => call.options.method === 'POST' && call.url.endsWith('/messaging_profiles/profile-test/phone_numbers')), 'Telnyx setup should assign the test number to the profile.');
 
-  console.log('Telnyx messaging check passed: signed inbound webhooks, message parsing, delivery receipts, and profile setup are wired.');
+  const activeRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      if (String(url).includes('/10dlc/phoneNumberCampaign?')) {
+        return { ok: true, status: 200, async json() { return { data: [{ phoneNumber: '+16095550199', campaignId: 'campaign-active', status: 'assigned' }] }; } };
+      }
+      if (String(url).endsWith('/10dlc/campaignBuilder/campaign-active')) {
+        return { ok: true, status: 200, async json() { return { data: { campaignId: 'campaign-active', status: 'ACTIVE' } }; } };
+      }
+      throw new Error('Unexpected Telnyx readiness URL: ' + url);
+    }
+  });
+  assert(activeRegistration.numberAssigned && activeRegistration.campaignActive && activeRegistration.readyForDeliveryTest, 'Active 10DLC campaign plus number assignment should unlock the outbound delivery test.');
+  const staleFailureWithActiveRegistration = {
+    integrations: { messaging: { telnyx10dlc: activeRegistration } },
+    messages: [{ provider: 'telnyx', providerStatus: 'delivery_failed', providerErrorCode: '40010', providerErrorMessage: 'Old registration failure', deliveryUpdatedAt: '2026-07-15T12:00:00.000Z' }]
+  };
+  const registrationOverride = telnyxCarrierReadiness(staleFailureWithActiveRegistration, 'telnyx');
+  assert(registrationOverride.carrierRegistrationVerified && !registrationOverride.carrierRegistrationRequired && !registrationOverride.carrierDeliveryVerified, 'Fresh active campaign evidence should clear a stale 10DLC blocker without pretending carrier delivery already passed.');
+  const missingRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      assert(String(url).includes('/10dlc/phoneNumberCampaign?'));
+      return { ok: true, status: 200, async json() { return { data: [] }; } };
+    }
+  });
+  assert(!missingRegistration.numberAssigned && !missingRegistration.campaignActive && !missingRegistration.readyForDeliveryTest, 'Unassigned Telnyx numbers must remain blocked from live SMS.');
+
+  console.log('Telnyx messaging check passed: signed inbound webhooks, message parsing, delivery receipts, profile setup, and live 10DLC readiness checks are wired.');
 })().catch(error => {
   console.error(error);
   process.exit(1);
