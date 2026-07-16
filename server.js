@@ -1430,9 +1430,13 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     error.statusCode = 409;
     throw error;
   }
-  const assignmentBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/phoneNumberCampaign?filter[phoneNumber]=' + encodeURIComponent(phoneNumber) + '&page[size]=50');
-  const assignmentRows = Array.isArray(assignmentBody.data) ? assignmentBody.data : Array.isArray(assignmentBody.records) ? assignmentBody.records : assignmentBody.data ? [assignmentBody.data] : [];
-  const assignment = assignmentRows.find(row => phoneKey(row && (row.phoneNumber || row.phone_number)) === phoneKey(phoneNumber)) || assignmentRows[0] || {};
+  let assignment = {};
+  try {
+    const assignmentBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/phone_number_campaigns/' + encodeURIComponent(phoneNumber));
+    assignment = assignmentBody.data || assignmentBody || {};
+  } catch (err) {
+    if (Number(err && err.statusCode) !== 404) throw err;
+  }
   let campaignId = String(assignment.campaignId || assignment.campaign_id || '').trim();
   const assignmentStatus = String(assignment.status || assignment.assignmentStatus || assignment.assignment_status || '').trim();
   let campaign = {};
@@ -1494,8 +1498,8 @@ async function assignTelnyx10dlcCampaign(options = {}) {
     throw error;
   }
   if (readiness.numberAssigned) return { ...readiness, alreadyAssigned: true };
-  await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/phoneNumberCampaign', {
-    method: 'POST',
+  await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/phone_number_campaigns/' + encodeURIComponent(phoneNumber), {
+    method: 'PUT',
     body: JSON.stringify({ phoneNumber, campaignId })
   });
   return {

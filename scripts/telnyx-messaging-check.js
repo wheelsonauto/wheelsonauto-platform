@@ -177,8 +177,8 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',
     fetchImpl: async url => {
-      if (String(url).includes('/10dlc/phoneNumberCampaign?')) {
-        return { ok: true, status: 200, async json() { return { data: [{ phoneNumber: '+16095550199', campaignId: 'campaign-active', status: 'assigned' }] }; } };
+      if (String(url).includes('/10dlc/phone_number_campaigns/%2B16095550199')) {
+        return { ok: true, status: 200, async json() { return { phoneNumber: '+16095550199', campaignId: 'campaign-active', assignmentStatus: 'ASSIGNED' }; } };
       }
       if (String(url).endsWith('/10dlc/campaignBuilder/campaign-active')) {
         return { ok: true, status: 200, async json() { return { data: { campaignId: 'campaign-active', status: 'ACTIVE' } }; } };
@@ -197,7 +197,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',
     fetchImpl: async url => {
-      if (String(url).includes('/10dlc/phoneNumberCampaign?')) return { ok: true, status: 200, async json() { return { data: [] }; } };
+      if (String(url).includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
       assert(String(url).includes('/10dlc/campaignBuilder?'));
       return { ok: true, status: 200, async json() { return { data: [] }; } };
     }
@@ -208,7 +208,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',
     fetchImpl: async url => {
-      if (String(url).includes('/10dlc/phoneNumberCampaign?')) return { ok: true, status: 200, async json() { return { data: [] }; } };
+      if (String(url).includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
       if (String(url).includes('/10dlc/campaignBuilder?')) return { ok: true, status: 200, async json() { return { data: [{ campaignId: 'campaign-candidate', status: 'ACTIVE' }] }; } };
       throw new Error('Unexpected candidate readiness URL: ' + url);
     }
@@ -224,7 +224,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     }
   });
   assert(submittedAssignment.assignmentStatus === 'Assignment submitted' && submittedAssignment.assignmentRequestedAt, 'Owner assignment should record a pending Telnyx number-to-campaign request.');
-  assert(assignmentCalls.length === 1 && assignmentCalls[0].url.endsWith('/10dlc/phoneNumberCampaign') && assignmentCalls[0].options.method === 'POST', '10DLC assignment should use the official phone-number campaign endpoint.');
+  assert(assignmentCalls.length === 1 && assignmentCalls[0].url.endsWith('/10dlc/phone_number_campaigns/%2B16095550199') && assignmentCalls[0].options.method === 'PUT', '10DLC assignment should use the official phone-number campaign endpoint.');
   assert.deepStrictEqual(JSON.parse(assignmentCalls[0].options.body), { phoneNumber: '+16095550199', campaignId: 'campaign-candidate' });
 
   console.log('Telnyx messaging check passed: signed inbound webhooks, message parsing, delivery receipts, profile setup, and live 10DLC readiness checks are wired.');
