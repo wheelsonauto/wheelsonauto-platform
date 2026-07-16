@@ -327,6 +327,12 @@ async function main() {
     assert(oversizedCustomerLogin.status === 413, 'Oversized customer login bodies must be rejected before authentication work.');
 
     const ownerCookie = await login(server, { pin: adminPin });
+    const crossOriginOwnerWrite = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      headers: { origin: 'https://malicious.example' },
+      json: { title: 'Cross-origin request must not save' }
+    });
+    assert(crossOriginOwnerWrite.status === 403 && /cross-origin/i.test(crossOriginOwnerWrite.json && crossOriginOwnerWrite.json.error || ''), 'Cookie-authenticated writes from another origin must be rejected before route handling.');
     const ownerSessionParts = ownerCookie.split('=')[1].split('.');
     const ownerSessionPayload = JSON.parse(Buffer.from(ownerSessionParts[2], 'base64url').toString('utf8'));
     assert(Number(ownerSessionPayload.exp) > Math.floor(Date.now() / 1000) && Number(ownerSessionPayload.exp) - Number(ownerSessionPayload.iat) <= 24 * 60 * 60, 'Staff session must carry a bounded signed expiration.');
@@ -629,6 +635,20 @@ async function main() {
       }
     });
     assert(weakStaffPassword.status === 400 && /letter and one number/i.test(weakStaffPassword.json.error || ''), 'Weak staff passwords should be rejected before account creation.');
+
+    const forbiddenOwnerStaff = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-forbidden-owner-staff',
+        name: 'Direct Forbidden Owner Staff',
+        username: 'direct-forbidden-owner-staff',
+        password: 'DirectForbiddenOwner123!',
+        role: 'Owner',
+        organizationId: 'org-wheelsonauto',
+        status: 'Active'
+      }
+    });
+    assert(forbiddenOwnerStaff.status === 400 && /Manager or Mechanic/i.test(forbiddenOwnerStaff.json.error || ''), 'Owner-level access must never be created through a staff account.');
 
     const pinOnlyStaff = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
@@ -935,6 +955,10 @@ async function main() {
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const managerResetAttempt = await request(server, 'POST', '/api/reset', { cookie: managerCookie, json: {} });
+    assert(managerResetAttempt.status === 403, 'Manager must never be able to reset platform data.');
+    const ownerResetWithoutMaintenanceFlag = await request(server, 'POST', '/api/reset', { cookie: ownerCookie, json: {} });
+    assert(ownerResetWithoutMaintenanceFlag.status === 403 && /disabled/i.test(ownerResetWithoutMaintenanceFlag.json.error || ''), 'Even owner data reset must stay disabled unless the maintenance-only environment flag is explicitly enabled.');
 
     const ownerReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: ownerCookie });
     assert(ownerReconciliation.status === 200 && ownerReconciliation.json.ok && ownerReconciliation.json.counts.disputes >= 1, 'Owner Clover reconciliation should expose disputes, refunds, webhook events, and unmatched payments.');
@@ -2159,9 +2183,9 @@ async function main() {
     assert(/No charge was run/i.test(starChargeDraft.json.plan.preparedAction.adminGuardrail || ''), 'Star charge prepared action should clearly say no charge was run.');
     const blockedStarChargeSend = await request(server, 'POST', '/api/messages/ai-action', {
       cookie: managerCookie,
-      json: { draftId: starChargeDraft.json.draft.id, channel: 'SMS' }
+      json: { draftId: starChargeDraft.json.draft.id, channel: 'SMS', approveMoneyAction: true }
     });
-    assert(blockedStarChargeSend.status === 409 && /money or account change/i.test(blockedStarChargeSend.json.error || ''), 'Star should not approve/send money-action drafts without explicit admin workflow approval.');
+    assert(blockedStarChargeSend.status === 403 && /Only the owner/i.test(blockedStarChargeSend.json.error || ''), 'Manager must not approve a sensitive Star money action even by forging the owner approval flag.');
     const starReceiptDraft = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
       json: { customer: 'Direct Closeout Customer', email: 'direct-closeout@example.com', channel: 'Email', body: 'Can you send me a receipt for my payment?' }
@@ -2169,9 +2193,9 @@ async function main() {
     assert(starReceiptDraft.status === 201 && starReceiptDraft.json.plan.actionType === 'send_receipt' && starReceiptDraft.json.plan.approvalRequired === true, 'Star should classify receipt requests as approval-required payment actions.');
     const blockedStarReceiptSend = await request(server, 'POST', '/api/messages/ai-action', {
       cookie: managerCookie,
-      json: { draftId: starReceiptDraft.json.draft.id, channel: 'Email' }
+      json: { draftId: starReceiptDraft.json.draft.id, channel: 'Email', approveMoneyAction: true }
     });
-    assert(blockedStarReceiptSend.status === 409 && /money or account change/i.test(blockedStarReceiptSend.json.error || ''), 'Star should not send receipt drafts through normal reply approval without admin payment confirmation.');
+    assert(blockedStarReceiptSend.status === 403 && /Only the owner/i.test(blockedStarReceiptSend.json.error || ''), 'Manager must not send an approval-gated receipt draft by forging the owner approval flag.');
     const pendingStarHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(pendingStarHealth.json.issues.some(row => row.key === 'pending_star_approvals' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Star'), 'System health should surface pending Star approvals for admin review.');
     assert(pendingStarHealth.json.issues.some(row => row.key === 'open_card_setup_links' && Number(row.count) >= 1 && row.view === 'Messages' && row.tab === 'Queue'), 'System health should surface open card setup/change links for follow-up.');
@@ -2268,6 +2292,37 @@ async function main() {
 
     const status = await request(server, 'GET', '/api/messages/status', { cookie: managerCookie });
     assert(status.status === 200 && status.json.messaging.emailWebhookUrl, 'Messaging status should expose email webhook.');
+
+    const revocableStaff = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-revocable-staff',
+        name: 'Direct Revocable Staff',
+        username: 'direct-revocable-staff',
+        password: 'DirectRevocable123!',
+        role: 'Manager',
+        organizationId: 'org-wheelsonauto',
+        status: 'Active'
+      }
+    });
+    assert(revocableStaff.status === 200 && revocableStaff.json.ok, 'Owner could not create the staff session-revocation test account.');
+    const revocableCookie = await login(server, { username: 'direct-revocable-staff', password: 'DirectRevocable123!' });
+    const revocableBeforeRemoval = await request(server, 'GET', '/api/state', { cookie: revocableCookie });
+    assert(revocableBeforeRemoval.status === 200, 'Active staff session should work before the account is removed.');
+    const removedStaff = await request(server, 'POST', '/api/staff-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-revocable-staff',
+        name: 'Direct Revocable Staff',
+        username: 'direct-revocable-staff',
+        role: 'Manager',
+        organizationId: 'org-wheelsonauto',
+        status: 'Removed'
+      }
+    });
+    assert(removedStaff.status === 200 && removedStaff.json.ok, 'Owner could not remove the staff session-revocation test account.');
+    const revokedStaffRead = await request(server, 'GET', '/api/state', { cookie: revocableCookie });
+    assert(revokedStaffRead.status === 401 && revokedStaffRead.json && revokedStaffRead.json.error === 'Authentication required.', 'Removing a staff account must revoke its already-issued session immediately.');
 
     console.log('Direct server smoke passed: login, customer portal privacy/logout, company accounts, duplicate guards, dispute matching, state repair, public application, role filters, SMS/email messages, email notifications, autopay failure tracking, inbound email webhook, Star email approval, and staff permissions.');
   } finally {

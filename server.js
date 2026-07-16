@@ -561,8 +561,8 @@ async function readData() {
 }
 async function dataVersion() {
   try {
-    const stat = await fs.stat(DATA_FILE);
-    return Math.trunc(stat.mtimeMs) + '-' + stat.size;
+    const stat = await fs.stat(DATA_FILE, { bigint: true });
+    return stat.mtimeNs + '-' + stat.size + '-' + stat.ino;
   } catch {
     return 'missing';
   }
@@ -4825,6 +4825,28 @@ function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) 
 }
 function json(res, status, payload, extra = {}) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store', ...extra }); }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
+function requestOrigin(req) {
+  const raw = String(req.headers.origin || req.headers.referer || '').trim();
+  if (!raw || raw === 'null') return raw;
+  try { return new URL(raw).origin; } catch { return 'invalid'; }
+}
+function requestTargetOrigin(req) {
+  const forwardedProtocol = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const protocol = forwardedProtocol || (PUBLIC_BASE_URL.startsWith('https://') ? 'https' : 'http');
+  const host = forwardedHost || String(req.headers.host || '').trim();
+  if (host) return protocol + '://' + host;
+  try { return new URL(PUBLIC_BASE_URL).origin; } catch { return ''; }
+}
+function crossOriginSessionWrite(req) {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase())) return false;
+  const savedCookies = cookies(req);
+  if (!savedCookies.woa_session && !savedCookies.woa_customer_session) return false;
+  const source = requestOrigin(req);
+  if (!source) return false;
+  if (source === 'null' || source === 'invalid') return true;
+  try { return source !== new URL(requestTargetOrigin(req)).origin; } catch { return true; }
+}
 function cookieSecurityFlags(options = {}) {
   const flags = ['HttpOnly', 'SameSite=Lax', 'Path=/'];
   if (PUBLIC_BASE_URL.startsWith('https://')) flags.push('Secure');
@@ -5000,11 +5022,17 @@ function findStaffByIdentity(data, identity) {
   }) || null;
 }
 function cleanStaffAccountPayload(payload, existing = null) {
+  const requestedRole = String(payload.role || existing && existing.role || 'Mechanic').trim();
+  if (!/^(manager|mechanic)$/i.test(requestedRole)) {
+    const error = new Error('Staff role must be Manager or Mechanic. Owner access is never created as a staff account.');
+    error.statusCode = 400;
+    throw error;
+  }
   const staff = {
     id: String(payload.id || existing && existing.id || ('staff-' + Date.now())).trim(),
     name: String(payload.name || '').trim(),
     username: normalizeLogin(payload.username || payload.email || existing && existing.username || ''),
-    role: String(payload.role || existing && existing.role || 'Mechanic').trim(),
+    role: requestedRole.charAt(0).toUpperCase() + requestedRole.slice(1).toLowerCase(),
     organizationId: String(payload.organizationId || existing && existing.organizationId || MAIN_ORG_ID).trim(),
     companyName: String(payload.companyName || existing && existing.companyName || 'WheelsonAuto').trim(),
     phone: String(payload.phone || '').trim(),
@@ -5036,7 +5064,27 @@ function cleanStaffAccountPayload(payload, existing = null) {
   return staff;
 }
 function staffStatusActive(row) {
-  return String(row && row.status || 'Active').toLowerCase() !== 'disabled';
+  return !/disabled|removed|inactive|closed/i.test(String(row && row.status || 'Active'));
+}
+let activeStaffSessionCache = { version: '', accounts: new Map(), companies: new Map() };
+async function activeStaffSessionUser(user) {
+  if (!user || isOwnerUser(user)) return user || null;
+  const version = await dataVersion();
+  if (activeStaffSessionCache.version !== version) {
+    const data = await readData();
+    activeStaffSessionCache = {
+      version,
+      accounts: new Map((data.staffAccounts || []).filter(staffStatusActive).map(account => [String(account.id || ''), account])),
+      companies: new Map((data.organizations || []).map(company => [String(company.id || ''), company]))
+    };
+  }
+  const account = activeStaffSessionCache.accounts.get(String(user.id || ''));
+  if (!account) return null;
+  if (!/^(manager|mechanic)$/i.test(String(account.role || ''))) return null;
+  const current = staffLoginUser(account);
+  const company = activeStaffSessionCache.companies.get(String(current.organizationId || MAIN_ORG_ID));
+  current.companyName = company && company.name || account.companyName || 'WheelsonAuto';
+  return current;
 }
 function safeCustomerAccount(account = {}) {
   const safe = { ...account };
@@ -5253,7 +5301,8 @@ function isOwnerUser(user) {
 function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
-  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications'];
+  if (!['manager', 'mechanic'].includes(role)) return false;
+  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications', '/api/reset'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/reports')) return false;
@@ -10427,6 +10476,10 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
+    if (crossOriginSessionWrite(req)) {
+      if (url.pathname.startsWith('/api/')) return json(res, 403, { ok: false, error: 'Cross-origin account changes are not allowed.' });
+      return send(res, 403, 'Cross-origin account changes are not allowed.', 'text/plain; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
     if (await staticFile(res, url.pathname)) return;
     if (url.pathname.startsWith('/native-media/') && req.method === 'GET') {
       const filename = String(url.pathname.split('/').pop() || '');
@@ -12048,7 +12101,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 401, loginPage('That login did not match an active account.'));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });
-    const user = sessionUser(req);
+    const user = await activeStaffSessionUser(sessionUser(req));
     if (!user) {
       if (url.pathname.startsWith('/api/')) return json(res, 401, { ok: false, error: 'Authentication required.' });
       return send(res, 200, loginPage());
@@ -12931,6 +12984,11 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJsonBody(req);
       const data = await readData();
       if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
+      const pendingDraft = (data.messages || []).find(item => item.id === payload.draftId && (item.aiPlan || item.channel === 'Star AI'));
+      const pendingPlan = pendingDraft && pendingDraft.aiPlan || {};
+      if (!isOwnerUser(user) && (pendingDraft && pendingDraft.approvalRequired || pendingPlan.approvalRequired)) {
+        return json(res, 403, { ok: false, error: 'Only the owner can approve a sensitive Star money or account action.' });
+      }
       try {
         const approved = await approveAiMessage(data, payload);
         data.integrations = data.integrations || {};
@@ -13038,7 +13096,11 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-store'
       });
     }
-    if (url.pathname === '/api/reset' && req.method === 'POST') { await fs.copyFile(SEED_FILE, DATA_FILE); return json(res, 200, { ok: true, data: await readData() }); }
+    if (url.pathname === '/api/reset' && req.method === 'POST') {
+      if (!isOwnerUser(user) || process.env.WOA_ALLOW_DATA_RESET !== '1') return json(res, 403, { ok: false, error: 'Platform data reset is disabled. Enable WOA_ALLOW_DATA_RESET=1 only for an intentional owner maintenance window.' });
+      await fs.copyFile(SEED_FILE, DATA_FILE);
+      return json(res, 200, { ok: true, data: await readData() });
+    }
     if (url.pathname === '/api/integrations/clover/connect' && req.method === 'POST') {
       const payload = await readJsonBody(req);
       const data = await readData();

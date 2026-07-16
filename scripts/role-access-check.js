@@ -78,6 +78,8 @@ const managerCommandBoard = finalFunctionSlice(app, 'managerCommandBoard');
 const mechanicCommandItems = finalFunctionSlice(app, 'mechanicCommandItems');
 const mechanicCommandBoard = finalFunctionSlice(app, 'mechanicCommandBoard');
 const apiAllowedForUser = finalFunctionSlice(server, 'apiAllowedForUser');
+const activeStaffSessionUser = finalFunctionSlice(server, 'activeStaffSessionUser');
+const crossOriginSessionWrite = finalFunctionSlice(server, 'crossOriginSessionWrite');
 const stateForUserRead = finalFunctionSlice(server, 'stateForUserRead');
 const stateForUserWrite = finalFunctionSlice(server, 'stateForUserWrite');
 const protectConcurrentLocalWrites = finalFunctionSlice(server, 'protectConcurrentLocalWrites');
@@ -88,6 +90,7 @@ if (!navForRole || !navSections || !mobileQuickbar || !actionAllowed || !apiAllo
 }
 if (!protectConcurrentLocalWrites) fail('Could not find concurrent-write protection helper.');
 if (!dataScopedToOrganization) fail('Could not find organization scoping helper.');
+if (!activeStaffSessionUser || !crossOriginSessionWrite) fail('Could not find staff session revocation or cross-origin write protection.');
 
 const mechanicNav = roleReturnArray(navForRole, 'mechanic');
 const managerNav = roleReturnArray(navForRole, 'manager');
@@ -172,6 +175,10 @@ if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/reports'\)/.test(apiA
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/system'\)/.test(apiAllowedForUser)) fail('Mechanic API system routes are not blocked.');
 if (!/role === 'mechanic' \|\| role === 'manager'/.test(apiAllowedForUser)) fail('Mechanic/manager payment route block is missing.');
 assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications']);
+if (!strings(apiAllowedForUser).includes('/api/reset')) fail('Platform data reset must be owner-only at the API role boundary.');
+if (!/\['manager', 'mechanic'\]\.includes\(role\)/.test(apiAllowedForUser)) fail('Unknown or legacy staff roles must default to no API access.');
+if (!/filter\(staffStatusActive\)/.test(activeStaffSessionUser) || !/activeStaffSessionCache/.test(activeStaffSessionUser)) fail('Signed staff sessions must be revalidated against the current active account record.');
+if (!/woa_session/.test(crossOriginSessionWrite) || !/woa_customer_session/.test(crossOriginSessionWrite)) fail('Cross-origin write protection must cover staff and customer session cookies.');
 assertIncludes('Staff state scrub collections', strings(stateForUserRead), ['paymentRequests']);
 if (!/if \(!owner\) safe = dataScopedToOrganization\(safe, userOrganizationId\(user\)\);[\s\S]*enrichLinkedProfiles\(safe\);/.test(stateForUserRead)) {
   fail('Staff read state should scope to the user company before profile enrichment.');
