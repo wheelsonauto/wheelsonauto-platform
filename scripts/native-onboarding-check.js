@@ -143,7 +143,7 @@ async function main() {
     business: { name: 'WheelsonAuto' },
     vehicles: [{ id: 'veh-native-1', year: '2016', make: 'Ford', model: 'Focus', vin: '1FADP3K24GL123456', plate: 'A19-WWM', status: 'Ready', organizationId: 'org-wheelsonauto' }],
     onlineVehicles: [{ id: 'online-native-1', platformVehicleId: 'veh-native-1', title: '2016 Ford Focus', slug: '2016-ford-focus', year: '2016', make: 'Ford', model: 'Focus', vin: '1FADP3K24GL123456', plate: 'A19-WWM', weeklyPayment: 229, downPayment: 485, contractMonths: 18, availability: 'Available', published: true, organizationId: 'org-wheelsonauto' }],
-    applications: [], websiteLeads: [], customers: [], contracts: [], payments: [], paymentRequests: [], cardSetupRequests: [], recurringPayments: [], maintenance: [], claims: [], messages: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], customerAccounts: [], staffAccounts: [], dailyCloseouts: [], auditLogs: [], apiProviders: [], organizations: [{ id: 'org-wheelsonauto', name: 'WheelsonAuto', status: 'Active' }], integrations: { clover: {}, messaging: {} }, publicSite: { defaultWeeklyPayment: 229, defaultDownPayment: 485, minimumPickupDays: 1, maximumVehicleHoldDays: 7, pickupSlotMinutes: 60, pickupCapacity: 2 }
+    applications: [], websiteLeads: [], customers: [], contracts: [], payments: [], paymentRequests: [], cardSetupRequests: [], recurringPayments: [], maintenance: [], claims: [], messages: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], customerAccounts: [], staffAccounts: [], dailyCloseouts: [], auditLogs: [], apiProviders: [], organizations: [{ id: 'org-wheelsonauto', name: 'WheelsonAuto', status: 'Active' }], integrations: { clover: {}, messaging: {} }, publicSite: { defaultWeeklyPayment: 229, defaultDownPayment: 485, minimumPickupDays: 1, maximumVehicleHoldDays: 7, pickupSlotMinutes: 30, pickupCapacity: 1 }
   };
   await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(initial, null, 2));
 
@@ -190,6 +190,8 @@ async function main() {
     assert(linkResponse.status === 201 && linkResponse.json.onboarding.url, 'Owner should be able to approve the application and create one secure onboarding link.');
     const onboardingId = linkResponse.json.onboarding.id;
     const token = linkResponse.json.onboarding.url.split('/onboard/')[1];
+    const onboardingPage = await request(server, 'GET', '/onboard/' + token);
+    assert(onboardingPage.status === 200 && /<option value="11:30 AM">11:30 AM<\/option>/.test(onboardingPage.text) && /<option value="4:30 PM">4:30 PM<\/option>/.test(onboardingPage.text), 'Thirty-minute pickup settings should render every valid appointment start through 4:30 PM.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedSession = saved.onboardingSessions.find(row => row.id === onboardingId);
     assert(savedSession && savedSession.tokenHash && !savedSession.publicToken, 'Onboarding session should persist only a token hash.');
@@ -213,8 +215,20 @@ async function main() {
     const tooLateProfile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: dateKey(8), requestedPickupTime: '1:00 PM', pickupAutopayConsent: true } });
     assert(tooLateProfile.status === 400 && /seven days/i.test(tooLateProfile.json.error), 'Specific-car pickup must not be scheduled more than seven days out.');
     const pickupDate = nextPickupDate();
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    saved.pickupAppointments.unshift({ id: 'pickup-existing-full-slot', organizationId: 'org-wheelsonauto', customer: 'Existing Pickup', date: pickupDate, time: '11:30 AM', status: 'Confirmed' });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const availability = await request(server, 'GET', '/api/public/onboarding/' + token + '/pickup-availability?date=' + pickupDate);
+    const fullSlot = availability.json && availability.json.slots.find(slot => slot.time === '11:30 AM');
+    assert(availability.status === 200 && availability.json.slotMinutes === 30 && fullSlot && fullSlot.available === false && fullSlot.remaining === 0, 'Pickup availability should mark a capacity-one occupied slot as full before the customer submits it.');
+    const fullProfile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: pickupDate, requestedPickupTime: '11:30 AM', pickupAutopayConsent: true } });
+    assert(fullProfile.status === 409 && /full/i.test(fullProfile.json.error), 'A slot that fills before submission must be rejected before documents, signing, or payment.');
+    const forgedTime = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: pickupDate, requestedPickupTime: '5:00 PM', pickupAutopayConsent: true } });
+    assert(forgedTime.status === 400 && /business hours/i.test(forgedTime.json.error), 'A forged appointment start at closing time must be rejected server-side.');
     const profile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: pickupDate, requestedPickupTime: '1:00 PM', pickupAutopayConsent: true } });
     assert(profile.status === 200, 'Valid next-day-to-seven-day pickup profile should save.');
+    const reservedAvailability = await request(server, 'GET', '/api/public/onboarding/' + token + '/pickup-availability?date=' + pickupDate);
+    assert(reservedAvailability.status === 200 && reservedAvailability.json.slots.find(slot => slot.time === '1:00 PM').available === true, 'A customer revisiting their own onboarding link must not be blocked by their own reserved slot.');
 
     const image = pngDataUrl();
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
@@ -273,7 +287,7 @@ async function main() {
     const depositWebhook = await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'clover-payment-deposit' });
     assert(depositWebhook.status === 200 && depositWebhook.json.hostedCheckout.approved, 'Signed Clover deposit webhook should verify the first transaction.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
-    assert(saved.pickupAppointments.length === 0, 'Deposit alone must not confirm pickup before the first weekly payment.');
+    assert(saved.pickupAppointments.filter(row => row.onboardingSessionId === onboardingId).length === 0, 'Deposit alone must not confirm this customer pickup before the first weekly payment.');
     assert(saved.payments.filter(row => row.onboardingSessionId === onboardingId).length === 1, 'Deposit should create exactly one payment record.');
     assert(saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt').length === 1, 'Deposit should create its own receipt.');
     const providerNeutralDepositRequest = saved.paymentRequests.find(row => row.id === 'plink-native-deposit');

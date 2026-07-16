@@ -40,6 +40,44 @@
   }
   function onboardingToken(){ var shell = one('[data-onboarding-token]'); return shell && shell.getAttribute('data-onboarding-token') || ''; }
   function reloadSoon(){ window.setTimeout(function(){ window.location.reload(); }, 450); }
+  function setupPickupAvailability(){
+    var form = one('form[data-onboarding-form="profile"]');
+    if(!form) return;
+    var dateInput = form.elements.requestedPickupDate, timeSelect = one('[data-pickup-time]', form), status = one('[data-pickup-availability]', form), sequence = 0;
+    if(!dateInput || !timeSelect) return;
+    function setStatus(text, error){ if(status){ status.textContent = text || ''; status.classList.toggle('error', !!error); } }
+    async function loadSlots(){
+      var date = String(dateInput.value || ''), currentSequence = ++sequence;
+      if(!date){ timeSelect.disabled = true; timeSelect.value = ''; setStatus('Select a pickup date to see current openings.'); return; }
+      timeSelect.disabled = true;
+      setStatus('Checking current openings...');
+      try{
+        var response = await fetch('/api/public/onboarding/' + encodeURIComponent(onboardingToken()) + '/pickup-availability?date=' + encodeURIComponent(date), { headers:{'Accept':'application/json'} });
+        var result = await response.json().catch(function(){ return {}; });
+        if(currentSequence !== sequence) return;
+        if(!response.ok || result.ok === false) throw new Error(result.error || 'Pickup openings could not be loaded.');
+        var selected = timeSelect.value, slots = {};
+        (result.slots || []).forEach(function(slot){ slots[slot.time] = slot; });
+        all('option[value]', timeSelect).forEach(function(option){
+          if(!option.value){ option.textContent = 'Choose time'; option.disabled = false; return; }
+          var slot = slots[option.value];
+          option.disabled = !slot || !slot.available;
+          option.textContent = option.value + (!slot || !slot.available ? ' - Full' : slot.remaining === 1 ? ' - 1 opening left' : '');
+        });
+        if(selected && (!slots[selected] || !slots[selected].available)) timeSelect.value = '';
+        timeSelect.disabled = false;
+        var availableCount = (result.slots || []).filter(function(slot){ return slot.available; }).length;
+        setStatus(availableCount ? availableCount + ' pickup time' + (availableCount === 1 ? '' : 's') + ' available.' : 'No online pickup times remain for this date. Call the office for help.', !availableCount);
+      }catch(error){
+        if(currentSequence !== sequence) return;
+        timeSelect.value = '';
+        timeSelect.disabled = true;
+        setStatus(error.message, true);
+      }
+    }
+    dateInput.addEventListener('change', loadSlots);
+    if(dateInput.value) loadSlots();
+  }
 
   var menu = one('[data-site-menu]');
   if(menu) menu.addEventListener('click', function(){ one('.site-header').classList.toggle('open'); });
@@ -134,4 +172,5 @@
       }catch(error){ message(error.message, true); }
     });
   });
+  setupPickupAvailability();
 })();

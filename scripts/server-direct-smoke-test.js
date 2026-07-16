@@ -37,6 +37,11 @@ function nativePublicApplicationPayload(overrides = {}) {
   };
 }
 
+function pngDataUrl() {
+  const header = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return 'data:image/png;base64,' + Buffer.concat([header, Buffer.alloc(256, 1)]).toString('base64');
+}
+
 class MockRequest extends Readable {
   constructor(method, url, headers, body) {
     super();
@@ -1295,7 +1300,7 @@ async function main() {
 	    assert(customerPortal.text.includes('/customer/statement-request') && customerPortal.text.includes('Request account document'), 'Customer portal should include account statement/payoff request workflow.');
 	    assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Send service request'), 'Customer portal should include a connected service request form.');
     assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Report issue'), 'Customer portal should include toll/claim/issue reporting.');
-    assert(customerPortal.text.includes('/customer/document-update') && customerPortal.text.includes('Send document / proof update'), 'Customer portal should include document/proof update intake.');
+    assert(customerPortal.text.includes('/customer/document-update') && customerPortal.text.includes('Send document / proof update') && customerPortal.text.includes('name="documentFile"') && customerPortal.text.includes('/customer-portal.js'), 'Customer portal should include secure document upload intake and its focused client script.');
     assert(customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card on file'), 'Customer portal should include a secure card-change action.');
     assert(customerPortal.text.includes('Documents & receipts') && customerPortal.text.includes('VISIBLE-DOC-PORTAL'), 'Customer portal should render customer-visible documents.');
     assert(!customerPortal.text.includes('PRIVATE-DOC-SHOULD-HIDE') && !customerPortal.text.includes('secret-internal-doc-note'), 'Customer portal should not render staff-only documents.');
@@ -1405,6 +1410,29 @@ async function main() {
     const customerDocument = (customerDocumentState.json.documents || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.reference === 'POLICY-PORTAL-SMOKE');
     assert(customerDocument && customerDocument.vehicleId === 'veh-003' && customerDocument.vin === '3LN6L2G91FR123456' && customerDocument.status === 'Needs verification' && customerDocument.requiresVerification === true && customerDocument.url === 'https://proof.example/insurance-photo', 'Customer document update should create a vehicle-linked verification document with proof URL: ' + JSON.stringify(customerDocument || null));
     assert((customerDocumentState.json.messages || []).some(message => message.documentId === customerDocument.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification' && String(message.body || '').includes('Proof link/note: https://proof.example/insurance-photo')), 'Customer document update should be logged in Messages for staff verification.');
+    const customerSecureUpload = await request(server, 'POST', '/customer/document-update', {
+      cookie: customerCookie,
+      json: {
+        type: 'Driver license',
+        provider: 'New Jersey MVC',
+        reference: 'DIRECT-SECURE-UPLOAD',
+        expires: '2030-12-31',
+        notes: 'Secure customer portal upload smoke test.',
+        file: { name: 'license-update.png', type: 'image/png', dataUrl: pngDataUrl() }
+      }
+    });
+    assert(customerSecureUpload.status === 201 && customerSecureUpload.json.ok && customerSecureUpload.json.document.portalDownloadUrl, 'Customer portal should accept a validated private JPG/PNG/PDF upload.');
+    const customerSecureUploadState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const uploadedDocument = (customerSecureUploadState.json.documents || []).find(item => item.reference === 'DIRECT-SECURE-UPLOAD');
+    assert(uploadedDocument && uploadedDocument.customerAccountId === 'direct-customer-login' && uploadedDocument.contentType === 'image/png' && uploadedDocument.size > 0 && uploadedDocument.sha256 && /^onboarding-uploads\//.test(uploadedDocument.storagePath || ''), 'Secure customer upload should store only validated private-file metadata on the linked customer record.');
+    const ownDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: customerCookie });
+    assert(ownDocumentDownload.status === 200 && String(ownDocumentDownload.headers['Content-Type'] || ownDocumentDownload.headers['content-type']).includes('image/png'), 'Customer should be able to reopen their own uploaded document through the authenticated route.');
+    const unauthenticatedDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id));
+    assert(unauthenticatedDocumentDownload.status === 302 && unauthenticatedDocumentDownload.location === '/customer/login', 'Private customer document download must require a customer login.');
+    const otherCustomerDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: cleanCookie(franchiseCustomerLogin.cookie) });
+    assert(otherCustomerDocumentDownload.status === 404, 'A customer from another company must not be able to read another customer private upload.');
+    const invalidSecureUpload = await request(server, 'POST', '/customer/document-update', { cookie: customerCookie, json: { type: 'Insurance proof', file: { name: 'fake.pdf', type: 'application/pdf', dataUrl: pngDataUrl().replace('image/png', 'application/pdf') } } });
+    assert(invalidSecureUpload.status === 400 && /does not match/i.test(invalidSecureUpload.json.error), 'Customer upload must reject a file whose bytes do not match its declared format.');
     const portalProofReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(portalProofReport.status === 200 && portalProofReport.text.includes('Verification inbox') && portalProofReport.text.includes('3LN6L2G91FR123456') && portalProofReport.text.includes('Tag LNZ-229') && portalProofReport.text.includes('https://proof.example/check-engine-light') && portalProofReport.text.includes('https://proof.example/ezpass-notice') && portalProofReport.text.includes('https://proof.example/insurance-photo'), 'Deep report verification inbox should keep customer portal proof linked to vehicle, VIN, tag, and proof evidence.');
     const mechanicDocumentReview = await request(server, 'POST', '/api/verification/document', { cookie: mechanicCookie, json: { documentId: customerDocument.id, action: 'verify' } });

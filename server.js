@@ -5783,7 +5783,8 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
     ...row,
     kind: 'Document',
     date: row.date || row.createdAt || row.expires || row.due || '',
-    title: row.title || row.type || 'Document'
+    title: row.title || row.type || 'Document',
+    portalDownloadUrl: row.storagePath && row.customerAccountId ? '/customer/documents/' + encodeURIComponent(row.id) : ''
   }));
   const receipts = (payments || []).filter(row => {
     const status = String(row.status || '').toLowerCase();
@@ -6032,6 +6033,13 @@ function customerPortalPaymentRow(payment = {}, vehicleTitle = 'Vehicle', vehicl
   ].filter(Boolean).join(' - ');
   return '<div class="customer-row"><div><strong>' + escapeHtml(payment.status || 'Recorded') + '</strong><small>' + escapeHtml(detail) + '</small></div><b>' + moneyText(payment.amount || 0) + '</b></div>';
 }
+function customerPortalDocumentRow(document = {}, vehicleTitle = 'Vehicle') {
+  const detail = [document.kind || document.type || 'Document', document.date || document.createdAt || '', document.method || document.status || '', document.vehicle || vehicleTitle].filter(Boolean).join(' - ');
+  const evidence = document.portalDownloadUrl
+    ? '<a class="btn" href="' + escapeHtml(document.portalDownloadUrl) + '" target="_blank" rel="noopener">View file</a>'
+    : (document.url || document.reference ? '<p>' + escapeHtml(document.url || document.reference) + '</p>' : '');
+  return '<div class="customer-row"><div><strong>' + escapeHtml(document.title || document.type || document.kind || 'Document') + '</strong><small>' + escapeHtml(detail) + '</small>' + evidence + '</div>' + (document.amount ? '<b>' + moneyText(document.amount || 0) + '</b>' : '<span>' + escapeHtml(document.status || '') + '</span>') + '</div>';
+}
 function customerPortalHtml(account, state) {
   const vehicle = state.vehicle || {};
   const recurring = state.recurring || {};
@@ -6051,11 +6059,11 @@ function customerPortalHtml(account, state) {
   const portalPaidOutsideForm = '<form method="POST" action="/customer/paid-outside" class="customer-message-form customer-paid-outside-form"><label>Report payment made outside app<input name="amount" type="number" step="0.01" min="0" value="' + escapeHtml(amount || '') + '"></label><label>Method<select name="method"><option>Cash</option><option>Zelle</option><option>Cash App</option><option>Money order</option><option>Clover terminal</option><option>Other</option></select></label><label>Payment date<input name="paidDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Receipt photo link, screenshot note, or who accepted it"></label><label>Note / proof placeholder<textarea name="note" maxlength="1200" placeholder="Receipt number, who accepted it, screenshot note, or any proof detail..."></textarea></label><button class="btn primary" type="submit">Report payment</button><small>This alerts WheelsonAuto to verify before marking the account paid.</small></form>';
   const portalServiceForm = '<form method="POST" action="/customer/service-request" class="customer-message-form customer-service-form"><label>Request service<select name="type"><option>Monthly inspection / oil change</option><option>Repair issue</option><option>Tire / brake concern</option><option>Warning light</option><option>Other service request</option></select></label><label>Preferred date<input name="preferredDate" type="date"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Photo link, dashboard light photo note, or where proof was sent"></label><label>Notes<textarea name="notes" maxlength="1200" placeholder="Tell us what is going on with the vehicle..."></textarea></label><button class="btn primary" type="submit">Send service request</button><small>This creates a WheelsonAuto service item connected to your vehicle and customer file.</small></form>';
   const portalIssueForm = '<form method="POST" action="/customer/issue-report" class="customer-message-form customer-issue-form"><label>Report toll, ticket, damage, or issue<select name="type"><option>Toll / E-ZPass notice</option><option>Ticket / violation</option><option>Damage</option><option>Insurance / claim</option><option>Tracker issue</option><option>Reimbursement question</option><option>Other issue</option></select></label><label>Notice / incident date<input name="incidentDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Amount, if shown<input name="amount" type="number" step="0.01" min="0" value="0"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Notice photo/link, receipt, damage photo note, or where proof was sent"></label><label>Note / proof placeholder<textarea name="notes" maxlength="1200" placeholder="Notice number, location, photo note, receipt, or what happened..."></textarea></label><button class="btn primary" type="submit">Report issue</button><small>This creates a review item connected to your vehicle and customer file.</small></form>';
-  const portalDocumentForm = '<form method="POST" action="/customer/document-update" class="customer-message-form customer-document-form"><label>Send document / proof update<select name="type"><option>Insurance proof</option><option>Driver license</option><option>Registration</option><option>Background check info</option><option>Proof of income</option><option>Other document</option></select></label><label>Provider / agency<input name="provider" maxlength="120" placeholder="Insurance company, DMV, background provider..."></label><label>Policy / reference<input name="reference" maxlength="160" placeholder="Policy, notice, confirmation, or reference number"></label><label>Expiration / due date<input name="expires" type="date"></label><label>Proof link / photo note<input name="proofUrl" maxlength="500" placeholder="Paste a photo/document link or write where proof was sent"></label><label>Note / proof placeholder<textarea name="notes" maxlength="1200" placeholder="Tell us what changed. Real file upload/email attachment can connect here later."></textarea></label><button class="btn primary" type="submit">Send update</button><small>This saves to your customer file and alerts WheelsonAuto to verify it.</small></form>';
+  const portalDocumentForm = '<form method="POST" action="/customer/document-update" class="customer-message-form customer-document-form" data-customer-document-upload><label>Send document / proof update<select name="type"><option>Insurance proof</option><option>Driver license</option><option>Registration</option><option>Background check info</option><option>Proof of income</option><option>Other document</option></select></label><label>Choose secure file<input name="documentFile" type="file" accept="image/jpeg,image/png,application/pdf" required></label><label>Provider / agency<input name="provider" maxlength="120" placeholder="Insurance company, DMV, background provider..."></label><label>Policy / reference<input name="reference" maxlength="160" placeholder="Policy, notice, confirmation, or reference number"></label><label>Expiration / due date<input name="expires" type="date"></label><label>Notes<textarea name="notes" maxlength="1200" placeholder="Tell us what changed or what the office should verify."></textarea></label><button class="btn primary" type="submit">Upload securely</button><small data-document-upload-status>JPG, PNG, or PDF up to 5 MB. The file stays private and requires staff verification.</small></form>';
   const portalReceiptForm = '<form method="POST" action="/customer/receipt-request" class="customer-message-form customer-receipt-form"><label>Request payment receipt<input name="paymentHint" maxlength="160" placeholder="Payment date, amount, or note"></label><button class="btn primary" type="submit">Request receipt</button><small>This asks the office to verify the payment and send the correct receipt.</small></form>';
   const portalStatementForm = '<form method="POST" action="/customer/statement-request" class="customer-message-form customer-statement-form"><label>Request account document<select name="requestType"><option>Account statement</option><option>Payoff balance</option><option>Payment history</option><option>Balance letter</option></select></label><label>Note<input name="note" maxlength="200" placeholder="What do you need it for?"></label><button class="btn primary" type="submit">Request document</button><small>The office verifies the account before sending any statement, payoff, or balance document.</small></form>';
   const cardChangeForm = customerPortalActionForm('/customer/card-change', 'Change card on file', 'Opens a secure Clover card setup link. WheelsonAuto never sees the full card number.', 'customer-card-form');
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => '<div class="customer-row"><div><strong>' + escapeHtml(d.title || d.type || d.kind || 'Document') + '</strong><small>' + escapeHtml([d.kind || d.type || 'Document', d.date || d.createdAt || '', d.method || d.status || '', d.vehicle || vehicleTitle].filter(Boolean).join(' - ')) + '</small>' + (d.url || d.reference ? '<p>' + escapeHtml(d.url || d.reference) + '</p>' : '') + '</div>' + (d.amount ? '<b>' + moneyText(d.amount || 0) + '</b>' : '<span>' + escapeHtml(d.status || '') + '</span>') + '</div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=secure-upload-1"></script></body></html>';
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
 customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
@@ -6405,13 +6413,13 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
     session.pickupError = dateCheck.error;
     return null;
   }
-  if (!onboarding.validatePickupTime(session.requestedPickupTime)) {
+  if (!onboarding.validatePickupTime(session.requestedPickupTime, settings)) {
     session.pickupStatus = 'Needs new time';
-    session.pickupError = 'Choose a pickup time from 11:00 AM through 4:00 PM.';
+    session.pickupError = 'Choose an available pickup time during business hours.';
     return null;
   }
   const capacity = Math.max(1, Number(settings.pickupCapacity || 2));
-  const sameSlot = data.pickupAppointments.filter(row => row.date === dateCheck.raw && row.time === session.requestedPickupTime && !/cancel/i.test(String(row.status || ''))).length;
+  const sameSlot = onboarding.pickupSlotOccupancy(data, dateCheck.raw, session.requestedPickupTime, { excludeSessionId: session.id });
   if (sameSlot >= capacity) {
     session.pickupStatus = 'Time needs staff review';
     session.pickupError = 'That pickup time filled while onboarding was completed. WheelsonAuto will contact the customer with the closest opening.';
@@ -6614,7 +6622,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
 }
 async function staticFile(res, pathname) {
   const clean = pathname.replace(/^\//, '');
-  if (!['styles.css', 'app.js', 'card-setup.js', 'native-site.css', 'native-site-client.js'].includes(clean)) return false;
+  if (!['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js'].includes(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : (clean.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8');
   send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': 'no-store' });
   return true;
@@ -10610,6 +10618,18 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), loginUrl: '/customer/login' });
     }
+    if (/^\/api\/public\/onboarding\/[^/]+\/pickup-availability$/.test(url.pathname) && req.method === 'GET') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      const publicToken = decodeURIComponent(parts[3] || '');
+      const data = await readData();
+      const context = await nativeOnboardingContext(data, publicToken);
+      if (!context) return json(res, 404, { ok: false, error: 'This secure onboarding link is invalid, expired, or replaced.' });
+      const settings = nativeSite.publicSettings(data);
+      const pickup = onboarding.pickupWindow(settings, url.searchParams.get('date'));
+      if (!pickup.ok) return json(res, 400, { ok: false, error: pickup.error });
+      const slots = onboarding.pickupAvailability(data, settings, pickup.raw, { excludeSessionId: context.session.id });
+      return json(res, 200, { ok: true, date: pickup.raw, weekday: pickup.weekday, slotMinutes: Number(settings.pickupSlotMinutes || 60), capacity: Number(settings.pickupCapacity || 2), slots });
+    }
     if (url.pathname.startsWith('/api/public/onboarding/') && req.method === 'POST') {
       const parts = url.pathname.split('/').filter(Boolean);
       const publicToken = decodeURIComponent(parts[3] || '');
@@ -10626,7 +10646,9 @@ const server = http.createServer(async (req, res) => {
         const settings = nativeSite.publicSettings(data);
         const pickup = onboarding.pickupWindow(settings, payload.requestedPickupDate);
         if (!pickup.ok) return json(res, 400, { ok: false, error: pickup.error });
-        if (!onboarding.validatePickupTime(payload.requestedPickupTime)) return json(res, 400, { ok: false, error: 'Choose a pickup time from 11:00 AM through 4:00 PM.' });
+        if (!onboarding.validatePickupTime(payload.requestedPickupTime, settings)) return json(res, 400, { ok: false, error: 'Choose an available pickup time during business hours.' });
+        const selectedAvailability = onboarding.pickupAvailability(data, settings, pickup.raw, { excludeSessionId: session.id }).find(slot => slot.time === payload.requestedPickupTime);
+        if (!selectedAvailability || !selectedAvailability.available) return json(res, 409, { ok: false, error: 'That pickup time is full. Choose another available time.' });
         if (payload.pickupAutopayConsent !== true) return json(res, 400, { ok: false, error: 'Confirm that the pickup date becomes the weekly autopay weekday.' });
         const required = ['address', 'city', 'state', 'postalCode', 'driverLicenseId', 'driverLicenseExpires', 'insuranceProvider', 'insurancePolicyNumber'];
         if (required.some(field => !onboarding.text(payload[field], 240))) return json(res, 400, { ok: false, error: 'Complete every profile, license, and insurance field.' });
@@ -11642,13 +11664,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/document-update' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req, 64 * 1024));
-      const type = String(form.get('type') || 'Document update').trim().slice(0, 120);
-      const provider = String(form.get('provider') || '').trim().slice(0, 120);
-      const reference = String(form.get('reference') || '').trim().slice(0, 160);
-      const expires = String(form.get('expires') || '').trim().slice(0, 40);
-      const proofUrl = String(form.get('proofUrl') || form.get('url') || '').trim().slice(0, 500);
-      const notes = String(form.get('notes') || '').trim().slice(0, 1200);
+      const jsonUpload = /application\/json/i.test(String(req.headers['content-type'] || ''));
+      const payload = jsonUpload ? await readJsonBody(req, 8 * 1024 * 1024) : Object.fromEntries(new URLSearchParams(await readBody(req, 64 * 1024)));
+      const type = String(payload.type || 'Document update').trim().slice(0, 120);
+      const provider = String(payload.provider || '').trim().slice(0, 120);
+      const reference = String(payload.reference || '').trim().slice(0, 160);
+      const expires = String(payload.expires || '').trim().slice(0, 40);
+      const proofUrl = String(payload.proofUrl || payload.url || '').trim().slice(0, 500);
+      const notes = String(payload.notes || '').trim().slice(0, 1200);
       const data = await readData();
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
@@ -11665,8 +11688,17 @@ const server = http.createServer(async (req, res) => {
       const customerName = context.customerName || account.customer || account.name || 'Customer';
       const vehicleName = context.vehicleName || recurring.vehicle || '';
       const tag = vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
+      let storedFile = null;
+      if (payload.file) {
+        try {
+          storedFile = await onboarding.savePrivateDocument(payload.file, DATA_DIR, 'doc-customer-portal');
+        } catch (error) {
+          return json(res, 400, { ok: false, error: error.message || 'The document could not be uploaded.' });
+        }
+      }
+      if (!storedFile && !proofUrl && !reference && !notes) return json(res, 400, { ok: false, error: 'Choose a secure file or provide enough proof information for staff to review.' });
       const document = {
-        id: 'doc-customer-portal-' + Date.now(),
+        id: storedFile && storedFile.id || 'doc-customer-portal-' + crypto.randomBytes(9).toString('hex'),
         organizationId: account.organizationId || MAIN_ORG_ID,
         customer: customerName,
         phone: account.phone || context.phone || '',
@@ -11688,6 +11720,11 @@ const server = http.createServer(async (req, res) => {
         reference,
         url: proofUrl,
         proofUrl,
+        originalName: storedFile && storedFile.originalName || '',
+        contentType: storedFile && storedFile.contentType || '',
+        size: storedFile && storedFile.size || 0,
+        sha256: storedFile && storedFile.sha256 || '',
+        storagePath: storedFile && storedFile.storagePath || '',
         expires,
         date: localDateKey(),
         createdAt: new Date().toISOString(),
@@ -11725,6 +11762,7 @@ const server = http.createServer(async (req, res) => {
           'Type: ' + type,
           provider ? 'Provider/agency: ' + provider : '',
           reference ? 'Reference: ' + reference : '',
+          storedFile ? 'Secure file: ' + storedFile.originalName + ' (' + storedFile.contentType + ')' : '',
           proofUrl ? 'Proof link/note: ' + proofUrl : '',
           expires ? 'Expiration/due date: ' + expires : '',
           'Vehicle: ' + (vehicleName || 'Not linked'),
@@ -11746,7 +11784,22 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal document submitted', [customerName, type, provider || reference || 'Document proof', vehicleName || document.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
+      if (jsonUpload) return json(res, 201, { ok: true, message: 'Document uploaded securely for WheelsonAuto verification.', document: { id: document.id, type: document.type, status: document.status, originalName: document.originalName, portalDownloadUrl: '/customer/documents/' + encodeURIComponent(document.id) } });
       return send(res, 302, '', 'text/plain', { Location: '/customer' });
+    }
+    if (url.pathname.startsWith('/customer/documents/') && req.method === 'GET') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
+      const document = (data.documents || []).find(row => row.id === id && row.customerAccountId === account.id && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
+      if (!document || !document.storagePath) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
+      const root = path.resolve(DATA_DIR, 'onboarding-uploads');
+      const filePath = path.resolve(DATA_DIR, document.storagePath);
+      if (!filePath.startsWith(root + path.sep)) return send(res, 403, 'Invalid document path', 'text/plain; charset=utf-8');
+      return send(res, 200, await fs.readFile(filePath), document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
     }
     if (url.pathname === '/customer/card-change' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);

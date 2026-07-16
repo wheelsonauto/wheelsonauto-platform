@@ -221,41 +221,54 @@ function validFileSignature(bytes, type) {
   return false;
 }
 
+async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload') {
+  const type = String(file && file.type || '').toLowerCase();
+  const extension = safeExtension(type);
+  if (!extension) throw new Error('Documents must be JPG, PNG, or PDF.');
+  const match = String(file && file.dataUrl || '').match(/^data:([^;]+);base64,([a-z0-9+/=\s]+)$/i);
+  if (!match || match[1].toLowerCase() !== type) throw new Error('The uploaded document could not be verified.');
+  const bytes = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error('Each document must be between 1 byte and 5 MB.');
+  if (!validFileSignature(bytes, type)) throw new Error('The uploaded file does not match its JPG, PNG, or PDF format.');
+  const folder = path.join(dataDir, 'onboarding-uploads');
+  await fs.mkdir(folder, { recursive: true });
+  const prefix = text(idPrefix, 40).replace(/[^a-z0-9-]/gi, '') || 'doc-upload';
+  const id = prefix + '-' + crypto.randomBytes(10).toString('hex');
+  const filename = id + extension;
+  await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' });
+  return {
+    id,
+    originalName: text(file.name, 180),
+    contentType: type,
+    size: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    storagePath: path.join('onboarding-uploads', filename)
+  };
+}
+
 async function saveDocuments(data, session, application, files, dataDir) {
   ensureCollections(data);
   const required = ['driver_license_front', 'driver_license_back', 'insurance'];
   const byKind = new Map((files || []).map(file => [String(file.kind || ''), file]));
   if (!required.every(kind => byKind.has(kind))) throw new Error('License front, license back, and insurance proof are all required.');
-  const folder = path.join(dataDir, 'onboarding-uploads');
-  await fs.mkdir(folder, { recursive: true });
   const saved = [];
   for (const kind of required) {
     const file = byKind.get(kind) || {};
-    const type = String(file.type || '').toLowerCase();
-    const extension = safeExtension(type);
-    if (!extension) throw new Error('Documents must be JPG, PNG, or PDF.');
-    const match = String(file.dataUrl || '').match(/^data:([^;]+);base64,([a-z0-9+/=\s]+)$/i);
-    if (!match || match[1].toLowerCase() !== type) throw new Error('One of the uploaded documents could not be verified.');
-    const bytes = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
-    if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error('Each document must be between 1 byte and 5 MB.');
-    if (!validFileSignature(bytes, type)) throw new Error('One of the uploaded files does not match its JPG, PNG, or PDF format.');
-    const id = 'doc-onboard-' + crypto.randomBytes(10).toString('hex');
-    const filename = id + extension;
-    await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' });
+    const stored = await savePrivateDocument(file, dataDir, 'doc-onboard');
     data.documents = data.documents.filter(document => !(document.applicationId === application.id && document.onboardingSessionId === session.id && document.documentKind === kind));
     const record = {
-      id,
+      id: stored.id,
       applicationId: application.id,
       onboardingSessionId: session.id,
       onlineVehicleId: session.onlineVehicleId,
       customer: application.name || '',
       type: kind === 'insurance' ? 'Insurance' : kind === 'driver_license_front' ? 'Driver license front' : 'Driver license back',
       documentKind: kind,
-      originalName: text(file.name, 180),
-      contentType: type,
-      size: bytes.length,
-      sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-      storagePath: path.join('onboarding-uploads', filename),
+      originalName: stored.originalName,
+      contentType: stored.contentType,
+      size: stored.size,
+      sha256: stored.sha256,
+      storagePath: stored.storagePath,
       status: 'Received - staff verification required',
       visibility: 'Private staff review',
       createdAt: new Date().toISOString()
@@ -311,8 +324,36 @@ function pickupWeekday(requestedDate) {
   return requested.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/New_York' });
 }
 
-function validatePickupTime(value) {
-  return ['11:00 AM', '12:00 PM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM'].includes(String(value || ''));
+function validatePickupTime(value, settings = {}) {
+  return nativeSite.pickupTimeSlots(settings).includes(String(value || ''));
+}
+
+function pickupSlotOccupancy(data = {}, requestedDate, requestedTime, options = {}) {
+  ensureCollections(data);
+  const date = String(requestedDate || '').slice(0, 10);
+  const time = String(requestedTime || '');
+  const excludedSessionId = String(options.excludeSessionId || '');
+  const occupied = new Set();
+  data.pickupAppointments.forEach(appointment => {
+    if (!appointment || appointment.date !== date || appointment.time !== time || /cancel|removed/i.test(String(appointment.status || ''))) return;
+    if (excludedSessionId && appointment.onboardingSessionId === excludedSessionId) return;
+    occupied.add(appointment.onboardingSessionId ? 'session:' + appointment.onboardingSessionId : 'appointment:' + appointment.id);
+  });
+  data.onboardingSessions.forEach(session => {
+    if (!session || !session.profileCompletedAt || session.requestedPickupDate !== date || session.requestedPickupTime !== time || /replaced|cancelled|expired|rejected/i.test(String(session.status || ''))) return;
+    if (excludedSessionId && session.id === excludedSessionId) return;
+    occupied.add('session:' + session.id);
+  });
+  return occupied.size;
+}
+
+function pickupAvailability(data = {}, settings = {}, requestedDate, options = {}) {
+  const date = String(requestedDate || '').slice(0, 10);
+  const capacity = Math.max(1, Math.min(4, Number(settings.pickupCapacity || 2)));
+  return nativeSite.pickupTimeSlots(settings).map(time => {
+    const used = pickupSlotOccupancy(data, date, time, options);
+    return { time, used, capacity, remaining: Math.max(0, capacity - used), available: used < capacity };
+  });
 }
 
 function createPendingCustomerAccount(data, application, links = {}) {
@@ -369,9 +410,12 @@ module.exports = {
   contractValues,
   buildContract,
   saveDocuments,
+  savePrivateDocument,
   saveSignatureImage,
   pickupWindow,
   pickupWeekday,
   validatePickupTime,
+  pickupSlotOccupancy,
+  pickupAvailability,
   createPendingCustomerAccount
 };

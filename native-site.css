@@ -127,6 +127,8 @@ button,a,input,select,textarea{transition:border-color .18s ease,background-colo
 .native-form.compact{padding:0;background:transparent;border:0}
 .native-form label,.signature-form label{display:grid;gap:6px;min-width:0}
 .native-form label>span,.signature-form label>span,.signature-pad-wrap>span{font-size:12px;color:#dedfe0;font-weight:800}
+.native-form label>small{min-height:17px;color:var(--muted);font-size:11px;line-height:1.45}
+.native-form label>small.error{color:var(--bad)}
 .native-form .wide{grid-column:1/-1}
 .form-title{grid-column:1/-1;margin-bottom:6px}
 .form-title span{color:var(--gold-2);font-size:12px;font-weight:900}
