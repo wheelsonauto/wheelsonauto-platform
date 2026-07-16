@@ -2995,7 +2995,7 @@ function integratedCloverQueueGapRow(count){
 }
 
 function integratedCloverWorkspace(){
-  integrationScheduleCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');
+  integrationScheduleCache('clover','/api/integrations/clover/reconciliation','Operations');
   var disputes=cloverDisputeRows(),refunds=(db.refundRequests||[]).slice(),payments=cloverRefundablePayments(),cache=integrationUiCache.clover&&integrationUiCache.clover.ok?integrationUiCache.clover:null,unmatchedRows=cache?(cache.unmatchedPayments||[]):(db.payments||[]).filter(function(row){return transactionCustomerName(row,recurringRoster())==='Customer match needed'}),webhooks=cache?cache.counts.webhookEvents:Number((((db.integrations||{}).clover||{}).webhookEvents||[]).length),unmatched=cache?cache.counts.unmatchedPayments:unmatchedRows.length,needAction=refunds.filter(function(row){return!/refunded|complete|cancelled/i.test(String(row.status||''))}).length,webhookReady=cache?cache.signedWebhookReady:!!((db.integrations||{}).clover||{}).webhookSecretConfigured;
   var serverUnmatched=[],unmatchedKeys={};
   unmatchedRows.forEach(function(row){var key=cloverQueuePaymentKey(row);if(!key)return;if(!cache&&unmatchedKeys[key])return;unmatchedKeys[key]=true;serverUnmatched.push(row)});
@@ -3209,7 +3209,7 @@ document.addEventListener('click',async function(event){
   event.preventDefault();event.stopImmediatePropagation();
   if(button.disabled)return;button.disabled=true;button.classList.add('is-loading');var original=button.textContent;
   try{
-    if(actionName==='integrated-refresh-clover'){delete integrationUiCache.clover;await integrationLoadCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');notify(integrationUiCache.clover&&integrationUiCache.clover.ok?'Clover reconciliation refreshed':integrationUiCache.clover&&integrationUiCache.clover.error||'Reconciliation needs attention');return}
+    if(actionName==='integrated-refresh-clover'){delete integrationUiCache.clover;await integrationLoadCache('clover','/api/integrations/clover/reconciliation','Operations');notify(integrationUiCache.clover&&integrationUiCache.clover.ok?'Clover reconciliation refreshed':integrationUiCache.clover&&integrationUiCache.clover.error||'Reconciliation needs attention');return}
     if(actionName==='integrated-open-payment-match'){integratedOpenPaymentMatch(button.dataset.id);return}
     if(actionName==='integrated-match-payment'){
       var matchedCustomer=button.dataset.customer||val('integratedMatchCustomer'),matchedPayment=await post('/api/integrations/clover/payments/match',{paymentId:button.dataset.id,customer:matchedCustomer});if(!matchedPayment.ok){notify(matchedPayment.error||'Clover payment match did not save');return}delete integrationUiCache.clover;await refreshData(true);closeModal();tab='Clover';queueRender();notify('Clover payment matched to '+matchedPayment.profile.customer);return
