@@ -2981,10 +2981,19 @@ function integratedRefundPaymentRow(row){
   return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(customer||'Customer match needed')+'</strong>'+badge(row.refundStatus||row.status||'Paid',integrationTone(row.refundStatus||row.status))+'</div><span>'+esc(integrationVehicleIdentity(Object.assign({},row,{customer:customer})))+'</span><small>'+esc([row.date||row.createdAt||'',row.method||row.source||'Clover',row.cloverPaymentId||row.cloverChargeId||'No provider ID'].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount">'+money(remaining)+'</div><div class="actions">'+actions+'</div></article>'
 }
 
+function cloverQueuePaymentKey(row){
+  var ids=paymentRecordIds(row||{});
+  return String(row&&(
+    row.cloverPaymentId||row.cloverChargeId||row.paymentId||row.externalReferenceId||row.external_reference_id||ids[0]||row.id
+  )||'').trim()
+}
+
 function integratedCloverWorkspace(){
   integrationScheduleCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');
   var disputes=cloverDisputeRows(),refunds=(db.refundRequests||[]).slice(),payments=cloverRefundablePayments(),cache=integrationUiCache.clover&&integrationUiCache.clover.ok?integrationUiCache.clover:null,unmatchedRows=cache?(cache.unmatchedPayments||[]):(db.payments||[]).filter(function(row){return transactionCustomerName(row,recurringRoster())==='Customer match needed'}),webhooks=cache?cache.counts.webhookEvents:Number((((db.integrations||{}).clover||{}).webhookEvents||[]).length),unmatched=cache?cache.counts.unmatchedPayments:unmatchedRows.length,needAction=refunds.filter(function(row){return!/refunded|complete|cancelled/i.test(String(row.status||''))}).length,webhookReady=cache?cache.signedWebhookReady:!!((db.integrations||{}).clover||{}).webhookSecretConfigured;
-  var serverUnmatched=unmatchedRows.map(function(row){return Object.assign({},row,{_cloverNeedsMatch:true})}),paymentQueue=uniquePayments(serverUnmatched.concat(payments)).slice(0,30),list=disputes.map(integratedDisputeRow).concat(refunds.map(integratedRefundRow)).concat(paymentQueue.map(integratedRefundPaymentRow));
+  var serverUnmatched=[],unmatchedKeys={};
+  unmatchedRows.forEach(function(row){var key=cloverQueuePaymentKey(row);if(!key||unmatchedKeys[key])return;unmatchedKeys[key]=true;serverUnmatched.push(Object.assign({},row,{_cloverNeedsMatch:true}))});
+  var paymentQueue=serverUnmatched.concat(payments.filter(function(row){return!unmatchedKeys[cloverQueuePaymentKey(row)]})).slice(0,30),list=disputes.map(integratedDisputeRow).concat(refunds.map(integratedRefundRow)).concat(paymentQueue.map(integratedRefundPaymentRow));
   return '<section class="card section integration-workspace" data-limit="18"><div class="section-head"><div><h2>Clover reconciliation</h2><p>Signed events, disputes, refunds, unmatched payments, and refundable transactions in one owner-reviewed queue.</p></div><button class="btn" data-action="integrated-refresh-clover">Refresh</button></div><div class="integration-metrics">'+integrationMetric('Webhook',webhookReady?'Signed':'Setup',webhooks+' event(s)',webhookReady?'good':'warn')+integrationMetric('Disputes',disputes.length,'Customer/payment evidence',disputes.some(function(row){return String(row.customerMatchStatus||'')==='Needs payment/customer match'})?'bad':'blue')+integrationMetric('Refunds',refunds.length,needAction+' need action',needAction?'warn':'good')+integrationMetric('Unmatched',unmatched,'Payments to identify',unmatched?'bad':'good')+'</div>'+localSearch('Search customer, payment ID, Clover case, VIN, tag, refund, amount, or status')+'<div class="integration-list">'+(list.length?list.join(''):'<div class="item">No Clover dispute, refund, or refundable payment records need review.</div>')+'</div><div class="notice">Refunds and dispute status changes require owner confirmation. Partial or POS refunds stay tracked here until the Clover reference is confirmed.</div></section>'
 }
 
