@@ -80,7 +80,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-telnyx-assignment-68">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-telnyx-tracker-69">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -751,13 +751,20 @@ function telnyxCarrierReadiness(data = {}, provider = '') {
   const errorCode = String(latest.providerErrorCode || '').trim();
   const registration = (((data.integrations || {}).messaging || {}).telnyx10dlc) || {};
   const registrationVerified = !!(registration.numberAssigned && registration.campaignActive);
+  const registrationChecked = !!registration.checkedAt;
   return {
     carrierDeliveryVerified: status === 'delivered',
-    carrierRegistrationRequired: errorCode === '40010' && !registrationVerified,
+    carrierRegistrationRequired: !registrationVerified && (errorCode === '40010' || registrationChecked),
     carrierRegistrationVerified: registrationVerified,
     carrierActiveCampaignAvailable: !!(registration.campaignActive && !registration.numberAssigned && registration.campaignId),
     carrierRegistrationStatus: registration.summary || registration.campaignStatus || '',
     carrierRegistrationCheckedAt: registration.checkedAt || '',
+    carrierRegistrationStage: registration.registrationStage || '',
+    carrierRegistrationNextAction: registration.nextAction || '',
+    carrierBrandStatus: registration.brandStatus || '',
+    carrierBrandVerified: !!registration.brandVerified,
+    carrierCampaignStatus: registration.campaignStatus || '',
+    carrierHistoricalCampaignStatus: registration.historicalCampaignStatus || '',
     carrierDeliveryStatus: status || (records.length ? 'unconfirmed' : 'not_tested'),
     carrierDeliveryErrorCode: errorCode,
     carrierDeliveryError: String(latest.providerErrorMessage || '').trim()
@@ -1442,6 +1449,9 @@ async function checkTelnyx10dlcReadiness(options = {}) {
   let campaign = {};
   let campaignStatus = '';
   let brandStatus = '';
+  let historicalCampaignStatus = '';
+  let historicalFailureReason = '';
+  let rejectedCampaignCount = 0;
   const campaignState = row => String(row && (row.campaignStatus || row.campaign_status || row.status || row.submissionStatus || row.submission_status) || '').trim().toUpperCase();
   const campaignFailure = row => {
     const raw = row && (row.failureReasons || row.failure_reasons || row.failureReason || row.failure_reason || row.reasons || row.reason);
@@ -1454,6 +1464,8 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     }).filter(Boolean).join('; ').slice(0, 800);
   };
   const activeCampaignState = value => ['ACTIVE', 'APPROVED', 'MNO_PROVISIONED'].includes(String(value || '').trim().toUpperCase());
+  const pendingCampaignState = value => ['CREATED', 'PENDING', 'TCR_PENDING', 'TCR_ACCEPTED', 'TELNYX_ACCEPTED', 'MNO_PENDING', 'MNO_ACCEPTED'].includes(String(value || '').trim().toUpperCase());
+  const rejectedCampaignState = value => /FAILED|REJECTED|SUSPENDED|EXPIRED/.test(String(value || '').trim().toUpperCase());
   if (campaignId) {
     let campaignBody;
     try {
@@ -1473,6 +1485,8 @@ async function checkTelnyx10dlcReadiness(options = {}) {
       campaigns = Array.isArray(campaignsBody.data) ? campaignsBody.data : Array.isArray(campaignsBody.records) ? campaignsBody.records : [];
     } catch (err) {
       if (Number(err && err.statusCode) !== 404) throw err;
+    }
+    try {
       const brandsBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/brand?page=1&recordsPerPage=500');
       const brands = Array.isArray(brandsBody.records) ? brandsBody.records : Array.isArray(brandsBody.data) ? brandsBody.data : [];
       const firstBrand = brands[0] || {};
@@ -1484,24 +1498,52 @@ async function checkTelnyx10dlcReadiness(options = {}) {
         const rows = Array.isArray(listed.records) ? listed.records : Array.isArray(listed.data) ? listed.data : [];
         campaigns.push(...rows);
       }
+    } catch (err) {
+      if (!campaigns.length || Number(err && err.statusCode) !== 404) throw err;
     }
-    campaign = campaigns.find(row => activeCampaignState(campaignState(row))) || campaigns[0] || {};
+    const uniqueCampaigns = Array.from(new Map(campaigns.map(row => [String(row.campaignId || row.campaign_id || row.id || JSON.stringify(row)), row])).values());
+    const rejectedCampaigns = uniqueCampaigns.filter(row => rejectedCampaignState(campaignState(row)));
+    const historicalCampaign = rejectedCampaigns[0] || {};
+    rejectedCampaignCount = rejectedCampaigns.length;
+    historicalCampaignStatus = campaignState(historicalCampaign);
+    historicalFailureReason = campaignFailure(historicalCampaign);
+    campaign = uniqueCampaigns.find(row => activeCampaignState(campaignState(row))) ||
+      uniqueCampaigns.find(row => pendingCampaignState(campaignState(row))) ||
+      uniqueCampaigns.find(row => !rejectedCampaignState(campaignState(row))) || {};
     campaignId = String(campaign.campaignId || campaign.campaign_id || campaign.id || '').trim();
     campaignStatus = campaignState(campaign);
   }
+  const brandVerified = ['VERIFIED', 'VETTED_VERIFIED'].includes(brandStatus);
   const campaignActive = activeCampaignState(campaignStatus);
-  const failureReason = campaignFailure(campaign);
-  const summary = !numberAssigned
-    ? (campaignActive && campaignId
-        ? 'An active Telnyx 10DLC campaign was found, but the SMS number is not attached to it.'
-        : campaignId
-          ? 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.' + (failureReason ? ' Reason: ' + failureReason : '')
-          : brandStatus
-            ? 'Telnyx brand is ' + brandStatus + ', but no 10DLC campaign is available yet.'
-            : 'Telnyx number is not attached to an active 10DLC campaign.')
-    : !campaignActive
-      ? 'Telnyx campaign is assigned but currently ' + (campaignStatus || assignmentStatus || 'under review') + '.'
-      : 'Telnyx 10DLC campaign is active and the SMS number is assigned. Run one outbound delivery test.';
+  const failureReason = campaignFailure(campaign) || historicalFailureReason;
+  let registrationStage = 'brand_registration';
+  let nextAction = 'Register and verify the WheelsonAuto business identity with Telnyx.';
+  let summary = 'No Telnyx 10DLC brand was found yet.';
+  if (numberAssigned && campaignActive) {
+    registrationStage = 'delivery_test';
+    nextAction = 'Run one outbound delivery test and confirm the inbound reply reaches the same customer thread.';
+    summary = 'Telnyx 10DLC campaign is active and the SMS number is assigned. Run one outbound delivery test.';
+  } else if (campaignActive && campaignId) {
+    registrationStage = 'number_assignment';
+    nextAction = 'Attach the WheelsonAuto SMS number to the approved campaign.';
+    summary = 'An active Telnyx 10DLC campaign was found, but the SMS number is not attached to it.';
+  } else if (brandStatus && !brandVerified) {
+    registrationStage = 'brand_verification';
+    nextAction = 'Wait for Telnyx to verify the corrected IRS legal name and CP-575 document before creating another campaign.';
+    summary = 'Telnyx brand is ' + brandStatus + ' and awaiting identity verification.' + (historicalCampaignStatus ? ' The previous ' + historicalCampaignStatus + ' campaign is retained as history only.' : '');
+  } else if (campaignId) {
+    registrationStage = 'campaign_review';
+    nextAction = 'Wait for Telnyx and carrier review to finish before assigning the number.';
+    summary = 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.' + (failureReason ? ' Reason: ' + failureReason : '');
+  } else if (brandVerified) {
+    registrationStage = 'campaign_creation';
+    nextAction = 'Create a corrected customer-care campaign for the verified brand, then wait for carrier approval.';
+    summary = 'Telnyx brand is verified. Create the corrected campaign next.' + (historicalCampaignStatus ? ' The previous ' + historicalCampaignStatus + ' campaign remains history only.' : '');
+  } else if (brandStatus) {
+    registrationStage = 'brand_verification';
+    nextAction = 'Complete Telnyx brand verification before creating a campaign.';
+    summary = 'Telnyx brand is currently ' + brandStatus + '.';
+  }
   return {
     checkedAt: new Date().toISOString(),
     phoneNumber: maskPhone(phoneNumber),
@@ -1510,9 +1552,15 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     campaignId,
     campaignStatus: campaignStatus || 'Not found',
     brandStatus: brandStatus || '',
+    brandVerified,
+    historicalCampaignStatus,
+    historicalFailureReason,
+    rejectedCampaignCount,
     failureReason,
     campaignActive,
     readyForDeliveryTest: numberAssigned && campaignActive,
+    registrationStage,
+    nextAction,
     summary
   };
 }
@@ -1525,9 +1573,15 @@ function publicTelnyx10dlcReadiness(readiness = {}) {
     campaignId: readiness.campaignId ? 'stored securely' : '',
     campaignStatus: readiness.campaignStatus || '',
     brandStatus: readiness.brandStatus || '',
+    brandVerified: !!readiness.brandVerified,
+    historicalCampaignStatus: readiness.historicalCampaignStatus || '',
+    historicalFailureReason: readiness.historicalFailureReason || '',
+    rejectedCampaignCount: Number(readiness.rejectedCampaignCount || 0),
     failureReason: readiness.failureReason || '',
     campaignActive: !!readiness.campaignActive,
     readyForDeliveryTest: !!readiness.readyForDeliveryTest,
+    registrationStage: readiness.registrationStage || '',
+    nextAction: readiness.nextAction || '',
     assignmentRequestedAt: readiness.assignmentRequestedAt || '',
     summary: readiness.summary || ''
   };
@@ -8434,7 +8488,7 @@ function apiProviderTruthOverrides(data = {}) {
   const smsResult = status.smsDeliveryLive
     ? 'Carrier delivery verified.'
     : (status.carrierRegistrationRequired
-      ? (status.carrierDeliveryError || 'Telnyx is configured, but outbound SMS is blocked until account upgrade and 10DLC approval are complete.')
+      ? (status.carrierRegistrationStatus || status.carrierDeliveryError || 'Telnyx is configured, but outbound SMS is blocked until account upgrade and 10DLC approval are complete.')
       : (status.carrierRegistrationVerified
         ? 'Telnyx 10DLC campaign is active and the number is assigned; carrier delivery has not been verified yet.'
         : (status.configured ? 'Provider credentials are stored; carrier delivery has not been verified.' : 'Hosted SMS provider credentials are not complete.')));

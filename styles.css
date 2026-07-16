@@ -4053,6 +4053,43 @@ body.fast-tab-switch .admin-shell .section{
   line-height:1.4;
   overflow-wrap:anywhere;
 }
+.telnyx-stage-strip{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
+  margin:0 0 10px;
+}
+.telnyx-stage-strip>div{
+  min-width:0;
+  display:grid;
+  grid-template-columns:28px 1fr;
+  gap:2px 8px;
+  align-items:center;
+  padding:9px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:10px;
+  background:rgba(255,255,255,.045);
+}
+.telnyx-stage-strip i{
+  grid-row:1/3;
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  background:rgba(255,255,255,.08);
+  color:#cbd5dd;
+  font-style:normal;
+  font-weight:800;
+}
+.telnyx-stage-strip span{color:#eef2f5;font-size:13px;font-weight:800}
+.telnyx-stage-strip small{min-width:0;color:#9eabb5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.telnyx-stage-strip .done{border-color:rgba(126,231,135,.28);background:rgba(126,231,135,.07)}
+.telnyx-stage-strip .done i{background:rgba(126,231,135,.16);color:#92efa0}
+.telnyx-stage-strip .current{border-color:rgba(240,211,148,.35);background:rgba(240,211,148,.09)}
+.telnyx-stage-strip .current i{background:rgba(240,211,148,.18);color:#f7df9b}
+.telnyx-next-action{margin:0 0 14px}
+.telnyx-next-action small{display:block;margin-top:5px;color:#aeb9c2}
 .api-provider-status-readonly{
   display:flex;
   align-items:center;
@@ -4678,6 +4715,7 @@ body.fast-tab-switch .admin-shell .section{
   .star-provider-strip,
   .star-capability-grid{grid-template-columns:1fr}
   .api-provider-guidance{grid-template-columns:1fr}
+  .telnyx-stage-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
   .api-provider-status-readonly{align-items:flex-start;flex-direction:column}
   .star-provider-strip .actions{flex-direction:row;flex-wrap:wrap}
   .star-provider-strip .actions .btn{flex:1 1 auto}

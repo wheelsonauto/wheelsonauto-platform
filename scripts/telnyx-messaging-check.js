@@ -198,8 +198,9 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     phoneNumber: '+16095550199',
     fetchImpl: async url => {
       if (String(url).includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
-      assert(String(url).includes('/10dlc/campaignBuilder?'));
-      return { ok: true, status: 200, async json() { return { data: [] }; } };
+      if (String(url).includes('/10dlc/campaignBuilder?')) return { ok: true, status: 200, async json() { return { data: [] }; } };
+      if (String(url).includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [] }; } };
+      throw new Error('Unexpected missing readiness URL: ' + url);
     }
   });
   assert(!missingRegistration.numberAssigned && !missingRegistration.campaignActive && !missingRegistration.readyForDeliveryTest, 'Unassigned Telnyx numbers must remain blocked from live SMS.');
@@ -241,8 +242,22 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
       throw new Error('Unexpected failed readiness URL: ' + url);
     }
   });
-  assert(!failedRegistration.campaignActive && failedRegistration.campaignStatus === 'TCR_FAILED', 'Campaign registration status must take precedence over the generic active record status.');
-  assert(/exact customer consent flow/.test(failedRegistration.failureReason) && /Reason:/.test(failedRegistration.summary), 'Telnyx failure reasons must be surfaced in the readiness result.');
+  assert(!failedRegistration.campaignActive && failedRegistration.campaignStatus === 'Not found' && failedRegistration.historicalCampaignStatus === 'TCR_FAILED', 'A rejected campaign must remain history instead of becoming the current campaign.');
+  assert(failedRegistration.registrationStage === 'campaign_creation' && /Create the corrected campaign/.test(failedRegistration.summary), 'A verified brand with only a rejected campaign must advance to corrected campaign creation.');
+  assert(/exact customer consent flow/.test(failedRegistration.historicalFailureReason), 'Historical Telnyx failure reasons must remain available for diagnosis.');
+  const unverifiedBrandRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Not found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-review', identityStatus: 'UNVERIFIED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-review')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-old', campaignStatus: 'TCR_FAILED', failureReasons: 'Brand does not qualify.' }] }; } };
+      throw new Error('Unexpected unverified readiness URL: ' + url);
+    }
+  });
+  assert(unverifiedBrandRegistration.registrationStage === 'brand_verification' && !unverifiedBrandRegistration.brandVerified && /history only/.test(unverifiedBrandRegistration.summary), 'An unverified brand must be the current blocker while its rejected campaign remains history.');
   const assignmentCalls = [];
   const candidateRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
@@ -250,6 +265,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     fetchImpl: async url => {
       if (String(url).includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
       if (String(url).includes('/10dlc/campaignBuilder?')) return { ok: true, status: 200, async json() { return { data: [{ campaignId: 'campaign-candidate', status: 'ACTIVE' }] }; } };
+      if (String(url).includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [] }; } };
       throw new Error('Unexpected candidate readiness URL: ' + url);
     }
   });
