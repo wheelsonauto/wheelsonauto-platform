@@ -272,6 +272,7 @@ const criticalActionRequirements = [
   ['Email notification test flow', 'send-email-notification-test', ['/api/notifications/email/test', 'notificationEmailTo', 'notification-event:checked', "tab='Setup'", 'Messages()']],
   ['Dispute match accept flow', 'apply-claim-match', ['applyClaimCandidate', 'Dispute match accepted', 'await save()', 'render()']],
   ['Transaction match accept flow', 'apply-transaction-match', ['applyTransactionCandidate', 'Transaction match accepted', 'await save()', "tab='Transactions'", 'render()']],
+  ['Clover reconciliation customer match flow', 'integrated-match-payment', ['/api/integrations/clover/payments/match', 'paymentId:button.dataset.id', "delete integrationUiCache.clover", 'await refreshData(true)', 'closeModal()']],
   ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
   ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'inspectionChecklist', 'lastInspectionChecklist', 'await save()', 'closeModal()', 'Maintenance()']],
   ['Clover refund preparation flow', 'integrated-prepare-refund', ['/api/integrations/clover/refunds/prepare', 'amount:Number', 'await refreshData(true)', 'integratedOpenRefundRecord']],
@@ -285,6 +286,7 @@ const criticalActionRequirements = [
   ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['/api/pickups/', '/complete', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
+assertIncludes('Clover refund eligibility guard', app, ['function cloverPaymentRefundable(row)', 'provider&&paid&&remaining>0', 'isOwner()&&cloverPaymentRefundable(row)']);
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
 ['repairAshleyDodgeTransfer', 'Ashley restored', 'Dodge Journey WHITE', 'Felicia V Gadson'].forEach(text => {

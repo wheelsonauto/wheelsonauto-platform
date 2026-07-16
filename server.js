@@ -80,7 +80,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-security-performance-57">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-clover-match-58">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -1931,6 +1931,27 @@ function closeoutPaymentCustomerName(data, payment = {}, recurringRows = allRecu
   if (!recurring && payment.email) recurring = recurringRows.find(row => emailKey(row.email) === emailKey(payment.email));
   if (!recurring && payment.phone) recurring = recurringRows.find(row => phoneKey(row.phone) === phoneKey(payment.phone));
   if (!recurring && payment.vehicle) recurring = recurringRows.find(row => normKey(row.vehicle) === normKey(payment.vehicle));
+  if (!recurring) {
+    const profiles = [...(data.customers || []), ...(data.contracts || [])];
+    const customerRef = String(payment.cloverCustomerId || payment.customerId || payment.externalCustomerReference || '').trim();
+    let profile = customerRef ? profiles.find(row => {
+      return String(row.cloverCustomerId || row.customerId || '').trim() === customerRef ||
+        normKey(row.name || row.customer) === normKey(customerRef);
+    }) : null;
+    if (!profile && payment.email) profile = profiles.find(row => emailKey(row.email) === emailKey(payment.email));
+    if (!profile && payment.phone) profile = profiles.find(row => phoneKey(row.phone) === phoneKey(payment.phone));
+    if (profile) return profile.name || profile.customer || 'Unmatched payment';
+
+    const vehicleId = String(payment.vehicleId || '').trim();
+    const vin = normKey(payment.vin);
+    const plate = normKey(payment.licensePlate || payment.plate || payment.tag || payment.tempTag);
+    const vehicle = (data.vehicles || []).find(row => {
+      if (vehicleId && String(row.id || '') === vehicleId) return true;
+      if (vin && normKey(row.vin) === vin) return true;
+      return plate && [row.plate, row.licensePlate, row.stock, row.tempTag].map(normKey).includes(plate);
+    });
+    if (vehicle && (vehicle.currentCustomer || vehicle.customer)) return vehicle.currentCustomer || vehicle.customer;
+  }
   if (!recurring && Number(payment.amount)) {
     const sameAmount = recurringRows.filter(row => Number(row.amount || row.weeklyAmount || 0) === Number(payment.amount || 0));
     if (sameAmount.length === 1) recurring = sameAmount[0];
@@ -6911,6 +6932,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
+    route('POST', '/api/integrations/clover/payments/match', 'Owner-confirmed Clover payment customer match'),
     route('POST', '/api/integrations/clover/refunds/prepare', 'Owner-approved refund preparation'),
     route('POST', '/api/integrations/clover/refunds/execute', 'Idempotent Clover Ecommerce full refund'),
     route('POST', '/api/integrations/clover/refunds/complete-manual', 'Confirm Clover POS/manual refund reference'),
@@ -7483,6 +7505,44 @@ function paymentRecordsMatch(a, b) {
   const bIds = paymentRecordIds(b);
   if (!aIds.length || !bIds.length) return false;
   return aIds.some(id => bIds.includes(id));
+}
+function paymentCustomerMatchProfile(data, customerName) {
+  const key = normKey(customerName);
+  if (!key) return null;
+  const customer = (data.customers || []).find(row => normKey(row.name || row.customer) === key) || {};
+  const contract = (data.contracts || []).find(row => normKey(row.customer || row.name) === key) || {};
+  const recurring = allRecurringRows(data).find(row => normKey(row.customer || row.name) === key) || {};
+  const vehicle = reportVehicleFor(data, customerName, customer.vehicleId || contract.vehicleId || recurring.vehicleId);
+  const savedName = customer.name || customer.customer || contract.customer || contract.name || recurring.customer || recurring.name || vehicle.currentCustomer || vehicle.customer;
+  if (!savedName) return null;
+  const tag = vehicle.plate || vehicle.licensePlate || vehicle.stock || customer.licensePlate || contract.licensePlate || recurring.licensePlate || recurring.plate || '';
+  return {
+    customer: savedName,
+    phone: customer.phone || contract.phone || recurring.phone || '',
+    email: customer.email || contract.email || recurring.email || '',
+    vehicleId: vehicle.id || customer.vehicleId || contract.vehicleId || recurring.vehicleId || '',
+    vehicle: vehicle.id ? vehicleNameFromParts(vehicle) : (customer.vehicle || contract.vehicle || recurring.vehicle || recurring.plan || ''),
+    vin: vehicle.vin || customer.vin || contract.vin || recurring.vin || '',
+    licensePlate: tag,
+    plate: tag,
+    tempTag: vehicle.tempTag || customer.tempTag || contract.tempTag || recurring.tempTag || '',
+    tracker: trackerName(vehicle) || trackerName(customer) || trackerName(contract) || trackerName(recurring),
+    recurringPaymentId: recurring.id || '',
+    cloverCustomerId: recurring.cloverCustomerId || customer.cloverCustomerId || contract.cloverCustomerId || '',
+    cloverSubscriptionId: recurring.cloverSubscriptionId || ''
+  };
+}
+function applyPaymentCustomerMatch(payment, profile, source) {
+  if (!payment || !profile || !profile.customer) return false;
+  payment.customer = profile.customer;
+  payment.customerMatchStatus = 'Matched';
+  payment.customerMatchSource = source || 'Owner selected customer';
+  payment.customerMatchedAt = new Date().toISOString();
+  ['phone', 'email', 'vehicleId', 'vehicle', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'recurringPaymentId', 'cloverCustomerId', 'cloverSubscriptionId'].forEach(field => {
+    if (!payment[field] && profile[field]) payment[field] = profile[field];
+  });
+  payment.notes = appendUniqueNote(payment.notes, 'Matched to ' + profile.customer + ' in Clover reconciliation.');
+  return true;
 }
 function weakPaymentCustomer(value) {
   const raw = String(value || '').trim();
@@ -12176,6 +12236,25 @@ const server = http.createServer(async (req, res) => {
         refunds: refunds.slice(0, 100),
         unmatchedPayments: unmatched.slice(0, 100)
       });
+    }
+    if (url.pathname === '/api/integrations/clover/payments/match' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can match Clover payments.' });
+      const payload = await readJsonBody(req);
+      const paymentId = String(payload.paymentId || '').trim();
+      const customerName = String(payload.customer || '').trim();
+      if (!paymentId || !customerName) return json(res, 400, { ok: false, error: 'Choose both a Clover payment and a customer.' });
+      const data = await readData();
+      const normalizedId = normalizedPaymentRecordId(paymentId);
+      const payment = (data.payments || []).find(row => String(row.id || '') === paymentId || paymentRecordIds(row).includes(normalizedId));
+      if (!payment) return json(res, 404, { ok: false, error: 'That payment was not found. Refresh Clover reconciliation and try again.' });
+      const profile = paymentCustomerMatchProfile(data, customerName);
+      if (!profile) return json(res, 404, { ok: false, error: 'That customer file was not found. Open Payments & Customers and verify the customer first.' });
+      const linkedPayments = (data.payments || []).filter(row => row === payment || paymentRecordsMatch(row, payment));
+      linkedPayments.forEach(row => applyPaymentCustomerMatch(row, profile, 'Owner matched Clover payment'));
+      appendAuditLog(data, user, 'Clover payment customer matched', [paymentId, profile.customer, profile.vehicle || 'No vehicle linked', profile.vin ? 'VIN ' + profile.vin : 'VIN missing', profile.licensePlate ? 'Tag ' + profile.licensePlate : 'Tag missing', linkedPayments.length + ' duplicate/source row(s) updated']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, matched: linkedPayments.length, payment: linkedPayments[0], profile });
     }
     if (url.pathname === '/api/integrations/clover/refunds/prepare' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can prepare refunds.' });

@@ -2951,11 +2951,13 @@ function cloverDisputeRows(){
   return(db.claims||[]).filter(function(row){return/clover|dispute|chargeback/i.test(String([row.type,row.source,row.provider,row.agency].filter(Boolean).join(' ')))})
 }
 
+function cloverPaymentRefundable(row){
+  var provider=/clover/i.test(String([row.source,row.method,row.provider,row.cloverPaymentId,row.cloverChargeId].filter(Boolean).join(' '))),paid=typeof isCollectedPayment==='function'?isCollectedPayment(row):/paid|approved|complete|succeed/i.test(String(row.status||'')),remaining=Number(row.amount||0)-Number(row.refundedAmount||0);
+  return provider&&paid&&remaining>0
+}
+
 function cloverRefundablePayments(){
-  return uniquePayments(db.payments||[]).filter(function(row){
-    var provider=/clover/i.test(String([row.source,row.method,row.provider,row.cloverPaymentId,row.cloverChargeId].filter(Boolean).join(' '))),paid=typeof isCollectedPayment==='function'?isCollectedPayment(row):/paid|approved|complete|succeed/i.test(String(row.status||'')),remaining=Number(row.amount||0)-Number(row.refundedAmount||0);
-    return provider&&paid&&remaining>0
-  }).sort(function(a,b){return String(b.date||b.createdAt||'').localeCompare(String(a.date||a.createdAt||''))})
+  return uniquePayments(db.payments||[]).filter(cloverPaymentRefundable).sort(function(a,b){return String(b.date||b.createdAt||'').localeCompare(String(a.date||a.createdAt||''))})
 }
 
 function integratedDisputeRow(row){
@@ -2972,16 +2974,27 @@ function integratedRefundRow(row){
 }
 
 function integratedRefundPaymentRow(row){
-  var customer=transactionCustomerName(row,recurringRoster()),remaining=Math.max(0,Number(row.amount||0)-Number(row.refundedAmount||0)),actions=customer&&customer!=='Customer match needed'?customerFileButton(customer,'Customer'):'';
-  if(isOwner())actions='<button class="btn gold" data-action="integrated-open-refund" data-id="'+esc(row.id)+'">Prepare refund</button>'+actions;
+  var customer=transactionCustomerName(row,recurringRoster()),needsMatch=customer==='Customer match needed',remaining=Math.max(0,Number(row.amount||0)-Number(row.refundedAmount||0)),actions=needsMatch&&isOwner()?'<button class="btn gold" data-action="integrated-open-payment-match" data-id="'+esc(row.id||'')+'">Match customer</button>':(customer?customerFileButton(customer,'Customer'):'');
+  if(isOwner()&&cloverPaymentRefundable(row))actions='<button class="btn gold" data-action="integrated-open-refund" data-id="'+esc(row.id)+'">Prepare refund</button>'+actions;
   return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(customer||'Customer match needed')+'</strong>'+badge(row.refundStatus||row.status||'Paid',integrationTone(row.refundStatus||row.status))+'</div><span>'+esc(integrationVehicleIdentity(Object.assign({},row,{customer:customer})))+'</span><small>'+esc([row.date||row.createdAt||'',row.method||row.source||'Clover',row.cloverPaymentId||row.cloverChargeId||'No provider ID'].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount">'+money(remaining)+'</div><div class="actions">'+actions+'</div></article>'
 }
 
 function integratedCloverWorkspace(){
   integrationScheduleCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');
-  var disputes=cloverDisputeRows(),refunds=(db.refundRequests||[]).slice(),payments=cloverRefundablePayments(),cache=integrationUiCache.clover&&integrationUiCache.clover.ok?integrationUiCache.clover:null,webhooks=cache?cache.counts.webhookEvents:Number((((db.integrations||{}).clover||{}).webhookEvents||[]).length),unmatched=cache?cache.counts.unmatchedPayments:(db.payments||[]).filter(function(row){return transactionCustomerName(row,recurringRoster())==='Customer match needed'}).length,needAction=refunds.filter(function(row){return!/refunded|complete|cancelled/i.test(String(row.status||''))}).length,webhookReady=cache?cache.signedWebhookReady:!!((db.integrations||{}).clover||{}).webhookSecretConfigured;
-  var list=disputes.map(integratedDisputeRow).concat(refunds.map(integratedRefundRow)).concat(payments.slice(0,20).map(integratedRefundPaymentRow));
+  var disputes=cloverDisputeRows(),refunds=(db.refundRequests||[]).slice(),payments=cloverRefundablePayments(),cache=integrationUiCache.clover&&integrationUiCache.clover.ok?integrationUiCache.clover:null,unmatchedRows=cache?(cache.unmatchedPayments||[]):(db.payments||[]).filter(function(row){return transactionCustomerName(row,recurringRoster())==='Customer match needed'}),webhooks=cache?cache.counts.webhookEvents:Number((((db.integrations||{}).clover||{}).webhookEvents||[]).length),unmatched=cache?cache.counts.unmatchedPayments:unmatchedRows.length,needAction=refunds.filter(function(row){return!/refunded|complete|cancelled/i.test(String(row.status||''))}).length,webhookReady=cache?cache.signedWebhookReady:!!((db.integrations||{}).clover||{}).webhookSecretConfigured;
+  var paymentQueue=uniquePayments(unmatchedRows.concat(payments)).slice(0,30),list=disputes.map(integratedDisputeRow).concat(refunds.map(integratedRefundRow)).concat(paymentQueue.map(integratedRefundPaymentRow));
   return '<section class="card section integration-workspace" data-limit="18"><div class="section-head"><div><h2>Clover reconciliation</h2><p>Signed events, disputes, refunds, unmatched payments, and refundable transactions in one owner-reviewed queue.</p></div><button class="btn" data-action="integrated-refresh-clover">Refresh</button></div><div class="integration-metrics">'+integrationMetric('Webhook',webhookReady?'Signed':'Setup',webhooks+' event(s)',webhookReady?'good':'warn')+integrationMetric('Disputes',disputes.length,'Customer/payment evidence',disputes.some(function(row){return String(row.customerMatchStatus||'')==='Needs payment/customer match'})?'bad':'blue')+integrationMetric('Refunds',refunds.length,needAction+' need action',needAction?'warn':'good')+integrationMetric('Unmatched',unmatched,'Payments to identify',unmatched?'bad':'good')+'</div>'+localSearch('Search customer, payment ID, Clover case, VIN, tag, refund, amount, or status')+'<div class="integration-list">'+(list.length?list.join(''):'<div class="item">No Clover dispute, refund, or refundable payment records need review.</div>')+'</div><div class="notice">Refunds and dispute status changes require owner confirmation. Partial or POS refunds stay tracked here until the Clover reference is confirmed.</div></section>'
+}
+
+function integratedPaymentMatchOptions(){
+  return existingCustomerRecords().map(function(row){var car=findVehicleByCustomer(row.name)||findVehicle(row.vehicleId)||{},detail=[row.vehicle||car.id&&vehicleName(car),row.vin||car.vin?'VIN '+(row.vin||car.vin):'',row.licensePlate||row.plate||car.plate||car.stock?'Tag '+(row.licensePlate||row.plate||car.plate||car.stock):'',row.tracker||car.tracker?'Tracker '+(row.tracker||car.tracker):''].filter(Boolean).join(' | ');return '<option value="'+esc(row.name)+'">'+esc(detail)+'</option>'}).join('')
+}
+
+function integratedOpenPaymentMatch(paymentId){
+  var cached=integrationUiCache.clover&&integrationUiCache.clover.unmatchedPayments||[],payment=(db.payments||[]).find(function(row){return row.id===paymentId})||cached.find(function(row){return row.id===paymentId});
+  if(!payment)return notify('That Clover payment was not found. Refresh reconciliation and try again.');
+  var matches=transactionPossibleMatches(payment,recurringRoster()),suggestions=matches.length?'<div class="integration-match-suggestions">'+matches.slice(0,3).map(function(match){return '<button class="integration-match-card" data-action="integrated-match-payment" data-id="'+esc(payment.id||'')+'" data-customer="'+esc(match.customer)+'"><strong>'+esc(match.customer)+'</strong><span>'+esc([match.vehicle,match.vin?'VIN '+match.vin:'',match.plate?'Tag '+match.plate:'',match.tracker?'Tracker '+match.tracker:''].filter(Boolean).join(' | ')||'No vehicle linked')+'</span><small>'+esc(match.reason||'Possible match')+'</small></button>'}).join('')+'</div>':'<div class="notice">No safe automatic match was found. Search the saved customer files below and confirm the correct person.</div>';
+  openModal('Match Clover payment','<div class="integration-modal-summary"><strong>Customer match needed</strong><span>'+money(payment.amount||0)+' | '+esc(payment.date||payment.createdAt||'Date unavailable')+'</span><small>'+esc(payment.cloverPaymentId||payment.externalReferenceId||payment.id||'No Clover reference')+'</small></div><div class="notice warn">Match only after checking Clover, the amount, date, card/tender, customer, and vehicle. This updates every saved duplicate of the same Clover payment and writes an audit record.</div>'+suggestions+'<div class="form"><div class="field span2"><label>Search saved customer</label><input id="integratedMatchCustomer" list="integratedMatchCustomerList" placeholder="Type customer name" autocomplete="off"><datalist id="integratedMatchCustomerList">'+integratedPaymentMatchOptions()+'</datalist></div></div><div class="actions"><button class="btn primary" data-action="integrated-match-payment" data-id="'+esc(payment.id||'')+'">Confirm customer match</button></div>')
 }
 
 function IntegratedClaimsIssues(){
@@ -3172,11 +3185,15 @@ OperationsTruthFocused=IntegratedOperations;
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action]');if(!button)return;
   var actionName=button.dataset.action||'';
-  if(['integrated-refresh-clover','integrated-open-refund','integrated-prepare-refund','integrated-open-refund-record','integrated-execute-refund','integrated-complete-refund','integrated-open-dispute','integrated-save-dispute','integrated-new-verification','integrated-create-verification','integrated-open-verification','integrated-review-verification','integrated-refresh-accounting','integrated-rebuild-accounting','integrated-prepare-pickup','integrated-open-pickup-completion','integrated-save-pickup-completion'].indexOf(actionName)<0)return;
+  if(['integrated-refresh-clover','integrated-open-payment-match','integrated-match-payment','integrated-open-refund','integrated-prepare-refund','integrated-open-refund-record','integrated-execute-refund','integrated-complete-refund','integrated-open-dispute','integrated-save-dispute','integrated-new-verification','integrated-create-verification','integrated-open-verification','integrated-review-verification','integrated-refresh-accounting','integrated-rebuild-accounting','integrated-prepare-pickup','integrated-open-pickup-completion','integrated-save-pickup-completion'].indexOf(actionName)<0)return;
   event.preventDefault();event.stopImmediatePropagation();
   if(button.disabled)return;button.disabled=true;button.classList.add('is-loading');var original=button.textContent;
   try{
     if(actionName==='integrated-refresh-clover'){delete integrationUiCache.clover;await integrationLoadCache('clover','/api/integrations/clover/reconciliation','Claims & Issues');notify(integrationUiCache.clover&&integrationUiCache.clover.ok?'Clover reconciliation refreshed':integrationUiCache.clover&&integrationUiCache.clover.error||'Reconciliation needs attention');return}
+    if(actionName==='integrated-open-payment-match'){integratedOpenPaymentMatch(button.dataset.id);return}
+    if(actionName==='integrated-match-payment'){
+      var matchedCustomer=button.dataset.customer||val('integratedMatchCustomer'),matchedPayment=await post('/api/integrations/clover/payments/match',{paymentId:button.dataset.id,customer:matchedCustomer});if(!matchedPayment.ok){notify(matchedPayment.error||'Clover payment match did not save');return}delete integrationUiCache.clover;await refreshData(true);closeModal();tab='Clover';queueRender();notify('Clover payment matched to '+matchedPayment.profile.customer);return
+    }
     if(actionName==='integrated-open-refund'){integratedOpenRefund(button.dataset.id);return}
     if(actionName==='integrated-prepare-refund'){
       var prepared=await post('/api/integrations/clover/refunds/prepare',{paymentId:button.dataset.id,amount:Number(val('integratedRefundAmount')||0),reason:val('integratedRefundReason'),notes:val('integratedRefundNotes')});

@@ -978,8 +978,16 @@ async function main() {
     assert(ownerReconciliation.status === 200 && ownerReconciliation.json.ok && ownerReconciliation.json.counts.disputes >= 1, 'Owner Clover reconciliation should expose disputes, refunds, webhook events, and unmatched payments.');
     assert(ownerReconciliation.json.unmatchedPayments.filter(row => row.cloverPaymentId === 'pay-direct-unmatched-duplicate').length === 1, 'Clover reconciliation must merge duplicate unmatched rows by provider payment id.');
     assert(ownerReconciliation.json.counts.unmatchedPayments === ownerReconciliation.json.unmatchedPayments.length, 'Clover reconciliation count must reflect the deduplicated unmatched queue.');
+    const unmatchedPaymentId = ownerReconciliation.json.unmatchedPayments.find(row => row.cloverPaymentId === 'pay-direct-unmatched-duplicate').id;
     const managerReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: managerCookie });
     assert(managerReconciliation.status === 403, 'Manager must not access Clover reconciliation or money controls.');
+    const managerPaymentMatch = await request(server, 'POST', '/api/integrations/clover/payments/match', { cookie: managerCookie, json: { paymentId: unmatchedPaymentId, customer: 'Direct Dispute Customer' } });
+    assert(managerPaymentMatch.status === 403, 'Manager must not match Clover payments to customer files.');
+    const ownerPaymentMatch = await request(server, 'POST', '/api/integrations/clover/payments/match', { cookie: ownerCookie, json: { paymentId: unmatchedPaymentId, customer: 'Direct Dispute Customer' } });
+    assert(ownerPaymentMatch.status === 200 && ownerPaymentMatch.json.ok && ownerPaymentMatch.json.matched >= 1, 'Owner Clover payment matching should update every surviving saved row for the same provider payment: ' + JSON.stringify(ownerPaymentMatch.json));
+    assert(ownerPaymentMatch.json.payment.customer === 'Direct Dispute Customer' && ownerPaymentMatch.json.payment.vin === 'DIRECTDISPUTEVIN' && ownerPaymentMatch.json.payment.plate === 'DIR-DSP', 'Matched Clover payments must inherit customer, vehicle, VIN, and tag context.');
+    const matchedReconciliation = await request(server, 'GET', '/api/integrations/clover/reconciliation', { cookie: ownerCookie });
+    assert(!matchedReconciliation.json.unmatchedPayments.some(row => row.cloverPaymentId === 'pay-direct-unmatched-duplicate'), 'A confirmed Clover payment match must leave the unmatched queue immediately.');
 
     const managerRefundPrepare = await request(server, 'POST', '/api/integrations/clover/refunds/prepare', { cookie: managerCookie, json: { paymentId: 'clover-payment-direct-dispute', amount: 50, reason: 'Direct role test' } });
     assert(managerRefundPrepare.status === 403, 'Manager must not prepare customer refunds.');

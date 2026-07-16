@@ -6602,6 +6602,37 @@ body:has(.admin-shell){background:#121416}
 .integration-modal-summary strong,.native-pickup-context strong{color:#f6f4ee!important;font-size:15px}
 .integration-modal-summary span,.native-pickup-context span{color:#d7bd77;font-size:11px;font-weight:800;overflow-wrap:anywhere}
 .integration-modal-summary small,.native-pickup-context small{color:#aeb2b5!important;font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+.integration-match-suggestions{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px;
+  margin:10px 0;
+}
+.integration-match-card{
+  display:grid;
+  gap:4px;
+  min-width:0;
+  min-height:88px;
+  padding:10px;
+  border:1px solid rgba(213,177,95,.24);
+  border-radius:7px;
+  background:#171b1e!important;
+  color:#f6f4ee!important;
+  text-align:left;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04)!important;
+  filter:none!important;
+  transform:none!important;
+  transition:background 160ms ease,border-color 160ms ease;
+}
+.integration-match-card:hover,.integration-match-card:focus-visible{
+  border-color:#d5b15f;
+  background:#1d2225!important;
+  filter:none!important;
+  transform:none!important;
+}
+.integration-match-card strong{color:#f6f4ee!important;font-size:12px;overflow-wrap:anywhere}
+.integration-match-card span{color:#d7bd77;font-size:10px;font-weight:800;overflow-wrap:anywhere}
+.integration-match-card small{color:#aeb2b5!important;font-size:9px;line-height:1.4;overflow-wrap:anywhere}
 .native-pickup-context{margin:10px 0}
 .native-pickup-context .actions{margin-top:4px}
 .native-pickup-context .btn{min-height:34px;padding:6px 9px;font-size:10px}
@@ -6630,5 +6661,7 @@ body:has(.admin-shell){background:#121416}
   .integration-row>.actions .btn{width:100%;min-width:0;justify-content:center}
   .integration-row>.actions .btn:only-child{grid-column:1/-1}
   .integration-modal-summary,.native-pickup-context{padding:9px 10px}
+  .integration-match-suggestions{grid-template-columns:1fr}
+  .integration-match-card{min-height:0}
   .integration-list{max-height:52dvh}
 }
