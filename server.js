@@ -36,7 +36,7 @@ const CLOVER_TOKEN_BASE = process.env.CLOVER_TOKEN_BASE || (CLOVER_ENV === 'sand
 const CLOVER_ECOMMERCE_PRIVATE_KEY = process.env.CLOVER_ECOMMERCE_PRIVATE_KEY || '';
 const CLOVER_ECOMMERCE_PUBLIC_KEY = process.env.CLOVER_ECOMMERCE_PUBLIC_KEY || process.env.CLOVER_API_ACCESS_KEY || '';
 const CLOVER_HCO_PAGE_CONFIG_UUID = process.env.CLOVER_HCO_PAGE_CONFIG_UUID || '';
-const CLOVER_WEBHOOK_SECRET = process.env.CLOVER_WEBHOOK_SECRET || process.env.WOA_CLOVER_WEBHOOK_SECRET || '';
+const CLOVER_WEBHOOK_SECRET = process.env.CLOVER_APP_AUTH_CODE || process.env.CLOVER_WEBHOOK_SECRET || process.env.WOA_CLOVER_WEBHOOK_SECRET || '';
 const CLOVER_HCO_WEBHOOK_SECRET = process.env.CLOVER_HCO_WEBHOOK_SECRET || process.env.WOA_CLOVER_HCO_WEBHOOK_SECRET || CLOVER_WEBHOOK_SECRET;
 const VERIFICATION_WEBHOOK_SECRET = process.env.WOA_VERIFICATION_WEBHOOK_SECRET || process.env.VERIFICATION_WEBHOOK_SECRET || '';
 const IDENTITY_PROVIDER = String(process.env.WOA_IDENTITY_PROVIDER || 'manual').trim().toLowerCase();
@@ -5763,6 +5763,9 @@ function stateForUserRead(data, user) {
     safe.integrations.clover = safe.integrations.clover || {};
     safe.integrations.clover.webhookSecretConfigured = !!CLOVER_HCO_WEBHOOK_SECRET;
     safe.integrations.clover.webhookSecretStatus = CLOVER_HCO_WEBHOOK_SECRET ? 'Hosted Checkout signing secret configured' : 'Needs Hosted Checkout signing secret';
+    safe.integrations.clover.hostedCheckoutWebhookReady = !!CLOVER_HCO_WEBHOOK_SECRET;
+    safe.integrations.clover.appWebhookAuthReady = !!CLOVER_WEBHOOK_SECRET;
+    safe.integrations.clover.appWebhookVerificationCodeReady = !!safe.integrations.clover.pendingVerificationCode;
     safe.integrations.apiProviderRuntime = apiProviderRows(safe);
   }
   if (owner) return safe;
@@ -8379,11 +8382,11 @@ function defaultApiProviderRows(data = {}) {
 	      id: 'clover-webhooks',
 	      name: 'Clover Webhooks',
 	      group: 'Money',
-	      status: CLOVER_HCO_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
+	      status: CLOVER_HCO_WEBHOOK_SECRET && CLOVER_WEBHOOK_SECRET ? 'Testing' : 'Ready for credentials',
 	      owner: 'Owner',
-	      envKeys: 'CLOVER_HCO_WEBHOOK_SECRET, Clover Hosted Checkout webhook URL',
+	      envKeys: 'CLOVER_HCO_WEBHOOK_SECRET, CLOVER_APP_AUTH_CODE (or CLOVER_WEBHOOK_SECRET), Clover webhook URLs',
 	      endpoint: '/api/webhooks/clover',
-	      liveTest: 'Trigger Clover payment webhook and confirm payment history / dashboard auto-sync updates.'
+	      liveTest: 'Verify Hosted Checkout signature plus X-Clover-Auth payment/customer events, then confirm named history and dashboard auto-sync.'
 	    },
 	    {
 	      id: 'woa-autopay',
@@ -8466,11 +8469,16 @@ function apiProviderTruthOverrides(data = {}) {
       ? (linkedSavedCards || completedCardSetup ? linkedSavedCards + ' saved payment source(s) are linked; a successful controlled saved-card charge is still required.' : 'Ecommerce keys are stored; complete card setup and one controlled saved-card charge before marking this connected.')
       : 'Clover Ecommerce public/private keys and merchant ID are not complete.');
   const cloverWebhookEvents = Array.isArray(clover.webhookEvents) ? clover.webhookEvents : [];
+  const hostedCheckoutWebhookEvents = cloverWebhookEvents.filter(row => row.kind === 'Hosted Checkout' || row.authorization === 'Clover-Signature');
+  const cloverAppWebhookEvents = cloverWebhookEvents.filter(row => row.kind === 'Clover app event' || row.authorization === 'X-Clover-Auth');
   const latestCloverWebhook = cloverWebhookEvents[0] || {};
-  const cloverWebhookLive = !!(CLOVER_HCO_WEBHOOK_SECRET && cloverWebhookEvents.length);
+  const cloverWebhookLive = !!(CLOVER_HCO_WEBHOOK_SECRET && CLOVER_WEBHOOK_SECRET && hostedCheckoutWebhookEvents.length && cloverAppWebhookEvents.length);
   const cloverWebhookResult = cloverWebhookLive
-    ? cloverWebhookEvents.length + ' Clover webhook event(s) have been accepted by the signed callback route.'
-    : (CLOVER_HCO_WEBHOOK_SECRET ? 'Clover Hosted Checkout signing secret is stored; a signed live payment event is still required.' : 'Clover Hosted Checkout signing secret is not configured.');
+    ? hostedCheckoutWebhookEvents.length + ' signed Hosted Checkout event(s) and ' + cloverAppWebhookEvents.length + ' authenticated Clover app event(s) have been accepted.'
+    : [
+        CLOVER_HCO_WEBHOOK_SECRET ? (hostedCheckoutWebhookEvents.length ? 'Hosted Checkout signed event verified.' : 'Hosted Checkout secret stored; live signed payment event needed.') : 'Hosted Checkout signing secret missing.',
+        CLOVER_WEBHOOK_SECRET ? (cloverAppWebhookEvents.length ? 'Clover app event verified.' : 'Clover app auth code stored; live payment/customer event needed.') : 'Clover app X-Clover-Auth code missing.'
+      ].join(' ');
   const savedAutopay = data.integrations && data.integrations.wheelsonAutoAutopay || {};
   const autopayEvidence = {
     ...woaAutopayStatus,
@@ -8529,7 +8537,7 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: ecommerceResult
     },
     'clover-webhooks': {
-      status: cloverWebhookLive ? 'Connected' : (CLOVER_HCO_WEBHOOK_SECRET ? 'Testing - live event needed' : 'Ready for credentials'),
+      status: cloverWebhookLive ? 'Connected' : (CLOVER_HCO_WEBHOOK_SECRET && CLOVER_WEBHOOK_SECRET ? 'Testing - live events needed' : 'Ready for credentials'),
       lastTestAt: latestCloverWebhook.receivedAt || latestCloverWebhook.createdAt || latestCloverWebhook.at || '',
       lastTestResult: cloverWebhookResult
     },
@@ -8609,7 +8617,7 @@ function apiProviderLaunchGuidance(provider = {}) {
       : ['Run one controlled saved-card charge from a named customer file, then confirm Paid in WheelsonAuto and the same customer name in Clover.', 'Successful Clover payment ID, customer name, amount, timestamp, and saved-card source match.'],
     'clover-webhooks': connected
       ? ['Monitor signed webhook receipts and confirm payment history continues refreshing automatically.', 'Accepted signed Clover event plus the matching payment/history sync timestamp.']
-      : ['Add the Clover webhook secret in Render, register /api/webhooks/clover in Clover, then trigger one signed payment event.', 'Accepted signed webhook event and an updated WheelsonAuto payment/history timestamp.'],
+      : ['Add the Hosted Checkout signing secret and Clover X-Clover-Auth code in Render, register /api/webhooks/clover for both Clover webhook systems, then trigger one payment event in each.', 'Accepted Hosted Checkout signature, authenticated payment/customer event, and updated WheelsonAuto customer/payment sync timestamps.'],
     'woa-autopay': connected
       ? ['Keep the monitor running and review only customer declines, payment-not-found, or retry outcomes.', 'Completed monitor run with next-run time and named charged/failed/skipped results.']
       : ['Run the autopay monitor with one managed saved-card schedule and verify charge, retry, failure, and next-run tracking.', 'Completed monitor result tied to a named customer and saved-card schedule.'],
@@ -8961,6 +8969,64 @@ function verifyCloverHostedCheckoutWebhook(rawBody, headers = {}) {
   const expected = crypto.createHmac('sha256', CLOVER_HCO_WEBHOOK_SECRET).update(String(timestamp) + '.' + String(rawBody || '')).digest('hex');
   return secureWebhookValueMatch(signature.toLowerCase(), expected.toLowerCase());
 }
+function verifyCloverAppWebhook(headers = {}) {
+  if (!CLOVER_WEBHOOK_SECRET) return false;
+  return secureWebhookValueMatch(headers['x-clover-auth'], CLOVER_WEBHOOK_SECRET);
+}
+function cloverWebhookVerificationCode(event = {}) {
+  const keys = Object.keys(event || {});
+  if (keys.length !== 1 || keys[0] !== 'verificationCode') return '';
+  const code = String(event.verificationCode || '').trim();
+  return /^[A-Za-z0-9-]{8,128}$/.test(code) ? code : '';
+}
+function cloverAppWebhookDetails(event = {}) {
+  const merchants = event && event.merchants && typeof event.merchants === 'object' && !Array.isArray(event.merchants) ? event.merchants : {};
+  const merchantIds = Object.keys(merchants);
+  const updates = [];
+  merchantIds.forEach(merchantId => {
+    const merchantUpdates = Array.isArray(merchants[merchantId]) ? merchants[merchantId] : [];
+    merchantUpdates.forEach(update => {
+      const objectId = String(update && update.objectId || '').trim();
+      updates.push({
+        merchantId,
+        objectId,
+        eventKey: objectId.includes(':') ? objectId.split(':')[0] : '',
+        objectIdValue: objectId.includes(':') ? objectId.slice(objectId.indexOf(':') + 1) : objectId,
+        type: String(update && update.type || '').toUpperCase(),
+        ts: Number(update && update.ts || 0)
+      });
+    });
+  });
+  return {
+    appId: String(event && event.appId || '').trim(),
+    merchantIds,
+    updates,
+    paymentUpdates: updates.filter(update => update.eventKey === 'P'),
+    customerUpdates: updates.filter(update => update.eventKey === 'C'),
+    merchantMatched: !CLOVER_MERCHANT_ID || merchantIds.length === 0 || merchantIds.includes(CLOVER_MERCHANT_ID)
+  };
+}
+function cloverWebhookFingerprint(event = {}, authorization = '') {
+  const hosted = hostedCheckoutWebhookDetails(event);
+  if (hosted.checkoutSessionId || hosted.paymentId) {
+    return ['hosted', hosted.merchantId, hosted.paymentId, hosted.checkoutSessionId, hosted.status, hosted.type].join('|');
+  }
+  const app = cloverAppWebhookDetails(event);
+  if (app.updates.length) {
+    return ['app', app.appId, ...app.updates.map(update => [update.merchantId, update.objectId, update.type, update.ts].join(':')).sort()].join('|');
+  }
+  return crypto.createHash('sha256').update(String(authorization) + '|' + JSON.stringify(event || {})).digest('hex');
+}
+async function recordCloverWebhookVerificationCode(code) {
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  data.integrations.clover = data.integrations.clover || {};
+  data.integrations.clover.pendingVerificationCode = code;
+  data.integrations.clover.pendingVerificationCodeReceivedAt = new Date().toISOString();
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return { ok: true, verified: false, verificationCodeReceived: true };
+}
 function hostedCheckoutWebhookDetails(event = {}) {
   const eventData = event.Data === undefined ? event.data : event.Data;
   const checkoutSessionId = typeof eventData === 'string'
@@ -9010,7 +9076,22 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
-  data.integrations.clover.webhookEvents.unshift({ receivedAt: new Date().toISOString(), authorization: options.authorization || 'Unknown', event });
+  const authorization = options.authorization || 'Unknown';
+  const fingerprint = cloverWebhookFingerprint(event, authorization);
+  const duplicate = data.integrations.clover.webhookEvents.find(row => row && row.fingerprint === fingerprint);
+  if (duplicate) return { ok: true, duplicate: true, webhookEventId: duplicate.id || '', hostedCheckout: { matched: false } };
+  const appDetails = options.verifiedCloverApp ? cloverAppWebhookDetails(event) : null;
+  const webhookEvent = {
+    id: 'clover-webhook-' + crypto.randomBytes(8).toString('hex'),
+    receivedAt: new Date().toISOString(),
+    authorization,
+    fingerprint,
+    kind: options.verifiedHostedCheckout ? 'Hosted Checkout' : (options.verifiedCloverApp ? 'Clover app event' : 'WheelsonAuto relay'),
+    merchantIds: appDetails ? appDetails.merchantIds : [],
+    objectIds: appDetails ? appDetails.updates.map(update => update.objectId).filter(Boolean) : [],
+    event
+  };
+  data.integrations.clover.webhookEvents.unshift(webhookEvent);
   data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents.slice(0, 250);
   const previous = JSON.parse(JSON.stringify(data));
   const hostedCheckout = options.verifiedHostedCheckout ? applyHostedCheckoutWebhook(data, event) : { matched: false };
@@ -9027,10 +9108,11 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
     resolveClaimCustomerLinks(data);
     await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
   }
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
   const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), WEBHOOK_AUTO_SYNC_DELAY_MS);
   if (webhookSyncTimer.unref) webhookSyncTimer.unref();
-  return { ok: true, disputeClaimId: createdClaimId, hostedCheckout };
+  return { ok: true, duplicate: false, webhookEventId: webhookEvent.id, disputeClaimId: createdClaimId, hostedCheckout };
 }
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
@@ -11450,14 +11532,30 @@ const server = http.createServer(async (req, res) => {
       const rawBody = await readBody(req, 256 * 1024);
       const sharedSecretValid = !!(CLOVER_WEBHOOK_SECRET && (secureWebhookValueMatch(url.searchParams.get('secret'), CLOVER_WEBHOOK_SECRET) || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], CLOVER_WEBHOOK_SECRET) || secureWebhookValueMatch(req.headers['x-clover-webhook-secret'], CLOVER_WEBHOOK_SECRET)));
       const hostedSignatureValid = verifyCloverHostedCheckoutWebhook(rawBody, req.headers);
-      if (!sharedSecretValid && !hostedSignatureValid) return json(res, CLOVER_HCO_WEBHOOK_SECRET ? 401 : 503, { ok: false, error: CLOVER_HCO_WEBHOOK_SECRET ? 'Unauthorized Clover webhook.' : 'Clover webhook signing secret is not configured.' });
       let event;
       try { event = JSON.parse(rawBody || '{}'); } catch { return json(res, 400, { ok: false, error: 'Clover webhook body must be valid JSON.' }); }
+      const verificationCode = cloverWebhookVerificationCode(event);
+      if (verificationCode && !hostedSignatureValid && !sharedSecretValid && !req.headers['x-clover-auth']) {
+        return json(res, 200, await recordCloverWebhookVerificationCode(verificationCode));
+      }
+      const cloverAppAuthValid = verifyCloverAppWebhook(req.headers);
+      if (!sharedSecretValid && !hostedSignatureValid && !cloverAppAuthValid) {
+        const configured = !!(CLOVER_HCO_WEBHOOK_SECRET || CLOVER_WEBHOOK_SECRET);
+        return json(res, configured ? 401 : 503, { ok: false, error: configured ? 'Unauthorized Clover webhook.' : 'Clover webhook credentials are not configured.' });
+      }
       if (hostedSignatureValid && url.searchParams.get('verify_only') === '1') {
         const details = hostedCheckoutWebhookDetails(event);
         return json(res, 200, { ok: true, verified: true, dryRun: true, authorization: 'Clover-Signature', type: details.type || 'TEST' });
       }
-      return json(res, 200, await recordCloverWebhookEvent(event, { verifiedHostedCheckout: true, authorization: hostedSignatureValid ? 'Clover-Signature' : 'WheelsonAuto shared secret' }));
+      const appDetails = cloverAppAuthValid ? cloverAppWebhookDetails(event) : null;
+      if (appDetails && !appDetails.merchantMatched) {
+        return json(res, 200, { ok: true, received: false, ignored: true, reason: 'Clover merchant ID mismatch.' });
+      }
+      return json(res, 200, await recordCloverWebhookEvent(event, {
+        verifiedHostedCheckout: hostedSignatureValid,
+        verifiedCloverApp: cloverAppAuthValid,
+        authorization: hostedSignatureValid ? 'Clover-Signature' : (cloverAppAuthValid ? 'X-Clover-Auth' : 'WheelsonAuto shared secret')
+      }));
     }
     if (url.pathname === '/api/webhooks/verification' && req.method === 'POST') {
       if (!VERIFICATION_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Verification webhook secret is not configured.' });
@@ -12486,6 +12584,10 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         checkedAt: new Date().toISOString(),
         signedWebhookReady: !!CLOVER_HCO_WEBHOOK_SECRET,
+        hostedCheckoutWebhookReady: !!CLOVER_HCO_WEBHOOK_SECRET,
+        appWebhookAuthReady: !!CLOVER_WEBHOOK_SECRET,
+        appWebhookVerificationCode: (((data.integrations || {}).clover || {}).pendingVerificationCode || ''),
+        appWebhookVerificationCodeReceivedAt: (((data.integrations || {}).clover || {}).pendingVerificationCodeReceivedAt || ''),
         refundAdapterReady: !!CLOVER_ECOMMERCE_PRIVATE_KEY,
         counts: {
           webhookEvents: webhookEvents.length,
@@ -14088,6 +14190,10 @@ module.exports = {
   shopifyProductVin,
   mapShopifyCatalogProducts,
   verifyCloverHostedCheckoutWebhook,
+  verifyCloverAppWebhook,
+  cloverWebhookVerificationCode,
+  cloverAppWebhookDetails,
+  cloverWebhookFingerprint,
   hostedCheckoutWebhookDetails,
   applyHostedCheckoutWebhook,
   recordHostedCheckoutPayment,

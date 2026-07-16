@@ -217,7 +217,7 @@ async function main() {
 
     const providerEvidenceState = {
       integrations: {
-        clover: { connected: true, lastCustomerSyncAt: '2026-07-14T12:00:00.000Z', lastPaymentSyncAt: '2026-07-14T12:01:00.000Z', recurringPlanMembers: [{ id: 'direct-provider-recurring' }], webhookEvents: [{ id: 'direct-provider-webhook', receivedAt: '2026-07-14T12:03:00.000Z' }] },
+        clover: { connected: true, lastCustomerSyncAt: '2026-07-14T12:00:00.000Z', lastPaymentSyncAt: '2026-07-14T12:01:00.000Z', recurringPlanMembers: [{ id: 'direct-provider-recurring' }], webhookEvents: [{ id: 'direct-provider-hosted-webhook', kind: 'Hosted Checkout', authorization: 'Clover-Signature', receivedAt: '2026-07-14T12:03:00.000Z' }, { id: 'direct-provider-app-webhook', kind: 'Clover app event', authorization: 'X-Clover-Auth', receivedAt: '2026-07-14T12:03:01.000Z' }] },
         wheelsonAutoAutopay: { enabled: true, intervalMs: 300000, lastFinishedAt: '2026-07-14T12:04:00.000Z', lastResult: { charged: 1, failed: 0, skipped: 0, errors: [] } }
       },
       recurringPayments: [{ id: 'direct-provider-recurring', customer: 'Direct Provider Customer', cloverCustomerId: 'direct-provider-customer', cloverPaymentSource: 'clv_direct_provider_source', cardSavedAt: '2026-07-14T11:59:00.000Z', autoChargeEnabled: true, lastManualChargeAt: '2026-07-14T12:02:00.000Z' }],
@@ -226,7 +226,7 @@ async function main() {
     const providerEvidence = new Map(apiProviderRows(providerEvidenceState).map(row => [row.id, row]));
     assert(providerEvidence.get('clover-core').status === 'Connected' && /customers and payments synced successfully/i.test(providerEvidence.get('clover-core').lastTestResult), 'Clover Core should be connected only when runtime customer/payment sync evidence exists.');
     assert(providerEvidence.get('clover-ecommerce').status === 'Connected' && /saved-card charge successfully/i.test(providerEvidence.get('clover-ecommerce').lastTestResult), 'Clover Ecommerce should be connected only after a successful WheelsonAuto saved-card charge.');
-    assert(providerEvidence.get('clover-webhooks').status === 'Connected' && /webhook event/i.test(providerEvidence.get('clover-webhooks').lastTestResult), 'Clover webhooks should be connected only after a signed live event is recorded.');
+    assert(providerEvidence.get('clover-webhooks').status === 'Connected' && /Hosted Checkout event/i.test(providerEvidence.get('clover-webhooks').lastTestResult) && /Clover app event/i.test(providerEvidence.get('clover-webhooks').lastTestResult), 'Clover webhooks should be connected only after both signed Hosted Checkout and authenticated app events are recorded.');
     assert(providerEvidence.get('woa-autopay').status === 'Connected' && /1 charged/.test(providerEvidence.get('woa-autopay').lastTestResult), 'WheelsonAuto Autopay should be connected only after a clean monitor run with a managed saved-card schedule.');
     assert(providerEvidence.get('insurance').endpoint.includes('/api/verification/cases') && !/future/i.test(providerEvidence.get('insurance').endpoint), 'Insurance provider readiness must point to the live provider-neutral verification routes.');
     assert(providerEvidence.get('identity-verification').endpoint.includes('/api/webhooks/verification') && /last-four/i.test(providerEvidence.get('identity-verification').lastTestResult), 'Identity provider readiness must expose the signed callback and last-four retention truth.');
@@ -235,7 +235,7 @@ async function main() {
     assert(/controlled saved-card charge/i.test(apiProviderLaunchGuidance({ id: 'clover-ecommerce', status: 'Testing - live charge needed' }).nextAction), 'Clover Ecommerce guidance should name the controlled saved-card charge required before connection.');
     assert(/10DLC approval/i.test(apiProviderLaunchGuidance({ id: 'sms-phone', status: 'Blocked - 10DLC approval' }).nextAction), 'SMS guidance should name the Telnyx account and 10DLC work blocking outbound delivery.');
     assert(/API credit/i.test(apiProviderLaunchGuidance({ id: 'star-ai', status: 'Blocked - OpenAI credit needed' }).nextAction), 'Star guidance should name usable OpenAI API credit as the current provider blocker.');
-    assert(/signed payment event/i.test(apiProviderLaunchGuidance({ id: 'clover-webhooks', status: 'Ready for credentials' }).nextAction), 'Clover webhook guidance should require a signed live event instead of treating a saved secret as connected.');
+    assert(/Hosted Checkout signing secret/i.test(apiProviderLaunchGuidance({ id: 'clover-webhooks', status: 'Ready for credentials' }).nextAction) && /X-Clover-Auth/i.test(apiProviderLaunchGuidance({ id: 'clover-webhooks', status: 'Ready for credentials' }).nextAction), 'Clover webhook guidance should require both real Clover webhook systems instead of treating one saved secret as connected.');
     assert(providerEvidence.get('clover-ecommerce').nextAction && providerEvidence.get('clover-ecommerce').proofRequired, 'Runtime provider rows should expose next-action and proof-required guidance to the app.');
     const providerReviewIds = new Set(apiProviderReviewRows(providerEvidenceState).map(row => row.id));
     assert(!providerReviewIds.has('clover-core') && !providerReviewIds.has('clover-ecommerce') && !providerReviewIds.has('clover-webhooks') && !providerReviewIds.has('woa-autopay'), 'Evidence-backed Clover and WheelsonAuto autopay providers should not remain in the provider readiness warning count.');
@@ -511,6 +511,34 @@ async function main() {
       }
     });
     assert(blockedWebhookDispute.status === 401, 'Clover dispute webhook should require the configured secret.');
+
+    const cloverVerificationCode = '5220ecf5-7dea-4396-b0ba-a1659c182887';
+    const cloverVerification = await request(server, 'POST', '/api/webhooks/clover', { json: { verificationCode: cloverVerificationCode } });
+    assert(cloverVerification.status === 200 && cloverVerification.json.verificationCodeReceived, 'Clover app webhook verification handshake should accept only the verification-code payload without treating it as a payment event.');
+    const verificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(verificationState.json.integrations.clover.pendingVerificationCode === cloverVerificationCode, 'Owner state should expose the pending Clover verification code without exposing webhook secrets.');
+
+    const cloverAppEvent = {
+      appId: 'DIRECTCLOVERAPP',
+      merchants: {
+        'direct-clover-merchant': [
+          { objectId: 'P:pay-direct-app-event', type: 'CREATE', ts: 1783526400000 },
+          { objectId: 'C:customer-direct-app-event', type: 'UPDATE', ts: 1783526401000 }
+        ]
+      }
+    };
+    const acceptedCloverAppEvent = await request(server, 'POST', '/api/webhooks/clover', { headers: { 'x-clover-auth': 'direct-clover-secret' }, json: cloverAppEvent });
+    assert(acceptedCloverAppEvent.status === 200 && acceptedCloverAppEvent.json.ok && !acceptedCloverAppEvent.json.duplicate, 'Clover X-Clover-Auth payment/customer event should be accepted.');
+    const repeatedCloverAppEvent = await request(server, 'POST', '/api/webhooks/clover', { headers: { 'x-clover-auth': 'direct-clover-secret' }, json: cloverAppEvent });
+    assert(repeatedCloverAppEvent.status === 200 && repeatedCloverAppEvent.json.duplicate, 'Repeated Clover app events should be idempotent.');
+    const wrongMerchantCloverAppEvent = await request(server, 'POST', '/api/webhooks/clover', {
+      headers: { 'x-clover-auth': 'direct-clover-secret' },
+      json: { appId: 'DIRECTCLOVERAPP', merchants: { 'another-merchant': [{ objectId: 'P:wrong-merchant-payment', type: 'CREATE', ts: 1783526402000 }] } }
+    });
+    assert(wrongMerchantCloverAppEvent.status === 200 && wrongMerchantCloverAppEvent.json.ignored, 'Authenticated Clover app events for a different merchant should be acknowledged without entering WheelsonAuto data.');
+    const cloverAppEventState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const savedCloverAppEvents = (cloverAppEventState.json.integrations.clover.webhookEvents || []).filter(row => row.kind === 'Clover app event' && (row.objectIds || []).includes('P:pay-direct-app-event'));
+    assert(savedCloverAppEvents.length === 1 && savedCloverAppEvents[0].authorization === 'X-Clover-Auth', 'Clover app event should be stored once with payment/customer object IDs and its verified authorization method.');
 
     const webhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
       headers: { 'x-clover-webhook-secret': 'direct-clover-secret' },
