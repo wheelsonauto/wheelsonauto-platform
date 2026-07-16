@@ -391,6 +391,13 @@ async function ownerInteractionSmoke() {
   assert(context.view === 'Operations' && context.tab === 'Service', 'Cross-view tab click should open Operations Service.');
   assertHealthy('Owner clicked Operations Service', html(context), ['Operations', 'Service work']);
 
+  await dispatchClick(context, { tab: 'Verification' });
+  assert(context.view === 'Operations' && context.tab === 'Verification', 'Operations Verification click should open the integrated review workspace.');
+  assertHealthy('Owner clicked Operations Verification', html(context), ['Insurance', 'Verification review']);
+  await dispatchClick(context, { tab: 'Verify background' });
+  assert(context.view === 'Operations' && context.tab === 'Verify background', 'Operations Background click must stay inside the verification workspace.');
+  assertHealthy('Owner clicked Operations Background', html(context), ['Insurance', 'Background checks', 'last four']);
+
   context.view = 'Dashboard';
   context.dashboardTab = 'Dues';
   context.render();

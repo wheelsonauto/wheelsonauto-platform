@@ -3202,7 +3202,7 @@ function IntegratedApplications(){
 var __woaIntegratedOperationsBase=Operations;
 function IntegratedOperations(){
   if(['Claims','Open','Clover','History'].indexOf(tab)>=0){IntegratedClaimsIssues();return}
-  if(['Verification','Verify review','Verify insurance','Verify identity'].indexOf(tab)>=0){IntegratedInsurance();return}
+  if(['Verification','Verify review','Verify insurance','Verify identity','Verify background'].indexOf(tab)>=0){IntegratedInsurance();return}
   __woaIntegratedOperationsBase();
   var tabs=document.querySelector('.main.view-operations .staff-tabs,.main.view-operations .tabs');
   if(tabs&&!tabs.querySelector('[data-tab="Verification"]')){
@@ -3260,7 +3260,7 @@ document.addEventListener('click',async function(event){
     }
     if(actionName==='integrated-new-verification'){integratedOpenVerificationForm(button.dataset.type||'insurance',button.dataset.customer||'');return}
     if(actionName==='integrated-create-verification'){
-      var created=await post('/api/verification/cases',{type:val('integratedVerificationType'),customer:val('integratedVerificationCustomer'),vehicleId:val('integratedVerificationVehicle'),provider:val('integratedVerificationProvider')||'Manual',reference:val('integratedVerificationReference'),expiresAt:val('integratedVerificationExpires'),externalCaseId:val('integratedVerificationExternal'),notes:val('integratedVerificationNotes')});if(!created.ok){notify(created.error||'Verification case did not save');return}await refreshData(true);closeModal();tab='Review';queueRender();notify(created.created?'Verification case created':'Existing open case found');return
+      var created=await post('/api/verification/cases',{type:val('integratedVerificationType'),customer:val('integratedVerificationCustomer'),vehicleId:val('integratedVerificationVehicle'),provider:val('integratedVerificationProvider')||'Manual',reference:val('integratedVerificationReference'),expiresAt:val('integratedVerificationExpires'),externalCaseId:val('integratedVerificationExternal'),notes:val('integratedVerificationNotes')});if(!created.ok){notify(created.error||'Verification case did not save');return}await refreshData(true);closeModal();tab=view==='Operations'?'Verify review':'Review';queueRender();notify(created.created?'Verification case created':'Existing open case found');return
     }
     if(actionName==='integrated-open-verification'){integratedOpenVerificationReview(button.dataset.id);return}
     if(actionName==='integrated-review-verification'){
