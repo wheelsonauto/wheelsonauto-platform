@@ -203,6 +203,32 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     }
   });
   assert(!missingRegistration.numberAssigned && !missingRegistration.campaignActive && !missingRegistration.readyForDeliveryTest, 'Unassigned Telnyx numbers must remain blocked from live SMS.');
+  const fallbackRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-live', identityStatus: 'VERIFIED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-live')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-fallback', status: 'ACTIVE' }] }; } };
+      throw new Error('Unexpected fallback readiness URL: ' + url);
+    }
+  });
+  assert(!fallbackRegistration.numberAssigned && fallbackRegistration.campaignActive && fallbackRegistration.campaignId === 'campaign-fallback' && fallbackRegistration.brandStatus === 'VERIFIED', 'Brand and campaign API fallback should find an approved campaign when campaignBuilder is unavailable.');
+  const pendingRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-pending', identityStatus: 'VERIFIED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-pending')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-pending', campaignStatus: 'MNO_PENDING' }] }; } };
+      throw new Error('Unexpected pending readiness URL: ' + url);
+    }
+  });
+  assert(!pendingRegistration.campaignActive && pendingRegistration.campaignStatus === 'MNO_PENDING' && /MNO_PENDING/.test(pendingRegistration.summary), 'Pending carrier review must be reported without exposing assignment controls.');
   const assignmentCalls = [];
   const candidateRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',

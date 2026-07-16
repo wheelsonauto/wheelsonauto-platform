@@ -1441,22 +1441,53 @@ async function checkTelnyx10dlcReadiness(options = {}) {
   const assignmentStatus = String(assignment.status || assignment.assignmentStatus || assignment.assignment_status || '').trim();
   let campaign = {};
   let campaignStatus = '';
+  let brandStatus = '';
+  const campaignState = row => String(row && (row.status || row.campaignStatus || row.campaign_status || row.submissionStatus || row.submission_status) || '').trim().toUpperCase();
+  const activeCampaignState = value => ['ACTIVE', 'APPROVED', 'MNO_PROVISIONED'].includes(String(value || '').trim().toUpperCase());
   if (campaignId) {
-    const campaignBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder/' + encodeURIComponent(campaignId));
+    let campaignBody;
+    try {
+      campaignBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder/' + encodeURIComponent(campaignId));
+    } catch (err) {
+      if (Number(err && err.statusCode) !== 404) throw err;
+      campaignBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaign/' + encodeURIComponent(campaignId));
+    }
     campaign = campaignBody.data || campaignBody || {};
-    campaignStatus = String(campaign.status || campaign.campaignStatus || campaign.campaign_status || '').trim().toUpperCase();
+    campaignStatus = campaignState(campaign);
   }
-  const numberAssigned = !!campaignId && !/failed|rejected|unassigned|removed/i.test(assignmentStatus);
+  const numberAssigned = !!campaignId && (!assignmentStatus || /^assigned$/i.test(assignmentStatus));
   if (!campaignId) {
-    const campaignsBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder?page[size]=50');
-    const campaigns = Array.isArray(campaignsBody.data) ? campaignsBody.data : Array.isArray(campaignsBody.records) ? campaignsBody.records : [];
-    campaign = campaigns.find(row => ['ACTIVE', 'TCR_ACCEPTED', 'APPROVED'].includes(String(row.status || row.campaignStatus || row.campaign_status || '').trim().toUpperCase())) || {};
+    let campaigns = [];
+    try {
+      const campaignsBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder?page[size]=50');
+      campaigns = Array.isArray(campaignsBody.data) ? campaignsBody.data : Array.isArray(campaignsBody.records) ? campaignsBody.records : [];
+    } catch (err) {
+      if (Number(err && err.statusCode) !== 404) throw err;
+      const brandsBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/brand?page=1&recordsPerPage=500');
+      const brands = Array.isArray(brandsBody.records) ? brandsBody.records : Array.isArray(brandsBody.data) ? brandsBody.data : [];
+      const firstBrand = brands[0] || {};
+      brandStatus = String(firstBrand.identityStatus || firstBrand.identity_status || firstBrand.status || '').trim().toUpperCase();
+      for (const brand of brands) {
+        const brandId = String(brand.brandId || brand.brand_id || brand.id || '').trim();
+        if (!brandId) continue;
+        const listed = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaign?brandId=' + encodeURIComponent(brandId) + '&page=1&recordsPerPage=500');
+        const rows = Array.isArray(listed.records) ? listed.records : Array.isArray(listed.data) ? listed.data : [];
+        campaigns.push(...rows);
+      }
+    }
+    campaign = campaigns.find(row => activeCampaignState(campaignState(row))) || campaigns[0] || {};
     campaignId = String(campaign.campaignId || campaign.campaign_id || campaign.id || '').trim();
-    campaignStatus = String(campaign.status || campaign.campaignStatus || campaign.campaign_status || '').trim().toUpperCase();
+    campaignStatus = campaignState(campaign);
   }
-  const campaignActive = campaignStatus === 'ACTIVE' || campaignStatus === 'TCR_ACCEPTED' || campaignStatus === 'APPROVED';
+  const campaignActive = activeCampaignState(campaignStatus);
   const summary = !numberAssigned
-    ? (campaignActive && campaignId ? 'An active Telnyx 10DLC campaign was found, but the SMS number is not attached to it.' : 'Telnyx number is not attached to an active 10DLC campaign.')
+    ? (campaignActive && campaignId
+        ? 'An active Telnyx 10DLC campaign was found, but the SMS number is not attached to it.'
+        : campaignId
+          ? 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.'
+          : brandStatus
+            ? 'Telnyx brand is ' + brandStatus + ', but no 10DLC campaign is available yet.'
+            : 'Telnyx number is not attached to an active 10DLC campaign.')
     : !campaignActive
       ? 'Telnyx campaign is assigned but currently ' + (campaignStatus || assignmentStatus || 'under review') + '.'
       : 'Telnyx 10DLC campaign is active and the SMS number is assigned. Run one outbound delivery test.';
@@ -1467,6 +1498,7 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     assignmentStatus: assignmentStatus || (numberAssigned ? 'Assigned' : 'Not assigned'),
     campaignId,
     campaignStatus: campaignStatus || 'Not found',
+    brandStatus: brandStatus || '',
     campaignActive,
     readyForDeliveryTest: numberAssigned && campaignActive,
     summary
@@ -1480,6 +1512,7 @@ function publicTelnyx10dlcReadiness(readiness = {}) {
     assignmentStatus: readiness.assignmentStatus || '',
     campaignId: readiness.campaignId ? 'stored securely' : '',
     campaignStatus: readiness.campaignStatus || '',
+    brandStatus: readiness.brandStatus || '',
     campaignActive: !!readiness.campaignActive,
     readyForDeliveryTest: !!readiness.readyForDeliveryTest,
     assignmentRequestedAt: readiness.assignmentRequestedAt || '',
