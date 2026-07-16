@@ -444,6 +444,8 @@ function ownerSmoke() {
   assert(context.apiProviders().find(row => row.id === 'clover-core').status === 'Connected', 'API Roadmap should use the live server provider status instead of the generic client default.');
   assert(context.apiProviders().find(row => row.id === 'insurance').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point insurance to the live verification adapter.');
   assert(context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/api/webhooks/verification'), 'Client fallback provider rows must include identity and driver-license signed callbacks.');
+  assert(context.apiProviders().find(row => row.id === 'background-checks').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point background screening to the shared secure verification adapter.');
+  assert(context.apiProviders().find(row => row.id === 'background-checks').status === 'Ready - manual review', 'Background screening must be honestly usable for manual review while an authoritative provider remains optional.');
   assert(context.apiProviders().find(row => row.id === 'accounting').endpoint.includes('/api/accounting/quickbooks.csv'), 'Client fallback provider rows must expose the balanced QuickBooks journal export.');
   assert(context.apiProviders().find(row => row.id === 'pickup-calendar').endpoint.includes('/api/pickups/calendar'), 'Client fallback provider rows must expose pickup calendar and maps routes.');
   const detailedProviderForm = context.apiProviderForm({ id: 'clover-ecommerce', name: 'Clover Ecommerce', status: 'Testing - live charge needed' });
@@ -480,6 +482,8 @@ function ownerSmoke() {
   assert(!context.verificationMissingRows('driver_license').some(row => row.customer === 'Expiring Case Smoke'), 'An expiring linked license must remain linked while appearing in the review queue.');
   const expirationReview = renderView(context, 'Insurance', 'Review');
   assert(expirationReview.includes('Expiring Case Smoke') && expirationReview.includes('Expiring'), 'The verification review must surface current expiration status from the saved date.');
+  const backgroundReview = renderView(context, 'Insurance', 'Background');
+  assert(backgroundReview.includes('Background checks') && backgroundReview.includes('Background Only Smoke') && backgroundReview.includes('last four'), 'Background screening must render as a dedicated manual/provider-neutral review surface.');
   context.db.recurringPayments.unshift({
     id: 'smoke-removed-today',
     customer: 'Removed Today Smoke',
@@ -539,9 +543,10 @@ function ownerSmoke() {
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board'], true],
     ['Claims Clover', 'Claims & Issues', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'Disputes', 'Refunds', 'Unmatched', 'integration-workspace'], true],
-    ['Verification review', 'Insurance', 'Review', ['Insurance', 'Verification review', 'Missing verified proof', 'Expires soon', 'integration-workspace'], true],
+    ['Verification review', 'Insurance', 'Review', ['Insurance', 'Verification review', 'Missing verified proof', 'Pending or expiring', 'integration-workspace'], true],
     ['Verification insurance', 'Insurance', 'Insurance', ['Insurance', 'Insurance verification', 'signed provider adapter', 'integration-workspace'], true],
     ['Verification identity', 'Insurance', 'Identity', ['Insurance', 'Identity &amp; driver license', 'last four', 'integration-workspace'], true],
+    ['Verification background', 'Insurance', 'Background', ['Insurance', 'Background checks', 'background check', 'last four', 'integration-workspace'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Ask Star', 'Review queue', 'message-star-focused', 'message-thread-grid'], false],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Follow-up', 'message-focused-list'], false],
     ['Documents', 'Documents', undefined, ['Documents', 'Customer requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
@@ -585,6 +590,7 @@ function managerSmoke() {
     ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board'], true],
     ['Manager Clover review', 'Claims & Issues', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'integration-workspace'], true],
     ['Manager verification', 'Insurance', 'Review', ['Insurance', 'Verification review', 'integration-workspace'], true],
+    ['Manager background verification', 'Insurance', 'Background', ['Insurance', 'Background checks', 'integration-workspace'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-shell', 'message-conversation-panel', 'message-empty-state'], false],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Operations snapshot'], false],
     ['Manager accounting', 'Reports', 'Accounting', ['Reports', 'Source-linked accounting ledger', 'QuickBooks'], false],

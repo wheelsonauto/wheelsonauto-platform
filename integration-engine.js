@@ -83,12 +83,16 @@ function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
 
 function verificationCase(data, payload = {}, actor = {}) {
   const type = text(payload.type || payload.kind).toLowerCase().replace(/\s+/g, '_');
-  if (!['identity', 'driver_license', 'insurance'].includes(type)) throw new Error('Verification type must be identity, driver_license, or insurance.');
+  if (!['identity', 'driver_license', 'insurance', 'background'].includes(type)) throw new Error('Verification type must be identity, driver_license, insurance, or background.');
   const customer = text(payload.customer || payload.name);
   if (!customer) throw new Error('Choose a customer before creating a verification case.');
   const profile = customerProfile(data, customer);
   const vehicle = vehicleFor(data, { ...profile, ...payload, customer });
-  const provider = text(payload.provider || (type === 'insurance' ? process.env.WOA_INSURANCE_PROVIDER : process.env.WOA_IDENTITY_PROVIDER) || 'manual');
+  const provider = text(payload.provider || (type === 'insurance'
+    ? process.env.WOA_INSURANCE_PROVIDER
+    : type === 'background'
+      ? process.env.WOA_BACKGROUND_PROVIDER
+      : process.env.WOA_IDENTITY_PROVIDER) || 'manual');
   const now = new Date().toISOString();
   const reference = text(payload.reference || payload.policyNumber || payload.driverLicenseId);
   const dedupeKey = stableId('verification', [type, customer, payload.documentId, payload.onboardingSessionId, payload.externalCaseId, reference.slice(-4)]);

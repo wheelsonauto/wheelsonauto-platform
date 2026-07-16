@@ -391,24 +391,20 @@ assertIncludes('Customer portal payment privacy', customerPortalState + stripCus
   'Please contact WheelsonAuto'
 ]);
 
-const insurance = finalFunctionSlice(app, 'Insurance');
-assertIncludes('Insurance/background surface', insurance + app, [
-  'Insurance & background command',
+const insurance = finalFunctionSlice(app, 'IntegratedInsurance');
+assertIncludes('Insurance/background surface', insurance + app + server, [
   'Background checks',
-  'new-background-doc',
-  'verificationDocs',
+  'backgroundCases',
+  'missingBackground',
+  'integrated-new-verification',
+  'verificationEvidenceDocs',
   'verificationDocClearedForCustomer',
-  '!verificationDocClearedForCustomer',
-  'Verification follow-up',
-  'Message queue',
   'Background check not verified',
-  'Search background by customer',
-  'Documents / verification',
-  "'Document'",
   'open-document',
-  'Insurance/background',
-  'Collect insurance proof',
-  'Finish background checks'
+  'Only last 4 will be stored',
+  'WOA_BACKGROUND_PROVIDER',
+  '/api/verification/cases',
+  '/api/webhooks/verification'
 ]);
 
 const auditTrailPanel = finalFunctionSlice(app, 'auditTrailPanel');

@@ -56,6 +56,20 @@ engine.reviewVerificationCase(providerCase, { decision: 'approve', notes: 'Manua
 engine.applyVerificationEvent(providerCase, { externalCaseId: 'insurance-case-1', status: 'rejected', provider: 'Insurance provider' });
 assert.equal(providerCase.status, 'Rejected', 'Authoritative provider results must supersede an earlier manual decision.');
 
+const backgroundCase = engine.verificationCase(data, {
+  type: 'background',
+  customer: 'Test Customer',
+  provider: 'manual',
+  reference: 'PRIVATE-SCREENING-7788',
+  notes: 'Manual screening review'
+}, { name: 'Manager' });
+assert.equal(backgroundCase.created, true, 'Background screening should use the shared provider-neutral verification engine.');
+assert.equal(backgroundCase.record.referenceLast4, '7788');
+assert.equal(JSON.stringify(backgroundCase.record).includes('PRIVATE-SCREENING-7788'), false, 'Full background-screening references must not be retained.');
+assert.equal(backgroundCase.record.vehicleId, 'vehicle-1');
+engine.reviewVerificationCase(backgroundCase.record, { decision: 'approve', notes: 'Manual background review completed.' }, { name: 'Manager' });
+assert.equal(backgroundCase.record.status, 'Verified');
+
 const ledger = engine.buildAccountingLedger(data, [{ sourceKey: 'payment:payment-1', quickBooksStatus: 'Synced', quickBooksEntityId: 'qb-1' }]);
 assert.equal(ledger.filter(row => row.sourceKey === 'payment:payment-1').length, 1);
 assert.equal(ledger.some(row => row.sourceKey === 'payment:payment-failed'), false, 'Failed payments must not enter the accounting ledger.');

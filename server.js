@@ -41,6 +41,7 @@ const CLOVER_HCO_WEBHOOK_SECRET = process.env.CLOVER_HCO_WEBHOOK_SECRET || proce
 const VERIFICATION_WEBHOOK_SECRET = process.env.WOA_VERIFICATION_WEBHOOK_SECRET || process.env.VERIFICATION_WEBHOOK_SECRET || '';
 const IDENTITY_PROVIDER = String(process.env.WOA_IDENTITY_PROVIDER || 'manual').trim().toLowerCase();
 const INSURANCE_PROVIDER = String(process.env.WOA_INSURANCE_PROVIDER || 'manual').trim().toLowerCase();
+const BACKGROUND_PROVIDER = String(process.env.WOA_BACKGROUND_PROVIDER || 'manual').trim().toLowerCase();
 const QUICKBOOKS_REALM_ID = process.env.QUICKBOOKS_REALM_ID || '';
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
 const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
@@ -80,7 +81,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-toll-missing-70">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-background-verification-71">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -7135,9 +7136,10 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
     ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
     ['CLOVER_HCO_WEBHOOK_SECRET', CLOVER_HCO_WEBHOOK_SECRET ? 'Set' : 'Missing', 'Signed Hosted Checkout payment reconciliation'],
-    ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed identity and insurance provider callbacks; staff review remains live without a provider'],
+    ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed identity, insurance, and background provider callbacks; staff review remains live without a provider'],
     ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Identity and driver-license verification adapter'],
     ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
+    ['WOA_BACKGROUND_PROVIDER', BACKGROUND_PROVIDER || 'manual', 'Background-screening verification adapter'],
     ['QUICKBOOKS_*', QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Set' : 'Manual-live', 'QuickBooks OAuth connection; internal accounting ledger and CSV remain live without it'],
     ['GOOGLE_CALENDAR_*', GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Set' : 'Manual-live', 'Automatic Google Calendar sync; ICS, add-to-calendar, and maps links remain live without it'],
     ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
@@ -8577,7 +8579,7 @@ function defaultApiProviderRows(data = {}) {
     { id: 'ezpass', name: 'WheelsonAuto Toll Import / E-ZPass', group: 'Risk', status: 'Ready - WheelsonAuto import', owner: 'Owner', envKeys: 'No external key required for CSV/TSV/JSON import', endpoint: '/api/tolls/import', liveTest: 'Preview statement, verify plate/VIN/customer separation, import once, import again to prove duplicate protection, then create one recovery link.' },
     { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review policy proof manually, verify the 30-day expiration queue, then accept one signed authoritative provider result.' },
     { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review identity/license proof manually, confirm only the last four are retained, then accept one signed authoritative provider result.' },
-    { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'BACKGROUND_PROVIDER_KEY', endpoint: 'Future /api/integrations/background/run', liveTest: 'Run from approved application and attach result to customer file.' },
+    { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_BACKGROUND_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Create a background review from an approved application, retain only the last four of any reference, then accept one signed authoritative provider result.' },
     { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: 'Provider needed', owner: 'Manager', envKeys: 'TRACKER_PROVIDER_KEY', endpoint: 'Future /api/integrations/tracker/sync', liveTest: 'Connect tracker name to vehicle, show last location and alert state.' },
     { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
     { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
@@ -8657,12 +8659,15 @@ function apiProviderTruthOverrides(data = {}) {
   const verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
   const insuranceCases = verificationCases.filter(row => String(row.type || '') === 'insurance');
   const identityCases = verificationCases.filter(row => ['identity', 'driver_license'].includes(String(row.type || '')));
+  const backgroundCases = verificationCases.filter(row => String(row.type || '') === 'background');
   const verificationEvidenceAt = rows => newestEvidenceAt(rows.map(row => row.providerVerifiedAt || row.reviewedAt || row.updatedAt || row.createdAt));
   const providerResultRecorded = rows => rows.some(row => row.externalCaseId && row.providerVerifiedAt && /verified|approved|clear|passed|active/i.test(String(row.providerStatus || row.status || '')));
   const insuranceProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual');
   const identityProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual');
+  const backgroundProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual');
   const insuranceProviderLive = insuranceProviderReady && providerResultRecorded(insuranceCases);
   const identityProviderLive = identityProviderReady && providerResultRecorded(identityCases);
+  const backgroundProviderLive = backgroundProviderReady && providerResultRecorded(backgroundCases);
   const accountingEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
   const quickBooksReady = !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET);
   const pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
@@ -8726,6 +8731,15 @@ function apiProviderTruthOverrides(data = {}) {
       liveTest: 'Review identity/license proof, confirm only the last four are retained, then accept one signed authoritative provider result.',
       lastTestAt: verificationEvidenceAt(identityCases),
       lastTestResult: identityCases.length + ' identity/license case(s) are tracked; only last-four references are retained.' + (identityProviderLive ? ' A signed authoritative result has been verified.' : ' Real-world identity validity remains provider-required.')
+    },
+    'background-checks': {
+      name: 'Background Checks',
+      status: backgroundProviderLive ? 'Connected' : (backgroundProviderReady ? 'Testing - signed result needed' : 'Ready - manual review'),
+      envKeys: 'WOA_BACKGROUND_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',
+      endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification',
+      liveTest: 'Create a background review from an approved application, retain only the last four of any reference, then accept one signed authoritative provider result.',
+      lastTestAt: verificationEvidenceAt(backgroundCases),
+      lastTestResult: backgroundCases.length + ' background case(s) are tracked; manual review, customer/vehicle linking, and last-four retention are live.' + (backgroundProviderLive ? ' A signed authoritative result has been verified.' : ' Real-world screening validity remains provider-required.')
     },
     accounting: {
       name: 'Accounting / QuickBooks',
@@ -12855,7 +12869,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
       const cases = (scoped.verificationCases || []).map(row => ({ ...row, status: integrationEngine.verificationCaseStatus(row) }));
-      return json(res, 200, { ok: true, providers: { identity: IDENTITY_PROVIDER, insurance: INSURANCE_PROVIDER, signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET }, cases });
+      return json(res, 200, { ok: true, providers: { identity: IDENTITY_PROVIDER, insurance: INSURANCE_PROVIDER, background: BACKGROUND_PROVIDER, signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET }, cases });
     }
     if (url.pathname === '/api/verification/cases' && req.method === 'POST') {
       const role = String(user.role || '').toLowerCase();
