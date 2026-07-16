@@ -20,7 +20,8 @@ const {
   mergeTelnyxDeliveryUpdates,
   reconcileTelnyxDeliveryRecords,
   configureTelnyxMessagingProfile,
-  checkTelnyx10dlcReadiness
+  checkTelnyx10dlcReadiness,
+  assignTelnyx10dlcCampaign
 } = require('../server');
 
 function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000))) {
@@ -196,11 +197,35 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',
     fetchImpl: async url => {
-      assert(String(url).includes('/10dlc/phoneNumberCampaign?'));
+      if (String(url).includes('/10dlc/phoneNumberCampaign?')) return { ok: true, status: 200, async json() { return { data: [] }; } };
+      assert(String(url).includes('/10dlc/campaignBuilder?'));
       return { ok: true, status: 200, async json() { return { data: [] }; } };
     }
   });
   assert(!missingRegistration.numberAssigned && !missingRegistration.campaignActive && !missingRegistration.readyForDeliveryTest, 'Unassigned Telnyx numbers must remain blocked from live SMS.');
+  const assignmentCalls = [];
+  const candidateRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      if (String(url).includes('/10dlc/phoneNumberCampaign?')) return { ok: true, status: 200, async json() { return { data: [] }; } };
+      if (String(url).includes('/10dlc/campaignBuilder?')) return { ok: true, status: 200, async json() { return { data: [{ campaignId: 'campaign-candidate', status: 'ACTIVE' }] }; } };
+      throw new Error('Unexpected candidate readiness URL: ' + url);
+    }
+  });
+  assert(!candidateRegistration.numberAssigned && candidateRegistration.campaignActive && candidateRegistration.campaignId === 'campaign-candidate', 'An active unassigned campaign should become a safe assignment candidate without pretending the number is attached.');
+  const submittedAssignment = await assignTelnyx10dlcCampaign({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    readiness: candidateRegistration,
+    fetchImpl: async (url, options = {}) => {
+      assignmentCalls.push({ url: String(url), options });
+      return { ok: true, status: 202, async json() { return { data: { status: 'pending' } }; } };
+    }
+  });
+  assert(submittedAssignment.assignmentStatus === 'Assignment submitted' && submittedAssignment.assignmentRequestedAt, 'Owner assignment should record a pending Telnyx number-to-campaign request.');
+  assert(assignmentCalls.length === 1 && assignmentCalls[0].url.endsWith('/10dlc/phoneNumberCampaign') && assignmentCalls[0].options.method === 'POST', '10DLC assignment should use the official phone-number campaign endpoint.');
+  assert.deepStrictEqual(JSON.parse(assignmentCalls[0].options.body), { phoneNumber: '+16095550199', campaignId: 'campaign-candidate' });
 
   console.log('Telnyx messaging check passed: signed inbound webhooks, message parsing, delivery receipts, profile setup, and live 10DLC readiness checks are wired.');
 })().catch(error => {
