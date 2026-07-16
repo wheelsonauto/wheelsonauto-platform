@@ -474,6 +474,46 @@ function repairWeakCustomerVehicleLabels(data) {
   }
   return repaired;
 }
+function appendUniqueNote(existing, note) {
+  const current = String(existing || '').trim();
+  const next = String(note || '').trim();
+  if (!next) return current;
+  const nextKey = normKey(next);
+  const alreadySaved = current.split(/\r?\n/).some(line => normKey(line) === nextKey);
+  return alreadySaved ? current : [current, next].filter(Boolean).join('\n');
+}
+function repairRepeatedNoteLines(data) {
+  const collections = ['vehicles', 'customers', 'contracts', 'recurringPayments', 'maintenance', 'claims', 'tasks', 'documents', 'applications'];
+  let repairedRows = 0;
+  let removedLines = 0;
+  collections.forEach(key => (Array.isArray(data[key]) ? data[key] : []).forEach(row => {
+    if (!row || typeof row.notes !== 'string' || !row.notes.includes('\n')) return;
+    const seen = new Set();
+    const clean = [];
+    row.notes.split(/\r?\n/).forEach(line => {
+      const value = String(line || '').trim();
+      if (!value) return;
+      const identity = normKey(value);
+      if (seen.has(identity)) {
+        removedLines += 1;
+        return;
+      }
+      seen.add(identity);
+      clean.push(value);
+    });
+    const next = clean.join('\n');
+    if (next === row.notes) return;
+    row.notes = next;
+    repairedRows += 1;
+  }));
+  if (repairedRows) {
+    data.systemRepairs = data.systemRepairs || {};
+    data.systemRepairs.repeatedNoteRepairAt = new Date().toISOString();
+    data.systemRepairs.repeatedNoteRepairRows = repairedRows;
+    data.systemRepairs.repeatedNoteRepairLines = removedLines;
+  }
+  return { repairedRows, removedLines };
+}
 function repairDataIds(data) {
   data.onlineVehicles = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
   data.eSignatures = Array.isArray(data.eSignatures) ? data.eSignatures : [];
@@ -489,6 +529,7 @@ function repairDataIds(data) {
   repairDuplicateRecordIds(data, 'contracts');
   repairDuplicateOpenMaintenance(data);
   repairWeakCustomerVehicleLabels(data);
+  repairRepeatedNoteLines(data);
   ensureBaseOrganization(data);
   repairVehicleSheetLinkConflicts(data);
   resolveClaimCustomerLinks(data);
@@ -8874,7 +8915,7 @@ function assignAutopayVehicle(data, autopay) {
       row.returnedVehicle = vehicleName;
       row.returnedVin = vehicle.vin || '';
       row.returnedPlate = tag;
-      row.notes = [row.notes, releaseNote].filter(Boolean).join('\n');
+      row.notes = appendUniqueNote(row.notes, releaseNote);
     });
     data.contracts.forEach(row => {
       if (normKey(row.customer || row.name) !== previousKey) return;
@@ -8886,7 +8927,7 @@ function assignAutopayVehicle(data, autopay) {
       row.returnedVehicle = vehicleName;
       row.returnedVin = vehicle.vin || '';
       row.returnedPlate = tag;
-      row.notes = [row.notes, releaseNote].filter(Boolean).join('\n');
+      row.notes = appendUniqueNote(row.notes, releaseNote);
     });
     data.recurringPayments.forEach(row => {
       if (normKey(row.customer) !== previousKey) return;
@@ -8904,7 +8945,7 @@ function assignAutopayVehicle(data, autopay) {
       row.autoChargeEnabled = false;
       row.autopayManagedBy = 'Stopped - vehicle reassigned';
       row.removedAt = new Date().toISOString();
-      row.notes = [row.notes, releaseNote].filter(Boolean).join('\n');
+      row.notes = appendUniqueNote(row.notes, releaseNote);
     });
   }
   vehicle.currentCustomer = autopay.customer;
@@ -8940,7 +8981,7 @@ function assignAutopayVehicle(data, autopay) {
     job.customerSyncedAt = new Date().toISOString();
     if (oldJobCustomer && normKey(oldJobCustomer) !== customerKey) {
       job.previousCustomer = oldJobCustomer;
-      job.notes = [job.notes, 'Open service customer updated from ' + oldJobCustomer + ' to ' + autopay.customer + ' after vehicle reassignment.'].filter(Boolean).join('\n');
+      job.notes = appendUniqueNote(job.notes, 'Open service customer updated from ' + oldJobCustomer + ' to ' + autopay.customer + ' after vehicle reassignment.');
     }
   });
   const customer = data.customers.find(row => normKey(row.name) === customerKey);

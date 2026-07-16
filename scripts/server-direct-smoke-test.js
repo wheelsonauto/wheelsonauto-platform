@@ -184,6 +184,16 @@ async function main() {
   } = require('../server.js');
 
   try {
+    const pathologicalNotes = {
+      customers: [{ id: 'direct-note-customer', name: 'Direct Note Customer', notes: Array(3000).fill('Vehicle reassigned through WheelsonAuto autopay.').join('\n') }],
+      contracts: [{ id: 'direct-note-contract', customer: 'Direct Note Customer', notes: Array(3000).fill('Vehicle reassigned through WheelsonAuto autopay.').join('\n') }]
+    };
+    const pathologicalSize = Buffer.byteLength(JSON.stringify(pathologicalNotes));
+    repairDataIds(pathologicalNotes);
+    assert(pathologicalNotes.customers[0].notes === 'Vehicle reassigned through WheelsonAuto autopay.' && pathologicalNotes.contracts[0].notes === 'Vehicle reassigned through WheelsonAuto autopay.', 'State repair must collapse pathological repeated note lines without removing the unique note.');
+    assert(pathologicalNotes.systemRepairs.repeatedNoteRepairRows === 2 && pathologicalNotes.systemRepairs.repeatedNoteRepairLines === 5998, 'State repair must record exactly how many repeated note rows and lines were removed.');
+    assert(Buffer.byteLength(JSON.stringify(pathologicalNotes)) < pathologicalSize / 20, 'Repeated-note repair should materially shrink a bloated customer/file payload.');
+
     const providerEvidenceState = {
       integrations: {
         clover: { connected: true, lastCustomerSyncAt: '2026-07-14T12:00:00.000Z', lastPaymentSyncAt: '2026-07-14T12:01:00.000Z', recurringPlanMembers: [{ id: 'direct-provider-recurring' }], webhookEvents: [{ id: 'direct-provider-webhook', receivedAt: '2026-07-14T12:03:00.000Z' }] },
