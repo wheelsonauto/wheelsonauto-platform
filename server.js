@@ -1442,7 +1442,17 @@ async function checkTelnyx10dlcReadiness(options = {}) {
   let campaign = {};
   let campaignStatus = '';
   let brandStatus = '';
-  const campaignState = row => String(row && (row.status || row.campaignStatus || row.campaign_status || row.submissionStatus || row.submission_status) || '').trim().toUpperCase();
+  const campaignState = row => String(row && (row.campaignStatus || row.campaign_status || row.status || row.submissionStatus || row.submission_status) || '').trim().toUpperCase();
+  const campaignFailure = row => {
+    const raw = row && (row.failureReasons || row.failure_reasons || row.failureReason || row.failure_reason || row.reasons || row.reason);
+    if (!raw) return '';
+    if (typeof raw === 'string') return raw.trim().slice(0, 800);
+    const values = Array.isArray(raw) ? raw : Object.values(raw);
+    return values.map(item => {
+      if (typeof item === 'string') return item.trim();
+      return String(item && (item.detail || item.message || item.reason || item.description) || '').trim();
+    }).filter(Boolean).join('; ').slice(0, 800);
+  };
   const activeCampaignState = value => ['ACTIVE', 'APPROVED', 'MNO_PROVISIONED'].includes(String(value || '').trim().toUpperCase());
   if (campaignId) {
     let campaignBody;
@@ -1480,11 +1490,12 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     campaignStatus = campaignState(campaign);
   }
   const campaignActive = activeCampaignState(campaignStatus);
+  const failureReason = campaignFailure(campaign);
   const summary = !numberAssigned
     ? (campaignActive && campaignId
         ? 'An active Telnyx 10DLC campaign was found, but the SMS number is not attached to it.'
         : campaignId
-          ? 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.'
+          ? 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.' + (failureReason ? ' Reason: ' + failureReason : '')
           : brandStatus
             ? 'Telnyx brand is ' + brandStatus + ', but no 10DLC campaign is available yet.'
             : 'Telnyx number is not attached to an active 10DLC campaign.')
@@ -1499,6 +1510,7 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     campaignId,
     campaignStatus: campaignStatus || 'Not found',
     brandStatus: brandStatus || '',
+    failureReason,
     campaignActive,
     readyForDeliveryTest: numberAssigned && campaignActive,
     summary
@@ -1513,6 +1525,7 @@ function publicTelnyx10dlcReadiness(readiness = {}) {
     campaignId: readiness.campaignId ? 'stored securely' : '',
     campaignStatus: readiness.campaignStatus || '',
     brandStatus: readiness.brandStatus || '',
+    failureReason: readiness.failureReason || '',
     campaignActive: !!readiness.campaignActive,
     readyForDeliveryTest: !!readiness.readyForDeliveryTest,
     assignmentRequestedAt: readiness.assignmentRequestedAt || '',

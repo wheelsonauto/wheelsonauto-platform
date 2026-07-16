@@ -229,6 +229,20 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     }
   });
   assert(!pendingRegistration.campaignActive && pendingRegistration.campaignStatus === 'MNO_PENDING' && /MNO_PENDING/.test(pendingRegistration.summary), 'Pending carrier review must be reported without exposing assignment controls.');
+  const failedRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-failed', identityStatus: 'VERIFIED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-failed')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-failed', status: 'ACTIVE', campaignStatus: 'TCR_FAILED', failureReasons: 'Opt-in description must identify the exact customer consent flow.' }] }; } };
+      throw new Error('Unexpected failed readiness URL: ' + url);
+    }
+  });
+  assert(!failedRegistration.campaignActive && failedRegistration.campaignStatus === 'TCR_FAILED', 'Campaign registration status must take precedence over the generic active record status.');
+  assert(/exact customer consent flow/.test(failedRegistration.failureReason) && /Reason:/.test(failedRegistration.summary), 'Telnyx failure reasons must be surfaced in the readiness result.');
   const assignmentCalls = [];
   const candidateRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
