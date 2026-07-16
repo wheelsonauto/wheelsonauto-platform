@@ -80,7 +80,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260715-operations-integrations-55">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-customer-journey-56">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -4921,6 +4921,7 @@ function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
       safe[field] = oldRow[field];
     }
   });
+  delete safe.privateFileAvailable;
   return safe;
 }
 function mergeScopedCollection(currentRows, incomingRows, user) {
@@ -5261,7 +5262,15 @@ function apiAllowedForUser(user, pathname) {
   return true;
 }
 function stateForUserWrite(current, incoming, user) {
-  if (isOwnerUser(user)) return preserveStaffLoginSecrets(current, incoming);
+  if (isOwnerUser(user)) {
+    const next = preserveStaffLoginSecrets(current, incoming);
+    if (Array.isArray(next.documents)) next.documents = next.documents.map(document => {
+      const clean = { ...document };
+      delete clean.privateFileAvailable;
+      return clean;
+    });
+    return next;
+  }
   const role = String(user && user.role || '').toLowerCase();
   const allowed = role === 'mechanic'
     ? ['maintenance', 'vehicles']
@@ -5442,6 +5451,7 @@ function stateForUserRead(data, user) {
   const owner = isOwnerUser(user);
   if (!owner) safe = dataScopedToOrganization(safe, userOrganizationId(user));
   enrichLinkedProfiles(safe);
+  if (Array.isArray(safe.documents)) safe.documents = safe.documents.map(document => ({ ...document, privateFileAvailable: !!document.storagePath }));
   safe.integrations = safe.integrations || {};
   safe.integrations.messaging = { ...(safe.integrations.messaging || {}), ...publicMessagingStatus(data) };
   if (owner) {
@@ -6063,12 +6073,12 @@ function customerPortalHtml(account, state) {
   const portalReceiptForm = '<form method="POST" action="/customer/receipt-request" class="customer-message-form customer-receipt-form"><label>Request payment receipt<input name="paymentHint" maxlength="160" placeholder="Payment date, amount, or note"></label><button class="btn primary" type="submit">Request receipt</button><small>This asks the office to verify the payment and send the correct receipt.</small></form>';
   const portalStatementForm = '<form method="POST" action="/customer/statement-request" class="customer-message-form customer-statement-form"><label>Request account document<select name="requestType"><option>Account statement</option><option>Payoff balance</option><option>Payment history</option><option>Balance letter</option></select></label><label>Note<input name="note" maxlength="200" placeholder="What do you need it for?"></label><button class="btn primary" type="submit">Request document</button><small>The office verifies the account before sending any statement, payoff, or balance document.</small></form>';
   const cardChangeForm = customerPortalActionForm('/customer/card-change', 'Change card on file', 'Opens a secure Clover card setup link. WheelsonAuto never sees the full card number.', 'customer-card-form');
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=secure-upload-1"></script></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=secure-upload-2-mobile-workspaces"></script></body></html>';
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
 customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
   let html = __woaCustomerPortalHubBase(account, state);
-  const actionHub = '<nav class="customer-action-hub" aria-label="Customer quick actions"><a href="#portal-payments"><span>Payments</span><strong>' + escapeHtml(String((state.paymentRequests || []).length)) + '</strong></a><a href="#portal-card"><span>Card</span><strong>' + escapeHtml(String((state.cardSetupRequests || []).length)) + '</strong></a><a href="#portal-service"><span>Service</span><strong>' + escapeHtml(String((state.maintenance || []).length)) + '</strong></a><a href="#portal-documents"><span>Documents</span><strong>' + escapeHtml(String((state.documents || []).length)) + '</strong></a><a href="#portal-issues"><span>Issues</span><strong>' + escapeHtml(String((state.claims || []).length)) + '</strong></a><a href="#portal-messages"><span>Messages</span><strong>' + escapeHtml(String((state.messages || []).length)) + '</strong></a></nav>';
+  const actionHub = '<nav class="customer-action-hub" aria-label="Customer quick actions"><a class="customer-action-overview" href="#portal-overview"><span>Overview</span><strong>Home</strong></a><a href="#portal-payments"><span>Payments</span><strong>' + escapeHtml(String((state.paymentRequests || []).length)) + '</strong></a><a href="#portal-card"><span>Card</span><strong>' + escapeHtml(String((state.cardSetupRequests || []).length)) + '</strong></a><a href="#portal-service"><span>Service</span><strong>' + escapeHtml(String((state.maintenance || []).length)) + '</strong></a><a href="#portal-documents"><span>Documents</span><strong>' + escapeHtml(String((state.documents || []).length)) + '</strong></a><a href="#portal-issues"><span>Issues</span><strong>' + escapeHtml(String((state.claims || []).length)) + '</strong></a><a href="#portal-messages"><span>Messages</span><strong>' + escapeHtml(String((state.messages || []).length)) + '</strong></a></nav>';
   html = html.replace('</header><section class="customer-summary-grid">', '</header>' + actionHub + '<section class="customer-summary-grid">');
   html = html.replace('<article class="customer-panel"><div class="section-head"><h2>Vehicle</h2>', '<article id="portal-vehicle" class="customer-panel"><div class="section-head"><h2>Vehicle</h2>');
   html = html.replace('<article class="customer-panel"><div class="section-head"><h2>Autopay</h2>', '<article id="portal-card" class="customer-panel"><div class="section-head"><h2>Autopay</h2>');
@@ -6580,6 +6590,43 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
   }
   application.contractId = contract.id;
   return appointment;
+}
+function completePickupHandoff(data, appointment, payload = {}, actor = { name: 'WheelsonAuto staff', role: 'Staff' }) {
+  if (!appointment) throw new Error('Pickup appointment was not found.');
+  if (/cancel/i.test(String(appointment.status || ''))) throw new Error('A cancelled pickup cannot be completed.');
+  if (/picked up|completed/i.test(String(appointment.status || ''))) return { appointment, alreadyCompleted: true };
+  const mileage = Number(payload.mileage);
+  if (!Number.isFinite(mileage) || mileage < 0) throw new Error('Enter the vehicle mileage shown at physical pickup.');
+  const now = new Date().toISOString();
+  const customerKey = normKey(appointment.customer);
+  const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId) || null;
+  const recurring = (data.recurringPayments || []).find(row => row.pickupAppointmentId === appointment.id || appointment.onboardingSessionId && row.onboardingSessionId === appointment.onboardingSessionId || appointment.applicationId && row.applicationId === appointment.applicationId)
+    || (data.recurringPayments || []).find(row => normKey(row.customer) === customerKey && (!appointment.vehicleId || row.vehicleId === appointment.vehicleId)) || null;
+  const application = (data.applications || []).find(row => row.id === appointment.applicationId) || null;
+  const session = (data.onboardingSessions || []).find(row => row.id === appointment.onboardingSessionId) || null;
+  const customer = (data.customers || []).find(row => row.applicationId === appointment.applicationId || recurring && row.recurringPaymentId === recurring.id)
+    || (data.customers || []).find(row => normKey(row.name || row.customer) === customerKey) || null;
+  const contract = (data.contracts || []).find(row => row.applicationId === appointment.applicationId || row.onboardingSessionId === appointment.onboardingSessionId)
+    || (data.contracts || []).find(row => normKey(row.customer || row.name) === customerKey && (!appointment.vehicleId || row.vehicleId === appointment.vehicleId)) || null;
+  const account = (data.customerAccounts || []).find(row => row.applicationId === appointment.applicationId || recurring && row.recurringPaymentId === recurring.id)
+    || (data.customerAccounts || []).find(row => normKey(row.customer || row.name) === customerKey) || null;
+  const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
+  Object.assign(appointment, {
+    status: 'Picked up',
+    pickupMileage: mileage,
+    completedAt: now,
+    completedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff',
+    completionNotes: onboarding.text(payload.notes, 1200)
+  });
+  if (vehicle) Object.assign(vehicle, { status: 'Rented', currentCustomer: appointment.customer || vehicle.currentCustomer || '', mileage, pickupMileage: mileage, pickupCompletedAt: now, updatedAt: now });
+  if (recurring) Object.assign(recurring, { status: 'Active', tone: 'good', autoChargeEnabled: true, autopayManagedBy: 'WheelsonAuto', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (customer) Object.assign(customer, { status: 'Active', stage: 'Active', vehicleId: appointment.vehicleId || customer.vehicleId || '', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (contract) Object.assign(contract, { status: 'Active', rentalStartDate: contract.rentalStartDate || appointment.date || '', pickupCompletedAt: now, startingMileage: mileage, updatedAt: now });
+  if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
+  if (account) Object.assign(account, { portalStage: 'Active customer', recurringPaymentId: recurring && recurring.id || account.recurringPaymentId || '', vehicleId: appointment.vehicleId || account.vehicleId || '', updatedAt: now });
+  if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });
+  return { appointment, vehicle, recurring, customer, contract, application, session, account, onlineVehicle, alreadyCompleted: false };
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -8602,8 +8649,8 @@ async function protectConcurrentLocalWrites(data, options = {}) {
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
   });
-  data.customers = preferIncoming ? upsertById(data.customers, latest.customers) : upsertById(latest.customers, data.customers);
-  data.payments = preferIncoming ? upsertById(data.payments, latest.payments) : upsertById(latest.payments, data.payments);
+  data.customers = preferIncoming ? upsertById(latest.customers, data.customers) : upsertById(data.customers, latest.customers);
+  data.payments = preferIncoming ? upsertById(latest.payments, data.payments) : upsertById(data.payments, latest.payments);
   if (options.preserveLatestIntegrations) data.integrations = latest.integrations || data.integrations || {};
   return data;
 }
@@ -12201,6 +12248,28 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, googleCalendar: { configured: !!(GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN), status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'API credentials saved' : 'Manual calendar links live; provider setup needed for automatic sync' }, events });
     }
     if (url.pathname.startsWith('/api/pickups/')) {
+      const pickupCompleteMatch = /^\/api\/pickups\/([^/]+)\/complete$/.exec(url.pathname);
+      if (pickupCompleteMatch && req.method === 'POST') {
+        const role = String(user.role || '').toLowerCase();
+        if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can complete a customer pickup.' });
+        const payload = await readJsonBody(req, 128 * 1024);
+        if (payload.confirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the customer physically received the vehicle.' });
+        const data = await readData();
+        const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupCompleteMatch[1]) && rowVisibleToUserOrganization(row, user));
+        if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
+        let completed;
+        try {
+          completed = completePickupHandoff(data, appointment, payload, user);
+        } catch (error) {
+          return json(res, 409, { ok: false, error: error.message || 'Pickup could not be completed.' });
+        }
+        if (!completed.alreadyCompleted) {
+          appendAuditLog(data, user, 'Customer pickup completed', [appointment.customer || 'Customer', appointment.vehicle || appointment.vin || 'Vehicle', appointment.date || '', 'Mileage ' + appointment.pickupMileage]);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
+        return json(res, 200, { ok: true, alreadyCompleted: completed.alreadyCompleted, appointment: completed.appointment, vehicle: completed.vehicle && { id: completed.vehicle.id, status: completed.vehicle.status, currentCustomer: completed.vehicle.currentCustomer, mileage: completed.vehicle.mileage }, recurring: completed.recurring && { id: completed.recurring.id, status: completed.recurring.status, nextRun: completed.recurring.nextRun, paymentDay: completed.recurring.paymentDay } });
+      }
       const pickupIcsMatch = /^\/api\/pickups\/([^/]+)\/calendar\.ics$/.exec(url.pathname);
       if (pickupIcsMatch && req.method === 'GET') {
         const role = String(user.role || '').toLowerCase();

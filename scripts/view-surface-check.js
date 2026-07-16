@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+const customerPortalClient = fs.readFileSync(path.join(root, 'customer-portal.js'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -323,9 +324,22 @@ const customerPortalState = finalFunctionSlice(server, 'customerPortalState');
 const customerPortalVisibleMessage = finalFunctionSlice(server, 'customerPortalVisibleMessage');
 const stripCustomerPortalMessage = finalFunctionSlice(server, 'stripCustomerPortalMessage');
 const stripCustomerPortalPayment = finalFunctionSlice(server, 'stripCustomerPortalPayment');
-assertIncludes('Customer portal proof intake', customerPortalHtml + server, [
+assertIncludes('Customer portal proof intake', customerPortalHtml + server + app + customerPortalClient + css, [
   '/customer/service-request',
   '/customer/issue-report',
+  'data-customer-document-upload',
+  'Choose secure file',
+  'Upload securely',
+  'customer-portal.js',
+  'savePrivateDocument',
+  'portalDownloadUrl',
+  'privateFileAvailable',
+  'View uploaded file',
+  'customer-mobile-focused',
+  '#portal-overview',
+  "'#portal-payments': ['portal-payments', 'portal-payment-history']",
+  'portal-mobile-visible',
+  'customer-next-actions{display:none}',
   'Proof link / photo note',
 	  'proofUrl',
 	  '/customer/paid-outside',
@@ -885,6 +899,18 @@ assertIncludes('Server email and Star backend', server, [
   'contract/e-sign send',
   'password reset',
   'customer, vehicle, VIN/tag, tracker, payment state, portal, documents, applications, service, tolls/claims, tasks, recent messages, launch readiness gaps, and iFleet coverage gaps'
+]);
+
+assertIncludes('Physical pickup completion handoff', app + server, [
+  'integrated-open-pickup-completion',
+  'integrated-save-pickup-completion',
+  'Starting mileage at handoff',
+  '/api/pickups/',
+  '/complete',
+  'Customer pickup completed',
+  'Approved - vehicle picked up',
+  "status: 'Rented'",
+  "status: 'Active'"
 ]);
 
 assertIncludes('Modal, mobile, and no-blur style surface', css, [

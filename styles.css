@@ -1166,10 +1166,35 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
 .customer-message-form textarea{background:#0d0e10;color:#f4ead2}
 .customer-card-form{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:10px 14px;align-items:center;margin-top:4px}
 .customer-card-form small{display:block;min-width:0;line-height:1.45}
+.customer-action-hub{grid-template-columns:repeat(7,minmax(0,1fr))}
+.customer-action-hub a.active{border-color:rgba(240,184,58,.72);background:#2a2215;box-shadow:0 18px 42px rgba(0,0,0,.3)}
+.customer-next-actions{display:none}
+.customer-payment-requests{grid-column:1/-1}
 @media(max-width:900px){
   .customer-portal{background:#090a0c}
   .customer-card-form{grid-template-columns:1fr}
   .customer-card-form .btn{width:100%;justify-content:center}
+}
+@media(max-width:760px){
+  .customer-action-hub{
+    display:flex;
+    overflow-x:auto;
+    overflow-y:hidden;
+    gap:7px;
+    position:sticky;
+    top:6px;
+    padding:2px 0 7px;
+    scroll-snap-type:x proximity;
+    scrollbar-width:none;
+  }
+  .customer-action-hub::-webkit-scrollbar{display:none}
+  .customer-action-hub a{flex:0 0 96px;min-width:96px;padding:9px;scroll-snap-align:start}
+  .customer-action-hub strong{font-size:17px}
+  .customer-mobile-focused .customer-grid{display:none}
+  .customer-mobile-focused .customer-grid.portal-mobile-has-visible{display:grid}
+  .customer-mobile-focused .customer-panel{display:none}
+  .customer-mobile-focused .customer-panel.portal-mobile-visible{display:block}
+  .customer-mobile-detail .customer-summary-grid{display:none}
 }
 @media(max-width:760px){
   .admin-shell .quickbar{

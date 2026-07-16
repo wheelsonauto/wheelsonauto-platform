@@ -367,12 +367,18 @@ async function main() {
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate Two', vin: 'DIRECTVIN002', plate: 'DIR-002', status: 'Ready' },
       { id: 'veh-direct-autopay-file', year: 2026, make: 'Direct', model: 'Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tempTag: 'TMP-AUTO', tracker: 'TRK-AUTO', status: 'Ready' },
       { id: 'veh-direct-dispute-car', year: 2025, make: 'Direct', model: 'Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tempTag: 'TMP-DSP', tracker: 'TRK-DSP', currentCustomer: 'Direct Dispute Customer', status: 'Rented' },
+      { id: 'veh-direct-pickup-car', organizationId: 'org-wheelsonauto', year: 2026, make: 'Direct', model: 'Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', tracker: 'TRK-PUP', currentCustomer: 'Direct Pickup Customer', status: 'Pending pickup', mileage: 41000 },
       { id: 'veh-signal-text-car', year: 2024, make: 'Signal', model: 'Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tempTag: 'TMP-SIG', tracker: 'TRK-SIG', currentCustomer: 'Signal Match Person', status: 'Rented' }
     );
     duplicateState.payments = duplicateState.payments || [];
     duplicateState.claims = duplicateState.claims || [];
     duplicateState.recurringPayments = duplicateState.recurringPayments || [];
     duplicateState.customerAccounts = duplicateState.customerAccounts || [];
+    duplicateState.customers = duplicateState.customers || [];
+    duplicateState.contracts = duplicateState.contracts || [];
+    duplicateState.applications = duplicateState.applications || [];
+    duplicateState.onboardingSessions = duplicateState.onboardingSessions || [];
+    duplicateState.onlineVehicles = duplicateState.onlineVehicles || [];
     duplicateState.maintenance = duplicateState.maintenance || [];
     duplicateState.pickupAppointments = duplicateState.pickupAppointments || [];
     duplicateState.payments = duplicateState.payments.filter(payment => payment.id !== 'pay-signal-alpha-983' && payment.cloverPaymentId !== 'charge-signal-alpha-983');
@@ -397,6 +403,12 @@ async function main() {
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
+    duplicateState.recurringPayments.unshift({ id: 'rec-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', pickupAppointmentId: 'pickup-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', amount: 229, status: 'Scheduled', nextRun: '2026-07-27', paymentDay: 'Monday', autoChargeEnabled: true });
+    duplicateState.customers.unshift({ id: 'cus-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', recurringPaymentId: 'rec-direct-pickup', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Approved - awaiting pickup' });
+    duplicateState.contracts.unshift({ id: 'con-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Signed - awaiting pickup' });
+    duplicateState.applications.unshift({ id: 'application-direct-calendar', organizationId: 'org-wheelsonauto', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', onlineVehicleId: 'online-direct-pickup', status: 'Approved - pickup confirmed', stage: 'Ready for pickup' });
+    duplicateState.onboardingSessions.unshift({ id: 'onboard-direct-calendar', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onlineVehicleId: 'online-direct-pickup', status: 'Pickup confirmed' });
+    duplicateState.onlineVehicles.unshift({ id: 'online-direct-pickup', organizationId: 'org-wheelsonauto', platformVehicleId: 'veh-direct-pickup-car', title: '2026 Direct Pickup Car', published: false, availability: 'Held - pickup scheduled' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-draft-portal', customer: 'Direct Draft Portal Customer', phone: '3135550188', email: 'direct-draft-portal@example.com', vehicle: 'Direct Draft Portal Car', amount: 77, status: 'Active' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-missing-portal-draft', customer: 'Direct Missing Portal Draft Customer', phone: '3135550189', email: 'direct-missing-portal@example.com', vehicle: 'Direct Missing Portal Draft Car', amount: 79, status: 'Active' });
     duplicateState.customerAccounts.unshift({ id: 'direct-draft-portal-login', name: 'Direct Draft Portal Customer', customer: 'Direct Draft Portal Customer', username: 'direct-draft-portal', phone: '3135550188', email: 'direct-draft-portal@example.com', status: 'Active', recurringPaymentId: 'rec-direct-draft-portal' });
@@ -405,7 +417,7 @@ async function main() {
       { id: 'mnt-direct-exact-copy-a', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', customer: 'Direct Dispute Customer', type: 'Monthly inspection / oil change', issue: 'Exact duplicate repair test', due: '2026-07-29', nextDue: '2026-07-29', status: 'Scheduled' },
       { id: 'mnt-direct-exact-copy-b', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', customer: 'Direct Dispute Customer', type: 'Monthly inspection / oil change', issue: 'Exact duplicate repair test', due: '2026-07-29', nextDue: '2026-07-29', status: 'Scheduled' }
     );
-    duplicateState.pickupAppointments.unshift({ id: 'pickup-direct-calendar', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', customer: 'Direct Pickup Customer', phone: '3135550177', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', date: '2026-07-20', time: '11:30 AM', durationMinutes: 30, address: '5150 NJ-42, Blackwood, NJ 08012', status: 'Confirmed' });
+    duplicateState.pickupAppointments.unshift({ id: 'pickup-direct-calendar', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', onlineVehicleId: 'online-direct-pickup', customer: 'Direct Pickup Customer', phone: '3135550177', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', date: '2026-07-20', time: '11:30 AM', durationMinutes: 30, address: '5150 NJ-42, Blackwood, NJ 08012', status: 'Confirmed' });
     duplicateState.claims.unshift(
       { id: 'claim-direct-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'pay-direct-dispute', amount: 199, status: 'Open' },
       { id: 'claim-direct-recurring-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', cloverCustomerId: 'direct-dispute-customer-id', amount: 111, status: 'Open' },
@@ -1011,7 +1023,25 @@ async function main() {
     const preparedPickupCalendar = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/calendar', { cookie: managerCookie, json: {} });
     assert(preparedPickupCalendar.status === 200 && preparedPickupCalendar.json.calendarEvent.appointmentId === 'pickup-direct-calendar' && preparedPickupCalendar.json.icsUrl, 'Manager should be able to prepare a reusable pickup calendar record.');
     const pickupIcs = await request(server, 'GET', '/api/pickups/pickup-direct-calendar/calendar.ics', { cookie: managerCookie });
-    assert(pickupIcs.status === 200 && /text\/calendar/.test(pickupIcs.headers['Content-Type'] || pickupIcs.headers['content-type'] || '') && pickupIcs.text.includes('DTSTART;TZID=America/New_York:20260720T113000') && pickupIcs.text.includes('DIRECTDISPUTEVIN'), 'Pickup ICS should contain the local appointment time and vehicle identity.');
+    assert(pickupIcs.status === 200 && /text\/calendar/.test(pickupIcs.headers['Content-Type'] || pickupIcs.headers['content-type'] || '') && pickupIcs.text.includes('DTSTART;TZID=America/New_York:20260720T113000') && pickupIcs.text.includes('DIRECTPICKUPVIN001'), 'Pickup ICS should contain the local appointment time and vehicle identity.');
+    const mechanicPickupCompletion = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: mechanicCookie, json: { confirmed: true, mileage: 41234 } });
+    assert(mechanicPickupCompletion.status === 403, 'Mechanic must not complete the customer/account pickup handoff.');
+    const unconfirmedPickupCompletion = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { mileage: 41234 } });
+    assert(unconfirmedPickupCompletion.status === 400, 'Pickup completion must require explicit physical-handoff confirmation.');
+    const completedPickup = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, mileage: 41234, notes: 'Keys and vehicle handed to customer.' } });
+    assert(completedPickup.status === 200 && completedPickup.json.appointment.status === 'Picked up' && completedPickup.json.vehicle.status === 'Rented' && completedPickup.json.recurring.status === 'Active', 'Manager should atomically complete the physical pickup, fleet status, and autopay activation.');
+    const completedPickupState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const pickupCompletionSnapshot = {
+      vehicle: completedPickupState.json.vehicles.find(row => row.id === 'veh-direct-pickup-car'),
+      customer: completedPickupState.json.customers.find(row => row.id === 'cus-direct-pickup'),
+      contract: completedPickupState.json.contracts.find(row => row.id === 'con-direct-pickup'),
+      application: completedPickupState.json.applications.find(row => row.id === 'application-direct-calendar'),
+      session: completedPickupState.json.onboardingSessions.find(row => row.id === 'onboard-direct-calendar'),
+      onlineVehicle: completedPickupState.json.onlineVehicles.find(row => row.id === 'online-direct-pickup')
+    };
+    assert(pickupCompletionSnapshot.vehicle.mileage === 41234 && pickupCompletionSnapshot.customer.status === 'Active' && pickupCompletionSnapshot.contract.status === 'Active' && pickupCompletionSnapshot.application.stage === 'Active customer' && pickupCompletionSnapshot.session.status === 'Completed' && pickupCompletionSnapshot.onlineVehicle.availability === 'Rented', 'Pickup completion must update customer, contract, application, onboarding, vehicle, and online inventory together: ' + JSON.stringify(pickupCompletionSnapshot));
+    const repeatedPickupCompletion = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, mileage: 41234 } });
+    assert(repeatedPickupCompletion.status === 200 && repeatedPickupCompletion.json.alreadyCompleted === true, 'Repeated pickup completion must be idempotent.');
 
     const tollSeedRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const tollSeedState = JSON.parse(JSON.stringify(tollSeedRead.json));
@@ -1431,6 +1461,17 @@ async function main() {
     assert(unauthenticatedDocumentDownload.status === 302 && unauthenticatedDocumentDownload.location === '/customer/login', 'Private customer document download must require a customer login.');
     const otherCustomerDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: cleanCookie(franchiseCustomerLogin.cookie) });
     assert(otherCustomerDocumentDownload.status === 404, 'A customer from another company must not be able to read another customer private upload.');
+    const managerUploadedDocumentState = await request(server, 'GET', '/api/state', { cookie: managerCookie });
+    const managerUploadedDocument = (managerUploadedDocumentState.json.documents || []).find(item => item.id === uploadedDocument.id);
+    assert(managerUploadedDocument && managerUploadedDocument.privateFileAvailable === true && !managerUploadedDocument.storagePath, 'Manager state should expose review availability without leaking the private storage path.');
+    const managerUploadedDocumentView = await request(server, 'GET', '/api/onboarding/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: managerCookie });
+    assert(managerUploadedDocumentView.status === 200 && String(managerUploadedDocumentView.headers['Content-Type'] || managerUploadedDocumentView.headers['content-type']).includes('image/png'), 'Manager should be able to open a scoped customer upload for verification.');
+    const mechanicUploadedDocumentView = await request(server, 'GET', '/api/onboarding/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: mechanicCookie });
+    assert(mechanicUploadedDocumentView.status === 403, 'Mechanic must not be able to open private identity or insurance uploads.');
+    const ownerDocumentRoundTrip = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: customerSecureUploadState.json });
+    assert(ownerDocumentRoundTrip.status === 200 && ownerDocumentRoundTrip.json.ok, 'Owner state round trip should preserve the secure upload.');
+    const rawDocumentRoundTrip = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8')).documents.find(item => item.id === uploadedDocument.id);
+    assert(rawDocumentRoundTrip && rawDocumentRoundTrip.storagePath && !Object.prototype.hasOwnProperty.call(rawDocumentRoundTrip, 'privateFileAvailable'), 'Derived private-file availability must not be persisted into business data during a staff save.');
     const invalidSecureUpload = await request(server, 'POST', '/customer/document-update', { cookie: customerCookie, json: { type: 'Insurance proof', file: { name: 'fake.pdf', type: 'application/pdf', dataUrl: pngDataUrl().replace('image/png', 'application/pdf') } } });
     assert(invalidSecureUpload.status === 400 && /does not match/i.test(invalidSecureUpload.json.error), 'Customer upload must reject a file whose bytes do not match its declared format.');
     const portalProofReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });

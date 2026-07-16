@@ -86,6 +86,10 @@ requireAnyBlock('Customer portal detail grid', '.customer-grid{', ['grid-templat
 requireAnyBlock('Customer portal mobile shell', '.customer-portal{', ['padding:12px']);
 requireAnyBlock('Customer portal mobile summary grid', '.customer-summary-grid{', ['grid-template-columns:repeat(2,minmax(0,1fr))']);
 requireAnyBlock('Customer portal mobile detail grid', '.customer-grid{', ['grid-template-columns:1fr']);
+requireAnyBlock('Customer portal compact action hub', '.customer-action-hub{', ['grid-template-columns:repeat(7,minmax(0,1fr))']);
+requireText('Customer portal mobile focused workspaces', '.customer-mobile-focused .customer-grid{display:none}');
+requireText('Customer portal mobile visible workspace', '.customer-mobile-focused .customer-panel.portal-mobile-visible{display:block}');
+requireText('Customer portal duplicate action helper removal', '.customer-next-actions{display:none}');
 
 const finalGuard = css.slice(css.indexOf('Final no-blur pass: every staff information surface stays sharp on hover.'));
 if (/filter\s*:\s*blur/i.test(finalGuard)) fail('A blur filter appears after the final no-blur guard.');

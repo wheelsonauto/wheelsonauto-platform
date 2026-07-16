@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const onboardingService = require('../onboarding-service');
+const nativeSite = require('../native-site');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -138,6 +139,7 @@ async function main() {
   process.env.WOA_EMAIL_ENABLED = '0';
   process.env.WOA_MESSAGING_ENABLED = '0';
   process.env.PUBLIC_BASE_URL = 'http://127.0.0.1:4181';
+  assert(nativeSite.localDateKey(new Date('2026-07-15T23:30:00-04:00')) === '2026-07-15', 'Pickup date bounds must use New Jersey local calendar dates instead of shifting through UTC after evening hours.');
 
   const initial = {
     business: { name: 'WheelsonAuto' },

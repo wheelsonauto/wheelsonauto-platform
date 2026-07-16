@@ -281,7 +281,8 @@ const criticalActionRequirements = [
   ['Verification case creation flow', 'integrated-create-verification', ['/api/verification/cases', 'reference:val', 'expiresAt:val', 'await refreshData(true)']],
   ['Verification review flow', 'integrated-review-verification', ['/api/verification/cases/review', 'caseId', 'decision:', 'await refreshData(true)']],
   ['Accounting ledger rebuild flow', 'integrated-rebuild-accounting', ['/api/accounting/ledger/rebuild', 'await refreshData(true)', '/api/accounting/ledger']],
-  ['Pickup calendar preparation flow', 'integrated-prepare-pickup', ['/api/pickups/', '/calendar', 'await refreshData(true)', '/api/pickups/calendar']]
+  ['Pickup calendar preparation flow', 'integrated-prepare-pickup', ['/api/pickups/', '/calendar', 'await refreshData(true)', '/api/pickups/calendar']],
+  ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['/api/pickups/', '/complete', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
