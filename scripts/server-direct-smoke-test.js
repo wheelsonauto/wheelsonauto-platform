@@ -105,7 +105,10 @@ async function request(server, method, route, options = {}) {
   const headers = { ...(options.headers || {}) };
   let body = '';
   if (options.cookie) headers.cookie = options.cookie;
-  if (options.form) {
+  if (Object.prototype.hasOwnProperty.call(options, 'raw')) {
+    body = String(options.raw || '');
+    headers['content-type'] = options.contentType || 'application/json';
+  } else if (options.form) {
     body = new URLSearchParams(options.form).toString();
     headers['content-type'] = 'application/x-www-form-urlencoded';
   } else if (Object.prototype.hasOwnProperty.call(options, 'json')) {
@@ -170,7 +173,9 @@ async function main() {
     apiProviderReviewRows,
     repairDataIds,
     enrichLinkedProfiles,
-    nearEndpointNameMatch
+    nearEndpointNameMatch,
+    sessionSignature,
+    verifySignedSessionCookie
   } = require('../server.js');
 
   try {
@@ -305,8 +310,30 @@ async function main() {
     }
     const throttledCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-rate-limit-customer', password: 'still-wrong' } });
     assert(throttledCustomerLogin.status === 429 && throttledCustomerLogin.text.includes('Too many failed login attempts') && String(throttledCustomerLogin.headers['Retry-After'] || '').length, 'Repeated bad customer login should be throttled with retry guidance.');
+    for (let i = 0; i < 6; i += 1) {
+      const spoofedForwardedLogin = await request(server, 'POST', '/login', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.20' }, form: { username: 'direct-forwarded-rate-limit', password: 'wrong-' + i } });
+      assert(spoofedForwardedLogin.status === 401, 'Forwarded-chain login attempt should fail before the throttle limit.');
+    }
+    const throttledForwardedLogin = await request(server, 'POST', '/login', { headers: { 'x-forwarded-for': '192.0.2.200, 198.51.100.20' }, form: { username: 'direct-forwarded-rate-limit', password: 'still-wrong' } });
+    assert(throttledForwardedLogin.status === 429, 'Login throttling must use the trusted end of the forwarded chain instead of a spoofable first address.');
+    const oversizedStaffLogin = await request(server, 'POST', '/login', { form: { username: 'oversized-staff', password: 'x'.repeat(70 * 1024) } });
+    assert(oversizedStaffLogin.status === 413, 'Oversized staff login bodies must be rejected before authentication work.');
+    const oversizedCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'oversized-customer', password: 'x'.repeat(70 * 1024) } });
+    assert(oversizedCustomerLogin.status === 413, 'Oversized customer login bodies must be rejected before authentication work.');
 
     const ownerCookie = await login(server, { pin: adminPin });
+    const ownerSessionParts = ownerCookie.split('=')[1].split('.');
+    const ownerSessionPayload = JSON.parse(Buffer.from(ownerSessionParts[2], 'base64url').toString('utf8'));
+    assert(Number(ownerSessionPayload.exp) > Math.floor(Date.now() / 1000) && Number(ownerSessionPayload.exp) - Number(ownerSessionPayload.iat) <= 24 * 60 * 60, 'Staff session must carry a bounded signed expiration.');
+    const expiredPayload = Buffer.from(JSON.stringify({ id: 'expired-owner', role: 'Owner', iat: Math.floor(Date.now() / 1000) - 120, exp: Math.floor(Date.now() / 1000) - 60 }), 'utf8').toString('base64url');
+    const expiredSession = 'v2.staff.' + expiredPayload + '.' + sessionSignature('staff', expiredPayload);
+    assert(verifySignedSessionCookie(expiredSession, 'staff') === null, 'Expired signed staff sessions must be rejected.');
+    const expiredSessionRead = await request(server, 'GET', '/api/state', { cookie: 'woa_session=' + expiredSession });
+    assert(expiredSessionRead.status === 401, 'Expired staff session cookies must not authorize API access.');
+    const invalidJsonTask = await request(server, 'POST', '/api/tasks', { cookie: ownerCookie, raw: '{not-json' });
+    assert(invalidJsonTask.status === 400 && /valid JSON/i.test(invalidJsonTask.json && invalidJsonTask.json.error || ''), 'Malformed API JSON must return a controlled 400 response.');
+    const oversizedJsonTask = await request(server, 'POST', '/api/tasks', { cookie: ownerCookie, raw: JSON.stringify({ title: 'x'.repeat(1024 * 1024 + 16) }) });
+    assert(oversizedJsonTask.status === 413, 'Oversized API JSON must return 413 instead of consuming an unbounded request body.');
     const paymentCheckoutStatus = await request(server, 'POST', '/api/integrations/payments/checkout-status', { cookie: ownerCookie, json: {} });
     assert(paymentCheckoutStatus.status === 200 && paymentCheckoutStatus.json && paymentCheckoutStatus.json.adapterReady && paymentCheckoutStatus.json.signedWebhookReady && paymentCheckoutStatus.json.verifiedPaymentPipelineReady && paymentCheckoutStatus.json.ok, 'Provider-neutral checkout readiness should require both checkout credentials and signed payment reconciliation.');
     const legacyCheckoutStatus = await request(server, 'POST', '/api/integrations/clover/checkout-status', { cookie: ownerCookie, json: {} });
@@ -322,6 +349,10 @@ async function main() {
     assert(initialStateVersion.status === 200 && initialStateVersion.json && initialStateVersion.json.version, 'State version endpoint should return a lightweight authenticated version.');
     const unchangedStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
     assert(unchangedStateVersion.json.version === initialStateVersion.json.version, 'State version should remain stable while business data is unchanged.');
+    const legacyApplyRedirect = await request(server, 'GET', '/apply');
+    assert(legacyApplyRedirect.status === 302 && legacyApplyRedirect.location === '/inventory', 'Legacy /apply must route customers into the single vehicle-specific native application journey.');
+    const publicPrototype = await request(server, 'GET', '/ifleet-prototype.html');
+    assert(publicPrototype.status === 200 && /WheelsonAuto Portal/.test(publicPrototype.text) && !/iFleet prototype/i.test(publicPrototype.text), 'The obsolete iFleet prototype must not be publicly served.');
 
     const duplicateState = JSON.parse(JSON.stringify(ownerState.json));
     duplicateState.vehicles = duplicateState.vehicles || [];
@@ -557,6 +588,16 @@ async function main() {
       json: nativePublicApplicationPayload()
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
+    const repeatedPublicApplication = await request(server, 'POST', '/api/public/applications', {
+      json: nativePublicApplicationPayload()
+    });
+    assert(repeatedPublicApplication.status === 200 && repeatedPublicApplication.json.duplicate === true && repeatedPublicApplication.json.application.id === publicApplication.json.application.id, 'A repeated same-person/same-car submission must return the existing application instead of creating a duplicate.');
+    for (let i = 0; i < 8; i += 1) {
+      const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
+      assert([400, 409].includes(limitedApplicationAttempt.status), 'Public application attempts should validate normally before the per-IP submission limit.');
+    }
+    const blockedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.250, 198.51.100.77' }, json: {} });
+    assert(blockedApplicationAttempt.status === 429 && String(blockedApplicationAttempt.headers['Retry-After'] || '').length, 'Public application flooding must return 429 with retry guidance despite spoofed forwarded prefixes.');
 
     const weakStaffPassword = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,

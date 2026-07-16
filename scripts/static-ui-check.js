@@ -195,12 +195,24 @@ if (indexHtml.includes('platform-20260711-public-qa') || server.includes('platfo
 }
 assertIncludes('Server CSS cache-busting link', server, ['/styles.css?v=' + indexCssVersions[0]]);
 assertIncludes('Static asset no-store headers', server, ['staticFile(res, pathname)', "'Cache-Control': 'no-store'"]);
-assertIncludes('Public app shell no-store headers', server, ["appHtml({ publicMode: true })", "'Cache-Control': 'no-store'"]);
+assertIncludes('Native public journey no-store headers', server, ["nativeSite.homeHtml", "nativeSite.inventoryHtml", "nativeSite.applicationHtml", "'Cache-Control': 'no-store'"]);
 assertIncludes('Authenticated app shell no-store headers', server, ["appHtml({ publicMode: false, user })", "'Cache-Control': 'no-store'"]);
 assertIncludes('Session cookie security flags', server, ['function cookieSecurityFlags', 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Secure']);
 assertIncludes('Staff session cookie helper usage', server, ["sessionSetCookie('woa_session'", "sessionSetCookie('woa_customer_session'"]);
 assertIncludes('Signed session cookies', server, ['SESSION_SIGNING_SECRET', 'SESSION_SIGNING_SECRET_CONFIGURED', 'sessionSignature', 'signedSessionCookie', 'verifySignedSessionCookie', "signedSessionCookie('staff'", "signedSessionCookie('customer'", "createHmac('sha256'"]);
+assertIncludes('Expiring signed sessions', server, ['STAFF_SESSION_TTL_SECONDS', 'CUSTOMER_SESSION_TTL_SECONDS', 'sessionTtlSeconds', 'iat: issuedAt', 'exp: expiresAt', 'Number(session.exp) <= now']);
+assertIncludes('Browser content security policy', server, ['function contentSecurityPolicy', "default-src 'self'", "script-src 'self' 'unsafe-inline' https://*.clover.com", "frame-src https://*.clover.com", "form-action 'self' https://*.clover.com", "upgrade-insecure-requests", "'Origin-Agent-Cluster': '?1'", "'X-Permitted-Cross-Domain-Policies': 'none'"]);
 assertIncludes('Login throttling guard', server, ['loginFailureBuckets', 'LOGIN_THROTTLE_LIMIT', 'loginThrottleKey', 'loginThrottleWaitMs', 'recordLoginFailure', 'clearLoginFailure', 'Retry-After', 'Too many failed login attempts']);
+assertIncludes('Public submission protection', server, ['publicActionBuckets', 'PUBLIC_APPLICATION_LIMIT', 'PUBLIC_APPLICATION_DUPLICATE_MS', 'publicActionLimit', 'Too many application attempts', 'This application was already received.', "forwarded[forwarded.length - 1]"]);
+if (/readBody\(req\)/.test(server) || /JSON\.parse\(await readBody/.test(server)) {
+  fail('Every request body must use an explicit size ceiling and structured JSON parser.');
+}
+assertIncludes('Bounded request parsers', server, ['readBody(req, 64 * 1024)', 'readJsonBody(req, 32 * 1024 * 1024)', 'Request is larger than the allowed secure upload size.', 'Request body must be valid JSON.']);
+assertIncludes('Single public application entry point', server, ["url.pathname === '/apply'", "Location: '/inventory'", "url.pathname.startsWith('/apply/')"]);
+if (/staticFile[\s\S]{0,900}ifleet-prototype\.html/.test(server)) {
+  fail('The obsolete iFleet prototype must not be publicly served as a static application surface.');
+}
+assertIncludes('Stale staff Apply state recovery', app, ["if(view==='Apply')view=isPublic?'Apply':'Website'"]);
 
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
   const value = match[1];

@@ -118,27 +118,49 @@ async function main() {
     assert(duplicateSmokeVehicles.length === 2, 'Duplicate vehicle repair should preserve both vehicles.');
     assert(duplicateSmokeIds.size === 2, 'Duplicate vehicle repair should assign unique IDs.');
 
+    const onlineVehicle = await request(base, 'POST', '/api/online-vehicles', {
+      cookie: ownerCookie,
+      json: {
+        id: 'online-smoke-application',
+        platformVehicleId: duplicateSmokeVehicles[0].id,
+        title: 'Smoke Online Vehicle',
+        weeklyPayment: 229,
+        downPayment: 485,
+        availability: 'Available',
+        published: true
+      }
+    });
+    assert(onlineVehicle.status === 201 && onlineVehicle.json.ok, 'Owner could not publish the smoke-test vehicle.');
+
     const applyPage = await request(base, 'GET', '/apply');
-    assert(applyPage.status === 200 && applyPage.text.includes('WheelsonAuto'), 'Public application page did not load.');
+    assert(applyPage.status === 302 && applyPage.location === '/inventory', 'Public application entry point should route to native inventory.');
 
     const publicApplication = await request(base, 'POST', '/api/public/applications', {
       json: {
-        id: 'smoke-public-app',
-        name: 'Smoke Applicant',
+        onlineVehicleId: onlineVehicle.json.vehicle.id,
+        firstName: 'Smoke',
+        lastName: 'Applicant',
         phone: '3135550111',
         email: 'smoke-applicant@example.com',
-        vehicleId: 'veh-001',
-        vehicle: '2016 Ford Focus Hatch',
+        password: 'SmokeApplicant123!',
+        address: '5150 NJ-42',
+        city: 'Blackwood',
+        state: 'NJ',
+        postalCode: '08012',
+        dateOfBirth: '1990-01-15',
+        driverLicenseId: 'D12345678901234',
+        driverLicenseExpires: '2030-01-15',
+        employer: 'Smoke Test Employer',
         income: 4500,
-        down: 500
+        applicationConsent: true
       }
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
     const applicationState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
-    const savedApplication = (applicationState.json.applications || []).find(app => app.id === 'smoke-public-app');
-    const selectedVehicle = (applicationState.json.vehicles || []).find(vehicle => vehicle.id === 'veh-001');
-    assert(savedApplication && savedApplication.stage === 'New', 'Public application is missing from admin state.');
-    assert(selectedVehicle && selectedVehicle.status === 'Pending application', 'Public vehicle status did not move to Pending application.');
+    const savedApplication = (applicationState.json.applications || []).find(app => app.id === publicApplication.json.application.id);
+    const savedPortal = (applicationState.json.customerAccounts || []).find(account => account.applicationId === savedApplication.id);
+    assert(savedApplication && savedApplication.stage === 'New' && savedApplication.onlineVehicleId === onlineVehicle.json.vehicle.id, 'Native public application is missing its selected online vehicle in admin state.');
+    assert(savedApplication.vehicleId === duplicateSmokeVehicles[0].id && savedPortal, 'Native application must connect the fleet car and customer portal draft immediately.');
 
     const mechanic = await request(base, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,

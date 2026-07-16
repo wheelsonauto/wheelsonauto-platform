@@ -2003,6 +2003,7 @@ Reports=ReportsFocused;
 
 function render(){
   if(!window.__woaBootReady)return;
+  if(view==='Apply')view=isPublic?'Apply':'Website';
   if(view==='Apply')return Apply();
   if(nav.indexOf(view)<0)view=currentUser.homeView||nav[0]||'Dashboard';
   var renderStarted=renderClock();

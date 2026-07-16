@@ -24,6 +24,8 @@ const STAFF_PIN_LOGIN_ENABLED = process.env.WOA_STAFF_PIN_LOGIN_ENABLED === '1';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 const SESSION_SIGNING_SECRET = process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_SIGNING_SECRET_CONFIGURED = !!(process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET);
+const STAFF_SESSION_TTL_SECONDS = Math.max(15 * 60, Math.min(24 * 60 * 60, Number(process.env.WOA_STAFF_SESSION_TTL_SECONDS || 12 * 60 * 60)));
+const CUSTOMER_SESSION_TTL_SECONDS = Math.max(15 * 60, Math.min(30 * 24 * 60 * 60, Number(process.env.WOA_CUSTOMER_SESSION_TTL_SECONDS || 7 * 24 * 60 * 60)));
 const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
 const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
@@ -127,6 +129,12 @@ const telnyxDeliveryPollStatus = {
 const loginFailureBuckets = new Map();
 const LOGIN_THROTTLE_LIMIT = Math.max(3, Number(process.env.WOA_LOGIN_THROTTLE_LIMIT || 6));
 const LOGIN_THROTTLE_WINDOW_MS = Math.max(60000, Number(process.env.WOA_LOGIN_THROTTLE_WINDOW_MS || 10 * 60 * 1000));
+const publicActionBuckets = new Map();
+const PUBLIC_APPLICATION_LIMIT = Math.max(3, Number(process.env.WOA_PUBLIC_APPLICATION_LIMIT || 8));
+const PUBLIC_APPLICATION_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_WINDOW_MS || 60 * 60 * 1000));
+const PUBLIC_APPLICATION_DUPLICATE_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_DUPLICATE_MS || 15 * 60 * 1000));
+const PUBLIC_HELP_LIMIT = Math.max(3, Number(process.env.WOA_PUBLIC_HELP_LIMIT || 8));
+const PUBLIC_HELP_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_HELP_WINDOW_MS || 60 * 60 * 1000));
 
 function stableVehicleId(base, vehicle) {
   const source = [vehicle && vehicle.vin, vehicle && vehicle.plate, vehicle && vehicle.stock, vehicle && vehicle.name, vehicle && vehicle.currentCustomer].filter(Boolean).join('|') || JSON.stringify(vehicle || {});
@@ -4781,21 +4789,41 @@ async function mergeVehicleImport(data) {
   data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked, maintenanceImported, profileEnrichment };
   return data.integrations.vehicleSheet;
 }
+function contentSecurityPolicy() {
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self' https://*.clover.com",
+    "script-src 'self' 'unsafe-inline' https://*.clover.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data: https:",
+    "connect-src 'self' https://*.clover.com",
+    "frame-src https://*.clover.com",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    'upgrade-insecure-requests'
+  ].join('; ');
+}
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) {
   res.writeHead(status, {
     'Content-Type': type,
-    'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+    'Content-Security-Policy': contentSecurityPolicy(),
     'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    'Origin-Agent-Cluster': '?1',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
+    'X-Permitted-Cross-Domain-Policies': 'none',
     ...extra
   });
   res.end(body);
 }
-function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store' }); }
+function json(res, status, payload, extra = {}) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store', ...extra }); }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
 function cookieSecurityFlags(options = {}) {
   const flags = ['HttpOnly', 'SameSite=Lax', 'Path=/'];
@@ -4809,8 +4837,13 @@ function sessionSetCookie(name, value, options = {}) {
 function sessionSignature(scope, payload) {
   return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(String(scope || '') + '.' + String(payload || '')).digest('base64url');
 }
-function signedSessionCookie(scope, user) {
-  const payload = Buffer.from(JSON.stringify(user), 'utf8').toString('base64url');
+function sessionTtlSeconds(scope) {
+  return String(scope || '').toLowerCase() === 'customer' ? CUSTOMER_SESSION_TTL_SECONDS : STAFF_SESSION_TTL_SECONDS;
+}
+function signedSessionCookie(scope, user, ttlSeconds = sessionTtlSeconds(scope)) {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + Math.max(1, Number(ttlSeconds || 0));
+  const payload = Buffer.from(JSON.stringify({ ...(user || {}), iat: issuedAt, exp: expiresAt }), 'utf8').toString('base64url');
   return 'v2.' + String(scope || 'staff') + '.' + payload + '.' + sessionSignature(scope || 'staff', payload);
 }
 function verifySignedSessionCookie(raw, scope) {
@@ -4822,7 +4855,11 @@ function verifySignedSessionCookie(raw, scope) {
   const payload = rest.slice(0, cut);
   const signature = rest.slice(cut + 1);
   if (!secureCompare(sessionSignature(scope || 'staff', payload), signature)) return null;
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(Number(session.iat)) || !Number.isFinite(Number(session.exp))) return null;
+  if (Number(session.iat) > now + 5 * 60 || Number(session.exp) <= now) return null;
+  return session;
 }
 function sessionCookie(user) {
   return signedSessionCookie('staff', user);
@@ -5493,7 +5530,32 @@ function normalizeLogin(value) {
   return String(value || '').trim().toLowerCase();
 }
 function requestIp(req) {
-  return String((req.headers && (req.headers['x-forwarded-for'] || req.headers['x-real-ip'])) || (req.socket && req.socket.remoteAddress) || 'local').split(',')[0].trim() || 'local';
+  const headers = req.headers || {};
+  const cloudflare = String(headers['cf-connecting-ip'] || '').trim();
+  if (cloudflare) return cloudflare;
+  const forwarded = String(headers['x-forwarded-for'] || '').split(',').map(value => value.trim()).filter(Boolean);
+  if (forwarded.length) return forwarded[forwarded.length - 1];
+  return String(headers['x-real-ip'] || (req.socket && req.socket.remoteAddress) || 'local').trim() || 'local';
+}
+function publicActionLimit(req, action, limit, windowMs) {
+  const now = Date.now();
+  const key = [String(action || 'public'), requestIp(req)].join('|');
+  const bucket = publicActionBuckets.get(key);
+  if (!bucket || now - Number(bucket.firstAt || 0) >= windowMs) {
+    publicActionBuckets.set(key, { count: 1, firstAt: now, lastAt: now });
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+  if (Number(bucket.count || 0) >= limit) {
+    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((windowMs - (now - Number(bucket.firstAt || 0))) / 1000)) };
+  }
+  bucket.count = Number(bucket.count || 0) + 1;
+  bucket.lastAt = now;
+  if (publicActionBuckets.size > 5000) {
+    for (const [bucketKey, value] of publicActionBuckets.entries()) {
+      if (now - Number(value.lastAt || value.firstAt || 0) > Math.max(PUBLIC_APPLICATION_WINDOW_MS, PUBLIC_HELP_WINDOW_MS)) publicActionBuckets.delete(bucketKey);
+    }
+  }
+  return { allowed: true, retryAfterSeconds: 0 };
 }
 function loginThrottleKey(req, realm, identity) {
   return [realm || 'login', requestIp(req), normalizeLogin(identity || 'blank')].join('|');
@@ -6552,7 +6614,7 @@ async function appHtml({ publicMode = false, user = null } = {}) {
 }
 async function staticFile(res, pathname) {
   const clean = pathname.replace(/^\//, '');
-  if (!['styles.css', 'app.js', 'card-setup.js', 'native-site.css', 'native-site-client.js', 'ifleet-prototype.html'].includes(clean)) return false;
+  if (!['styles.css', 'app.js', 'card-setup.js', 'native-site.css', 'native-site-client.js'].includes(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : (clean.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8');
   send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': 'no-store' });
   return true;
@@ -10374,7 +10436,7 @@ const server = http.createServer(async (req, res) => {
       if (!claim || token.length < 32) return send(res, 404, paymentResultHtml('Toll receipt not found', 'Please contact WheelsonAuto so we can verify the transaction and send fresh proof.'));
       return send(res, 200, tollReceiptHtml(claim), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
-    if (url.pathname === '/apply' && req.method === 'GET') return send(res, 200, await appHtml({ publicMode: true }), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    if (url.pathname === '/apply' && req.method === 'GET') return send(res, 302, '', 'text/plain; charset=utf-8', { Location: '/inventory', 'Cache-Control': 'no-store' });
     if (url.pathname.startsWith('/setup-card/') && req.method === 'GET') {
       const requestId = url.pathname.split('/').filter(Boolean)[1];
       const data = await readData();
@@ -10437,6 +10499,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 302, '', 'text/plain', { Location: checkout.href });
     }
     if (url.pathname === '/api/public/applications' && req.method === 'POST') {
+      const applicationRate = publicActionLimit(req, 'public-application', PUBLIC_APPLICATION_LIMIT, PUBLIC_APPLICATION_WINDOW_MS);
+      if (!applicationRate.allowed) return json(res, 429, { ok: false, error: 'Too many application attempts from this connection. Wait before trying again.' }, { 'Retry-After': String(applicationRate.retryAfterSeconds) });
       const payload = await readJsonBody(req, 256 * 1024);
       const data = await readData();
       onboarding.ensureCollections(data);
@@ -10460,6 +10524,25 @@ const server = http.createServer(async (req, res) => {
       if (payload.applicationConsent !== true) return json(res, 400, { ok: false, error: 'Application authorization is required.' });
       const required = ['address', 'city', 'state', 'postalCode', 'dateOfBirth', 'driverLicenseId', 'driverLicenseExpires', 'employer'];
       if (required.some(field => !onboarding.text(payload[field], 300))) return json(res, 400, { ok: false, error: 'Complete every required application field.' });
+      const duplicateCutoff = Date.now() - PUBLIC_APPLICATION_DUPLICATE_MS;
+      const duplicateApplication = (data.applications || []).find(application => {
+        const submittedAt = Date.parse(application.submittedAt || application.createdAt || '');
+        return application.onlineVehicleId === selectedVehicle.id && emailKey(application.email) === emailKey(email) && phoneKey(application.phone) === phone && Number.isFinite(submittedAt) && submittedAt >= duplicateCutoff;
+      });
+      if (duplicateApplication) {
+        let duplicateAccount = (data.customerAccounts || []).find(account => account.applicationId === duplicateApplication.id);
+        if (!duplicateAccount) {
+          duplicateAccount = onboarding.createPendingCustomerAccount(data, duplicateApplication, {
+            vehicleId: duplicateApplication.vehicleId || selectedVehicle.platformVehicleId || '',
+            onlineVehicleId: selectedVehicle.id,
+            portalStage: 'Application under review',
+            status: 'Active'
+          });
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
+        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), loginUrl: '/customer/login' });
+      }
       const pricing = onboarding.pricingSnapshot(selectedVehicle);
       const password = createPasswordRecord(payload.password);
       const submittedAt = new Date().toISOString();
@@ -10755,7 +10838,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
       const requestId = url.pathname.split('/').filter(Boolean)[3];
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
       const request = data.cardSetupRequests.find(item => item.id === requestId);
@@ -10913,7 +10996,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = form.get('username') || '';
       const password = form.get('password') || '';
       const throttleKey = loginThrottleKey(req, 'customer', username);
@@ -10945,7 +11028,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/customer/forgot' && req.method === 'GET') return send(res, 200, customerForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/forgot' && req.method === 'POST') {
-      const form = new URLSearchParams(await readBody(req));
+      const helpRate = publicActionLimit(req, 'customer-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
+      if (!helpRate.allowed) return send(res, 429, customerForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const identity = String(form.get('identity') || '').trim();
       if (!identity) return send(res, 400, customerForgotPage('Enter your name, username, phone, or email so we can find the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
@@ -11001,7 +11086,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/message' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const body = String(form.get('body') || '').trim().slice(0, 1200);
       if (!body) return send(res, 302, '', 'text/plain', { Location: '/customer' });
       const data = await readData();
@@ -11081,7 +11166,7 @@ const server = http.createServer(async (req, res) => {
 	    if (url.pathname === '/customer/receipt-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
 	      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-	      const form = new URLSearchParams(await readBody(req));
+	      const form = new URLSearchParams(await readBody(req, 64 * 1024));
 	      const paymentHint = String(form.get('paymentHint') || '').trim().slice(0, 160);
 	      const data = await readData();
 	      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
@@ -11151,7 +11236,7 @@ const server = http.createServer(async (req, res) => {
 	    if (url.pathname === '/customer/statement-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
 	      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-	      const form = new URLSearchParams(await readBody(req));
+	      const form = new URLSearchParams(await readBody(req, 64 * 1024));
 	      const requestType = String(form.get('requestType') || 'Account statement').trim().slice(0, 80) || 'Account statement';
 	      const note = String(form.get('note') || '').trim().slice(0, 200);
 	      const data = await readData();
@@ -11267,7 +11352,7 @@ const server = http.createServer(async (req, res) => {
 	    if (url.pathname === '/customer/paid-outside' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const amount = Number(form.get('amount') || 0);
       const method = String(form.get('method') || 'Outside app').trim().slice(0, 80);
       const paidDate = String(form.get('paidDate') || '').trim();
@@ -11362,7 +11447,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/service-request' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const type = String(form.get('type') || 'Service request').trim().slice(0, 120);
       const preferredDate = String(form.get('preferredDate') || '').trim();
       const notes = String(form.get('notes') || '').trim().slice(0, 1200);
@@ -11458,7 +11543,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/issue-report' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const type = String(form.get('type') || 'Customer issue').trim().slice(0, 120);
       const incidentDate = String(form.get('incidentDate') || '').trim();
       const amount = Number(form.get('amount') || 0);
@@ -11557,7 +11642,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/document-update' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const type = String(form.get('type') || 'Document update').trim().slice(0, 120);
       const provider = String(form.get('provider') || '').trim().slice(0, 120);
       const reference = String(form.get('reference') || '').trim().slice(0, 160);
@@ -11780,7 +11865,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/forgot' && req.method === 'GET') return send(res, 200, staffForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/forgot' && req.method === 'POST') {
-      const form = new URLSearchParams(await readBody(req));
+      const helpRate = publicActionLimit(req, 'staff-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
+      if (!helpRate.allowed) return send(res, 429, staffForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const identity = String(form.get('identity') || '').trim();
       if (!identity) return send(res, 400, staffForgotPage('Enter your name, username, phone, or email so the owner can find the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
@@ -11834,7 +11921,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, staffForgotPage('Your request was sent to the owner. They will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/login' && req.method === 'POST') {
-      const form = new URLSearchParams(await readBody(req));
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = form.get('username') || '';
       const password = form.get('password') || '';
       const pin = form.get('pin') || '';
@@ -12326,7 +12413,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/state/version' && req.method === 'GET') return json(res, 200, { ok: true, version: await dataVersion() });
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
     if (url.pathname === '/api/state' && req.method === 'PUT') {
-      const incoming = JSON.parse(await readBody(req) || '{}');
+      const incoming = await readJsonBody(req, 32 * 1024 * 1024);
       const current = await readData();
       const nextState = stateForUserWrite(current, incoming, user);
       enrichLinkedProfiles(nextState);
@@ -12353,7 +12440,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/tolls/import' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can import toll or violation statements.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const preview = prepareTollImport(data, payload, user);
       if (payload.preview === true) {
@@ -12399,7 +12486,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/tolls/receipt/send' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can approve and send toll reimbursement proof.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const claim = (data.claims || []).find(row => row.id === payload.id && isTollViolationClaim(row));
       if (!claim) return json(res, 404, { ok: false, error: 'That toll or violation record was not found.' });
@@ -12420,7 +12507,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/messages/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change messaging and Star AI settings.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.integrations = data.integrations || {};
       data.integrations.messaging = data.integrations.messaging || {};
@@ -12495,7 +12582,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/notifications/email/settings' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change email notification settings.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.integrations = data.integrations || {};
       data.integrations.notifications = data.integrations.notifications || {};
@@ -12509,7 +12596,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/notifications/email/test' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can send email notification tests.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const settings = emailNotificationSettings(data);
       const result = await queueEmailNotification(data, {
@@ -12524,7 +12611,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/notifications/daily-closeout' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can send daily closeout notifications.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const settings = emailNotificationSettings(data);
       if (!settings.emailRecipients.length) return json(res, 400, { ok: false, error: 'Add a notification email in Messages setup first.' });
@@ -12549,7 +12636,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/verification/document' && req.method === 'POST') {
       const role = String(user && user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can verify customer proof.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       try {
         const document = reviewDocumentProof(data, user, payload);
@@ -12562,7 +12649,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/verification/paid-outside' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can verify paid-outside payment reports.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       try {
         const payment = reviewPaidOutsideProof(data, user, payload);
@@ -12574,7 +12661,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/messages/send' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.integrations = data.integrations || {};
@@ -12676,7 +12763,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/messages/ai-reply' && req.method === 'POST') {
       if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
       const sourceMessage = payload.messageId ? (data.messages || []).find(item => item.id === payload.messageId) : null;
@@ -12719,7 +12806,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/messages/ai-action' && req.method === 'POST') {
       if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
       try {
@@ -12736,7 +12823,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/messages/ai-health' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can run the Star AI provider health test.' });
       if (!WOA_STAR_AI_ENABLED) return json(res, 423, { ok: false, error: 'Star AI is turned off in Render with WOA_STAR_AI_ENABLED=0.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       if (!messageSettings(data).aiEnabled) return json(res, 423, { ok: false, error: 'Star AI is turned off in WheelsonAuto messaging settings.' });
       const health = await starAiProviderHealthCheck(data, payload);
@@ -12831,7 +12918,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/reset' && req.method === 'POST') { await fs.copyFile(SEED_FILE, DATA_FILE); return json(res, 200, { ok: true, data: await readData() }); }
     if (url.pathname === '/api/integrations/clover/connect' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.integrations = data.integrations || {}; data.integrations.clover = { ...(data.integrations.clover || {}), ...payload, connected: true };
       await writeData(data); return json(res, 200, { ok: true, clover: data.integrations.clover });
@@ -12851,7 +12938,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/integrations/clover/import-plan-summary' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.integrations = data.integrations || {};
       data.integrations.clover = data.integrations.clover || {};
@@ -12866,7 +12953,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, imported: plans.length, summary: data.integrations.clover.recurringPlanSummary });
     }
     if (url.pathname === '/api/integrations/clover/import-recurring-roster' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.integrations = data.integrations || {};
       data.integrations.clover = data.integrations.clover || {};
@@ -12922,7 +13009,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, providers: Array.isArray(data.apiProviders) ? data.apiProviders : [] });
     }
     if (url.pathname === '/api/api-providers' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.apiProviders = Array.isArray(data.apiProviders) ? data.apiProviders : [];
       const provider = cleanApiProviderPayload(payload);
@@ -12948,7 +13035,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, provider, task: apiTask });
     }
     if (url.pathname === '/api/tasks' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
       const task = cleanTaskPayload(payload);
@@ -12960,7 +13047,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, task });
     }
     if (url.pathname === '/api/account/password' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const currentPassword = String(payload.currentPassword || '').trim();
       const newPassword = String(payload.newPassword || '').trim();
       const accountPolicyError = passwordPolicyError(newPassword, 'New password');
@@ -12987,7 +13074,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       if (String(payload.password || '').trim()) {
         const staffPolicyError = passwordPolicyError(String(payload.password || '').trim(), 'Staff password');
         if (staffPolicyError) return json(res, 400, { ok: false, error: staffPolicyError });
@@ -13014,7 +13101,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/customer-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage customer logins.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       if (String(payload.password || '').trim()) {
         const customerPolicyError = passwordPolicyError(String(payload.password || '').trim(), 'Customer password');
         if (customerPolicyError) return json(res, 400, { ok: false, error: customerPolicyError });
@@ -13069,7 +13156,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/organizations' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage company accounts.' });
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       ensureBaseOrganization(data);
       const existing = data.organizations.find(item => item.id === payload.id);
@@ -13085,7 +13172,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, organization: existing || organization });
     }
     if (url.pathname === '/api/recurring-payments' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const autopay = cleanAutopayPayload(payload);
       data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
@@ -13116,7 +13203,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, { ok: true, autopay: existingAutopay || autopay, reactivated: !!existingAutopay });
     }
     if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       const recurring = findRecurringRow(data, id);
@@ -13159,7 +13246,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       if (!id) return json(res, 400, { ok: false, error: 'Choose a recurring customer to remove.' });
@@ -13179,7 +13266,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, removedAt });
     }
     if (url.pathname === '/api/card-setup-requests/delete' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.setupRequestId || payload.id || '').trim();
       if (!id) return json(res, 400, { ok: false, error: 'Choose a card setup row to delete.' });
@@ -13199,7 +13286,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, deletedRecurring, deletedRequests });
     }
     if (url.pathname === '/api/card-setup-requests' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       const created = createCardSetupRequest(data, payload);
       appendAuditLog(data, user, 'Card setup link created', [created.autopay.customer || payload.customer || 'Unknown customer', moneyText(created.autopay.amount || payload.amount || 0), created.request.url || 'Setup link saved']);
@@ -13207,7 +13294,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, { ok: true, autopay: created.autopay, setupLink: created.request });
     }
     if (url.pathname === '/api/integrations/clover/manual-charge' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       try {
         const result = await chargeSavedRecurringCard(data, payload, req);
@@ -13235,7 +13322,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/payment-links' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req) || '{}');
+      const payload = await readJsonBody(req);
       const data = await readData();
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       const request = createPaymentRequest(data, payload);
@@ -13355,5 +13442,7 @@ module.exports = {
   activeHostedCheckoutHref,
   apiProviderLaunchGuidance,
   apiProviderRows,
-  apiProviderReviewRows
+  apiProviderReviewRows,
+  sessionSignature,
+  verifySignedSessionCookie
 };
