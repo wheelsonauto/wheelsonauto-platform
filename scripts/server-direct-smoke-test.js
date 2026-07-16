@@ -309,6 +309,10 @@ async function main() {
     assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
     assert(loginPage.headers['X-Frame-Options'] === 'DENY' && loginPage.headers['X-Content-Type-Options'] === 'nosniff', 'Login responses must carry anti-framing and content-sniffing security headers.');
     assert(String(loginPage.headers['Content-Security-Policy'] || '').includes("frame-ancestors 'none'"), 'Login responses must prevent embedding by another site.');
+    const versionedAppAsset = await request(server, 'GET', '/app.js?v=platform-direct-cache-test');
+    assert(versionedAppAsset.status === 200 && versionedAppAsset.headers['Cache-Control'] === 'public, max-age=31536000, immutable', 'Versioned app assets should be cached immutably instead of downloaded again after every login or refresh.');
+    const unversionedAppAsset = await request(server, 'GET', '/app.js');
+    assert(unversionedAppAsset.status === 200 && unversionedAppAsset.headers['Cache-Control'] === 'no-store', 'Unversioned app assets must remain uncached so a stale direct URL cannot survive a deploy.');
     const unauthenticatedState = await request(server, 'GET', '/api/state');
     assert(unauthenticatedState.status === 401 && unauthenticatedState.json && unauthenticatedState.json.error === 'Authentication required.', 'Protected APIs must return a JSON 401 instead of rendering the staff login page.');
     assert(unauthenticatedState.headers['Cache-Control'] === 'no-store', 'Authenticated JSON APIs must not be cached by browsers or intermediaries.');

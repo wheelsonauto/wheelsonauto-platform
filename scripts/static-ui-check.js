@@ -194,7 +194,7 @@ if (indexHtml.includes('platform-20260711-public-qa') || server.includes('platfo
   fail('Stale public QA asset version is still referenced.');
 }
 assertIncludes('Server CSS cache-busting link', server, ['/styles.css?v=' + indexCssVersions[0]]);
-assertIncludes('Static asset no-store headers', server, ['staticFile(res, pathname)', "'Cache-Control': 'no-store'"]);
+assertIncludes('Versioned static asset caching', server, ['staticFile(res, pathname, searchParams)', 'public, max-age=31536000, immutable', "? 'public, max-age=31536000, immutable'", ": 'no-store'"]);
 assertIncludes('Native public journey no-store headers', server, ["nativeSite.homeHtml", "nativeSite.inventoryHtml", "nativeSite.applicationHtml", "'Cache-Control': 'no-store'"]);
 assertIncludes('Authenticated app shell no-store headers', server, ["appHtml({ publicMode: false, user })", "'Cache-Control': 'no-store'"]);
 assertIncludes('Session cookie security flags', server, ['function cookieSecurityFlags', 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Secure']);

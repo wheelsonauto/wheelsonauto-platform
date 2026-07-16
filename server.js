@@ -6757,11 +6757,15 @@ async function appHtml({ publicMode = false, user = null } = {}) {
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__SERVER_DATA_VERSION__=' + JSON.stringify(serverDataVersion) + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
-async function staticFile(res, pathname) {
+async function staticFile(res, pathname, searchParams) {
   const clean = pathname.replace(/^\//, '');
   if (!['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js'].includes(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : (clean.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8');
-  send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': 'no-store' });
+  const version = searchParams && String(searchParams.get('v') || '').trim();
+  const cacheControl = version && /^[a-z0-9][a-z0-9._-]{2,100}$/i.test(version)
+    ? 'public, max-age=31536000, immutable'
+    : 'no-store';
+  send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': cacheControl });
   return true;
 }
 function scoreApplication(app) {
@@ -10521,7 +10525,7 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname.startsWith('/api/')) return json(res, 403, { ok: false, error: 'Cross-origin account changes are not allowed.' });
       return send(res, 403, 'Cross-origin account changes are not allowed.', 'text/plain; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
-    if (await staticFile(res, url.pathname)) return;
+    if (await staticFile(res, url.pathname, url.searchParams)) return;
     if (url.pathname.startsWith('/native-media/') && req.method === 'GET') {
       const filename = String(url.pathname.split('/').pop() || '');
       if (!/^[a-f0-9]{20,64}\.(?:jpg|jpeg|png|webp|avif)$/i.test(filename)) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
