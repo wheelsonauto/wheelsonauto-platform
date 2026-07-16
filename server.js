@@ -80,7 +80,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-telnyx-tracker-69">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-toll-missing-70">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -8010,14 +8010,32 @@ function tollImportMatch(data, row = {}) {
   const vin = tollTagKey(tollImportValue(row, ['vin', 'vehicleidentificationnumber']));
   const vehicleText = normKey(tollImportValue(row, ['vehicle', 'car', 'unit', 'vehiclelabel']));
   const importedCustomer = tollImportValue(row, ['customer', 'name', 'driver', 'renter']);
+  const incidentDate = tollImportTransactionDate(row);
   const vehicles = data.vehicles || [];
   let candidates = plateKeys.length ? vehicles.filter(vehicle => tollVehicleTags(vehicle).some(tag => plateKeys.includes(tag))) : [];
   let matchSource = candidates.length ? 'Exact plate / tag' : '';
   if (!candidates.length && plateKeys.length) {
     const savedMappings = ((((data.integrations || {}).tolls || {}).tagMappings) || data.tollTagMappings || []).filter(mapping => {
-      return tollTagKeys(mapping.tag || mapping.plate || mapping.tagPlateNumber).some(tag => plateKeys.includes(tag));
+      const tagMatches = tollTagKeys(mapping.tag || mapping.plate || mapping.tagPlateNumber).some(tag => plateKeys.includes(tag));
+      const startDate = mapping.startDate ? tollImportDate(mapping.startDate) : '';
+      const endDate = mapping.endDate ? tollImportDate(mapping.endDate) : '';
+      return tagMatches && (!startDate || startDate <= incidentDate) && (!endDate || endDate >= incidentDate);
     });
-    const mappedVehicleIds = Array.from(new Set(savedMappings.map(mapping => mapping.vehicleId).filter(Boolean)));
+    const personalMappings = savedMappings.filter(mapping => /personal|company|owner/i.test(String(mapping.classification || mapping.disposition || '')));
+    const fleetMappings = savedMappings.filter(mapping => !personalMappings.includes(mapping));
+    if (personalMappings.length && !fleetMappings.length) {
+      return {
+        vehicle: null,
+        customer: '',
+        profile: {},
+        candidates: [],
+        ambiguous: false,
+        excluded: true,
+        classification: 'personal',
+        source: 'Personal/company transponder'
+      };
+    }
+    const mappedVehicleIds = Array.from(new Set(fleetMappings.map(mapping => mapping.vehicleId).filter(Boolean)));
     candidates = mappedVehicleIds.map(vehicleId => vehicles.find(vehicle => vehicle.id === vehicleId)).filter(Boolean);
     if (candidates.length) matchSource = 'Saved E-ZPass tag mapping';
   }
@@ -8037,7 +8055,6 @@ function tollImportMatch(data, row = {}) {
     candidates = vehicles.filter(vehicle => normKey(vehicle.currentCustomer) === key);
     if (candidates.length) matchSource = 'Imported customer';
   }
-  const incidentDate = tollImportTransactionDate(row);
   const contractMatchesVehicleOnDate = (contract, vehicle) => {
     const linked = contract.vehicleId === vehicle.id || contract.returnedVehicleId === vehicle.id ||
       normKey(contract.vehicle || contract.returnedVehicle) === normKey(tollVehicleLabel(vehicle));
@@ -8096,6 +8113,106 @@ function tollImportMatch(data, row = {}) {
     candidates: matchCandidates,
     ambiguous,
     source: ambiguous ? 'Ambiguous vehicle/customer match' : (customer ? (matchSource || 'Imported customer') : 'No exact customer match')
+  };
+}
+function tollUnmatchedTagGroups(preparedRows = []) {
+  const groups = new Map();
+  preparedRows.filter(item => item.valid && !item.duplicate && !item.claim.customer && !item.claim.personalCompanyActivity).forEach(item => {
+    const claim = item.claim || {};
+    const evidence = claim.tollEvidence || {};
+    const tag = String(evidence.tagPlateNumber || claim.plate || claim.licensePlate || '').trim();
+    const tagKey = tollTagKey(tag);
+    if (!tagKey || tagKey === 'NA' || tagKey === 'NONE') return;
+    const existing = groups.get(tagKey) || {
+      tag,
+      count: 0,
+      total: 0,
+      firstTransactionDate: claim.transactionDate || claim.incidentDate || '',
+      lastTransactionDate: claim.transactionDate || claim.incidentDate || '',
+      providers: new Set(),
+      sampleReference: claim.reference || ''
+    };
+    const transactionDate = claim.transactionDate || claim.incidentDate || '';
+    existing.count += 1;
+    existing.total = Math.round((existing.total + Number(claim.amount || 0)) * 100) / 100;
+    if (transactionDate && (!existing.firstTransactionDate || transactionDate < existing.firstTransactionDate)) existing.firstTransactionDate = transactionDate;
+    if (transactionDate && (!existing.lastTransactionDate || transactionDate > existing.lastTransactionDate)) existing.lastTransactionDate = transactionDate;
+    if (claim.provider || claim.agency) existing.providers.add(claim.provider || claim.agency);
+    groups.set(tagKey, existing);
+  });
+  return Array.from(groups.values()).map(group => ({
+    ...group,
+    providers: Array.from(group.providers).sort()
+  })).sort((a, b) => b.count - a.count || b.total - a.total || a.tag.localeCompare(b.tag));
+}
+function tollMappingRangesOverlap(left = {}, right = {}) {
+  const leftStart = left.startDate || '0000-01-01';
+  const leftEnd = left.endDate || '9999-12-31';
+  const rightStart = right.startDate || '0000-01-01';
+  const rightEnd = right.endDate || '9999-12-31';
+  return leftStart <= rightEnd && rightStart <= leftEnd;
+}
+function upsertTollTagMappings(data, payload = {}, user = {}) {
+  const incoming = Array.isArray(payload.mappings) ? payload.mappings.slice(0, 200) : [];
+  if (!incoming.length) throw new Error('Choose at least one E-ZPass tag and vehicle mapping.');
+  data.integrations = data.integrations || {};
+  data.integrations.tolls = data.integrations.tolls || {};
+  const mappings = Array.isArray(data.integrations.tolls.tagMappings) ? data.integrations.tolls.tagMappings : [];
+  data.integrations.tolls.tagMappings = mappings;
+  const now = new Date().toISOString();
+  const saved = [];
+  incoming.forEach(row => {
+    const tag = String(row.tag || row.plate || row.tagPlateNumber || '').trim();
+    const tagKey = tollTagKey(tag);
+    const classification = /personal|company|owner/i.test(String(row.classification || row.disposition || '')) ? 'personal' : 'fleet';
+    const vehicleId = classification === 'personal' ? '' : String(row.vehicleId || '').trim();
+    if (!tagKey) throw new Error('Every E-ZPass mapping needs a tag or transponder number.');
+    const vehicle = classification === 'personal' ? null : (data.vehicles || []).find(item => item.id === vehicleId);
+    if (classification === 'fleet' && !vehicle) throw new Error('Choose a valid fleet vehicle for E-ZPass tag ' + tag + '.');
+    const startDate = row.startDate ? tollImportDate(row.startDate) : '';
+    const endDate = row.endDate ? tollImportDate(row.endDate) : '';
+    if (startDate && endDate && startDate > endDate) throw new Error('The mapping start date must be before the end date for ' + tag + '.');
+    const mappingTarget = classification === 'personal' ? 'personal' : vehicleId;
+    const candidate = { tag, tagKey, vehicleId, classification, startDate, endDate };
+    const exact = mappings.find(item => tollTagKey(item.tag || item.plate || item.tagPlateNumber) === tagKey && String(item.startDate || '') === startDate && String(item.endDate || '') === endDate);
+    const conflict = mappings.find(item => {
+      const itemTarget = /personal|company|owner/i.test(String(item.classification || item.disposition || '')) ? 'personal' : String(item.vehicleId || '');
+      return item !== exact && tollTagKey(item.tag || item.plate || item.tagPlateNumber) === tagKey && itemTarget !== mappingTarget && tollMappingRangesOverlap(item, candidate);
+    });
+    if (conflict) throw new Error('E-ZPass tag ' + tag + ' already maps to another vehicle during these dates. Adjust the effective dates instead of overlapping them.');
+    const mapping = exact || { id: 'toll-map-' + crypto.randomBytes(8).toString('hex'), createdAt: now };
+    Object.assign(mapping, {
+      tag,
+      vehicleId,
+      classification,
+      vehicle: vehicle ? tollVehicleLabel(vehicle) : 'Personal / company vehicle',
+      vin: vehicle && vehicle.vin || '',
+      plate: vehicle && (vehicle.plate || vehicle.licensePlate || vehicle.stock) || '',
+      startDate,
+      endDate,
+      organizationId: vehicle && vehicle.organizationId || userOrganizationId(user),
+      updatedAt: now,
+      updatedBy: user && (user.name || user.username || user.role) || 'Owner'
+    });
+    if (!exact) mappings.unshift(mapping);
+    saved.push(mapping);
+  });
+  const rematched = rematchSavedTollClaims(data, user);
+  appendAuditLog(data, user, 'E-ZPass tag mappings saved', [saved.length + ' mapping(s)', rematched + ' existing toll row(s) rematched']);
+  return {
+    saved: saved.length,
+    rematched,
+    mappings: saved.map(mapping => ({
+      id: mapping.id,
+      tag: mapping.tag,
+      vehicleId: mapping.vehicleId,
+      classification: mapping.classification,
+      vehicle: mapping.vehicle,
+      vin: mapping.vin,
+      plate: mapping.plate,
+      startDate: mapping.startDate,
+      endDate: mapping.endDate
+    }))
   };
 }
 function tollImportFingerprint(record = {}) {
@@ -8161,18 +8278,19 @@ function prepareTollImport(data, payload = {}, user = {}) {
       amount,
       paidAmount: 0,
       balance: amount,
-      status: 'Open',
-      recoveryStatus: 'Open',
-      responsibility: 'Customer',
+      status: match.excluded ? 'Closed - personal/company' : (match.customer ? 'Open' : 'Missing file'),
+      recoveryStatus: match.excluded ? 'Excluded from customer recovery' : (match.customer ? 'Open' : 'Needs match'),
+      responsibility: match.excluded ? 'WheelsonAuto' : (match.customer ? 'Customer' : 'Unassigned'),
       incidentDate,
       transactionDate: incidentDate,
       postingDate,
       postedMonth: String(postingDate || '').slice(0, 7),
       location,
       nextFollowUp: localDateKey(),
-      customerMatchStatus: match.customer ? 'Matched from toll import' : 'Needs payment/customer match',
+      customerMatchStatus: match.excluded ? 'Personal / company vehicle' : (match.customer ? 'Matched from toll import' : 'Needs payment/customer match'),
       customerMatchSource: match.source,
       matchCandidates: match.candidates,
+      personalCompanyActivity: !!match.excluded,
       proofUrl: proofUrl || receiptUrl,
       evidence: proofUrl || receiptUrl,
       receiptToken,
@@ -8199,11 +8317,13 @@ function prepareTollImport(data, payload = {}, user = {}) {
   });
   return {
     rows: prepared,
+    tagGroups: tollUnmatchedTagGroups(prepared),
     summary: {
       received: prepared.length,
       importable: prepared.filter(item => item.valid && !item.duplicate).length,
       matched: prepared.filter(item => item.valid && !item.duplicate && item.claim.customer).length,
-      unmatched: prepared.filter(item => item.valid && !item.duplicate && !item.claim.customer).length,
+      unmatched: prepared.filter(item => item.valid && !item.duplicate && !item.claim.customer && !item.claim.personalCompanyActivity).length,
+      personalCompany: prepared.filter(item => item.valid && !item.duplicate && item.claim.personalCompanyActivity).length,
       duplicates: prepared.filter(item => item.duplicate).length,
       invalid: prepared.filter(item => !item.valid).length,
       accountActivity: prepared.filter(item => item.errors.includes('Account payment/funding row skipped')).length
@@ -8219,7 +8339,8 @@ async function importTollRows(data, payload = {}, user = {}) {
     appendAuditLog(data, user, 'Toll / violation statement imported', [
       imported.length + ' imported',
       preview.summary.matched + ' matched',
-      preview.summary.unmatched + ' need review',
+      preview.summary.unmatched + ' in Missing file',
+      preview.summary.personalCompany + ' personal/company excluded',
       preview.summary.duplicates + ' duplicates skipped',
       preview.summary.invalid + ' invalid skipped'
     ]);
@@ -8334,6 +8455,30 @@ function rematchSavedTollClaims(data, user) {
     if (!row.transactiondate) row.transactiondate = claim.transactionDate || claim.incidentDate || '';
     if (!row.postingdate) row.postingdate = claim.postingDate || '';
     const match = tollImportMatch(data, row);
+    if (match.excluded) {
+      Object.assign(claim, {
+        customer: '',
+        customerId: '',
+        phone: '',
+        email: '',
+        vehicle: '',
+        vehicleId: '',
+        vin: '',
+        tracker: '',
+        status: 'Closed - personal/company',
+        recoveryStatus: 'Excluded from customer recovery',
+        responsibility: 'WheelsonAuto',
+        customerMatchStatus: 'Personal / company vehicle',
+        customerMatchSource: match.source,
+        matchCandidates: [],
+        personalCompanyActivity: true,
+        customerVisible: false,
+        portalVisible: false,
+        updatedAt: new Date().toISOString()
+      });
+      updated += 1;
+      return;
+    }
     if (!match.customer || !match.vehicle) return;
     const profile = match.profile || tollCustomerProfile(data, match.customer);
     Object.assign(claim, {
@@ -8348,6 +8493,7 @@ function rematchSavedTollClaims(data, user) {
       customerMatchStatus: 'Matched from saved E-ZPass tag',
       customerMatchSource: match.source,
       matchCandidates: match.candidates,
+      personalCompanyActivity: false,
       updatedAt: new Date().toISOString()
     });
     updated += 1;
@@ -13171,8 +13317,10 @@ const server = http.createServer(async (req, res) => {
             amount: item.claim.amount,
             customerMatchStatus: item.claim.customerMatchStatus,
             customerMatchSource: item.claim.customerMatchSource,
+            personalCompanyActivity: item.claim.personalCompanyActivity,
             matchCandidates: item.claim.matchCandidates
           })),
+          tagGroups: preview.tagGroups,
           summary: preview.summary
         });
       }
@@ -13183,6 +13331,19 @@ const server = http.createServer(async (req, res) => {
         await writeData(data);
       }
       return json(res, 200, { ok: true, result, version: await dataVersion() });
+    }
+    if (url.pathname === '/api/tolls/tag-mappings' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can save E-ZPass tag mappings.' });
+      const payload = await readJsonBody(req);
+      const data = await readData();
+      try {
+        const result = upsertTollTagMappings(data, payload, user);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, result, version: await dataVersion() });
+      } catch (err) {
+        return json(res, 400, { ok: false, error: String(err && err.message || err) });
+      }
     }
     if (url.pathname === '/api/tolls/receipt/send' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can approve and send toll reimbursement proof.' });
@@ -14181,6 +14342,8 @@ module.exports = {
   tollImportFingerprint,
   prepareTollImport,
   importTollRows,
+  tollUnmatchedTagGroups,
+  upsertTollTagMappings,
   tollReceiptText,
   tollReceiptHtml,
   rematchSavedTollClaims,

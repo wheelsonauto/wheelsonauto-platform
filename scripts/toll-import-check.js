@@ -3,9 +3,10 @@ const {
   tollImportMatch,
   prepareTollImport,
   importTollRows,
+  tollUnmatchedTagGroups,
+  upsertTollTagMappings,
   tollReceiptText,
-  tollReceiptHtml,
-  rematchSavedTollClaims
+  tollReceiptHtml
 } = require('../server');
 
 function assert(condition, message) {
@@ -64,16 +65,20 @@ async function run() {
   assert(preview.summary.received === 7, 'Preview should count every statement row.');
   assert(preview.summary.importable === 4, 'Preview should include three matched tolls plus one unmatched review row.');
   assert(preview.summary.matched === 3, 'Preview should separate historical and current-customer tolls.');
-  assert(preview.summary.unmatched === 1, 'Unknown plate should enter Match Review without guessing.');
+  assert(preview.summary.unmatched === 1, 'Unknown plate should enter Missing file without guessing.');
+  assert(preview.summary.personalCompany === 0, 'No statement row should be excluded unless the owner classifies its tag.');
   assert(preview.summary.duplicates === 1, 'Duplicate rows inside one file should be skipped.');
   assert(preview.summary.invalid === 2, 'Funding rows and invalid amounts should be skipped with feedback.');
   assert(preview.summary.accountActivity === 1, 'E-ZPass prepaid account funding must never become a customer toll.');
+  const missingGroups = tollUnmatchedTagGroups(preview.rows);
+  assert(missingGroups.length === 1 && missingGroups[0].tag === 'UNKNOWN-NJ', 'Missing file should group repeated work by exact transponder or plate.');
+  assert(missingGroups[0].count === 1 && missingGroups[0].total === 4, 'Missing file group should preserve its row count and recovery amount.');
 
   const imported = await importTollRows(data, { raw }, { name: 'Owner admin', role: 'Owner', organizationId: 'org-wheelsonauto' });
   assert(imported.claims.length === 4 && data.claims.length === 4, 'Only valid, unique toll rows should become claims.');
   assert(data.claims.some(claim => claim.customer === 'Old Customer' && claim.plate === 'OLD-999-NJ'), 'Historical customer toll should be saved with the old tag.');
   assert(data.claims.some(claim => claim.customer === 'New Customer' && claim.tracker === 'Tracker 12'), 'Current customer toll should keep vehicle and tracker context.');
-  assert(data.claims.some(claim => !claim.customer && claim.customerMatchStatus === 'Needs payment/customer match'), 'Unknown plate should stay unassigned for human review.');
+  assert(data.claims.some(claim => !claim.customer && claim.status === 'Missing file' && claim.customerMatchStatus === 'Needs payment/customer match'), 'Unknown plate should stay unassigned in Missing file for owner review.');
   const historicalClaim = data.claims.find(claim => claim.customer === 'Old Customer');
   assert(historicalClaim.transactionDate === '2026-06-15' && historicalClaim.postingDate === '2026-07-15', 'Late-posted tolls must assign the customer using transaction date while preserving posting date.');
   assert(historicalClaim.receiptUrl && historicalClaim.receiptToken, 'Every imported toll should get a private receipt link.');
@@ -83,10 +88,28 @@ async function run() {
   assert(currentClaims.length === 2 && currentClaims[0].reference !== currentClaims[1].reference, 'Two real same-day tolls with the same amount must remain separate when their trip details differ.');
   assert(data.auditLogs.length === 1, 'One compact audit record should summarize the import.');
 
-  data.integrations = { tolls: { tagMappings: [{ tag: 'UNKNOWN-NJ', vehicleId: 'veh-toll-1' }] } };
-  const rematched = rematchSavedTollClaims(data, { name: 'Owner admin', role: 'Owner', organizationId: 'org-wheelsonauto' });
+  const personalRepairData = JSON.parse(JSON.stringify(data));
+  const personalResult = upsertTollTagMappings(personalRepairData, {
+    mappings: [{ tag: 'UNKNOWN-NJ', classification: 'personal', startDate: '2026-07-11', endDate: '2026-07-11' }]
+  }, { name: 'Owner admin', role: 'Owner', organizationId: 'org-wheelsonauto' });
+  const personalClaim = personalRepairData.claims.find(claim => claim.plate === 'UNKNOWN-NJ');
+  assert(personalResult.rematched === 1, 'Classifying a saved unknown tag as personal should repair its already-imported row.');
+  assert(personalClaim.personalCompanyActivity === true && personalClaim.status === 'Closed - personal/company', 'Personal activity must be closed and excluded from customer recovery.');
+  assert(!personalClaim.customer && personalClaim.responsibility === 'WheelsonAuto', 'Personal activity must never be attached to or charged to a customer.');
+
+  const mappingResult = upsertTollTagMappings(data, {
+    mappings: [{ tag: 'UNKNOWN-NJ', vehicleId: 'veh-toll-1', classification: 'fleet', startDate: '2026-07-11', endDate: '2026-07-11' }]
+  }, { name: 'Owner admin', role: 'Owner', organizationId: 'org-wheelsonauto' });
   const learnedTagClaim = data.claims.find(claim => claim.plate === 'UNKNOWN-NJ');
-  assert(rematched === 1 && learnedTagClaim.customer === 'New Customer' && learnedTagClaim.vehicleId === 'veh-toll-1', 'One saved E-ZPass tag mapping should rematch all existing rows using each transaction date.');
+  assert(mappingResult.rematched === 1 && learnedTagClaim.customer === 'New Customer' && learnedTagClaim.vehicleId === 'veh-toll-1', 'One saved E-ZPass tag mapping should rematch existing rows using each transaction date.');
+  assert(mappingResult.mappings[0].startDate === '2026-07-11' && mappingResult.mappings[0].endDate === '2026-07-11', 'Tag ownership history must preserve its effective dates.');
+
+  const personalPreviewData = JSON.parse(JSON.stringify({ ...data, claims: [], auditLogs: [], integrations: { tolls: { tagMappings: [] } } }));
+  upsertTollTagMappings(personalPreviewData, {
+    mappings: [{ tag: 'UNKNOWN-NJ', classification: 'personal', startDate: '2026-07-11', endDate: '2026-07-11' }]
+  }, { name: 'Owner admin', role: 'Owner', organizationId: 'org-wheelsonauto' });
+  const personalPreview = prepareTollImport(personalPreviewData, { raw }, { role: 'Owner', organizationId: 'org-wheelsonauto' });
+  assert(personalPreview.summary.personalCompany === 1 && personalPreview.summary.unmatched === 0, 'Future imports should recognize personal tags without adding them to Missing file.');
 
   const duplicatePreview = prepareTollImport(data, { raw }, { role: 'Owner', organizationId: 'org-wheelsonauto' });
   assert(duplicatePreview.summary.importable === 0, 'Re-importing the same statement must not create more claims.');

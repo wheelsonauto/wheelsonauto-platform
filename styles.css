@@ -4262,6 +4262,69 @@ body.fast-tab-switch .admin-shell .section{
   gap:10px;
   margin-top:12px;
 }
+.toll-tag-mapping-panel{
+  margin-top:12px;
+  padding:14px;
+  border:1px solid rgba(240,211,148,.24);
+  border-radius:8px;
+  background:#121619;
+  color:#e8edf2;
+}
+.toll-tag-mapping-panel .section-head{
+  margin-bottom:10px;
+}
+.toll-tag-mapping-panel h3{
+  margin:0;
+  color:#f7df9b;
+  font-size:15px;
+}
+.toll-tag-mapping-panel p{
+  margin:4px 0 0;
+  color:#c8d2dc;
+  font-size:11px;
+  line-height:1.45;
+}
+.toll-tag-mapping-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:9px;
+}
+.toll-tag-mapping-card{
+  display:grid;
+  gap:8px;
+  min-width:0;
+  padding:11px;
+  border:1px solid rgba(255,255,255,.10);
+  border-left:3px solid #f0d394;
+  border-radius:7px;
+  background:#191e21;
+}
+.toll-tag-mapping-card label{
+  display:grid;
+  gap:4px;
+  min-width:0;
+}
+.toll-tag-mapping-card label>span{
+  color:#aeb8c2;
+  font-size:10px;
+  font-weight:800;
+}
+.toll-tag-mapping-card input,
+.toll-tag-mapping-card select{
+  width:100%;
+  min-width:0;
+  min-height:38px;
+  border:1px solid rgba(240,211,148,.20);
+  border-radius:6px;
+  background:#101316;
+  color:#f4f0e7;
+  font-size:12px;
+}
+.toll-tag-map-dates{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:7px;
+}
 .toll-import-preview-card,
 .toll-receipt-review{
   min-width:0;
@@ -4686,6 +4749,7 @@ body.fast-tab-switch .admin-shell .section{
   .service-inspection-grid,
   .service-route-grid,
   .toll-route-grid,
+  .toll-tag-mapping-grid,
   .toll-import-preview-grid,
   .company-launch-grid,
   .notification-command-grid,
@@ -4705,6 +4769,7 @@ body.fast-tab-switch .admin-shell .section{
   .service-inspection-grid,
   .service-route-grid,
   .toll-route-grid,
+  .toll-tag-mapping-grid,
   .toll-import-preview-grid,
   .company-launch-grid,
   .notification-command-grid,
