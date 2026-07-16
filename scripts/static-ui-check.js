@@ -287,7 +287,7 @@ const criticalActionRequirements = [
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 assertIncludes('Clover refund eligibility guard', app, ['function cloverPaymentRefundable(row)', 'provider&&paid&&remaining>0', 'isOwner()&&!needsMatch&&cloverPaymentRefundable(row)']);
-assertIncludes('Server-authoritative unmatched Clover queue', app, ['function cloverQueuePaymentKey(row)', '_cloverNeedsMatch:true', 'row._cloverNeedsMatch===true', "customer='Customer match needed'", 'unmatchedKeys[key]=true', 'serverUnmatched.concat(payments.filter']);
+assertIncludes('Server-authoritative unmatched Clover queue', app, ['function cloverQueuePaymentKey(row)', '_cloverNeedsMatch:true', 'row._cloverNeedsMatch===true', "customer='Customer match needed'", 'if(!cache&&unmatchedKeys[key])return', 'serverUnmatched.concat(payments.filter']);
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
 ['repairAshleyDodgeTransfer', 'Ashley restored', 'Dodge Journey WHITE', 'Felicia V Gadson'].forEach(text => {
