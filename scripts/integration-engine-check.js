@@ -52,6 +52,9 @@ const providerCase = engine.verificationCase(data, {
 engine.applyVerificationEvent(providerCase, { externalCaseId: 'insurance-case-1', status: 'approved', expiresAt: '2026-07-30', provider: 'Insurance provider' });
 assert.equal(providerCase.status, 'Expiring');
 assert.equal(providerCase.policyNumberLast4, '5555');
+engine.reviewVerificationCase(providerCase, { decision: 'approve', notes: 'Manual review before authoritative callback.' }, { name: 'Manager' });
+engine.applyVerificationEvent(providerCase, { externalCaseId: 'insurance-case-1', status: 'rejected', provider: 'Insurance provider' });
+assert.equal(providerCase.status, 'Rejected', 'Authoritative provider results must supersede an earlier manual decision.');
 
 const ledger = engine.buildAccountingLedger(data, [{ sourceKey: 'payment:payment-1', quickBooksStatus: 'Synced', quickBooksEntityId: 'qb-1' }]);
 assert.equal(ledger.filter(row => row.sourceKey === 'payment:payment-1').length, 1);
@@ -62,6 +65,24 @@ assert.equal(ledger.find(row => row.sourceKey === 'maintenance:service-1').signe
 assert.equal(ledger.find(row => row.sourceKey === 'claim:claim-1').signedAmount, 12.5);
 assert.equal(ledger.every(row => row.customer === 'Test Customer'), true);
 assert.equal(ledger.every(row => row.vin === 'VIN123456789'), true);
+
+const quickBooksRows = engine.buildQuickBooksJournalRows(ledger);
+assert.equal(quickBooksRows.length, ledger.length * 2, 'Every accounting source must create one balanced QuickBooks debit/credit pair.');
+const journals = new Map();
+quickBooksRows.forEach(row => {
+  const totals = journals.get(row.journalNo) || { debit: 0, credit: 0, lines: 0 };
+  totals.debit += Number(row.debit || 0);
+  totals.credit += Number(row.credit || 0);
+  totals.lines += 1;
+  journals.set(row.journalNo, totals);
+});
+journals.forEach(totals => {
+  assert.equal(totals.lines, 2, 'Each QuickBooks journal must have exactly two lines.');
+  assert.equal(totals.debit, totals.credit, 'Each QuickBooks journal must balance.');
+});
+assert(quickBooksRows.some(row => row.account === 'Clover Clearing'), 'Clover payments/refunds must map through the Clover clearing account.');
+assert(quickBooksRows.some(row => row.account === 'Rental Income'), 'Rental payments must map to rental income.');
+assert(quickBooksRows.some(row => row.account === 'Repairs and Maintenance'), 'Maintenance costs must map to repairs and maintenance.');
 
 const calendar = engine.pickupCalendarEvent(data.pickupAppointments[0], data.publicSite);
 assert.match(calendar.googleCalendarUrl, /^https:\/\/calendar\.google\.com\/calendar\/render\?/);

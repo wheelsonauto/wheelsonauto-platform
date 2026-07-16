@@ -140,6 +140,7 @@ async function main() {
   process.env.WOA_AUTO_SYNC_MS = '3600000';
   process.env.WOA_AUTOPAY_MS = '3600000';
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
+  process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS = '3600000';
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
   process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
   process.env.CLOVER_HCO_WEBHOOK_SECRET = 'direct-clover-hosted-checkout-secret';
@@ -186,6 +187,10 @@ async function main() {
     assert(providerEvidence.get('clover-ecommerce').status === 'Connected' && /saved-card charge successfully/i.test(providerEvidence.get('clover-ecommerce').lastTestResult), 'Clover Ecommerce should be connected only after a successful WheelsonAuto saved-card charge.');
     assert(providerEvidence.get('clover-webhooks').status === 'Connected' && /webhook event/i.test(providerEvidence.get('clover-webhooks').lastTestResult), 'Clover webhooks should be connected only after a signed live event is recorded.');
     assert(providerEvidence.get('woa-autopay').status === 'Connected' && /1 charged/.test(providerEvidence.get('woa-autopay').lastTestResult), 'WheelsonAuto Autopay should be connected only after a clean monitor run with a managed saved-card schedule.');
+    assert(providerEvidence.get('insurance').endpoint.includes('/api/verification/cases') && !/future/i.test(providerEvidence.get('insurance').endpoint), 'Insurance provider readiness must point to the live provider-neutral verification routes.');
+    assert(providerEvidence.get('identity-verification').endpoint.includes('/api/webhooks/verification') && /last-four/i.test(providerEvidence.get('identity-verification').lastTestResult), 'Identity provider readiness must expose the signed callback and last-four retention truth.');
+    assert(providerEvidence.get('accounting').endpoint.includes('/api/accounting/quickbooks.csv') && /balanced QuickBooks journal/i.test(providerEvidence.get('accounting').lastTestResult), 'Accounting provider readiness must expose the live balanced journal path without pretending OAuth is connected.');
+    assert(providerEvidence.get('pickup-calendar').endpoint.includes('/api/pickups/calendar') && /Google add-to-calendar/i.test(providerEvidence.get('pickup-calendar').lastTestResult), 'Pickup provider readiness must expose the live manual calendar and maps path.');
     assert(/controlled saved-card charge/i.test(apiProviderLaunchGuidance({ id: 'clover-ecommerce', status: 'Testing - live charge needed' }).nextAction), 'Clover Ecommerce guidance should name the controlled saved-card charge required before connection.');
     assert(/10DLC approval/i.test(apiProviderLaunchGuidance({ id: 'sms-phone', status: 'Blocked - 10DLC approval' }).nextAction), 'SMS guidance should name the Telnyx account and 10DLC work blocking outbound delivery.');
     assert(/API credit/i.test(apiProviderLaunchGuidance({ id: 'star-ai', status: 'Blocked - OpenAI credit needed' }).nextAction), 'Star guidance should name usable OpenAI API credit as the current provider blocker.');
@@ -282,6 +287,11 @@ async function main() {
     assert(loginPage.status === 200, 'Login page did not load.');
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
     assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
+    assert(loginPage.headers['X-Frame-Options'] === 'DENY' && loginPage.headers['X-Content-Type-Options'] === 'nosniff', 'Login responses must carry anti-framing and content-sniffing security headers.');
+    assert(String(loginPage.headers['Content-Security-Policy'] || '').includes("frame-ancestors 'none'"), 'Login responses must prevent embedding by another site.');
+    const unauthenticatedState = await request(server, 'GET', '/api/state');
+    assert(unauthenticatedState.status === 401 && unauthenticatedState.json && unauthenticatedState.json.error === 'Authentication required.', 'Protected APIs must return a JSON 401 instead of rendering the staff login page.');
+    assert(unauthenticatedState.headers['Cache-Control'] === 'no-store', 'Authenticated JSON APIs must not be cached by browsers or intermediaries.');
 
     for (let i = 0; i < 6; i += 1) {
       const badLogin = await request(server, 'POST', '/login', { form: { username: 'direct-rate-limit-staff', password: 'wrong-' + i } });
@@ -305,7 +315,7 @@ async function main() {
     assert(missingTwilioSetup.status === 409 && /saved in Render/i.test(missingTwilioSetup.json.error || ''), 'Twilio setup route should clearly report missing Render credentials without faking a connection.');
     const tamperedOwnerCookie = ownerCookie.replace(/\.[^.]+$/, '.bad-signature');
     const tamperedOwnerRead = await request(server, 'GET', '/api/state', { cookie: tamperedOwnerCookie });
-    assert(!tamperedOwnerRead.json && tamperedOwnerRead.text.includes('WheelsonAuto Portal'), 'Tampered staff session cookie should not authenticate API access.');
+    assert(tamperedOwnerRead.status === 401 && tamperedOwnerRead.json && tamperedOwnerRead.json.error === 'Authentication required.', 'Tampered staff session cookie should not authenticate API access.');
     const ownerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(ownerState.status === 200 && ownerState.json, 'Owner could not read state.');
     const initialStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
@@ -904,8 +914,22 @@ async function main() {
     assert(providerVerification.json.verificationCase.referenceLast4 === '1234' && !JSON.stringify(providerVerification.json).includes('D12345678901234'), 'Verification records must retain only the last four characters of sensitive identity references.');
     const blockedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-webhook-secret': 'wrong-secret' }, json: { externalCaseId: 'identity-direct-provider-1', status: 'verified' } });
     assert(blockedVerificationWebhook.status === 401, 'Verification provider webhook must reject an invalid signature secret.');
-    const acceptedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-webhook-secret': 'direct-verification-secret' }, json: { externalCaseId: 'identity-direct-provider-1', status: 'verified', provider: 'Direct Identity Adapter', reference: 'verification-event-1' } });
-    assert(acceptedVerificationWebhook.status === 200 && acceptedVerificationWebhook.json.verificationCase.status === 'Verified', 'Signed verification provider result should update the linked case.');
+    const oversizedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-webhook-secret': 'direct-verification-secret' }, json: { externalCaseId: 'identity-direct-provider-1', notes: 'x'.repeat(257 * 1024) } });
+    assert(oversizedVerificationWebhook.status === 413, 'Verification provider webhook must reject oversized payloads while streaming.');
+    const legacyVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-webhook-secret': 'direct-verification-secret' }, json: { externalCaseId: 'identity-direct-provider-1', status: 'processing', provider: 'Direct Identity Adapter', reference: 'verification-legacy-event-1' } });
+    assert(legacyVerificationWebhook.status === 200 && legacyVerificationWebhook.json.authorization === 'Shared secret', 'Existing verification shared-secret callbacks must remain compatible during provider migration.');
+    const signedVerificationPayload = { externalCaseId: 'identity-direct-provider-1', status: 'verified', provider: 'Direct Identity Adapter', reference: 'verification-signed-event-1' };
+    const signedVerificationBody = JSON.stringify(signedVerificationPayload);
+    const verificationTimestamp = String(Math.floor(Date.now() / 1000));
+    const verificationSignature = crypto.createHmac('sha256', 'direct-verification-secret').update(verificationTimestamp + '.' + signedVerificationBody).digest('hex');
+    const acceptedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-timestamp': verificationTimestamp, 'x-verification-signature': 'sha256=' + verificationSignature }, json: signedVerificationPayload });
+    assert(acceptedVerificationWebhook.status === 200 && acceptedVerificationWebhook.json.authorization === 'HMAC-SHA256' && acceptedVerificationWebhook.json.verificationCase.status === 'Verified', 'Timestamped HMAC verification result should update the linked case.');
+    const repeatedVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-timestamp': verificationTimestamp, 'x-verification-signature': 'sha256=' + verificationSignature }, json: signedVerificationPayload });
+    assert(repeatedVerificationWebhook.status === 200 && repeatedVerificationWebhook.json.duplicate === true && repeatedVerificationWebhook.json.received === false, 'Repeated verification provider event IDs must be idempotent.');
+    const staleVerificationTimestamp = String(Math.floor(Date.now() / 1000) - 600);
+    const staleVerificationSignature = crypto.createHmac('sha256', 'direct-verification-secret').update(staleVerificationTimestamp + '.' + signedVerificationBody).digest('hex');
+    const staleVerificationWebhook = await request(server, 'POST', '/api/webhooks/verification', { headers: { 'x-verification-timestamp': staleVerificationTimestamp, 'x-verification-signature': staleVerificationSignature }, json: signedVerificationPayload });
+    assert(staleVerificationWebhook.status === 401, 'Verification HMAC signatures older than five minutes must be rejected.');
     const manualInsurance = await request(server, 'POST', '/api/verification/cases', { cookie: managerCookie, json: { type: 'insurance', customer: 'Direct Dispute Customer', vehicleId: 'veh-direct-dispute-car', provider: 'Manual', reference: 'POLICY-DIRECT-9876', expiresAt: '2030-02-01' } });
     assert(manualInsurance.status === 201 && manualInsurance.json.verificationCase.status === 'Needs staff review' && manualInsurance.json.verificationCase.policyNumberLast4 === '9876', 'Manual insurance verification should enter the staff review queue without retaining the full policy number.');
     const approvedInsurance = await request(server, 'POST', '/api/verification/cases/review', { cookie: managerCookie, json: { caseId: manualInsurance.json.verificationCase.id, decision: 'approve', notes: 'Insurance card and vehicle identity reviewed.' } });
@@ -925,6 +949,10 @@ async function main() {
     assert(rebuiltLedger.status === 200 && rebuiltLedger.json.entries.some(row => row.sourceKey === 'refund:' + preparedRefund.json.refund.id && row.direction === 'debit'), 'Accounting ledger should include the completed customer refund as a debit.');
     const accountingCsv = await request(server, 'GET', '/api/accounting/export.csv', { cookie: managerCookie });
     assert(accountingCsv.status === 200 && /text\/csv/.test(accountingCsv.headers['Content-Type'] || accountingCsv.headers['content-type'] || '') && accountingCsv.text.includes('Direct Dispute Customer') && accountingCsv.text.includes('DIRECTDISPUTEVIN'), 'QuickBooks-ready accounting CSV should retain customer, vehicle, and VIN context.');
+    const quickBooksCsv = await request(server, 'GET', '/api/accounting/quickbooks.csv', { cookie: managerCookie });
+    assert(quickBooksCsv.status === 200 && /text\/csv/.test(quickBooksCsv.headers['Content-Type'] || quickBooksCsv.headers['content-type'] || '') && quickBooksCsv.text.includes('Journal No.') && quickBooksCsv.text.includes('Debits') && quickBooksCsv.text.includes('Credits') && quickBooksCsv.text.includes('Clover Clearing') && quickBooksCsv.text.includes('Direct Dispute Customer'), 'QuickBooks journal CSV should be balanced-account ready and retain the source customer trail.');
+    const mechanicQuickBooksCsv = await request(server, 'GET', '/api/accounting/quickbooks.csv', { cookie: mechanicCookie });
+    assert(mechanicQuickBooksCsv.status === 403, 'Mechanic must not export QuickBooks accounting records.');
 
     const managerPickupCalendar = await request(server, 'GET', '/api/pickups/calendar', { cookie: managerCookie });
     assert(managerPickupCalendar.status === 200 && managerPickupCalendar.json.events.some(row => row.appointmentId === 'pickup-direct-calendar' && /calendar\.google\.com/.test(row.googleCalendarUrl) && /google\.com\/maps/.test(row.mapsUrl)), 'Manager pickup calendar should include deterministic Google Calendar and Maps links.');
@@ -1411,7 +1439,7 @@ async function main() {
     assert((customerPortalState.json.portal.payments || []).some(payment => payment.id === 'direct-customer-private-payment-row' && /Please contact WheelsonAuto/.test(payment.notes || '')), 'Customer portal failed payments should show a clean customer-safe note.');
 
     const customerBlockedState = await request(server, 'GET', '/api/state', { cookie: customerCookie });
-    assert(customerBlockedState.status === 200 && customerBlockedState.text.includes('WheelsonAuto Portal'), 'Customer session should not access staff/admin API state.');
+    assert(customerBlockedState.status === 401 && customerBlockedState.json && customerBlockedState.json.error === 'Authentication required.', 'Customer session should not access staff/admin API state.');
 
     const disabledCustomerLogin = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,

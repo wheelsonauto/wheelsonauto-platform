@@ -64,7 +64,7 @@ function vehicleTitle(vehicle = {}) {
 }
 
 function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
-  const raw = text(record.manualDecision || record.providerStatus || record.status).toLowerCase();
+  const raw = text(record.providerStatus || record.manualDecision || record.status).toLowerCase();
   const expires = dateKey(record.expiresAt || record.expires || record.expirationDate);
   if (/cancel|closed/.test(raw)) return 'Closed';
   if (/reject|fail|invalid|fraud|mismatch/.test(raw)) return 'Rejected';
@@ -251,6 +251,52 @@ function buildAccountingLedger(data = {}, existing = []) {
   return entries.sort((a, b) => text(b.date).localeCompare(text(a.date)) || text(b.updatedAt).localeCompare(text(a.updatedAt)));
 }
 
+function quickBooksOffsetAccount(entry = {}) {
+  const method = text([entry.method, entry.reference].filter(Boolean).join(' ')).toLowerCase();
+  if (/clover/.test(method)) return 'Clover Clearing';
+  if (/cash/.test(method)) return 'Cash on Hand';
+  if (/check|ach|bank|transfer/.test(method)) return 'Operating Bank';
+  return entry.direction === 'debit' ? 'Operating Bank' : 'Undeposited Funds';
+}
+
+function quickBooksCategoryAccount(entry = {}) {
+  const category = text(entry.category).toLowerCase();
+  if (/nonrefundable down payment|deposit/.test(category)) return 'Down Payment Income';
+  if (/toll|violation|ticket/.test(category)) return 'Toll and Violation Reimbursements';
+  if (/claim recovery/.test(category)) return 'Claim Recoveries';
+  if (/customer refund|refund/.test(category)) return 'Customer Refunds and Allowances';
+  if (/maintenance|repair/.test(category)) return 'Repairs and Maintenance';
+  if (/rental payment/.test(category)) return 'Rental Income';
+  return entry.direction === 'debit' ? 'Other Operating Expense' : 'Other Operating Income';
+}
+
+function buildQuickBooksJournalRows(entries = []) {
+  return (entries || []).flatMap(entry => {
+    const amount = Math.abs(number(entry.amount));
+    if (!amount || !entry.sourceKey) return [];
+    const journalNo = 'WOA-' + stableId('journal', [entry.sourceKey]).slice(-12).toUpperCase();
+    const offsetAccount = quickBooksOffsetAccount(entry);
+    const categoryAccount = quickBooksCategoryAccount(entry);
+    const description = [entry.category, entry.vehicle, entry.vin ? 'VIN ' + entry.vin : '', entry.plate ? 'Tag ' + entry.plate : ''].filter(Boolean).join(' | ');
+    const common = {
+      journalNo,
+      journalDate: dateKey(entry.date || entry.createdAt),
+      description,
+      name: text(entry.customer),
+      className: 'WheelsonAuto Fleet',
+      location: text(entry.companyId),
+      reference: text(entry.reference),
+      sourceKey: text(entry.sourceKey)
+    };
+    const debitAccount = entry.direction === 'debit' ? categoryAccount : offsetAccount;
+    const creditAccount = entry.direction === 'debit' ? offsetAccount : categoryAccount;
+    return [
+      { ...common, lineNo: 1, account: debitAccount, debit: amount, credit: 0 },
+      { ...common, lineNo: 2, account: creditAccount, debit: 0, credit: amount }
+    ];
+  });
+}
+
 function parseTime(value) {
   const raw = text(value).toUpperCase();
   const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/.exec(raw);
@@ -343,6 +389,7 @@ module.exports = {
   reviewVerificationCase,
   applyVerificationEvent,
   buildAccountingLedger,
+  buildQuickBooksJournalRows,
   pickupCalendarEvent,
   buildPickupCalendarEvents
 };

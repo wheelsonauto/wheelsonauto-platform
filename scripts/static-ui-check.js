@@ -163,7 +163,9 @@ function actionSlice(action) {
     "b.dataset.action==='" + action + "'",
     'b.dataset.action==="' + action + '"',
     "b.dataset.action!=='" + action + "'",
-    'b.dataset.action!=="' + action + '"'
+    'b.dataset.action!=="' + action + '"',
+    "actionName==='" + action + "'",
+    'actionName==="' + action + '"'
   ];
   let index = -1;
   for (const needle of needles) index = Math.max(index, app.lastIndexOf(needle));
@@ -223,7 +225,7 @@ const handledActions = new Set([
   ...unique(app.matchAll(/b\.dataset\.action\s*===\s*['"]([^'"]+)['"]/g), match => match[1]),
   ...unique(app.matchAll(/closest\(['"]button\[data-action=\\?["']([^"'\\]+)\\?["']\]/g), match => match[1])
 ]);
-for (const block of app.matchAll(/\[((?:\s*['"][^'"]+['"]\s*,?)+)\]\.indexOf\((?:a|b\.dataset\.action)\)/g)) {
+for (const block of app.matchAll(/\[((?:\s*['"][^'"]+['"]\s*,?)+)\]\.indexOf\((?:a|b\.dataset\.action|actionName)\)/g)) {
   for (const action of block[1].matchAll(/['"]([^'"]+)['"]/g)) handledActions.add(action[1]);
 }
 
@@ -259,7 +261,15 @@ const criticalActionRequirements = [
   ['Dispute match accept flow', 'apply-claim-match', ['applyClaimCandidate', 'Dispute match accepted', 'await save()', 'render()']],
   ['Transaction match accept flow', 'apply-transaction-match', ['applyTransactionCandidate', 'Transaction match accepted', 'await save()', "tab='Transactions'", 'render()']],
   ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
-  ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'inspectionChecklist', 'lastInspectionChecklist', 'await save()', 'closeModal()', 'Maintenance()']]
+  ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'inspectionChecklist', 'lastInspectionChecklist', 'await save()', 'closeModal()', 'Maintenance()']],
+  ['Clover refund preparation flow', 'integrated-prepare-refund', ['/api/integrations/clover/refunds/prepare', 'amount:Number', 'await refreshData(true)', 'integratedOpenRefundRecord']],
+  ['Clover refund execution flow', 'integrated-execute-refund', ['/api/integrations/clover/refunds/execute', 'confirmed:true', 'await refreshData(true)', 'closeModal()']],
+  ['Manual Clover refund completion flow', 'integrated-complete-refund', ['/api/integrations/clover/refunds/complete-manual', 'providerRefundId', 'confirmed:true', 'await refreshData(true)']],
+  ['Clover dispute review flow', 'integrated-save-dispute', ['/api/integrations/clover/disputes/action', 'claimId', 'confirmed:confirmed', 'await refreshData(true)']],
+  ['Verification case creation flow', 'integrated-create-verification', ['/api/verification/cases', 'reference:val', 'expiresAt:val', 'await refreshData(true)']],
+  ['Verification review flow', 'integrated-review-verification', ['/api/verification/cases/review', 'caseId', 'decision:', 'await refreshData(true)']],
+  ['Accounting ledger rebuild flow', 'integrated-rebuild-accounting', ['/api/accounting/ledger/rebuild', 'await refreshData(true)', '/api/accounting/ledger']],
+  ['Pickup calendar preparation flow', 'integrated-prepare-pickup', ['/api/pickups/', '/calendar', 'await refreshData(true)', '/api/pickups/calendar']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);

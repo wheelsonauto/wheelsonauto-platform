@@ -438,6 +438,10 @@ function ownerSmoke() {
   context.db.integrations = context.db.integrations || {};
   context.db.integrations.apiProviderRuntime = [{ id: 'clover-core', name: 'Clover Core', group: 'Money', status: 'Connected', lastTestAt: '2026-07-14T12:00:00.000Z', lastTestResult: 'Runtime sync proof passed.' }];
   assert(context.apiProviders().find(row => row.id === 'clover-core').status === 'Connected', 'API Roadmap should use the live server provider status instead of the generic client default.');
+  assert(context.apiProviders().find(row => row.id === 'insurance').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point insurance to the live verification adapter.');
+  assert(context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/api/webhooks/verification'), 'Client fallback provider rows must include identity and driver-license signed callbacks.');
+  assert(context.apiProviders().find(row => row.id === 'accounting').endpoint.includes('/api/accounting/quickbooks.csv'), 'Client fallback provider rows must expose the balanced QuickBooks journal export.');
+  assert(context.apiProviders().find(row => row.id === 'pickup-calendar').endpoint.includes('/api/pickups/calendar'), 'Client fallback provider rows must expose pickup calendar and maps routes.');
   const detailedProviderForm = context.apiProviderForm({ id: 'clover-ecommerce', name: 'Clover Ecommerce', status: 'Testing - live charge needed' });
   assert(detailedProviderForm.includes('type="hidden" value="Testing - live charge needed"') && detailedProviderForm.includes('Calculated from live credentials'), 'Built-in API status must preserve the exact runtime status as evidence-controlled read-only state.');
   assert(!detailedProviderForm.includes('<select id="apiStatus">') && !detailedProviderForm.includes('<option selected>Connected</option>'), 'An unfinished built-in provider must never expose a manual Connected selector.');
@@ -453,6 +457,25 @@ function ownerSmoke() {
   const weakVehicleRow = { customer: 'Weak Vehicle Label Smoke', vehicle: '230', plan: '$230.00', amount: 230, status: 'Active' };
   assert(context.enrichedVehicleForRecurring(weakVehicleRow) === 'No vehicle linked', 'A numeric payment amount must not render as a vehicle label on Dashboard, Payments, Reports, or Messages.');
   assert(context.paymentVehicleInfo({}, weakVehicleRow, {}, {}).vehicle === 'No vehicle linked', 'Customer payment cards must replace numeric vehicle text with an honest unlinked label.');
+  context.db.contracts = context.db.contracts || [];
+  context.db.documents = context.db.documents || [];
+  context.db.verificationCases = context.db.verificationCases || [];
+  context.db.contracts.unshift(
+    { id: 'contract-license-proof-smoke', customer: 'Driver Proof Smoke', status: 'Active', vehicle: '2018 Proof Car' },
+    { id: 'contract-background-only-smoke', customer: 'Background Only Smoke', status: 'Active', vehicle: '2019 Background Car' },
+    { id: 'contract-expiring-case-smoke', customer: 'Expiring Case Smoke', status: 'Active', vehicle: '2020 Expiring Car' }
+  );
+  context.db.documents.unshift(
+    { id: 'doc-license-proof-smoke', type: 'Driver license', customer: 'Driver Proof Smoke', status: 'Verified', expires: context.addMonthsKey(context.todayKey(), 12) },
+    { id: 'doc-background-only-smoke', type: 'Background check', customer: 'Background Only Smoke', status: 'Verified', expires: context.addMonthsKey(context.todayKey(), 12) }
+  );
+  context.db.verificationCases.unshift({ id: 'verify-expiring-smoke', type: 'driver_license', customer: 'Expiring Case Smoke', status: 'Verified', expiresAt: context.todayKey() });
+  assert(!context.verificationMissingRows('driver_license').some(row => row.customer === 'Driver Proof Smoke'), 'Verified driver-license proof must satisfy the ID/license requirement.');
+  assert(context.verificationMissingRows('driver_license').some(row => row.customer === 'Background Only Smoke'), 'A background check must not be mistaken for driver-license or identity proof.');
+  assert(context.integratedVerificationStatus(context.db.verificationCases[0]) === 'Expiring', 'A persisted Verified case inside the expiration window must render as Expiring without waiting for a data rewrite.');
+  assert(!context.verificationMissingRows('driver_license').some(row => row.customer === 'Expiring Case Smoke'), 'An expiring linked license must remain linked while appearing in the review queue.');
+  const expirationReview = renderView(context, 'Insurance', 'Review');
+  assert(expirationReview.includes('Expiring Case Smoke') && expirationReview.includes('Expiring'), 'The verification review must surface current expiration status from the saved date.');
   context.db.recurringPayments.unshift({
     id: 'smoke-removed-today',
     customer: 'Removed Today Smoke',
@@ -499,10 +522,16 @@ function ownerSmoke() {
     ['Payments transactions', 'Payments', 'Transactions', ['Transactions', 'transaction-card', 'customer-pay-list']],
     ['Operations fleet', 'Operations', 'Fleet', ['Operations', 'Available fleet', 'staff-card-board']],
     ['Operations service', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board']],
-    ['Operations claims', 'Operations', 'Claims', ['Operations', 'Claims, tolls & issues', 'staff-card-board']],
+    ['Operations claims', 'Operations', 'Claims', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board']],
+    ['Operations Clover', 'Operations', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'integration-workspace']],
+    ['Operations verification', 'Operations', 'Verification', ['Insurance', 'Verification review', 'integration-workspace']],
     ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board'], true],
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
-    ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
+    ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board'], true],
+    ['Claims Clover', 'Claims & Issues', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'Disputes', 'Refunds', 'Unmatched', 'integration-workspace'], true],
+    ['Verification review', 'Insurance', 'Review', ['Insurance', 'Verification review', 'Missing verified proof', 'Expires soon', 'integration-workspace'], true],
+    ['Verification insurance', 'Insurance', 'Insurance', ['Insurance', 'Insurance verification', 'signed provider adapter', 'integration-workspace'], true],
+    ['Verification identity', 'Insurance', 'Identity', ['Insurance', 'Identity &amp; driver license', 'last four', 'integration-workspace'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Ask Star', 'Review queue', 'message-star-focused', 'message-thread-grid'], false],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Follow-up', 'message-focused-list'], false],
     ['Documents', 'Documents', undefined, ['Documents', 'Customer requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
@@ -517,13 +546,17 @@ function ownerSmoke() {
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],
     ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Owner snapshot', 'Daily closeout'], false],
-    ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Accounting control', 'Car profitability & recovery'], false],
+    ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Source-linked accounting ledger', '/api/accounting/quickbooks.csv', 'balanced QuickBooks journal export', 'integration-workspace'], false],
     ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Payment risk'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
     else assertHealthy(label, output, required);
   });
+  const ownerClaimsOpen = renderView(context, 'Claims & Issues', 'Open');
+  assertNo('Owner Claims duplicate boards', ownerClaimsOpen, ['Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge']);
+  const ownerPickups = renderView(context, 'Applications', 'Pickups');
+  assertHealthy('Owner pickup schedule', ownerPickups, ['Applications', 'Pickup schedule', '5150 NJ-42', 'next-day minimum', 'integration-workspace']);
 
   context.openComposeMessage('new');
   assertHealthy('Compose message modal', modalHtml(context), ['New message', 'Text message', 'Email', 'Send / save message']);
@@ -539,15 +572,19 @@ function managerSmoke() {
   [
     ['Manager operations', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board'], true],
     ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
-    ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Dispute evidence package', 'Dispute / recovery bridge', 'staff-card-board'], true],
+    ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board'], true],
+    ['Manager Clover review', 'Claims & Issues', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'integration-workspace'], true],
+    ['Manager verification', 'Insurance', 'Review', ['Insurance', 'Verification review', 'integration-workspace'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-shell', 'message-conversation-panel', 'message-empty-state'], false],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Operations snapshot'], false],
-    ['Manager applications', 'Applications', 'Pipeline', ['Applications', 'New applications', 'native-applications-board'], false]
+    ['Manager accounting', 'Reports', 'Accounting', ['Reports', 'Source-linked accounting ledger', 'QuickBooks'], false],
+    ['Manager applications', 'Applications', 'Pipeline', ['Applications', 'New applications', 'native-applications-board'], false],
+    ['Manager pickups', 'Applications', 'Pickups', ['Applications', 'Pickup schedule', '5150 NJ-42'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
     else assertHealthy(label, output, required);
-    assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="new-toll"', 'data-action="new-toll-import"', 'data-action="send-claim-link"', 'data-action="save-clover"']);
+    assertNo(label, output, ['data-action="record-charge"', 'data-action="new-autopay"', 'data-action="new-toll"', 'data-action="new-toll-import"', 'data-action="send-claim-link"', 'data-action="save-clover"', 'data-action="integrated-open-refund"', 'data-action="integrated-open-dispute"', 'data-action="integrated-rebuild-accounting"']);
   });
   assertNo('Manager portal duplicate queue', html(context), ['Manager command queue']);
   const managerAccount = renderView(context, 'Settings', 'Account');

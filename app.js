@@ -1159,7 +1159,7 @@ function apiProviderStatusOptions(current){
   var options=[current,'Connected','Testing','Ready for credentials','Ready for API','API needed','Provider needed','Blocked','Architecture ready'],seen={};
   return options.filter(function(status){if(seen[status])return false;seen[status]=true;return true}).map(function(status){return '<option '+(status===current?'selected':'')+'>'+esc(status)+'</option>'}).join('')
 }
-function apiProviderStatusIsEvidenceControlled(id){return['clover-core','clover-ecommerce','clover-webhooks','woa-autopay','sms-phone','email','star-ai'].indexOf(String(id||''))>=0}
+function apiProviderStatusIsEvidenceControlled(id){return['clover-core','clover-ecommerce','clover-webhooks','woa-autopay','sms-phone','email','star-ai','insurance','identity-verification','accounting','pickup-calendar'].indexOf(String(id||''))>=0}
 function apiProviderStatusControl(p){
   var status=String(p&&p.status||'API needed').trim()||'API needed';
   if(apiProviderStatusIsEvidenceControlled(p&&p.id))return '<input id="apiStatus" type="hidden" value="'+esc(status)+'"><div class="api-provider-status-readonly">'+badge(status,apiStatusTone(status))+'<small>Calculated from live credentials, provider events, and successful test evidence.</small></div>';
@@ -1709,6 +1709,15 @@ paymentVehicleInfo=function(c,r,con,car){
   var savedVehicle=usableVehicleLabel(c&&c.vehicle)||usableVehicleLabel(r&&r.vehicle)||usableVehicleLabel(con&&con.vehicle)||usableVehicleLabel(r&&r.plan),vehicle=car&&car.id?vehicleName(car):(savedVehicle||'No vehicle linked');
   var plate=car&&car.plate||car&&car.stock||c&&c.licensePlate||r&&r.licensePlate||con&&con.licensePlate||'',temp=car&&car.tempTag||c&&c.tempTag||r&&r.tempTag||con&&con.tempTag||'',tracker=car&&car.tracker||c&&c.tracker||r&&r.tracker||con&&con.tracker||'',vin=car&&car.vin||c&&c.vin||r&&r.vin||con&&con.vin||'';
   return{vehicle:vehicle,plate:plate,temp:temp,tracker:tracker,vin:vin,line:[plate?'Plate '+plate:'',temp?'Old temp '+temp:'',tracker?'Tracker '+tracker:''].filter(Boolean).join(' | ')||'No tag/tracker saved'}
+};
+var __woaApiProviderDefaultsTruthBase=apiProviderDefaults;
+apiProviderDefaults=function(){
+  var rows=__woaApiProviderDefaultsTruthBase(),byId={};rows.forEach(function(row){byId[row.id]=row});
+  Object.assign(byId.insurance||{}, {name:'Insurance Verification',status:'Ready - manual review',envKeys:'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',endpoint:'/api/verification/cases, /api/verification/status, /api/webhooks/verification',liveTest:'Review policy proof, verify the 30-day expiration queue, then accept one signed authoritative provider result.',view:'Insurance',notes:'Manual review is live; real-world policy validity still requires an authoritative provider.'});
+  if(!byId['identity-verification'])rows.push({id:'identity-verification',name:'Identity / Driver License Verification',group:'Risk',status:'Ready - manual review',owner:'Manager',envKeys:'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',endpoint:'/api/verification/cases, /api/verification/status, /api/webhooks/verification',liveTest:'Review identity/license proof, confirm only the last four are retained, then accept one signed authoritative provider result.',view:'Insurance',notes:'Manual review is live; authoritative identity validation remains provider-backed.'});
+  Object.assign(byId.accounting||{}, {name:'Accounting / QuickBooks',status:'Ready - internal ledger',envKeys:'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET',endpoint:'/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv',liveTest:'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.',view:'Reports',notes:'Balanced journal and source-ledger exports are live; direct sync still needs QuickBooks OAuth.'});
+  if(!byId['pickup-calendar'])rows.push({id:'pickup-calendar',name:'Pickup Calendar / Maps',group:'Operations',status:'Ready - manual calendar',owner:'Manager',envKeys:'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN',endpoint:'/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics',liveTest:'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify customer, vehicle, date, time, and address.',view:'Applications',notes:'Directions, Google add-to-calendar, and ICS are live without automatic provider sync.'});
+  return rows
 };
 var __woaApiProvidersSavedBase=apiProviders;
 apiProviders=function(){
@@ -3002,17 +3011,43 @@ function integratedOpenDispute(claimId){
   openModal('Clover dispute status','<div class="integration-modal-summary"><strong>'+esc(row.customer||'Unmatched dispute')+'</strong><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+money(row.amount||0)+' | '+esc(row.externalId||row.disputeId||row.paymentId||row.cloverPaymentId||'No Clover/payment ID')+'</small></div><div class="form"><div class="field"><label>Response stage</label><select id="integratedDisputeAction"><option value="evidence_ready">Evidence ready</option><option value="submitted">Response submitted</option><option value="won">Won</option><option value="lost">Lost</option><option value="closed">Closed</option></select></div><div class="field span2"><label>Review note</label><textarea id="integratedDisputeNotes">'+esc(row.notes||'')+'</textarea></div></div><label class="native-confirm"><input id="integratedDisputeConfirm" type="checkbox"> I reviewed the matched customer, payment, vehicle, and evidence before changing this status.</label><div class="actions"><button class="btn primary" data-action="integrated-save-dispute" data-id="'+esc(row.id)+'">Save dispute status</button></div>')
 }
 
+function integratedVerificationStatus(row){
+  var raw=String(row&&row.status||'Needs staff review'),normalized=raw.toLowerCase(),expires=dateKeyFrom(row&&row.expiresAt||row&&row.expires||row&&row.expirationDate);
+  if(/cancel|closed/.test(normalized))return'Closed';
+  if(/reject|fail|invalid|fraud|mismatch/.test(normalized))return'Rejected';
+  if(expires&&expires<todayKey())return'Expired';
+  if(expires&&expires<=addMonthsKey(todayKey(),1))return'Expiring';
+  return raw
+}
+
+function verificationCaseTypeMatches(rowType,type){
+  rowType=String(rowType||'').toLowerCase();type=String(type||'').toLowerCase();
+  return type==='driver_license'?(rowType==='driver_license'||rowType==='identity'):rowType===type
+}
+
+function verificationEvidenceKinds(type){return type==='insurance'?['insurance']:['driver license','identity']}
+
+function verificationEvidenceDocs(type){
+  var seen={};
+  return verificationEvidenceKinds(type).reduce(function(rows,kind){
+    verificationDocs(kind).forEach(function(doc){var id=doc.id||[doc.customer,doc.type,doc.expires,doc.reference].join('|');if(!seen[id]){seen[id]=true;rows.push(doc)}});return rows
+  },[])
+}
+
 function verificationNewCaseClear(customer,type){
-  return(db.verificationCases||[]).some(function(row){return normName(row.customer)===normName(customer)&&row.type===type&&/verified|approved|clear|active/i.test(String(row.status||''))})
+  return(db.verificationCases||[]).some(function(row){var status=integratedVerificationStatus(row);return normName(row.customer)===normName(customer)&&verificationCaseTypeMatches(row.type,type)&&/verified|approved|clear|active|expiring/i.test(status)})
+}
+
+function verificationDocumentClearForType(customer,type){
+  return verificationEvidenceKinds(type).some(function(kind){return!!verificationDocClearedForCustomer(customer,kind)})
 }
 
 function verificationMissingRows(type){
-  var oldType=type==='insurance'?'insurance':'background';
-  return activeCustomerFiles().filter(function(row){return!verificationNewCaseClear(row.customer,type)&&!verificationDocClearedForCustomer(row.customer,oldType)})
+  return activeCustomerFiles().filter(function(row){return!verificationNewCaseClear(row.customer,type)&&!verificationDocumentClearForType(row.customer,type)})
 }
 
 function integratedVerificationCaseRow(row){
-  var status=row.status||'Needs staff review',actions='<button class="btn primary" data-action="integrated-open-verification" data-id="'+esc(row.id)+'">Review</button>';
+  var status=integratedVerificationStatus(row),actions='<button class="btn primary" data-action="integrated-open-verification" data-id="'+esc(row.id)+'">Review</button>';
   if(row.customer)actions+=customerFileButton(row.customer,'Customer');
   return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||'Customer')+'</strong>'+badge(status,integrationTone(status))+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([String(row.type||'Verification').replace('_',' '),row.provider||'Manual',row.expiresAt?'Expires '+row.expiresAt:'No expiration',row.policyNumberLast4?'Policy ending '+row.policyNumberLast4:'',row.referenceLast4?'Reference ending '+row.referenceLast4:''].filter(Boolean).join(' | '))+'</small></div><div class="actions">'+actions+'</div></article>'
 }
@@ -3028,12 +3063,12 @@ function integratedMissingVerificationRow(row,type){
 }
 
 function IntegratedInsurance(){
-  var selected=['Review','Insurance','Identity'].indexOf(tab)>=0?tab:'Review',cases=db.verificationCases||[],insuranceCases=cases.filter(function(row){return row.type==='insurance'}),identityCases=cases.filter(function(row){return row.type==='identity'||row.type==='driver_license'}),insuranceDocs=verificationDocs('insurance').filter(function(row){return!row.system}),identityDocs=verificationDocs('background').filter(function(row){return!row.system}),missingInsurance=verificationMissingRows('insurance'),missingIdentity=verificationMissingRows('driver_license'),reviewCases=cases.filter(function(row){return!/verified|closed/i.test(String(row.status||''))}),items=[];
-  if(selected==='Review')items=reviewCases.map(integratedVerificationCaseRow).concat(missingInsurance.map(function(row){return integratedMissingVerificationRow(row,'insurance')})).concat(missingIdentity.map(function(row){return integratedMissingVerificationRow(row,'driver_license')}));
-  if(selected==='Insurance')items=insuranceCases.map(integratedVerificationCaseRow).concat(insuranceDocs.map(integratedVerificationDocumentRow));
-  if(selected==='Identity')items=identityCases.map(integratedVerificationCaseRow).concat(identityDocs.map(integratedVerificationDocumentRow));
-  var tabs=fastWorkspaceTabs([['Review','Review',reviewCases.length+missingInsurance.length+missingIdentity.length],['Insurance','Insurance',insuranceCases.length+insuranceDocs.length],['Identity','ID & license',identityCases.length+identityDocs.length]],selected,'staff-tabs');
-  var body=tabs+'<section class="card section integration-workspace" data-limit="16"><div class="section-head"><div><h2>'+esc(selected==='Review'?'Verification review':selected==='Insurance'?'Insurance verification':'Identity & driver license')+'</h2><p>Manual review works now; authoritative outside results can enter through the signed provider adapter.</p></div><div class="actions"><button class="btn primary" data-action="integrated-new-verification" data-type="'+esc(selected==='Identity'?'driver_license':'insurance')+'">Add '+esc(selected==='Identity'?'ID / license':'insurance')+'</button><button class="btn" data-view="Claims & Issues">Claims</button></div></div>'+localSearch('Search customer, vehicle, VIN, tag, provider, expiration, or status')+'<div class="integration-list">'+(items.length?items.join(''):'<div class="item">No '+esc(selected.toLowerCase())+' verification records need attention.</div>')+'</div><div class="notice">WheelsonAuto stores only the last four characters of license/policy references in verification cases. Sensitive documents remain in the document workflow.</div></section>';
+  var operationsMode=view==='Operations',selected=operationsMode?({'Verification':'Review','Verify review':'Review','Verify insurance':'Insurance','Verify identity':'Identity'}[tab]||'Review'):(['Review','Insurance','Identity'].indexOf(tab)>=0?tab:'Review'),cases=db.verificationCases||[],insuranceCases=cases.filter(function(row){return row.type==='insurance'}),identityCases=cases.filter(function(row){return row.type==='identity'||row.type==='driver_license'}),insuranceDocs=verificationEvidenceDocs('insurance').filter(function(row){return!row.system}),identityDocs=verificationEvidenceDocs('driver_license').filter(function(row){return!row.system}),missingInsurance=verificationMissingRows('insurance'),missingIdentity=verificationMissingRows('driver_license'),reviewCases=cases.filter(function(row){return!/verified|closed/i.test(integratedVerificationStatus(row))}),expiringCases=cases.filter(function(row){return/expiring|expired/i.test(integratedVerificationStatus(row))}),allDocs=insuranceDocs.concat(identityDocs),expiringDocs=allDocs.filter(function(row){var raw=row.expiresAt||row.expires||row.due,ms=raw?Date.parse(String(raw).slice(0,10)+'T12:00:00'):NaN;return Number.isFinite(ms)&&ms<=Date.now()+30*24*60*60*1000}),items=[];
+  if(selected==='Review')items=reviewCases.map(integratedVerificationCaseRow).concat(expiringDocs.map(integratedVerificationDocumentRow));
+  if(selected==='Insurance')items=missingInsurance.map(function(row){return integratedMissingVerificationRow(row,'insurance')}).concat(insuranceCases.map(integratedVerificationCaseRow)).concat(insuranceDocs.map(integratedVerificationDocumentRow));
+  if(selected==='Identity')items=missingIdentity.map(function(row){return integratedMissingVerificationRow(row,'driver_license')}).concat(identityCases.map(integratedVerificationCaseRow)).concat(identityDocs.map(integratedVerificationDocumentRow));
+  var reviewCount=reviewCases.length+expiringDocs.length,expirationCount=expiringCases.length+expiringDocs.length,tabs=fastWorkspaceTabs(operationsMode?[['Verify review','Review',reviewCount],['Verify insurance','Insurance',missingInsurance.length+insuranceCases.length+insuranceDocs.length],['Verify identity','ID & license',missingIdentity.length+identityCases.length+identityDocs.length]]:[['Review','Review',reviewCount],['Insurance','Insurance',missingInsurance.length+insuranceCases.length+insuranceDocs.length],['Identity','ID & license',missingIdentity.length+identityCases.length+identityDocs.length]],operationsMode?'Verify '+selected.toLowerCase():selected,'staff-tabs');
+  var body=tabs+'<section class="card section integration-workspace" data-limit="16"><div class="section-head"><div><h2>'+esc(selected==='Review'?'Verification review':selected==='Insurance'?'Insurance verification':'Identity & driver license')+'</h2><p>Manual review works now; authoritative outside results can enter through the signed provider adapter.</p></div><div class="actions"><button class="btn primary" data-action="integrated-new-verification" data-type="'+esc(selected==='Identity'?'driver_license':'insurance')+'">Add '+esc(selected==='Identity'?'ID / license':'insurance')+'</button><button class="btn" data-view="Claims & Issues">Claims</button></div></div><div class="integration-metrics">'+integrationMetric('Review',reviewCount,'Pending or expiring',reviewCount?'warn':'good')+integrationMetric('Insurance',missingInsurance.length,'Missing verified proof',missingInsurance.length?'bad':'good')+integrationMetric('ID / license',missingIdentity.length,'Missing verified record',missingIdentity.length?'bad':'good')+integrationMetric('Expires soon',expirationCount,'Due within 30 days',expirationCount?'warn':'good')+'</div>'+localSearch('Search customer, vehicle, VIN, tag, provider, expiration, or status')+'<div class="integration-list">'+(items.length?items.join(''):'<div class="item">No '+esc(selected.toLowerCase())+' verification records need attention.</div>')+'</div><div class="notice">WheelsonAuto stores only the last four characters of license/policy references in verification cases. Sensitive documents remain in the document workflow.</div></section>';
   shell('Insurance','Insurance, identity, and license verification without repeated boards.',body,'')
 }
 
@@ -3050,7 +3085,7 @@ function integratedOpenVerificationReview(caseId){
 function integratedLedgerWorkspace(){
   integrationScheduleCache('accounting','/api/accounting/ledger','Reports');
   var payload=integrationUiCache.accounting&&integrationUiCache.accounting.ok?integrationUiCache.accounting:null,entries=payload?payload.entries:(db.ledgerEntries||[]),credits=entries.filter(function(row){return row.direction==='credit'}).reduce(function(sum,row){return sum+Number(row.amount||0)},0),debits=entries.filter(function(row){return row.direction==='debit'}).reduce(function(sum,row){return sum+Number(row.amount||0)},0),unsynced=entries.filter(function(row){return!/synced/i.test(String(row.quickBooksStatus||''))}).length,qb=payload&&payload.quickBooks||{configured:false,status:'Provider setup needed'},rows=entries.slice(0,60).map(function(row){var actions=row.customer?customerFileButton(row.customer,'Customer'):'';return '<article class="integration-row"><div class="integration-row-main"><div class="item-row"><strong>'+esc(row.customer||row.category||'Accounting entry')+'</strong>'+badge(row.category||row.status,integrationTone(row.status))+'</div><span>'+esc(integrationVehicleIdentity(row))+'</span><small>'+esc([row.date,row.method,row.reference,row.quickBooksStatus||'Not synced',row.sourceKey].filter(Boolean).join(' | '))+'</small></div><div class="integration-amount '+(row.direction==='debit'?'debit':'')+'">'+(row.direction==='debit'?'-':'+')+money(row.amount||0)+'</div><div class="actions">'+actions+'</div></article>'});
-  return '<section class="card section integration-workspace" data-limit="24"><div class="section-head"><div><h2>Source-linked accounting ledger</h2><p>Payments, refunds, maintenance cost, and recovered claims stay tied to customer, vehicle, VIN/tag, and provider reference.</p></div><div class="actions"><a class="btn" href="/api/accounting/export.csv">Export CSV</a><button class="btn" data-action="integrated-refresh-accounting">Refresh</button>'+(isOwner()?'<button class="btn gold" data-action="integrated-rebuild-accounting">Rebuild ledger</button>':'')+'</div></div><div class="integration-metrics">'+integrationMetric('Credits',money(credits),entries.filter(function(row){return row.direction==='credit'}).length+' entries','good')+integrationMetric('Debits',money(debits),entries.filter(function(row){return row.direction==='debit'}).length+' entries',debits?'warn':'blue')+integrationMetric('Net',money(credits-debits),'Source-linked total',credits-debits<0?'bad':'blue')+integrationMetric('QuickBooks',qb.configured?'Ready':'Setup',unsynced+' not synced',qb.configured?'blue':'warn')+'</div>'+localSearch('Search ledger by customer, vehicle, VIN, tag, payment, refund, claim, amount, or reference')+'<div class="integration-list">'+(rows.length?rows.join(''):'<div class="item">'+(integrationUiLoading.accounting?'Loading the source-linked ledger...':'No accounting entries were built yet. Use Rebuild ledger.')+'</div>')+'</div><div class="notice">The internal ledger and CSV are live now. QuickBooks stays marked setup-required until its OAuth connection is completed and tested.</div></section>'
+  return '<section class="card section integration-workspace" data-limit="24"><div class="section-head"><div><h2>Source-linked accounting ledger</h2><p>Payments, refunds, maintenance cost, and recovered claims stay tied to customer, vehicle, VIN/tag, and provider reference.</p></div><div class="actions"><a class="btn" href="/api/accounting/export.csv">Ledger CSV</a><a class="btn" href="/api/accounting/quickbooks.csv">QuickBooks</a><button class="btn" data-action="integrated-refresh-accounting">Refresh</button>'+(isOwner()?'<button class="btn gold" data-action="integrated-rebuild-accounting">Rebuild ledger</button>':'')+'</div></div><div class="integration-metrics">'+integrationMetric('Credits',money(credits),entries.filter(function(row){return row.direction==='credit'}).length+' entries','good')+integrationMetric('Debits',money(debits),entries.filter(function(row){return row.direction==='debit'}).length+' entries',debits?'warn':'blue')+integrationMetric('Net',money(credits-debits),'Source-linked total',credits-debits<0?'bad':'blue')+integrationMetric('QuickBooks',qb.configured?'Ready':'Setup',unsynced+' not synced',qb.configured?'blue':'warn')+'</div>'+localSearch('Search ledger by customer, vehicle, VIN, tag, payment, refund, claim, amount, or reference')+'<div class="integration-list">'+(rows.length?rows.join(''):'<div class="item">'+(integrationUiLoading.accounting?'Loading the source-linked ledger...':'No accounting entries were built yet. Use Rebuild ledger.')+'</div>')+'</div><div class="notice">The internal ledger and balanced QuickBooks journal export are live. Direct QuickBooks sync stays setup-required until OAuth is completed and tested.</div></section>'
 }
 
 function IntegratedReports(){
@@ -3095,6 +3130,18 @@ function IntegratedApplications(){
   }
 }
 
+var __woaIntegratedOperationsBase=Operations;
+function IntegratedOperations(){
+  if(['Claims','Open','Clover','History'].indexOf(tab)>=0){IntegratedClaimsIssues();return}
+  if(['Verification','Verify review','Verify insurance','Verify identity'].indexOf(tab)>=0){IntegratedInsurance();return}
+  __woaIntegratedOperationsBase();
+  var tabs=document.querySelector('.main.view-operations .staff-tabs,.main.view-operations .tabs');
+  if(tabs&&!tabs.querySelector('[data-tab="Verification"]')){
+    var button=document.createElement('button'),review=(db.verificationCases||[]).filter(function(row){return!/verified|closed/i.test(String(row.status||''))}).length+verificationMissingRows('insurance').length+verificationMissingRows('driver_license').length;
+    button.dataset.tab='Verification';button.textContent='Verification '+review;tabs.appendChild(button)
+  }
+}
+
 var __woaOpenNativeApplicationWithPickup=openNativeApplication;
 openNativeApplication=function(id,createdLink){
   __woaOpenNativeApplicationWithPickup(id,createdLink);
@@ -3109,11 +3156,13 @@ Insurance=IntegratedInsurance;
 Reports=IntegratedReports;
 ReportsFast=IntegratedReports;
 Applications=IntegratedApplications;
+Operations=IntegratedOperations;
+OperationsTruthFocused=IntegratedOperations;
 
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action]');if(!button)return;
-  var actionName=button.dataset.action||'',handled=['integrated-refresh-clover','integrated-open-refund','integrated-prepare-refund','integrated-open-refund-record','integrated-execute-refund','integrated-complete-refund','integrated-open-dispute','integrated-save-dispute','integrated-new-verification','integrated-create-verification','integrated-open-verification','integrated-review-verification','integrated-refresh-accounting','integrated-rebuild-accounting','integrated-prepare-pickup'];
-  if(handled.indexOf(actionName)<0)return;
+  var actionName=button.dataset.action||'';
+  if(['integrated-refresh-clover','integrated-open-refund','integrated-prepare-refund','integrated-open-refund-record','integrated-execute-refund','integrated-complete-refund','integrated-open-dispute','integrated-save-dispute','integrated-new-verification','integrated-create-verification','integrated-open-verification','integrated-review-verification','integrated-refresh-accounting','integrated-rebuild-accounting','integrated-prepare-pickup'].indexOf(actionName)<0)return;
   event.preventDefault();event.stopImmediatePropagation();
   if(button.disabled)return;button.disabled=true;button.classList.add('is-loading');var original=button.textContent;
   try{

@@ -1062,6 +1062,20 @@ function secureWebhookValueMatch(actual, expected) {
   const right = Buffer.from(String(expected || ''));
   return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
 }
+function verifyVerificationWebhook(rawBody, headers = {}) {
+  if (!VERIFICATION_WEBHOOK_SECRET) return false;
+  const timestamp = String(headers['x-verification-timestamp'] || headers['x-woa-webhook-timestamp'] || '');
+  const unixSeconds = Number(timestamp);
+  const supplied = String(headers['x-verification-signature'] || headers['x-woa-webhook-signature'] || '');
+  if (!unixSeconds || !supplied || Math.abs(Date.now() / 1000 - unixSeconds) > 300) return false;
+  const signedBody = timestamp + '.' + String(rawBody || '');
+  const expectedHex = crypto.createHmac('sha256', VERIFICATION_WEBHOOK_SECRET).update(signedBody).digest('hex');
+  const expectedBase64 = crypto.createHmac('sha256', VERIFICATION_WEBHOOK_SECRET).update(signedBody).digest('base64');
+  return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
+    const value = part.replace(/^(?:sha256=|v1=)/i, '');
+    return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
+  });
+}
 function verifyResendWebhook(rawBody, headers) {
   if (!RESEND_WEBHOOK_SECRET) return false;
   const id = String(headers['svix-id'] || '');
@@ -4767,8 +4781,21 @@ async function mergeVehicleImport(data) {
   data.integrations.vehicleSheet = { source: 'Vehicles  - Sheet1 (1).csv', importedAt: new Date().toISOString(), rows: rows.length, vehicles: rows.length, customers, contracts, recurringLinked, maintenanceImported, profileEnrichment };
   return data.integrations.vehicleSheet;
 }
-function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) { res.writeHead(status, { 'Content-Type': type, ...extra }); res.end(body); }
-function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8'); }
+function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) {
+  res.writeHead(status, {
+    'Content-Type': type,
+    'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    ...extra
+  });
+  res.end(body);
+}
+function json(res, status, payload) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store' }); }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
 function cookieSecurityFlags(options = {}) {
   const flags = ['HttpOnly', 'SameSite=Lax', 'Path=/'];
@@ -5427,7 +5454,20 @@ function stateForUserRead(data, user) {
   }
   return safe;
 }
-async function readBody(req) { let body = ''; for await (const chunk of req) body += chunk; return body; }
+async function readBody(req, maxBytes = Infinity) {
+  let body = '';
+  let size = 0;
+  for await (const chunk of req) {
+    size += Buffer.byteLength(chunk);
+    if (size > maxBytes) {
+      const error = new Error('Request is larger than the allowed secure upload size.');
+      error.statusCode = 413;
+      throw error;
+    }
+    body += chunk;
+  }
+  return body;
+}
 async function readJsonBody(req, maxBytes = 1024 * 1024) {
   let body = '';
   let size = 0;
@@ -6666,7 +6706,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/clover/disputes/action', 'Owner dispute evidence and outcome workflow'),
     route('GET', '/api/accounting/ledger', 'Source-linked accounting ledger'),
     route('POST', '/api/accounting/ledger/rebuild', 'Rebuild ledger without losing provider sync references'),
-    route('GET', '/api/accounting/export.csv', 'QuickBooks-ready accounting CSV'),
+    route('GET', '/api/accounting/export.csv', 'Source-linked accounting ledger CSV'),
+    route('GET', '/api/accounting/quickbooks.csv', 'Balanced QuickBooks journal CSV'),
     route('GET', '/api/pickups/calendar', 'Pickup calendar, ICS, and maps records'),
     route('POST', '/api/pickups/:id/calendar', 'Prepare deterministic pickup calendar record'),
     route('GET', '/api/pickups/:id/calendar.ics', 'Download pickup appointment calendar file'),
@@ -7853,10 +7894,12 @@ function defaultApiProviderRows(data = {}) {
       liveTest: 'Run Test Star provider, confirm a Responses API answer, verify sanitization, then approve one non-sensitive draft.'
     },
     { id: 'ezpass', name: 'WheelsonAuto Toll Import / E-ZPass', group: 'Risk', status: 'Ready - WheelsonAuto import', owner: 'Owner', envKeys: 'No external key required for CSV/TSV/JSON import', endpoint: '/api/tolls/import', liveTest: 'Preview statement, verify plate/VIN/customer separation, import once, import again to prove duplicate protection, then create one recovery link.' },
-    { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'INSURANCE_PROVIDER_KEY', endpoint: 'Future /api/integrations/insurance/verify', liveTest: 'Verify proof, set expiration, surface warning before due date.' },
+    { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review policy proof manually, verify the 30-day expiration queue, then accept one signed authoritative provider result.' },
+    { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review identity/license proof manually, confirm only the last four are retained, then accept one signed authoritative provider result.' },
     { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: 'API needed', owner: 'Manager', envKeys: 'BACKGROUND_PROVIDER_KEY', endpoint: 'Future /api/integrations/background/run', liveTest: 'Run from approved application and attach result to customer file.' },
     { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: 'Provider needed', owner: 'Manager', envKeys: 'TRACKER_PROVIDER_KEY', endpoint: 'Future /api/integrations/tracker/sync', liveTest: 'Connect tracker name to vehicle, show last location and alert state.' },
-    { id: 'accounting', name: 'Accounting / Exports', group: 'Finance', status: 'Ready for API', owner: 'Owner', envKeys: 'ACCOUNTING_PROVIDER_KEY', endpoint: 'Future /api/integrations/accounting/export', liveTest: 'Push paid payments, claims, repairs, reimbursements to accounting ledger.' },
+    { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
+    { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
     { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: 'API needed', owner: 'Manager', envKeys: 'MARKETING_PROVIDER_KEY', endpoint: 'Future /api/integrations/marketing/sync', liveTest: 'Import lead source, follow-up status, and conversion into Marketing board.' },
     { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: 'Architecture ready', owner: 'Owner', envKeys: 'BILLING_PROVIDER_KEY', endpoint: 'Future /api/billing/subscriptions', liveTest: 'Create company account, staff, fleet, separate provider credentials, subscription status.' }
   ];
@@ -7926,6 +7969,20 @@ function apiProviderTruthOverrides(data = {}) {
   const tollImportResult = tollImportLive
     ? 'A WheelsonAuto statement import is saved with duplicate protection and customer/vehicle matching. Future direct toll providers will use the same claim ledger.'
     : 'WheelsonAuto statement import is ready. Import one real E-ZPass CSV/TSV statement and verify the separated customer totals before calling the production workflow proven.';
+  const verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
+  const insuranceCases = verificationCases.filter(row => String(row.type || '') === 'insurance');
+  const identityCases = verificationCases.filter(row => ['identity', 'driver_license'].includes(String(row.type || '')));
+  const verificationEvidenceAt = rows => newestEvidenceAt(rows.map(row => row.providerVerifiedAt || row.reviewedAt || row.updatedAt || row.createdAt));
+  const providerResultRecorded = rows => rows.some(row => row.externalCaseId && row.providerVerifiedAt && /verified|approved|clear|passed|active/i.test(String(row.providerStatus || row.status || '')));
+  const insuranceProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual');
+  const identityProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual');
+  const insuranceProviderLive = insuranceProviderReady && providerResultRecorded(insuranceCases);
+  const identityProviderLive = identityProviderReady && providerResultRecorded(identityCases);
+  const accountingEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+  const quickBooksReady = !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET);
+  const pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
+  const preparedPickupEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
+  const googleCalendarReady = !!(GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN);
   return {
     'clover-core': {
       status: cloverCoreReady ? 'Connected' : (CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Testing - sync proof needed' : 'Ready for credentials'),
@@ -7966,6 +8023,42 @@ function apiProviderTruthOverrides(data = {}) {
       status: tollImportLive ? 'Connected - WheelsonAuto import' : 'Ready - WheelsonAuto import',
       lastTestAt: latestTollImport.importedAt || '',
       lastTestResult: tollImportResult
+    },
+    insurance: {
+      name: 'Insurance Verification',
+      status: insuranceProviderLive ? 'Connected' : (insuranceProviderReady ? 'Testing - signed result needed' : 'Ready - manual review'),
+      envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',
+      endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification',
+      liveTest: 'Review policy proof, verify the 30-day expiration queue, then accept one signed authoritative provider result.',
+      lastTestAt: verificationEvidenceAt(insuranceCases),
+      lastTestResult: insuranceCases.length + ' insurance case(s) are tracked; manual review and expiration monitoring are live.' + (insuranceProviderLive ? ' A signed authoritative result has been verified.' : ' External policy validity remains provider-required.')
+    },
+    'identity-verification': {
+      name: 'Identity / Driver License Verification',
+      status: identityProviderLive ? 'Connected' : (identityProviderReady ? 'Testing - signed result needed' : 'Ready - manual review'),
+      envKeys: 'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',
+      endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification',
+      liveTest: 'Review identity/license proof, confirm only the last four are retained, then accept one signed authoritative provider result.',
+      lastTestAt: verificationEvidenceAt(identityCases),
+      lastTestResult: identityCases.length + ' identity/license case(s) are tracked; only last-four references are retained.' + (identityProviderLive ? ' A signed authoritative result has been verified.' : ' Real-world identity validity remains provider-required.')
+    },
+    accounting: {
+      name: 'Accounting / QuickBooks',
+      status: quickBooksReady ? 'Testing - OAuth required' : 'Ready - internal ledger',
+      envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET',
+      endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv',
+      liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.',
+      lastTestAt: newestEvidenceAt(accountingEntries.map(row => row.updatedAt || row.date || row.createdAt)),
+      lastTestResult: accountingEntries.length + ' source-linked ledger entry/entries produce balanced QuickBooks journal rows. Direct sync is not connected until OAuth is completed and tested.'
+    },
+    'pickup-calendar': {
+      name: 'Pickup Calendar / Maps',
+      status: googleCalendarReady ? 'Testing - automatic sync pending' : 'Ready - manual calendar',
+      envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN',
+      endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics',
+      liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify customer, vehicle, date, time, and address.',
+      lastTestAt: newestEvidenceAt(preparedPickupEvents.map(row => row.updatedAt || row.createdAt)),
+      lastTestResult: pickupAppointments.length + ' pickup appointment(s) and ' + preparedPickupEvents.length + ' prepared calendar event(s) are tracked. Directions, Google add-to-calendar, and ICS are live without automatic provider sync.'
     }
   };
 }
@@ -7997,7 +8090,15 @@ function apiProviderLaunchGuidance(provider = {}) {
       : [status.includes('credit') ? 'Add usable OpenAI API credit, then run Test Star provider and approve one non-sensitive draft.' : 'Add the OpenAI API key and usable API credit, then run Test Star provider and approve one non-sensitive draft.', 'Successful sanitized Responses API answer; money and account actions must remain admin-approved.'],
     ezpass: connected
       ? ['Import each new E-ZPass statement through Tolls and clear only uncertain plate/customer matches.', 'Statement rows separated by customer and vehicle, duplicate re-import skipped, recovery totals visible in Tolls and Reports.']
-      : ['Export CSV from E-ZPass, preview it in Tolls, verify the separated customer/car matches, then import the same file twice to prove duplicate protection.', 'Exact plate/VIN/customer matches, an unmatched review queue, duplicate count, and recovery totals tied to the source references.']
+      : ['Export CSV from E-ZPass, preview it in Tolls, verify the separated customer/car matches, then import the same file twice to prove duplicate protection.', 'Exact plate/VIN/customer matches, an unmatched review queue, duplicate count, and recovery totals tied to the source references.'],
+    insurance: connected
+      ? ['Monitor signed insurance results and the 30-day expiration queue.', 'A signed provider result tied to customer, vehicle, expiration, and last-four policy reference.']
+      : ['Use manual review now; connect an authoritative insurance provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result tied to the correct customer and vehicle.'],
+    'identity-verification': connected
+      ? ['Monitor signed identity/license results and expiration warnings.', 'A signed provider result with only the last-four reference retained.']
+      : ['Use manual review now; connect an authoritative identity provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result, with no full license identifier stored.'],
+    accounting: ['Use the balanced QuickBooks journal export now; complete QuickBooks OAuth before testing direct sync.', 'Every source entry balances debits and credits, then a successful OAuth-backed sandbox/company sync.'],
+    'pickup-calendar': ['Use directions, Google add-to-calendar, and ICS now; connect Calendar credentials only when automatic sync is needed.', 'A pickup event with the correct customer, car, address, local time, and deterministic calendar ID.']
   };
   const selected = guidance[id] || [
     connected ? 'Monitor the provider and preserve matching/report evidence.' : 'Finish credentials and endpoint setup, run a controlled live test, and save the result before marking connected.',
@@ -10671,7 +10772,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/webhooks/messages' && req.method === 'POST') {
-      const rawBody = await readBody(req);
+      const rawBody = await readBody(req, 256 * 1024);
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
       const provider = String(url.searchParams.get('provider') || MESSAGING_PROVIDER || '').toLowerCase();
@@ -10683,7 +10784,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await processMessagingWebhookEvent(provider, req.headers, payload));
     }
     if (url.pathname === '/api/webhooks/email' && req.method === 'POST') {
-      const rawBody = await readBody(req);
+      const rawBody = await readBody(req, 1024 * 1024);
       const contentType = String(req.headers['content-type'] || '').toLowerCase();
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
       const provider = String(url.searchParams.get('provider') || WOA_EMAIL_PROVIDER || '').toLowerCase();
@@ -10773,7 +10874,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
-      const rawBody = await readBody(req);
+      const rawBody = await readBody(req, 256 * 1024);
       const sharedSecretValid = !!(CLOVER_WEBHOOK_SECRET && (secureWebhookValueMatch(url.searchParams.get('secret'), CLOVER_WEBHOOK_SECRET) || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], CLOVER_WEBHOOK_SECRET) || secureWebhookValueMatch(req.headers['x-clover-webhook-secret'], CLOVER_WEBHOOK_SECRET)));
       const hostedSignatureValid = verifyCloverHostedCheckoutWebhook(rawBody, req.headers);
       if (!sharedSecretValid && !hostedSignatureValid) return json(res, CLOVER_HCO_WEBHOOK_SECRET ? 401 : 503, { ok: false, error: CLOVER_HCO_WEBHOOK_SECRET ? 'Unauthorized Clover webhook.' : 'Clover webhook signing secret is not configured.' });
@@ -10787,21 +10888,28 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/webhooks/verification' && req.method === 'POST') {
       if (!VERIFICATION_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Verification webhook secret is not configured.' });
-      const authorized = secureWebhookValueMatch(url.searchParams.get('secret'), VERIFICATION_WEBHOOK_SECRET)
+      const rawBody = await readBody(req, 256 * 1024);
+      const signed = verifyVerificationWebhook(rawBody, req.headers);
+      const authorized = signed || secureWebhookValueMatch(url.searchParams.get('secret'), VERIFICATION_WEBHOOK_SECRET)
         || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], VERIFICATION_WEBHOOK_SECRET)
         || secureWebhookValueMatch(req.headers['x-verification-webhook-secret'], VERIFICATION_WEBHOOK_SECRET);
       if (!authorized) return json(res, 401, { ok: false, error: 'Unauthorized verification webhook.' });
-      const event = await readJsonBody(req, 256 * 1024);
+      let event;
+      try { event = rawBody ? JSON.parse(rawBody) : {}; } catch { return json(res, 400, { ok: false, error: 'Verification webhook body must be valid JSON.' }); }
       const externalId = String(event.externalCaseId || event.providerCaseId || event.caseId || event.id || '').trim();
       if (!externalId) return json(res, 400, { ok: false, error: 'Verification event needs an external case ID.' });
       const data = await readData();
       const record = (data.verificationCases || []).find(row => [row.externalCaseId, row.providerCaseId, row.id].map(String).includes(externalId));
       if (!record) return json(res, 404, { ok: false, error: 'Verification case was not found.' });
+      const providerEventId = String(event.eventId || event.webhookEventId || event.reference || '').trim();
+      record.providerEventIds = Array.isArray(record.providerEventIds) ? record.providerEventIds : [];
+      if (providerEventId && record.providerEventIds.includes(providerEventId)) return json(res, 200, { ok: true, received: false, duplicate: true, verificationCase: record });
       integrationEngine.applyVerificationEvent(record, event);
-      appendAuditLog(data, { name: event.provider || record.provider || 'Verification provider', role: 'System' }, 'Verification provider update', [record.customer, record.type, record.status, record.externalCaseId]);
+      if (providerEventId) record.providerEventIds = [providerEventId, ...record.providerEventIds].slice(0, 100);
+      appendAuditLog(data, { name: event.provider || record.provider || 'Verification provider', role: 'System' }, 'Verification provider update', [record.customer, record.type, record.status, record.externalCaseId, signed ? 'HMAC signed' : 'Shared secret']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, verificationCase: record });
+      return json(res, 200, { ok: true, received: true, authorization: signed ? 'HMAC-SHA256' : 'Shared secret', verificationCase: record });
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
@@ -11754,7 +11862,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });
     const user = sessionUser(req);
-    if (!user) return send(res, 200, loginPage());
+    if (!user) {
+      if (url.pathname.startsWith('/api/')) return json(res, 401, { ok: false, error: 'Authentication required.' });
+      return send(res, 200, loginPage());
+    }
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if (url.pathname === '/api/integrations/clover/reconciliation' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view Clover reconciliation controls.' });
@@ -11930,6 +12041,17 @@ const server = http.createServer(async (req, res) => {
         .concat(entries.map(row => [row.date, row.category, row.direction, row.amount, row.customer, row.vehicle, row.vin, row.plate, row.method, row.status, row.reference, row.quickBooksStatus, row.sourceKey]));
       return send(res, 200, rows.map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n', 'text/csv; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-accounting-ledger.csv"', 'Cache-Control': 'no-store' });
     }
+    if (url.pathname === '/api/accounting/quickbooks.csv' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can export accounting records.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
+      const journal = integrationEngine.buildQuickBooksJournalRows(entries);
+      const rows = [['Journal No.', 'Journal Date', 'Line No.', 'Account', 'Debits', 'Credits', 'Description', 'Name', 'Class', 'Location', 'Reference', 'Source Key']]
+        .concat(journal.map(row => [row.journalNo, row.journalDate, row.lineNo, row.account, row.debit || '', row.credit || '', row.description, row.name, row.className, row.location, row.reference, row.sourceKey]));
+      return send(res, 200, rows.map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n', 'text/csv; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-quickbooks-journal.csv"', 'Cache-Control': 'no-store' });
+    }
     if (url.pathname === '/api/pickups/calendar' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view pickup scheduling.' });
@@ -11938,36 +12060,38 @@ const server = http.createServer(async (req, res) => {
       const events = integrationEngine.buildPickupCalendarEvents(scoped).map(event => { const safe = { ...event }; delete safe.ics; return safe; });
       return json(res, 200, { ok: true, googleCalendar: { configured: !!(GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN), status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'API credentials saved' : 'Manual calendar links live; provider setup needed for automatic sync' }, events });
     }
-    const pickupIcsMatch = /^\/api\/pickups\/([^/]+)\/calendar\.ics$/.exec(url.pathname);
-    if (pickupIcsMatch && req.method === 'GET') {
-      const role = String(user.role || '').toLowerCase();
-      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can download pickup calendars.' });
-      const data = await readData();
-      const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupIcsMatch[1]) && rowVisibleToUserOrganization(row, user));
-      if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
-      const event = integrationEngine.pickupCalendarEvent(appointment, data.publicSite || {});
-      return send(res, 200, event.ics, 'text/calendar; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-pickup-' + integrationEngine.dateKey(appointment.date) + '.ics"', 'Cache-Control': 'no-store' });
-    }
-    const pickupCalendarMatch = /^\/api\/pickups\/([^/]+)\/calendar$/.exec(url.pathname);
-    if (pickupCalendarMatch && req.method === 'POST') {
-      const role = String(user.role || '').toLowerCase();
-      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can prepare pickup calendar events.' });
-      const data = await readData();
-      const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupCalendarMatch[1]) && rowVisibleToUserOrganization(row, user));
-      if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
-      const event = integrationEngine.pickupCalendarEvent(appointment, data.publicSite || {});
-      data.calendarEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
-      const existing = data.calendarEvents.find(row => row.appointmentId === appointment.id);
-      const record = { ...(existing || {}), ...event, ics: undefined, organizationId: rowOrganizationId(appointment), status: existing && existing.status || 'Manual-live', updatedAt: new Date().toISOString(), createdAt: existing && existing.createdAt || new Date().toISOString() };
-      if (existing) Object.assign(existing, record);
-      else data.calendarEvents.unshift(record);
-      appointment.calendarEventId = record.id;
-      appointment.calendarPreparedAt = record.updatedAt;
-      appointment.mapsUrl = record.mapsUrl;
-      appendAuditLog(data, user, 'Pickup calendar prepared', [appointment.customer || 'Customer', appointment.date + ' ' + appointment.time, appointment.vehicle || 'No vehicle linked']);
-      await protectConcurrentLocalWrites(data, { preferIncoming: true });
-      await writeData(data);
-      return json(res, 200, { ok: true, calendarEvent: record, icsUrl: '/api/pickups/' + encodeURIComponent(appointment.id) + '/calendar.ics' });
+    if (url.pathname.startsWith('/api/pickups/')) {
+      const pickupIcsMatch = /^\/api\/pickups\/([^/]+)\/calendar\.ics$/.exec(url.pathname);
+      if (pickupIcsMatch && req.method === 'GET') {
+        const role = String(user.role || '').toLowerCase();
+        if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can download pickup calendars.' });
+        const data = await readData();
+        const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupIcsMatch[1]) && rowVisibleToUserOrganization(row, user));
+        if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
+        const event = integrationEngine.pickupCalendarEvent(appointment, data.publicSite || {});
+        return send(res, 200, event.ics, 'text/calendar; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-pickup-' + integrationEngine.dateKey(appointment.date) + '.ics"', 'Cache-Control': 'no-store' });
+      }
+      const pickupCalendarMatch = /^\/api\/pickups\/([^/]+)\/calendar$/.exec(url.pathname);
+      if (pickupCalendarMatch && req.method === 'POST') {
+        const role = String(user.role || '').toLowerCase();
+        if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can prepare pickup calendar events.' });
+        const data = await readData();
+        const appointment = (data.pickupAppointments || []).find(row => row.id === decodeURIComponent(pickupCalendarMatch[1]) && rowVisibleToUserOrganization(row, user));
+        if (!appointment) return json(res, 404, { ok: false, error: 'Pickup appointment was not found.' });
+        const event = integrationEngine.pickupCalendarEvent(appointment, data.publicSite || {});
+        data.calendarEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
+        const existing = data.calendarEvents.find(row => row.appointmentId === appointment.id);
+        const record = { ...(existing || {}), ...event, ics: undefined, organizationId: rowOrganizationId(appointment), status: existing && existing.status || 'Manual-live', updatedAt: new Date().toISOString(), createdAt: existing && existing.createdAt || new Date().toISOString() };
+        if (existing) Object.assign(existing, record);
+        else data.calendarEvents.unshift(record);
+        appointment.calendarEventId = record.id;
+        appointment.calendarPreparedAt = record.updatedAt;
+        appointment.mapsUrl = record.mapsUrl;
+        appendAuditLog(data, user, 'Pickup calendar prepared', [appointment.customer || 'Customer', appointment.date + ' ' + appointment.time, appointment.vehicle || 'No vehicle linked']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, calendarEvent: record, icsUrl: '/api/pickups/' + encodeURIComponent(appointment.id) + '/calendar.ics' });
+      }
     }
     if (url.pathname === '/api/online-vehicles' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can manage online inventory.' });
