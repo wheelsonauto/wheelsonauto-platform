@@ -70,6 +70,53 @@ assert.equal(backgroundCase.record.vehicleId, 'vehicle-1');
 engine.reviewVerificationCase(backgroundCase.record, { decision: 'approve', notes: 'Manual background review completed.' }, { name: 'Manager' });
 assert.equal(backgroundCase.record.status, 'Verified');
 
+const trackerData = JSON.parse(JSON.stringify(data));
+trackerData.vehicles[0].organizationId = 'org-wheelsonauto';
+trackerData.vehicles[0].tracker = 'Track One, Device-101';
+const trackerMatch = engine.applyTrackerUpdate(trackerData, {
+  eventId: 'tracker-event-1',
+  organizationId: 'org-wheelsonauto',
+  deviceId: 'device-101',
+  status: 'Active',
+  lastPing: '2026-07-16T12:00:00.000Z',
+  location: '5150 NJ-42, Blackwood, NJ',
+  latitude: 39.752,
+  longitude: -75.064
+}, { name: 'Manager', organizationId: 'org-wheelsonauto' });
+assert.equal(trackerMatch.matched, true, 'Exact tracker/device tokens should update the linked vehicle.');
+assert.equal(trackerMatch.record.matchedBy, 'tracker');
+assert.equal(trackerData.vehicles[0].trackerStatus, 'Active');
+assert.equal(trackerData.vehicles[0].trackerLocation, '5150 NJ-42, Blackwood, NJ');
+assert.equal(trackerData.vehicles[0].trackerLatitude, 39.752);
+const trackerDuplicate = engine.applyTrackerUpdate(trackerData, { eventId: 'tracker-event-1', organizationId: 'org-wheelsonauto', deviceId: 'device-101' }, { organizationId: 'org-wheelsonauto' });
+assert.equal(trackerDuplicate.duplicate, true, 'Repeated provider tracker event IDs must be idempotent.');
+assert.equal(trackerData.trackerEvents.length, 1);
+
+const missingTracker = engine.applyTrackerUpdate(trackerData, {
+  eventId: 'tracker-event-missing',
+  organizationId: 'org-wheelsonauto',
+  deviceId: 'unknown-device',
+  status: 'Offline',
+  location: 'Private exact location',
+  latitude: 39.999,
+  longitude: -75.999
+}, { organizationId: 'org-wheelsonauto' });
+assert.equal(missingTracker.matched, false);
+assert.equal(trackerData.trackerUnmatched.length, 1);
+assert.equal(trackerData.trackerUnmatched[0].matchStatus, 'Missing file');
+assert.equal(JSON.stringify(trackerData.trackerUnmatched).includes('Private exact location'), false, 'Unmatched tracker events must not retain precise location.');
+assert.equal(JSON.stringify(trackerData.trackerUnmatched).includes('39.999'), false, 'Unmatched tracker events must not retain coordinates.');
+
+trackerData.vehicles.push({ id: 'vehicle-2', organizationId: 'org-wheelsonauto', vin: 'VIN-CONFLICT', tracker: 'Device-202' });
+const trackerConflict = engine.applyTrackerUpdate(trackerData, {
+  eventId: 'tracker-event-conflict',
+  organizationId: 'org-wheelsonauto',
+  vehicleId: 'vehicle-1',
+  deviceId: 'device-202'
+}, { organizationId: 'org-wheelsonauto' });
+assert.equal(trackerConflict.conflict, true, 'Conflicting exact vehicle and tracker identifiers must enter review instead of updating either car.');
+assert.equal(trackerData.vehicles[1].trackerStatus, undefined);
+
 const ledger = engine.buildAccountingLedger(data, [{ sourceKey: 'payment:payment-1', quickBooksStatus: 'Synced', quickBooksEntityId: 'qb-1' }]);
 assert.equal(ledger.filter(row => row.sourceKey === 'payment:payment-1').length, 1);
 assert.equal(ledger.some(row => row.sourceKey === 'payment:payment-failed'), false, 'Failed payments must not enter the accounting ledger.');

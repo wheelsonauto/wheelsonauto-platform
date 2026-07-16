@@ -453,6 +453,7 @@ function ownerSmoke() {
   assert(context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/api/webhooks/verification'), 'Client fallback provider rows must include identity and driver-license signed callbacks.');
   assert(context.apiProviders().find(row => row.id === 'background-checks').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point background screening to the shared secure verification adapter.');
   assert(context.apiProviders().find(row => row.id === 'background-checks').status === 'Ready - manual review', 'Background screening must be honestly usable for manual review while an authoritative provider remains optional.');
+  assert(context.apiProviders().find(row => row.id === 'tracker-gps').endpoint.includes('/api/webhooks/tracker'), 'Client fallback provider rows must expose the live tracker adapter and signed callback.');
   assert(context.apiProviders().find(row => row.id === 'accounting').endpoint.includes('/api/accounting/quickbooks.csv'), 'Client fallback provider rows must expose the balanced QuickBooks journal export.');
   assert(context.apiProviders().find(row => row.id === 'pickup-calendar').endpoint.includes('/api/pickups/calendar'), 'Client fallback provider rows must expose pickup calendar and maps routes.');
   const detailedProviderForm = context.apiProviderForm({ id: 'clover-ecommerce', name: 'Clover Ecommerce', status: 'Testing - live charge needed' });

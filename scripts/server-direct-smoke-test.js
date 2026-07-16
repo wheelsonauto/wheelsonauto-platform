@@ -159,6 +159,8 @@ async function main() {
   process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'direct-clover-private-key';
   process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
   process.env.WOA_VERIFICATION_WEBHOOK_SECRET = 'direct-verification-secret';
+  process.env.WOA_TRACKER_PROVIDER = 'direct-tracker-adapter';
+  process.env.WOA_TRACKER_WEBHOOK_SECRET = 'direct-tracker-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
   delete require.cache[require.resolve('../server.js')];
@@ -230,6 +232,7 @@ async function main() {
     assert(providerEvidence.get('woa-autopay').status === 'Connected' && /1 charged/.test(providerEvidence.get('woa-autopay').lastTestResult), 'WheelsonAuto Autopay should be connected only after a clean monitor run with a managed saved-card schedule.');
     assert(providerEvidence.get('insurance').endpoint.includes('/api/verification/cases') && !/future/i.test(providerEvidence.get('insurance').endpoint), 'Insurance provider readiness must point to the live provider-neutral verification routes.');
     assert(providerEvidence.get('identity-verification').endpoint.includes('/api/webhooks/verification') && /last-four/i.test(providerEvidence.get('identity-verification').lastTestResult), 'Identity provider readiness must expose the signed callback and last-four retention truth.');
+    assert(providerEvidence.get('tracker-gps').endpoint.includes('/api/webhooks/tracker') && /manual updates are live/i.test(providerEvidence.get('tracker-gps').lastTestResult), 'Tracker readiness must expose the provider-neutral signed adapter without pretending a provider event has passed.');
     assert(providerEvidence.get('accounting').endpoint.includes('/api/accounting/quickbooks.csv') && /balanced QuickBooks journal/i.test(providerEvidence.get('accounting').lastTestResult), 'Accounting provider readiness must expose the live balanced journal path without pretending OAuth is connected.');
     assert(providerEvidence.get('pickup-calendar').endpoint.includes('/api/pickups/calendar') && /Google add-to-calendar/i.test(providerEvidence.get('pickup-calendar').lastTestResult), 'Pickup provider readiness must expose the live manual calendar and maps path.');
     assert(/controlled saved-card charge/i.test(apiProviderLaunchGuidance({ id: 'clover-ecommerce', status: 'Testing - live charge needed' }).nextAction), 'Clover Ecommerce guidance should name the controlled saved-card charge required before connection.');
@@ -1137,6 +1140,38 @@ async function main() {
     const mechanicVerificationStatus = await request(server, 'GET', '/api/verification/status', { cookie: mechanicCookie });
     assert(mechanicVerificationStatus.status === 403, 'Mechanic must not view customer identity or insurance verification cases.');
 
+    const mechanicTrackerStatus = await request(server, 'GET', '/api/integrations/tracker/status', { cookie: mechanicCookie });
+    assert(mechanicTrackerStatus.status === 403, 'Mechanic must not receive tracker/GPS status or precise location records.');
+    const managerTrackerSync = await request(server, 'POST', '/api/integrations/tracker/sync', {
+      cookie: managerCookie,
+      json: {
+        updates: [
+          { eventId: 'tracker-direct-manual-1', trackerId: 'TRK-DSP', status: 'Active', lastPing: '2026-07-16T14:00:00.000Z', location: 'Direct private tracker location', latitude: 39.751, longitude: -75.061 },
+          { eventId: 'tracker-direct-portal-1', vehicleId: 'veh-003', status: 'Active', lastPing: '2026-07-16T14:01:00.000Z', location: 'Customer portal private tracker location', latitude: 39.752, longitude: -75.062 }
+        ]
+      }
+    });
+    assert(managerTrackerSync.status === 200 && managerTrackerSync.json.matched === 2 && managerTrackerSync.json.missing === 0, 'Manager tracker adapter should match exact saved tracker and vehicle IDs.');
+    const duplicateTrackerSync = await request(server, 'POST', '/api/integrations/tracker/sync', { cookie: managerCookie, json: { eventId: 'tracker-direct-manual-1', trackerId: 'TRK-DSP', status: 'Active' } });
+    assert(duplicateTrackerSync.status === 200 && duplicateTrackerSync.json.duplicates === 1 && duplicateTrackerSync.json.received === 0, 'Repeated tracker event IDs must remain idempotent through the server route.');
+    const missingTrackerSync = await request(server, 'POST', '/api/integrations/tracker/sync', { cookie: managerCookie, json: { eventId: 'tracker-direct-missing-1', deviceId: 'TRK-NOT-IN-FLEET', status: 'Offline', location: 'Unknown device private location', latitude: 40.001, longitude: -75.001 } });
+    assert(missingTrackerSync.status === 200 && missingTrackerSync.json.missing === 1, 'Unknown tracker devices should enter Missing file instead of attaching to a customer car.');
+    const trackerStatus = await request(server, 'GET', '/api/integrations/tracker/status', { cookie: managerCookie });
+    assert(trackerStatus.status === 200 && trackerStatus.json.vehicles.some(row => row.id === 'veh-direct-dispute-car' && row.trackerLocation === 'Direct private tracker location'), 'Manager tracker status should show the matched vehicle, last ping, and precise location.');
+    assert(trackerStatus.json.unmatched.some(row => row.eventId === 'tracker-direct-missing-1') && !JSON.stringify(trackerStatus.json.unmatched).includes('Unknown device private location') && !JSON.stringify(trackerStatus.json.unmatched).includes('40.001'), 'Missing-file tracker rows must retain identifiers but never exact locations.');
+    const blockedTrackerWebhook = await request(server, 'POST', '/api/webhooks/tracker', { headers: { 'x-tracker-webhook-secret': 'wrong-secret' }, json: { eventId: 'tracker-provider-blocked', trackerId: 'TRK-DSP' } });
+    assert(blockedTrackerWebhook.status === 401, 'Tracker provider webhook must reject invalid credentials.');
+    const signedTrackerPayload = { eventId: 'tracker-provider-signed-1', organizationId: 'org-wheelsonauto', trackerId: 'TRK-DSP', provider: 'direct-tracker-adapter', status: 'Moving', lastPing: '2026-07-16T14:05:00.000Z', location: 'Signed provider private location', latitude: 39.753, longitude: -75.063 };
+    const signedTrackerBody = JSON.stringify(signedTrackerPayload);
+    const trackerTimestamp = String(Math.floor(Date.now() / 1000));
+    const trackerSignature = crypto.createHmac('sha256', 'direct-tracker-secret').update(trackerTimestamp + '.' + signedTrackerBody).digest('hex');
+    const signedTrackerWebhook = await request(server, 'POST', '/api/webhooks/tracker', { headers: { 'x-tracker-timestamp': trackerTimestamp, 'x-tracker-signature': 'sha256=' + trackerSignature }, json: signedTrackerPayload });
+    assert(signedTrackerWebhook.status === 200 && signedTrackerWebhook.json.authorization === 'HMAC-SHA256' && signedTrackerWebhook.json.matched === 1, 'Timestamped HMAC tracker update should reach the exact linked vehicle.');
+    const repeatedTrackerWebhook = await request(server, 'POST', '/api/webhooks/tracker', { headers: { 'x-tracker-timestamp': trackerTimestamp, 'x-tracker-signature': 'sha256=' + trackerSignature }, json: signedTrackerPayload });
+    assert(repeatedTrackerWebhook.status === 200 && repeatedTrackerWebhook.json.duplicates === 1 && repeatedTrackerWebhook.json.received === 0, 'Repeated signed tracker events must be idempotent.');
+    const mechanicTrackerPrivacy = await request(server, 'GET', '/api/state', { cookie: mechanicCookie });
+    assert(!JSON.stringify(mechanicTrackerPrivacy.json).includes('Signed provider private location') && !JSON.stringify(mechanicTrackerPrivacy.json).includes('Customer portal private tracker location') && !JSON.stringify(mechanicTrackerPrivacy.json).includes('39.753'), 'Mechanic state must retain tracker health without exposing exact locations or coordinates.');
+
     const managerLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: managerCookie });
     assert(managerLedger.status === 200 && managerLedger.json.entries.some(row => row.customer === 'Direct Dispute Customer'), 'Manager accounting view should contain source-linked customer and vehicle records.');
     const mechanicLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: mechanicCookie });
@@ -1684,6 +1719,7 @@ async function main() {
     assert(!JSON.stringify(customerPortalState.json).includes('secret-source-token'), 'Customer portal state should not expose saved-card payment sources.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-payment-token'), 'Customer portal state should not expose payment tokens.');
     assert(!JSON.stringify(customerPortalState.json).includes('secret-raw-value'), 'Customer portal state should not expose raw provider payloads.');
+    assert(!JSON.stringify(customerPortalState.json).includes('Customer portal private tracker location') && !JSON.stringify(customerPortalState.json).includes('39.752'), 'Customer portal state must never expose precise tracker locations or coordinates.');
     assert(!JSON.stringify(customerPortalState.json.portal.messages || []).includes('approvalRequired') && !JSON.stringify(customerPortalState.json.portal.messages || []).includes('customerAccountId'), 'Customer portal message history should not expose staff triage fields or internal account ids.');
     assert(!JSON.stringify(customerPortalState.json.portal.payments || []).includes('secret-clover-error') && !JSON.stringify(customerPortalState.json.portal.payments || []).includes('secret-clover-payment-id') && !JSON.stringify(customerPortalState.json.portal.payments || []).includes('secret-external-reference'), 'Customer portal payments should not expose Clover/internal error or reference fields.');
     assert((customerPortalState.json.portal.payments || []).some(payment => payment.id === 'direct-customer-private-payment-row' && /Please contact WheelsonAuto/.test(payment.notes || '')), 'Customer portal failed payments should show a clean customer-safe note.');

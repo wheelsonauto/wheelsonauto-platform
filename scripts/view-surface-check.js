@@ -416,6 +416,16 @@ assertIncludes('Owner audit trail surface', auditTrailPanel + app + server, [
   'delete safe.auditLogs'
 ]);
 
+assertIncludes('Tracker provider-neutral adapter', app + server, [
+  'WOA_TRACKER_PROVIDER',
+  'WOA_TRACKER_WEBHOOK_SECRET',
+  '/api/integrations/tracker/status',
+  '/api/integrations/tracker/sync',
+  '/api/webhooks/tracker',
+  'Missing file',
+  'scrubPreciseTrackerLocation'
+]);
+
 const paymentRecurringCard = finalFunctionSlice(app, 'paymentRecurringCard');
 assertIncludes('Recurring payment cards', paymentRecurringCard, [
   'paymentContactFor',

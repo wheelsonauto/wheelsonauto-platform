@@ -63,6 +63,162 @@ function vehicleTitle(vehicle = {}) {
   return text(vehicle.name || [vehicle.year, vehicle.make, vehicle.model, vehicle.color].filter(Boolean).join(' '));
 }
 
+function trackerTokens(value) {
+  const values = (Array.isArray(value) ? value : [value]).flatMap(item => String(item || '').split(/[,;|/\n]+/));
+  return [...new Set(values.map(key).filter(Boolean))];
+}
+
+function trackerVehicleMatch(data = {}, event = {}, options = {}) {
+  const organizationId = text(options.organizationId || event.organizationId || event.companyId);
+  const vehicles = (data.vehicles || []).filter(vehicle => {
+    if (!organizationId) return true;
+    const vehicleOrganizationId = text(vehicle.organizationId || vehicle.companyId);
+    return vehicleOrganizationId === organizationId || (!vehicleOrganizationId && organizationId === 'org-wheelsonauto');
+  });
+  const criteria = [
+    {
+      name: 'vehicleId',
+      value: text(event.vehicleId),
+      matches: vehicle => text(vehicle.id) === text(event.vehicleId)
+    },
+    {
+      name: 'tracker',
+      value: key(event.tracker || event.trackerId || event.deviceId || event.device || event.imei || event.serialNumber),
+      matches: vehicle => {
+        const expected = key(event.tracker || event.trackerId || event.deviceId || event.device || event.imei || event.serialNumber);
+        return expected && trackerTokens([vehicle.tracker, vehicle.trackerId, vehicle.deviceId, vehicle.imei, vehicle.serialNumber]).includes(expected);
+      }
+    },
+    {
+      name: 'vin',
+      value: key(event.vin),
+      matches: vehicle => key(vehicle.vin) === key(event.vin)
+    },
+    {
+      name: 'plate',
+      value: key(event.plate || event.licensePlate || event.tag || event.tempTag),
+      matches: vehicle => {
+        const expected = key(event.plate || event.licensePlate || event.tag || event.tempTag);
+        return expected && [vehicle.plate, vehicle.licensePlate, vehicle.tag, vehicle.tempTag, vehicle.stock, vehicle.oldTempTag].map(key).includes(expected);
+      }
+    }
+  ];
+  let selected = null;
+  const matchedBy = [];
+  for (const criterion of criteria) {
+    if (!criterion.value) continue;
+    const matches = vehicles.filter(criterion.matches);
+    if (matches.length > 1) return { vehicle: null, matchedBy, conflict: true, reason: 'Multiple vehicles share the supplied ' + criterion.name + '.' };
+    if (!matches.length) continue;
+    if (selected && text(selected.id) !== text(matches[0].id)) {
+      return { vehicle: null, matchedBy, conflict: true, reason: 'Tracker identifiers point to different vehicles.' };
+    }
+    selected = matches[0];
+    matchedBy.push(criterion.name);
+  }
+  return selected
+    ? { vehicle: selected, matchedBy, conflict: false, reason: '' }
+    : { vehicle: null, matchedBy: [], conflict: false, reason: 'No exact vehicle, tracker, VIN, or tag match was found.' };
+}
+
+function trackerEventId(event = {}, organizationId = '') {
+  const providerEventId = text(event.eventId || event.externalEventId || event.providerEventId || event.id);
+  return providerEventId ? stableId('tracker-event', [organizationId, providerEventId]) : stableId('tracker-event', [
+    organizationId,
+    event.vehicleId,
+    event.tracker || event.trackerId || event.deviceId || event.imei,
+    event.vin,
+    event.plate || event.licensePlate || event.tag,
+    event.status || event.state,
+    event.lastPing || event.occurredAt || event.timestamp,
+    typeof event.location === 'string' ? event.location : JSON.stringify(event.location || {}),
+    event.latitude || event.lat,
+    event.longitude || event.lng
+  ]);
+}
+
+function trackerCoordinates(event = {}) {
+  const location = event.location && typeof event.location === 'object' ? event.location : {};
+  const latitude = Number(event.latitude ?? event.lat ?? location.latitude ?? location.lat);
+  const longitude = Number(event.longitude ?? event.lng ?? location.longitude ?? location.lng ?? location.lon);
+  return {
+    latitude: Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 ? latitude : null,
+    longitude: Number.isFinite(longitude) && longitude >= -180 && longitude <= 180 ? longitude : null
+  };
+}
+
+function applyTrackerUpdate(data = {}, event = {}, actor = {}, options = {}) {
+  data.trackerEvents = Array.isArray(data.trackerEvents) ? data.trackerEvents : [];
+  data.trackerUnmatched = Array.isArray(data.trackerUnmatched) ? data.trackerUnmatched : [];
+  const organizationId = text(options.organizationId || event.organizationId || event.companyId || actor.organizationId);
+  const providerEventId = text(event.eventId || event.externalEventId || event.providerEventId || event.id);
+  const eventId = trackerEventId(event, organizationId);
+  const duplicate = data.trackerEvents.find(row => text(row.organizationId) === organizationId && (text(row.id) === eventId || (providerEventId && text(row.providerEventId) === providerEventId)));
+  if (duplicate) return { duplicate: true, matched: !!duplicate.vehicleId, conflict: false, record: duplicate, vehicle: null };
+
+  const match = trackerVehicleMatch(data, event, { organizationId });
+  const now = new Date().toISOString();
+  const lastPing = text(event.lastPing || event.occurredAt || event.timestamp || event.recordedAt || now);
+  const provider = text(event.provider || options.provider || 'manual');
+  const tracker = text(event.tracker || event.trackerId || event.deviceId || event.device || event.imei || event.serialNumber);
+  const status = text(event.status || event.state || 'Active');
+  const plate = text(event.plate || event.licensePlate || event.tag || event.tempTag);
+  const coordinates = trackerCoordinates(event);
+  const locationText = text(typeof event.location === 'string' ? event.location : event.address || event.locationLabel || (event.location && event.location.address));
+  const record = {
+    id: eventId,
+    providerEventId: providerEventId || eventId,
+    organizationId,
+    provider,
+    vehicleId: match.vehicle ? text(match.vehicle.id) : '',
+    tracker,
+    vin: text(event.vin || (match.vehicle && match.vehicle.vin)),
+    plate: text(plate || (match.vehicle && (match.vehicle.plate || match.vehicle.licensePlate || match.vehicle.tag || match.vehicle.tempTag))),
+    status,
+    lastPing,
+    receivedAt: now,
+    matchedBy: match.matchedBy.join(', '),
+    matchStatus: match.conflict ? 'Conflict' : (match.vehicle ? 'Matched' : 'Missing file')
+  };
+
+  if (match.vehicle) {
+    const vehicle = match.vehicle;
+    vehicle.tracker = text(vehicle.tracker || tracker);
+    vehicle.trackerStatus = status;
+    vehicle.trackerLastPing = lastPing;
+    vehicle.trackerProvider = provider;
+    vehicle.trackerUpdatedAt = now;
+    if (locationText) vehicle.trackerLocation = locationText.slice(0, 240);
+    if (coordinates.latitude !== null) vehicle.trackerLatitude = coordinates.latitude;
+    if (coordinates.longitude !== null) vehicle.trackerLongitude = coordinates.longitude;
+    record.customer = text(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo);
+    record.vehicle = vehicleTitle(vehicle);
+    if (locationText) record.location = locationText.slice(0, 240);
+    if (coordinates.latitude !== null) record.latitude = coordinates.latitude;
+    if (coordinates.longitude !== null) record.longitude = coordinates.longitude;
+  } else {
+    const missing = {
+      id: stableId('tracker-missing', [organizationId, eventId]),
+      eventId: providerEventId || eventId,
+      organizationId,
+      provider,
+      tracker,
+      vin: text(event.vin),
+      plate,
+      status,
+      lastPing,
+      reason: match.reason,
+      matchStatus: match.conflict ? 'Conflict' : 'Missing file',
+      createdAt: now
+    };
+    data.trackerUnmatched.unshift(missing);
+    data.trackerUnmatched = data.trackerUnmatched.slice(0, 500);
+  }
+  data.trackerEvents.unshift(record);
+  data.trackerEvents = data.trackerEvents.slice(0, 1000);
+  return { duplicate: false, matched: !!match.vehicle, conflict: match.conflict, reason: match.reason, record, vehicle: match.vehicle || null };
+}
+
 function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
   const raw = text(record.providerStatus || record.manualDecision || record.status).toLowerCase();
   const expires = dateKey(record.expiresAt || record.expires || record.expirationDate);
@@ -388,6 +544,9 @@ function buildPickupCalendarEvents(data = {}) {
 module.exports = {
   stableId,
   dateKey,
+  trackerTokens,
+  trackerVehicleMatch,
+  applyTrackerUpdate,
   verificationCaseStatus,
   verificationCase,
   reviewVerificationCase,

@@ -42,6 +42,8 @@ const VERIFICATION_WEBHOOK_SECRET = process.env.WOA_VERIFICATION_WEBHOOK_SECRET 
 const IDENTITY_PROVIDER = String(process.env.WOA_IDENTITY_PROVIDER || 'manual').trim().toLowerCase();
 const INSURANCE_PROVIDER = String(process.env.WOA_INSURANCE_PROVIDER || 'manual').trim().toLowerCase();
 const BACKGROUND_PROVIDER = String(process.env.WOA_BACKGROUND_PROVIDER || 'manual').trim().toLowerCase();
+const TRACKER_PROVIDER = String(process.env.WOA_TRACKER_PROVIDER || 'manual').trim().toLowerCase();
+const TRACKER_WEBHOOK_SECRET = process.env.WOA_TRACKER_WEBHOOK_SECRET || process.env.TRACKER_WEBHOOK_SECRET || '';
 const QUICKBOOKS_REALM_ID = process.env.QUICKBOOKS_REALM_ID || '';
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
 const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
@@ -81,7 +83,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-background-navigation-72">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-tracker-adapter-73">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -597,7 +599,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -1134,6 +1136,20 @@ function verifyVerificationWebhook(rawBody, headers = {}) {
   const signedBody = timestamp + '.' + String(rawBody || '');
   const expectedHex = crypto.createHmac('sha256', VERIFICATION_WEBHOOK_SECRET).update(signedBody).digest('hex');
   const expectedBase64 = crypto.createHmac('sha256', VERIFICATION_WEBHOOK_SECRET).update(signedBody).digest('base64');
+  return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
+    const value = part.replace(/^(?:sha256=|v1=)/i, '');
+    return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
+  });
+}
+function verifyTrackerWebhook(rawBody, headers = {}) {
+  if (!TRACKER_WEBHOOK_SECRET) return false;
+  const timestamp = String(headers['x-tracker-timestamp'] || headers['x-woa-webhook-timestamp'] || '');
+  const unixSeconds = Number(timestamp);
+  const supplied = String(headers['x-tracker-signature'] || headers['x-woa-webhook-signature'] || '');
+  if (!unixSeconds || !supplied || Math.abs(Date.now() / 1000 - unixSeconds) > 300) return false;
+  const signedBody = timestamp + '.' + String(rawBody || '');
+  const expectedHex = crypto.createHmac('sha256', TRACKER_WEBHOOK_SECRET).update(signedBody).digest('hex');
+  const expectedBase64 = crypto.createHmac('sha256', TRACKER_WEBHOOK_SECRET).update(signedBody).digest('base64');
   return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
     const value = part.replace(/^(?:sha256=|v1=)/i, '');
     return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
@@ -5225,6 +5241,12 @@ function scrubMechanicMoneyValue(value) {
 function scrubMechanicMoneyFields(row = {}) {
   return scrubMechanicMoneyValue(row || {});
 }
+const PRECISE_TRACKER_FIELDS = ['trackerLocation', 'lastLocation', 'trackerLatitude', 'trackerLongitude', 'latitude', 'longitude', 'lat', 'lng'];
+function scrubPreciseTrackerLocation(row = {}) {
+  const safe = { ...(row || {}) };
+  PRECISE_TRACKER_FIELDS.forEach(field => delete safe[field]);
+  return safe;
+}
 function isMechanicVisibleClaim(row = {}) {
   const text = [row.type, row.source, row.provider, row.agency, row.notes, row.responsibility, row.status, row.customerMatchStatus]
     .filter(Boolean)
@@ -5559,6 +5581,7 @@ function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
   if (!['manager', 'mechanic'].includes(role)) return false;
+  if (role === 'manager' && pathname.startsWith('/api/integrations/tracker')) return true;
   const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications', '/api/reset'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
@@ -5780,7 +5803,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents'].forEach(key => {
+  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents', 'trackerEvents', 'trackerUnmatched'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {
@@ -5798,6 +5821,7 @@ function stateForUserRead(data, user) {
     ['vehicles', 'maintenance', 'claims'].forEach(key => {
       if (Array.isArray(mechanic[key])) mechanic[key] = mechanic[key].map(scrubMechanicMoneyFields);
     });
+    if (Array.isArray(mechanic.vehicles)) mechanic.vehicles = mechanic.vehicles.map(scrubPreciseTrackerLocation);
     if (Array.isArray(mechanic.claims)) mechanic.claims = mechanic.claims.filter(isMechanicVisibleClaim);
     mechanic.integrations = {
       messaging: {
@@ -6010,6 +6034,7 @@ function moneyText(value) {
 function stripPrivateCustomerFields(row = {}) {
   const safe = { ...row };
   PRIVATE_OPERATIONAL_FIELDS.forEach(key => delete safe[key]);
+  PRECISE_TRACKER_FIELDS.forEach(key => delete safe[key]);
   return safe;
 }
 function scrubPrivateOperationalFields(value) {
@@ -7140,6 +7165,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Identity and driver-license verification adapter'],
     ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
     ['WOA_BACKGROUND_PROVIDER', BACKGROUND_PROVIDER || 'manual', 'Background-screening verification adapter'],
+    ['WOA_TRACKER_PROVIDER', TRACKER_PROVIDER || 'manual', 'Vehicle tracker/GPS provider adapter'],
+    ['WOA_TRACKER_WEBHOOK_SECRET', TRACKER_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed tracker/GPS provider callbacks; manager updates remain live without a provider'],
     ['QUICKBOOKS_*', QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Set' : 'Manual-live', 'QuickBooks OAuth connection; internal accounting ledger and CSV remain live without it'],
     ['GOOGLE_CALENDAR_*', GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Set' : 'Manual-live', 'Automatic Google Calendar sync; ICS, add-to-calendar, and maps links remain live without it'],
     ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
@@ -7195,6 +7222,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/verification/cases', 'Create provider-neutral verification case'),
     route('POST', '/api/verification/cases/review', 'Owner/manager verification review'),
     route('POST', '/api/webhooks/verification', 'Signed provider verification callback'),
+    route('GET', '/api/integrations/tracker/status', 'Owner/manager tracker health, vehicle matches, and missing-file queue'),
+    route('POST', '/api/integrations/tracker/sync', 'Owner/manager tracker update adapter'),
+    route('POST', '/api/webhooks/tracker', 'Signed tracker/GPS provider callback'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
@@ -7226,6 +7256,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     tasks: (scoped.tasks || []).length,
     documents: (scoped.documents || []).length,
     verificationCases: (scoped.verificationCases || []).length,
+    trackerEvents: (scoped.trackerEvents || []).length,
+    trackerUnmatched: (scoped.trackerUnmatched || []).length,
     refundRequests: (scoped.refundRequests || []).length,
     ledgerEntries: (scoped.ledgerEntries || []).length,
     pickupAppointments: (scoped.pickupAppointments || []).length
@@ -8580,7 +8612,7 @@ function defaultApiProviderRows(data = {}) {
     { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review policy proof manually, verify the 30-day expiration queue, then accept one signed authoritative provider result.' },
     { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review identity/license proof manually, confirm only the last four are retained, then accept one signed authoritative provider result.' },
     { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_BACKGROUND_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Create a background review from an approved application, retain only the last four of any reference, then accept one signed authoritative provider result.' },
-    { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: 'Provider needed', owner: 'Manager', envKeys: 'TRACKER_PROVIDER_KEY', endpoint: 'Future /api/integrations/tracker/sync', liveTest: 'Connect tracker name to vehicle, show last location and alert state.' },
+    { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET', endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker', liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.' },
     { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
     { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
     { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: 'API needed', owner: 'Manager', envKeys: 'MARKETING_PROVIDER_KEY', endpoint: 'Future /api/integrations/marketing/sync', liveTest: 'Import lead source, follow-up status, and conversion into Marketing board.' },
@@ -8668,6 +8700,11 @@ function apiProviderTruthOverrides(data = {}) {
   const insuranceProviderLive = insuranceProviderReady && providerResultRecorded(insuranceCases);
   const identityProviderLive = identityProviderReady && providerResultRecorded(identityCases);
   const backgroundProviderLive = backgroundProviderReady && providerResultRecorded(backgroundCases);
+  const trackerEvents = Array.isArray(data.trackerEvents) ? data.trackerEvents : [];
+  const trackerUnmatched = Array.isArray(data.trackerUnmatched) ? data.trackerUnmatched : [];
+  const trackerVehicleCount = (data.vehicles || []).filter(vehicle => vehicle.tracker && (vehicle.trackerStatus || vehicle.trackerLastPing)).length;
+  const trackerProviderReady = !!(TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual');
+  const trackerProviderLive = trackerProviderReady && trackerEvents.some(row => row.authorization === 'HMAC-SHA256');
   const accountingEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
   const quickBooksReady = !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET);
   const pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
@@ -8741,6 +8778,15 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestAt: verificationEvidenceAt(backgroundCases),
       lastTestResult: backgroundCases.length + ' background case(s) are tracked; manual review, customer/vehicle linking, and last-four retention are live.' + (backgroundProviderLive ? ' A signed authoritative result has been verified.' : ' Real-world screening validity remains provider-required.')
     },
+    'tracker-gps': {
+      name: 'Tracker / GPS',
+      status: trackerProviderLive ? 'Connected' : (trackerProviderReady ? 'Testing - signed event needed' : 'Ready - manual adapter'),
+      envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET',
+      endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker',
+      liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.',
+      lastTestAt: newestEvidenceAt(trackerEvents.map(row => row.receivedAt || row.lastPing)),
+      lastTestResult: trackerVehicleCount + ' vehicle tracker(s) expose status/last-ping evidence; ' + trackerUnmatched.length + ' update(s) remain in Missing file.' + (trackerProviderLive ? ' A signed provider event was accepted.' : ' Manual updates are live; provider-backed location remains unverified until one signed event is accepted.')
+    },
     accounting: {
       name: 'Accounting / QuickBooks',
       status: quickBooksReady ? 'Testing - OAuth required' : 'Ready - internal ledger',
@@ -8796,6 +8842,9 @@ function apiProviderLaunchGuidance(provider = {}) {
     'identity-verification': connected
       ? ['Monitor signed identity/license results and expiration warnings.', 'A signed provider result with only the last-four reference retained.']
       : ['Use manual review now; connect an authoritative identity provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result, with no full license identifier stored.'],
+    'tracker-gps': connected
+      ? ['Monitor tracker freshness and clear the Missing file queue when devices or tags change.', 'A signed tracker event tied to the correct company, vehicle, VIN/tag, last ping, and manager-visible location.']
+      : ['Use the manager tracker adapter now; connect a GPS provider to the signed webhook and submit one exact device/vehicle event before marking it connected.', 'Exact device/VIN/tag match, duplicate protection, Missing file handling, and proof that mechanic/customer responses omit precise location.'],
     accounting: ['Use the balanced QuickBooks journal export now; complete QuickBooks OAuth before testing direct sync.', 'Every source entry balances debits and credits, then a successful OAuth-backed sandbox/company sync.'],
     'pickup-calendar': ['Use directions, Google add-to-calendar, and ICS now; connect Calendar credentials only when automatic sync is needed.', 'A pickup event with the correct customer, car, address, local time, and deterministic calendar ID.']
   };
@@ -9300,7 +9349,7 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
@@ -11739,6 +11788,42 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, received: true, authorization: signed ? 'HMAC-SHA256' : 'Shared secret', verificationCase: record });
     }
+    if (url.pathname === '/api/webhooks/tracker' && req.method === 'POST') {
+      if (!TRACKER_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Tracker webhook secret is not configured.' });
+      const rawBody = await readBody(req, 512 * 1024);
+      const signed = verifyTrackerWebhook(rawBody, req.headers);
+      const authorized = signed || secureWebhookValueMatch(url.searchParams.get('secret'), TRACKER_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], TRACKER_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-tracker-webhook-secret'], TRACKER_WEBHOOK_SECRET);
+      if (!authorized) return json(res, 401, { ok: false, error: 'Unauthorized tracker webhook.' });
+      let payload;
+      try { payload = rawBody ? JSON.parse(rawBody) : {}; } catch { return json(res, 400, { ok: false, error: 'Tracker webhook body must be valid JSON.' }); }
+      const events = Array.isArray(payload.events) ? payload.events : [payload];
+      if (!events.length || events.length > 500) return json(res, 400, { ok: false, error: 'Tracker webhook must include between 1 and 500 events.' });
+      const data = await readData();
+      const results = events.map(event => integrationEngine.applyTrackerUpdate(data, event || {}, {
+        name: String(event && event.provider || TRACKER_PROVIDER || 'Tracker provider'),
+        role: 'System',
+        organizationId: String(event && (event.organizationId || event.companyId) || MAIN_ORG_ID)
+      }, {
+        organizationId: String(event && (event.organizationId || event.companyId) || MAIN_ORG_ID),
+        provider: String(event && event.provider || TRACKER_PROVIDER || 'tracker')
+      }));
+      results.forEach(result => {
+        if (result.record && !result.duplicate) result.record.authorization = signed ? 'HMAC-SHA256' : 'Shared secret';
+      });
+      const summary = {
+        received: results.filter(result => !result.duplicate).length,
+        matched: results.filter(result => result.matched && !result.duplicate).length,
+        missing: results.filter(result => !result.matched && !result.conflict && !result.duplicate).length,
+        conflicts: results.filter(result => result.conflict && !result.duplicate).length,
+        duplicates: results.filter(result => result.duplicate).length
+      };
+      appendAuditLog(data, { name: TRACKER_PROVIDER || 'Tracker provider', role: 'System', organizationId: MAIN_ORG_ID }, 'Tracker provider update', [summary.received + ' received', summary.matched + ' matched', summary.missing + ' missing file', summary.conflicts + ' conflicts', signed ? 'HMAC signed' : 'Shared secret']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, authorization: signed ? 'HMAC-SHA256' : 'Shared secret', ...summary, eventIds: results.map(result => result.record && result.record.id).filter(Boolean) });
+    }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
@@ -12862,6 +12947,66 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, dispute: claim });
+    }
+    if (url.pathname === '/api/integrations/tracker/status' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view tracker status.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const vehicles = (scoped.vehicles || []).map(vehicle => ({
+        id: vehicle.id,
+        organizationId: rowOrganizationId(vehicle),
+        customer: vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '',
+        vehicle: vehicle.name || [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(' '),
+        vin: vehicle.vin || '',
+        plate: vehicle.plate || vehicle.licensePlate || vehicle.tag || vehicle.tempTag || vehicle.stock || '',
+        tracker: vehicle.tracker || '',
+        trackerStatus: vehicle.trackerStatus || (vehicle.tracker ? 'Saved' : 'Missing'),
+        trackerLastPing: vehicle.trackerLastPing || '',
+        trackerLocation: vehicle.trackerLocation || '',
+        trackerLatitude: vehicle.trackerLatitude,
+        trackerLongitude: vehicle.trackerLongitude,
+        trackerProvider: vehicle.trackerProvider || ''
+      }));
+      const events = (scoped.trackerEvents || []).slice(0, 200).map(scrubPrivateOperationalFields);
+      const unmatched = (scoped.trackerUnmatched || []).slice(0, 200).map(scrubPrivateOperationalFields);
+      return json(res, 200, {
+        ok: true,
+        provider: TRACKER_PROVIDER,
+        signedWebhookReady: !!TRACKER_WEBHOOK_SECRET,
+        status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed provider event needed' : 'Ready - manual adapter',
+        vehicles,
+        events,
+        unmatched,
+        generatedAt: new Date().toISOString()
+      });
+    }
+    if (url.pathname === '/api/integrations/tracker/sync' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can update tracker status.' });
+      const payload = await readJsonBody(req, 512 * 1024);
+      const updates = Array.isArray(payload.updates) ? payload.updates : [payload];
+      if (!updates.length || updates.length > 500) return json(res, 400, { ok: false, error: 'Tracker sync must include between 1 and 500 updates.' });
+      const missingIdentity = updates.find(event => !event || ![event.vehicleId, event.tracker, event.trackerId, event.deviceId, event.device, event.imei, event.serialNumber, event.vin, event.plate, event.licensePlate, event.tag, event.tempTag].some(value => String(value || '').trim()));
+      if (missingIdentity) return json(res, 400, { ok: false, error: 'Every tracker update needs a vehicle ID, tracker/device ID, VIN, or tag.' });
+      const data = await readData();
+      const results = updates.map(event => {
+        const organizationId = isOwnerUser(user)
+          ? String(event.organizationId || event.companyId || userOrganizationId(user))
+          : userOrganizationId(user);
+        return integrationEngine.applyTrackerUpdate(data, { ...event, organizationId }, user, { organizationId, provider: String(event.provider || TRACKER_PROVIDER || 'manual') });
+      });
+      const summary = {
+        received: results.filter(result => !result.duplicate).length,
+        matched: results.filter(result => result.matched && !result.duplicate).length,
+        missing: results.filter(result => !result.matched && !result.conflict && !result.duplicate).length,
+        conflicts: results.filter(result => result.conflict && !result.duplicate).length,
+        duplicates: results.filter(result => result.duplicate).length
+      };
+      appendAuditLog(data, user, 'Tracker updates synchronized', [summary.received + ' received', summary.matched + ' matched', summary.missing + ' missing file', summary.conflicts + ' conflicts', summary.duplicates + ' duplicate']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, ...summary, results: results.map(result => ({ id: result.record && result.record.id, vehicleId: result.record && result.record.vehicleId, matchStatus: result.record && result.record.matchStatus, duplicate: result.duplicate, reason: result.reason || '' })) });
     }
     if (url.pathname === '/api/verification/status' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
