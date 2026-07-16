@@ -677,6 +677,16 @@ async function main() {
     assert(isolatedPortalState.json.portal.application.id === isolatedApplication.json.application.id && /2017 Ford Fusion/i.test(isolatedPortalState.json.portal.summary.vehicle || ''), 'Pending applicant portal should show only its own application and selected public vehicle.');
     assert(!isolatedPortalText.includes('Old Shared Phone Customer') && !isolatedPortalText.includes('PRIVATEOLDVIN001') && !isolatedPortalText.includes('OLD-PRIVATE') && !isolatedPortalText.includes('9098') && !isolatedPortalText.includes('pay-direct-shared-phone-old'), 'A pending applicant must not inherit another customer file, vehicle, saved card, or payment through a shared phone.');
     assert(!isolatedPortalText.includes('systemHealth') && !isolatedPortalText.includes('platformModules'), 'Customer portal state must not expose internal platform health or module counts.');
+    const deniedIsolatedApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: isolatedApplication.json.application.id, decision: 'deny', notes: 'Direct smoke applicant cleanup.' } });
+    assert(deniedIsolatedApplication.status === 200 && deniedIsolatedApplication.json.ok && deniedIsolatedApplication.json.portalDisabled, 'Owner should be able to deny/archive an unapproved application and disable its pending portal login.');
+    const deniedPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(isolatedPortalLogin.cookie) });
+    assert(deniedPortalState.status === 401, 'A denied application must immediately lose customer portal access.');
+    const deniedApplicationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const deniedApplicationRow = deniedApplicationState.json.applications.find(row => row.id === isolatedApplication.json.application.id);
+    const deniedApplicationAccount = deniedApplicationState.json.customerAccounts.find(row => row.applicationId === isolatedApplication.json.application.id);
+    const releasedApplicationVehicle = deniedApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
+    assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Disabled', 'Denied application and pending login should move to archived/disabled state together.');
+    assert(releasedApplicationVehicle && releasedApplicationVehicle.published === true && releasedApplicationVehicle.availability === 'Available', 'Denying an application should leave its unused online vehicle available for another applicant.');
     for (let i = 0; i < 8; i += 1) {
       const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
       assert([400, 409].includes(limitedApplicationAttempt.status), 'Public application attempts should validate normally before the per-IP submission limit.');

@@ -141,11 +141,13 @@ function releaseExpiredHolds(data, nowValue = Date.now()) {
     }
     const vehicle = findPublicVehicle(data, session.onlineVehicleId);
     if (!vehicle || vehicle.heldApplicationId && vehicle.heldApplicationId !== session.applicationId) return;
-    vehicle.published = true;
-    vehicle.availability = 'Available';
+    vehicle.published = vehicle.holdPreviousPublished === undefined || vehicle.holdPreviousPublished === '' ? true : !!vehicle.holdPreviousPublished;
+    vehicle.availability = vehicle.holdPreviousAvailability || 'Available';
     vehicle.heldFor = '';
     vehicle.heldApplicationId = '';
     vehicle.heldUntil = '';
+    vehicle.holdPreviousPublished = '';
+    vehicle.holdPreviousAvailability = '';
     vehicle.updatedAt = new Date(now).toISOString();
     const linked = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
     if (linked && (!linked.heldApplicationId || linked.heldApplicationId === session.applicationId) && /pending application|held for onboarding/i.test(String(linked.status || ''))) {

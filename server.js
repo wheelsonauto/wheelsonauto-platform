@@ -80,7 +80,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-clover-match-65">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-application-review-66">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -12653,6 +12653,44 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, publicSite: data.publicSite });
     }
+    if (url.pathname === '/api/applications/review' && req.method === 'POST') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can review an application.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.decision !== 'deny') return json(res, 400, { ok: false, error: 'Choose the deny/archive decision.' });
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      const application = (data.applications || []).find(row => row.id === String(payload.applicationId || ''));
+      if (!application || !rowVisibleToUserOrganization(application, user)) return json(res, 404, { ok: false, error: 'Application not found.' });
+      const activeCustomer = (data.customers || []).find(row => row.applicationId === application.id && /active/i.test(String(row.status || row.stage || '')));
+      const completedPickup = (data.pickupAppointments || []).find(row => row.applicationId === application.id && /picked up|completed/i.test(String(row.status || '')));
+      const paidRequests = (data.paymentRequests || []).filter(row => row.applicationId === application.id && nativePaymentPaid(row));
+      if (activeCustomer || completedPickup) return json(res, 409, { ok: false, error: 'This applicant is already an active customer. End the customer file from Payments & Customers instead.' });
+      if (paidRequests.length) return json(res, 409, { ok: false, error: 'This application has verified payments. Resolve the payment/refund review before denying the file.' });
+      const reviewedAt = new Date().toISOString();
+      const reviewer = user.name || user.username || user.role || 'Staff';
+      const notes = onboarding.text(payload.notes, 1600);
+      Object.assign(application, { stage: 'Denied', status: 'Denied - archived', deniedAt: reviewedAt, deniedBy: reviewer, denialNotes: notes, updatedAt: reviewedAt });
+      const sessions = (data.onboardingSessions || []).filter(row => row.applicationId === application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
+      sessions.forEach(session => Object.assign(session, { status: 'Cancelled', cancelledAt: reviewedAt, cancelledBy: reviewer, cancellationReason: notes || 'Application denied and archived.' }));
+      (data.paymentRequests || []).filter(row => row.applicationId === application.id && isOpenCustomerPaymentRequest(row)).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', closedAt: reviewedAt, closeReason: notes || 'Application denied and archived.' }));
+      (data.cardSetupRequests || []).filter(row => row.applicationId === application.id && isOpenCardSetupRequest(row)).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', closedAt: reviewedAt }));
+      const account = (data.customerAccounts || []).find(row => row.applicationId === application.id);
+      if (account) Object.assign(account, { status: 'Disabled', portalStage: 'Application denied', disabledAt: reviewedAt, disabledBy: reviewer, updatedAt: reviewedAt });
+      (data.websiteLeads || []).filter(row => row.applicationId === application.id).forEach(row => Object.assign(row, { status: 'Denied', updatedAt: reviewedAt }));
+      (data.messages || []).filter(row => row.applicationId === application.id && /draft|ready to send|needs approval/i.test(String(row.status || row.direction || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', updatedAt: reviewedAt }));
+      const publicVehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
+      if (publicVehicle && (!publicVehicle.heldApplicationId || publicVehicle.heldApplicationId === application.id)) {
+        Object.assign(publicVehicle, { published: publicVehicle.holdPreviousPublished === undefined ? true : !!publicVehicle.holdPreviousPublished, availability: publicVehicle.holdPreviousAvailability || 'Available', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousPublished: '', holdPreviousAvailability: '', updatedAt: reviewedAt });
+        const linkedVehicle = (data.vehicles || []).find(row => row.id === publicVehicle.platformVehicleId);
+        if (linkedVehicle && (!linkedVehicle.heldApplicationId || linkedVehicle.heldApplicationId === application.id) && /pending application|held for onboarding/i.test(String(linkedVehicle.status || ''))) {
+          Object.assign(linkedVehicle, { status: linkedVehicle.holdPreviousStatus || 'Ready', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousStatus: '', updatedAt: reviewedAt });
+        }
+      }
+      appendAuditLog(data, user, 'Application denied and archived', [application.name || 'Applicant', application.vehicle || 'No vehicle linked', notes || 'No review note']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, application: publicApplicationSummary(application), portalDisabled: !!account, releasedSessions: sessions.length });
+    }
     if (url.pathname === '/api/onboarding/links' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can approve an application and create onboarding.' });
       const payload = await readJsonBody(req, 128 * 1024);
@@ -12661,6 +12699,7 @@ const server = http.createServer(async (req, res) => {
       onboarding.releaseExpiredHolds(data);
       const application = (data.applications || []).find(row => row.id === String(payload.applicationId || ''));
       if (!application || !rowVisibleToUserOrganization(application, user)) return json(res, 404, { ok: false, error: 'Application not found.' });
+      if (/denied|removed|cancelled/i.test(String(application.status || application.stage || ''))) return json(res, 409, { ok: false, error: 'Denied or archived applications cannot create onboarding links.' });
       const vehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
       if (!vehicle) return json(res, 409, { ok: false, error: 'The application is not connected to a native online vehicle.' });
       const competingSession = data.onboardingSessions.find(row => row.onlineVehicleId === vehicle.id && row.applicationId !== application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
@@ -12668,7 +12707,7 @@ const server = http.createServer(async (req, res) => {
       const session = onboarding.createSession(data, application, user, requestBaseUrl(req));
       const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
       Object.assign(application, { stage: 'Approved', status: 'Approved - onboarding sent', approvedAt: new Date().toISOString(), approvedBy: user.name || user.username || user.role, pricingSnapshot: application.pricingSnapshot || onboarding.pricingSnapshot(vehicle) });
-      Object.assign(vehicle, { published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
+      Object.assign(vehicle, { holdPreviousPublished: vehicle.holdPreviousPublished === undefined ? !!vehicle.published : vehicle.holdPreviousPublished, holdPreviousAvailability: vehicle.holdPreviousAvailability || vehicle.availability || 'Available', published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
       if (linkedVehicle) Object.assign(linkedVehicle, { holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready', status: 'Pending application', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({ id: 'msg-onboarding-' + crypto.randomBytes(7).toString('hex'), applicationId: application.id, customer: application.name || '', phone: application.phone || '', email: application.email || '', direction: 'Draft', channel: 'SMS', template: 'Application approved', subject: 'Application approved', status: 'Ready to send', tone: 'blue', body: 'Hi ' + (application.firstName || application.name || 'there') + ', your WheelsonAuto application for the ' + nativeSite.vehicleTitle(vehicle) + ' was approved. Complete your secure onboarding within seven days: ' + session.publicUrl, createdAt: new Date().toISOString(), source: 'Native onboarding' });
