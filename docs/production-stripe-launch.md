@@ -12,6 +12,11 @@ artifact and must never be committed as part of a code release.
   restore pass against the intended database.
 - Do not set `WOA_PRODUCTION_HARDENING_REQUIRED=1` until the owner-only
   infrastructure preflight is clear.
+- Before enabling production hardening, reset the owner password through
+  **Settings -> Account** so the platform stores the current PBKDF2 record,
+  and disable the owner PIN fallback. A legacy/plain environment password can
+  still be used for recovery, but it intentionally cannot clear the live
+  Stripe launch gate.
 - Never store card numbers, CVVs, API secrets, or private identity documents
   in the normal state JSON.
 - Keep a dated, access-controlled copy of the current `data.json` before any
@@ -157,6 +162,8 @@ WOA_DATA_BACKEND=postgres
 WOA_POSTGRES_SNAPSHOT_LIMIT=180
 WOA_SESSION_SECRET=<long random secret>
 WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1
+WOA_OWNER_PIN_FALLBACK_ENABLED=0
+# Set WOA_PRODUCTION_HARDENING_REQUIRED=1 only after the full preflight is clear.
 ```
 
 Restart once and visit the owner-only endpoint:

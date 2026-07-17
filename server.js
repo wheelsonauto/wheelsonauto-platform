@@ -7018,7 +7018,8 @@ function ownerAuthenticationReadiness(data) {
   return authPolicy.ownerAuthenticationReadiness({
     environment: {
       loginPassword: LOGIN_PASSWORD,
-      loginPasswordHash: LOGIN_PASSWORD_HASH
+      loginPasswordHash: LOGIN_PASSWORD_HASH,
+      loginPasswordSalt: LOGIN_PASSWORD_SALT
     },
     state: data || {},
     productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
@@ -8484,6 +8485,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
+  else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   if (IDENTITY_PROVIDER === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');

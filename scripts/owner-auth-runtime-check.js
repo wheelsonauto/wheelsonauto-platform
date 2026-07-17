@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -70,7 +71,11 @@ async function main() {
     process.env.WOA_PRODUCTION_HARDENING_REQUIRED = '1';
     process.env.WOA_ADMIN_PIN = '9999';
     process.env.WOA_ADMIN_USERNAME = 'owner';
-    process.env.WOA_ADMIN_PASSWORD = 'OwnerPassword123!';
+    const password = 'OwnerPassword123!';
+    const salt = 'runtime-owner-password-salt';
+    process.env.WOA_ADMIN_PASSWORD_HASH = 'pbkdf2$310000$' + crypto.pbkdf2Sync(password, salt, 310000, 32, 'sha256').toString('hex');
+    process.env.WOA_ADMIN_PASSWORD_SALT = salt;
+    delete process.env.WOA_ADMIN_PASSWORD;
     process.env.WOA_AUTO_SYNC_MS = '3600000';
     process.env.WOA_AUTOPAY_MS = '3600000';
     process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
@@ -84,7 +89,7 @@ async function main() {
       const pinLogin = await request(server, 'POST', '/login', { pin: '9999' });
       assert.strictEqual(pinLogin.status, 401, 'Production hardening must reject owner PIN-only login.');
 
-      const passwordLogin = await request(server, 'POST', '/login', { username: 'owner', password: 'OwnerPassword123!' });
+      const passwordLogin = await request(server, 'POST', '/login', { username: 'owner', password });
       assert.strictEqual(passwordLogin.status, 302, 'Production hardening must retain password-backed owner login.');
       assert(String(passwordLogin.headers['Set-Cookie'] || '').includes('woa_session='), 'A production password login must create a signed owner session.');
     } finally {

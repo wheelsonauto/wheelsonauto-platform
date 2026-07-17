@@ -176,7 +176,7 @@ const productionInfrastructurePreflight = finalFunctionSlice(server, 'production
 if (!/ownerPinLoginAllowed\(\)/.test(ownerLoginMatches) || !/ownerPinLoginAllowed\(\)/.test(staffLoginPage)) {
   fail('Owner PIN fallback must be policy-gated in both sign-in behavior and the login UI.');
 }
-if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
+if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginStrong/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
   fail('The production Stripe launch gate must require password-backed owner access with owner PIN fallback disabled.');
 }
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
