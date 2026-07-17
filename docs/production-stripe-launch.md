@@ -106,19 +106,26 @@ encryption key changes, run the validation again before enabling
 
 ## 3. Migrate Platform State to PostgreSQL
 
-After the test database has passed, provision the production PostgreSQL
-database and retain a protected rollback copy of the live state. First run the
-preflight again against the exact source copy:
+After the test database has passed, pause production writes, provision the
+production PostgreSQL database, and retain a protected rollback copy of the
+live state. First run the preflight against the exact protected source copy:
 
 ```sh
 pnpm run postgres-preflight -- /secure/path/to/data-backup.json
 ```
 
-Import only after it reports no immutable identity conflicts:
+Record the `sourceFileChecksum` printed by preflight. It is an exact SHA-256
+fingerprint of the protected JSON bytes. The importer and verifier refuse to
+operate if that file changes, even if the JSON still parses.
+
+Import only after it reports no immutable identity conflicts and only while
+application writes are paused:
 
 ```sh
 DATABASE_URL='postgresql://...' \
 WOA_POSTGRES_MIGRATION_CONFIRM=1 \
+WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 \
+WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<sourceFileChecksum from preflight>' \
 pnpm run migrate-json-to-postgres -- /secure/path/to/data-backup.json
 ```
 
@@ -132,6 +139,7 @@ without rewriting either state, use the exact protected source copy:
 ```sh
 DATABASE_URL='postgresql://...' \
 WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 \
+WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<same sourceFileChecksum from preflight>' \
 pnpm run verify-json-to-postgres -- /secure/path/to/data-backup.json
 ```
 

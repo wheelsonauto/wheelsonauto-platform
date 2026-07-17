@@ -1,8 +1,8 @@
 'use strict';
 
-const fs = require('node:fs/promises');
 const path = require('node:path');
 const stateRepository = require('../state-repository');
+const migrationSource = require('../postgres-migration-source');
 
 const root = path.resolve(__dirname, '..');
 const dataFile = path.resolve(process.argv[2] || path.join(root, 'data.json'));
@@ -12,8 +12,11 @@ async function main() {
   if (process.env.WOA_POSTGRES_MIGRATION_PROOF_CONFIRM !== '1') {
     throw new Error('Refusing to record a migration proof without WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1. This command never rewrites the JSON or PostgreSQL business state.');
   }
+  const source = await migrationSource.readSource(dataFile);
+  const expectedSourceChecksum = migrationSource.requiredExpectedChecksum();
+  migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedSourceChecksum);
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required to verify PostgreSQL import evidence.');
-  const state = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const state = source.state;
   const conflicts = stateRepository.identityConflicts(state);
   if (conflicts.length) {
     const error = new Error('Migration proof blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the source conflicts without deleting business history.');
@@ -40,6 +43,7 @@ async function main() {
     if (canonicalSourceChecksum !== target.checksum || stateRepository.stableJson(sourceRecordCounts) !== stateRepository.stableJson(targetRecordCounts)) {
       throw new Error('The supplied JSON source does not exactly match the current PostgreSQL state. No state was changed and no proof was recorded. Use the exact protected migration copy, not a later or earlier data.json.');
     }
+    await migrationSource.assertSourceUnchanged(dataFile, source.sourceFileChecksum);
     const proof = await repository.recordMigrationProof({
       sourceChecksum,
       canonicalSourceChecksum,
@@ -56,6 +60,7 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       source: dataFile,
+      sourceFileChecksum: source.sourceFileChecksum,
       databaseVersion: target.version,
       checksum: target.checksum,
       migrationProof: proof,

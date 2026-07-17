@@ -1,8 +1,8 @@
 'use strict';
 
-const fs = require('node:fs/promises');
 const path = require('node:path');
 const stateRepository = require('../state-repository');
+const migrationSource = require('../postgres-migration-source');
 
 const root = path.resolve(__dirname, '..');
 const dataFile = path.resolve(process.argv[2] || path.join(root, 'data.json'));
@@ -12,8 +12,14 @@ async function main() {
   if (process.env.WOA_POSTGRES_MIGRATION_CONFIRM !== '1') {
     throw new Error('Refusing to copy live data without WOA_POSTGRES_MIGRATION_CONFIRM=1. This command never deletes data.json.');
   }
+  if (process.env.WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM !== '1') {
+    throw new Error('Refusing to import PostgreSQL state without WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1. Pause production writes and import an exact protected JSON copy so no customer change is lost during cutover.');
+  }
+  const source = await migrationSource.readSource(dataFile);
+  const expectedSourceChecksum = migrationSource.requiredExpectedChecksum();
+  migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedSourceChecksum);
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL migration.');
-  const state = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const state = source.state;
   const conflicts = stateRepository.identityConflicts(state);
   if (conflicts.length) {
     const error = new Error('Migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Run node scripts/postgres-preflight.js first.');
@@ -38,12 +44,14 @@ async function main() {
     const sourceChecksum = stateRepository.checksum(state);
     const canonicalSourceChecksum = stateRepository.checksum(canonicalSource);
     const sourceRecordCounts = stateRepository.migrationRecordCounts(canonicalSource);
+    await migrationSource.assertSourceUnchanged(dataFile, source.sourceFileChecksum);
     const written = await repository.write(state, { reason: 'controlled JSON-to-PostgreSQL import', actor: 'production migration script' });
     const verified = await repository.read();
     const targetRecordCounts = stateRepository.migrationRecordCounts(verified.state);
     if (written.checksum !== verified.checksum || canonicalSourceChecksum !== written.checksum || stateRepository.checksum(verified.state) !== written.checksum) {
       throw new Error('PostgreSQL checksum verification failed after import. JSON source was not changed.');
     }
+    await migrationSource.assertSourceUnchanged(dataFile, source.sourceFileChecksum);
     const migrationProof = await repository.recordMigrationProof({
       sourceChecksum,
       canonicalSourceChecksum,
@@ -60,10 +68,11 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       source: dataFile,
+      sourceFileChecksum: source.sourceFileChecksum,
       databaseVersion: verified.version,
       checksum: verified.checksum,
       migrationProof,
-      message: 'PostgreSQL import and checksum/count evidence verified. Keep data.json as a rollback snapshot until the dedicated recovery test is complete.'
+      message: 'PostgreSQL import and checksum/count evidence verified against the preflight-confirmed protected source. Keep the JSON rollback snapshot until the dedicated recovery test is complete.'
     }, null, 2));
   } finally {
     await repository.close();

@@ -1,18 +1,15 @@
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
 const stateRepository = require('../state-repository');
+const migrationSource = require('../postgres-migration-source');
 
 const root = path.resolve(__dirname, '..');
 const dataFile = path.resolve(process.argv[2] || path.join(root, 'data.json'));
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
-try {
-  const state = readJson(dataFile);
+async function main() {
+  const source = await migrationSource.readSource(dataFile);
+  const state = source.state;
   const conflicts = stateRepository.identityConflicts(state);
   const privateDocuments = stateRepository.privateDocumentRows(state);
   const encryptedDocuments = privateDocuments.filter(row => row.storageKey && row.encryption && row.encryption.algorithm === 'AES-256-GCM');
@@ -20,6 +17,8 @@ try {
   const report = {
     source: dataFile,
     timestamp: new Date().toISOString(),
+    sourceFileChecksum: source.sourceFileChecksum,
+    canonicalStateChecksum: stateRepository.checksum(state),
     postgresqlImportAllowed: conflicts.length === 0,
     conflicts,
     counts: {
@@ -33,11 +32,13 @@ try {
     },
     nextSteps: conflicts.length
       ? ['Resolve each listed immutable VIN, plate, email, or payment-id conflict without deleting business history.', 'Run this preflight again until postgresqlImportAllowed is true.']
-      : ['Provision PostgreSQL and set DATABASE_URL.', 'Run WOA_POSTGRES_MIGRATION_CONFIRM=1 node scripts/migrate-json-to-postgres.js.', 'Verify the state checksum, then set WOA_DATA_BACKEND=postgres in Render.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
+      : ['Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test passes.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
   };
   console.log(JSON.stringify(report, null, 2));
   process.exitCode = conflicts.length ? 2 : 0;
-} catch (error) {
+}
+
+main().catch(error => {
   console.error('PostgreSQL preflight failed:', error.message || error);
   process.exit(1);
-}
+});
