@@ -1848,7 +1848,7 @@ apiProviderDefaults=function(){
   Object.assign(byId.insurance||{}, {name:'Insurance Verification + Monitoring',status:'Ready - manual review',envKeys:'CANOPY_CONNECT_ALIAS, CANOPY_CLIENT_ID, CANOPY_CLIENT_SECRET, CANOPY_TEAM_ID, CANOPY_WEBHOOK_SECRET',endpoint:'/api/verification/cases/start, /api/verification/monitor/run, /api/webhooks/canopy',liveTest:'Send a customer-authorized insurance link, receive a signed policy result, then verify expiration and reconnect monitoring.',view:'Operations',notes:'Local expiration monitoring is live; Canopy adds authoritative policy data and continuous refresh.'});
   if(!byId['identity-verification'])rows.push({id:'identity-verification',name:'Identity / Driver License Verification',group:'Risk',status:'Ready - private manual review',owner:'Manager',envKeys:'WOA_IDENTITY_PROVIDER, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET',endpoint:'/api/public/onboarding/:token/identity, /api/webhooks/stripe',liveTest:'Complete one Stripe-hosted live-license and matching-selfie check, then approve insurance before signing.',view:'Insurance',notes:'Private customer-uploaded license files remain in WheelsonAuto; Stripe verification activates only with live credentials.'});
   Object.assign(byId['background-checks']||{}, {name:'Driver Record / MVR + Background',status:'Ready - provider setup',envKeys:'CHECKR_API_KEY, CHECKR_MVR_PACKAGE, CHECKR_BACKGROUND_PACKAGE, CHECKR_USE_CASE_CONFIRMED, CHECKR_WEBHOOK_SECRET',endpoint:'/api/verification/cases/start, /api/verification/cases/refresh, /api/webhooks/checkr',liveTest:'Complete one hosted MVR and one background invitation and prove Consider remains human review.',view:'Operations',notes:'Checkr-hosted invitations collect consent and sensitive information without storing it in WheelsonAuto.'});
-  Object.assign(byId['tracker-gps']||{}, {name:'PassTime Tracker / GPS',status:'Ready - PassTime API access needed',envKeys:'WOA_TRACKER_PROVIDER=passtime, PASSTIME_API_BASE, PASSTIME_DEVICES_PATH, PASSTIME_API_TOKEN or PASSTIME_API_USERNAME/PASSTIME_API_PASSWORD, optional PASSTIME_ACCOUNT_ID',endpoint:'/api/integrations/tracker/status, /api/integrations/tracker/provider-sync, /api/integrations/tracker/sync, /api/webhooks/tracker',liveTest:'Run one read-only PassTime sync, match exact device IDs to VIN/tag vehicles, verify owner/manager location, then confirm mechanics/customers cannot receive precise location or control commands.',view:'Operations',notes:'PassTime location is read-only. Exact matches update the fleet record; unknown or conflicting devices stay in Missing file.'});
+  Object.assign(byId['tracker-gps']||{}, {name:'PassTime Tracker / GPS',status:'Ready - OASIS portal mode',envKeys:'No API key is required for portal mode. Keep the optional PassTime API environment fields empty unless PassTime issues credentials later.',endpoint:'https://oasis.passtimeusa.com/vehicle, /api/integrations/tracker/status, /api/integrations/tracker/sync, dormant /api/integrations/tracker/provider-sync and /api/webhooks/tracker',liveTest:'Activate each device with PassTime Mobile Installer, save its serial on the exact WheelsonAuto vehicle, then open the reusable OASIS companion tab and verify the live map.',view:'Operations',notes:'PassTime does not offer API access for the current account size. WheelsonAuto keeps vehicle, VIN, tag, customer, and tracker pairing; OASIS remains the source for live location.'});
   Object.assign(byId.accounting||{}, {name:'Accounting / QuickBooks',status:'Connected - internal ledger',envKeys:'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET',endpoint:'/api/accounting/ledger, /api/accounting/adjustments, /api/accounting/reconcile, /api/accounting/periods/close, /api/accounting/export.csv, /api/accounting/quickbooks.csv',liveTest:'Rebuild, reconcile sources, add a controlled adjustment, close a month, and verify the source hash plus balanced QuickBooks journal.',view:'Dashboard',notes:'Internal books, reconciliation, month close, and exports are live; direct QuickBooks sync still needs OAuth.'});
   if(!byId['pickup-calendar'])rows.push({id:'pickup-calendar',name:'Pickup Calendar / Maps',group:'Operations',status:'Ready - manual calendar',owner:'Manager',envKeys:'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN',endpoint:'/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics',liveTest:'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify customer, vehicle, date, time, and address.',view:'Applications',notes:'Directions, Google add-to-calendar, and ICS are live without automatic provider sync.'});
   return rows
@@ -3920,3 +3920,54 @@ function fastStarSystemAuditItems(){
 }
 starSystemAuditItems=fastStarSystemAuditItems;
 if(!isPublic&&view==='Dashboard')queueRender();
+
+var PASSTIME_OASIS_BASE='https://oasis.passtimeusa.com';
+function passTimePortalLink(label,path,className){
+  return '<a class="'+esc(className||'tracker-portal-link')+'" data-passtime-portal href="'+PASSTIME_OASIS_BASE+esc(path||'/vehicle')+'" target="woa-passtime">'+esc(label||'Open OASIS')+'</a>'
+}
+function passTimePortalModePanel(){
+  return '<section class="passtime-portal-panel"><div><span>PassTime connection</span><strong>OASIS companion mode</strong><small>WheelsonAuto keeps the vehicle, VIN, tag, customer, and tracker serial together. OASIS remains the secure live-map source because PassTime does not offer this account API access.</small></div><ol><li><b>Activate</b><span>Use PassTime Mobile Installer to scan the physical tracker and enter the vehicle.</span></li><li><b>Pair once</b><span>Open the same car in WheelsonAuto and save the PassTime serial in Tracker.</span></li><li><b>Track</b><span>Open the reusable OASIS companion tab from Fleet. It stays signed in and does not create duplicate tabs.</span></li></ol><div class="actions">'+passTimePortalLink('Open OASIS vehicles','/vehicle','btn primary')+passTimePortalLink('View unassigned devices','/inventory','btn')+'<a class="btn" href="https://passtimegps.com/apps/" target="woa-passtime-help">Activation guide</a><button class="btn" data-view="Operations" data-tab="Fleet">Open WheelsonAuto fleet</button></div></section>'
+}
+function passTimeProviderForm(provider){
+  var form=apiProviderForm(Object.assign({},provider,{status:'Ready for API'}));
+  return form.replace(/(<option\s+selected>)Ready for API<\/option>/,'$1Ready - OASIS portal mode</option>')
+}
+document.addEventListener('click',function(event){
+  var link=event.target.closest('a[data-passtime-portal]');
+  if(!link)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  var companion=window.open(link.href,'woa-passtime');
+  if(companion)try{companion.opener=null;companion.focus()}catch(_error){}
+},true);
+document.addEventListener('click',function(event){
+  var button=event.target.closest('button[data-action="open-api-provider"][data-id="tracker-gps"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  var provider=apiProviders().find(function(row){return row.id==='tracker-gps'})||{};
+  var apiReady=/connected|testing - passtime/i.test(String(provider.status||''));
+  openModal('PassTime Tracker / GPS',passTimePortalModePanel()+passTimeProviderForm(provider)+'<div class="notice" style="margin-top:12px">Do not paste the OASIS password into WheelsonAuto. The companion tab uses the browser\'s existing PassTime login. The read-only API adapter stays available if PassTime issues credentials later.</div><div class="actions" style="margin-top:12px"><button class="btn primary" data-action="save-api-provider" data-id="tracker-gps">Save setup notes</button>'+(apiReady?'<button class="btn gold" data-action="sync-passtime">Run API sync</button>':'')+'</div>')
+},true);
+var __woaPassTimeFleetCardBase=staffFleetCard;
+staffFleetCard=function(vehicle,withCustomer){
+  var html=__woaPassTimeFleetCardBase(vehicle,withCustomer);
+  if(roleName()==='mechanic'||!trackerName(vehicle))return html;
+  return html.replace('<div class="item-row vehicle-mileage-row">','<div class="tracker-portal-row"><span>PassTime '+esc(trackerName(vehicle))+'</span>'+passTimePortalLink('Live map','/vehicle')+'</div><div class="item-row vehicle-mileage-row">')
+};
+function addPassTimeFleetLauncher(){
+  if(roleName()==='mechanic'||!root||view!=='Operations'||['Fleet','Assigned'].indexOf(tab)<0)return;
+  var header=root.querySelector('.view-operations .compact-fleet-board .section-head');
+  if(!header||header.querySelector('[data-passtime-portal]'))return;
+  var wrap=document.createElement('div');
+  wrap.className='actions passtime-fleet-actions';
+  wrap.innerHTML=passTimePortalLink('PassTime map','/vehicle','btn')+passTimePortalLink('Activate trackers','/inventory','btn');
+  header.appendChild(wrap)
+}
+var __woaPassTimeOperationsBase=Operations;
+Operations=function(){
+  __woaPassTimeOperationsBase();
+  requestAnimationFrame(addPassTimeFleetLauncher)
+};
+OperationsTruthFocused=Operations;
+OperationsFocused=Operations;
