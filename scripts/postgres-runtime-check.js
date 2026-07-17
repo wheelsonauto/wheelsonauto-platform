@@ -43,6 +43,16 @@ async function main() {
     const firstSnapshots = await repository.listSnapshots();
     assert.strictEqual(firstSnapshots.length, 1, 'The first PostgreSQL write must create a recoverable snapshot.');
     assert.strictEqual(firstSnapshots[0].version, firstWrite.version, 'Snapshot version must match the state write version.');
+    const migrationProof = await repository.recordMigrationProof({
+      sourceChecksum: stateRepository.checksum(firstState),
+      canonicalSourceChecksum: stateRepository.checksum(firstState),
+      targetChecksum: firstWrite.checksum,
+      sourceRecordCounts: stateRepository.migrationRecordCounts(firstState),
+      targetRecordCounts: stateRepository.migrationRecordCounts(firstWrite.state),
+      importedVersion: firstWrite.version,
+      actor: 'runtime migration proof test'
+    });
+    assert.strictEqual(migrationProof.migrationProofReady, true, 'A matching source checksum/count proof must be recorded with the imported PostgreSQL snapshot.');
 
     const secondState = {
       ...firstState,
@@ -80,7 +90,9 @@ async function main() {
     assert.strictEqual(health.snapshotVersionMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state version.');
     assert.strictEqual(health.snapshotChecksumMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state checksum.');
     assert.strictEqual(health.snapshotRecoveryReady, true, 'A production-ready PostgreSQL repository must expose a verified current recovery snapshot.');
-    console.log('PostgreSQL runtime recovery check passed: write, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
+    assert.strictEqual(health.migrationProofIntegrity, 'verified', 'The PostgreSQL import proof must retain the source-to-target checksum/count evidence.');
+    assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
+    console.log('PostgreSQL runtime recovery check passed: write, import proof, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await repository.close();

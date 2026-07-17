@@ -34,17 +34,36 @@ async function main() {
     if (before.exists && process.env.WOA_POSTGRES_MIGRATION_REPLACE !== '1') {
       throw new Error('PostgreSQL already contains WheelsonAuto state. Refusing to replace it. Review the database and use WOA_POSTGRES_MIGRATION_REPLACE=1 only for an intentional recovery import.');
     }
+    const canonicalSource = repository.repair(stateRepository.clone(state));
+    const sourceChecksum = stateRepository.checksum(state);
+    const canonicalSourceChecksum = stateRepository.checksum(canonicalSource);
+    const sourceRecordCounts = stateRepository.migrationRecordCounts(canonicalSource);
     const written = await repository.write(state, { reason: 'controlled JSON-to-PostgreSQL import', actor: 'production migration script' });
     const verified = await repository.read();
-    if (written.checksum !== verified.checksum || stateRepository.checksum(verified.state) !== written.checksum) {
+    const targetRecordCounts = stateRepository.migrationRecordCounts(verified.state);
+    if (written.checksum !== verified.checksum || canonicalSourceChecksum !== written.checksum || stateRepository.checksum(verified.state) !== written.checksum) {
       throw new Error('PostgreSQL checksum verification failed after import. JSON source was not changed.');
+    }
+    const migrationProof = await repository.recordMigrationProof({
+      sourceChecksum,
+      canonicalSourceChecksum,
+      targetChecksum: verified.checksum,
+      sourceRecordCounts,
+      targetRecordCounts,
+      importedVersion: verified.version,
+      actor: 'production migration script'
+    });
+    const health = await repository.health();
+    if (!migrationProof.migrationProofReady || !health.migrationProofReady || !health.snapshotRecoveryReady) {
+      throw new Error('PostgreSQL import proof or current recovery snapshot verification failed. JSON source was not changed.');
     }
     console.log(JSON.stringify({
       ok: true,
       source: dataFile,
       databaseVersion: verified.version,
       checksum: verified.checksum,
-      message: 'PostgreSQL import verified. Keep data.json as a rollback snapshot until backup and recovery verification are complete.'
+      migrationProof,
+      message: 'PostgreSQL import and checksum/count evidence verified. Keep data.json as a rollback snapshot until the dedicated recovery test is complete.'
     }, null, 2));
   } finally {
     await repository.close();

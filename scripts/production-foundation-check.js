@@ -33,6 +33,19 @@ async function main() {
     assert.strictEqual(stateRepository.recoverySnapshotEvidence(null, { version: 4, checksum: intactChecksum }).snapshotIntegrity, 'missing', 'A PostgreSQL state without a retained snapshot must fail the recovery launch gate.');
     assert.strictEqual(stateRepository.recoverySnapshotEvidence({ id: 4, version: 3, checksum: intactChecksum, state: intactState }, { version: 4, checksum: intactChecksum }).snapshotIntegrity, 'stale', 'A previous PostgreSQL snapshot must not masquerade as the current recovery proof.');
     assert.strictEqual(stateRepository.recoverySnapshotEvidence({ id: 5, version: 4, checksum: intactChecksum, state: { records: [] } }, { version: 4, checksum: intactChecksum }).snapshotIntegrity, 'failed', 'A tampered recovery snapshot must fail checksum verification before live launch.');
+    const sourceCounts = stateRepository.migrationRecordCounts({ vehicles: [{}], customers: [{}], payments: [], auditLogs: [] });
+    const migrationProofInput = {
+      sourceChecksum: 'raw-json-checksum',
+      canonicalSourceChecksum: intactChecksum,
+      targetChecksum: intactChecksum,
+      sourceRecordCounts: sourceCounts,
+      targetRecordCounts: sourceCounts,
+      importedVersion: 4,
+      snapshotChecksum: intactChecksum,
+      verifiedAt: '2026-07-17T12:00:00.000Z'
+    };
+    assert.strictEqual(stateRepository.migrationProofEvidence(migrationProofInput).migrationProofReady, true, 'A JSON-to-PostgreSQL import proof must retain matching canonical source, target, snapshot, and collection-count evidence.');
+    assert.strictEqual(stateRepository.migrationProofEvidence({ ...migrationProofInput, targetRecordCounts: { vehicles: 0 } }).migrationProofIntegrity, 'failed', 'A migration proof with changed collection counts must fail closed before live launch.');
     const first = await repository.read();
     assert.strictEqual(first.exists, false, 'A missing local data file must safely use the seed without writing it.');
     const next = {

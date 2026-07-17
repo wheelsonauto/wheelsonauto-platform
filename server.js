@@ -8425,6 +8425,7 @@ async function productionInfrastructurePreflight(data = null) {
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
   if (!database.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
+  if (!database.migrationProofReady) missing.push('verified JSON-to-PostgreSQL import proof');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
   if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
@@ -8446,7 +8447,7 @@ async function productionInfrastructurePreflight(data = null) {
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified recovery snapshot, encrypted private storage, signed live Stripe webhooks, verified failure alerts, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, signed live Stripe webhooks, verified failure alerts, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -17163,7 +17164,7 @@ const server = http.createServer(async (req, res) => {
         identityConflicts: conflicts.slice(0, 50),
         openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
         requiredBeforeLiveStripe: [
-          'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL',
+          'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL and verified JSON-to-PostgreSQL import proof',
           'Current PostgreSQL snapshot checksum/version verification plus a controlled test-database restore record',
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',

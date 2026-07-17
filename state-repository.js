@@ -64,6 +64,45 @@ function recoverySnapshotEvidence(snapshot, current = {}) {
   };
 }
 
+function migrationRecordCounts(state = {}) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return {};
+  return Object.keys(state).sort().reduce((counts, key) => {
+    if (Array.isArray(state[key])) counts[key] = state[key].length;
+    return counts;
+  }, {});
+}
+
+function migrationProofEvidence(proof) {
+  const row = proof || {};
+  const sourceChecksum = String(row.sourceChecksum || row.source_checksum || '').trim();
+  const canonicalSourceChecksum = String(row.canonicalSourceChecksum || row.canonical_source_checksum || '').trim();
+  const targetChecksum = String(row.targetChecksum || row.target_checksum || '').trim();
+  const sourceRecordCounts = row.sourceRecordCounts || row.source_record_counts || {};
+  const targetRecordCounts = row.targetRecordCounts || row.target_record_counts || {};
+  const importedVersion = Number(row.importedVersion || row.imported_version || 0);
+  const snapshotChecksum = String(row.snapshotChecksum || row.snapshot_checksum || '').trim();
+  const verifiedAt = row.verifiedAt || row.verified_at || '';
+  const hasProof = !!(sourceChecksum && canonicalSourceChecksum && targetChecksum && importedVersion > 0 && snapshotChecksum && verifiedAt);
+  const canonicalChecksumMatchesTarget = hasProof && canonicalSourceChecksum === targetChecksum;
+  const countsMatch = hasProof && stableJson(sourceRecordCounts) === stableJson(targetRecordCounts);
+  const snapshotChecksumMatchesTarget = hasProof && snapshotChecksum === targetChecksum;
+  const ready = canonicalChecksumMatchesTarget && countsMatch && snapshotChecksumMatchesTarget;
+  return {
+    importedVersion,
+    importedAt: verifiedAt,
+    sourceChecksum,
+    canonicalSourceChecksum,
+    targetChecksum,
+    sourceRecordCounts,
+    targetRecordCounts,
+    migrationProofIntegrity: !hasProof ? 'missing' : ready ? 'verified' : 'failed',
+    migrationChecksumMatchesTarget: canonicalChecksumMatchesTarget,
+    migrationRecordCountsMatch: countsMatch,
+    migrationSnapshotMatchesTarget: snapshotChecksumMatchesTarget,
+    migrationProofReady: ready
+  };
+}
+
 function normalizeOrganizationId(value) {
   return String(value || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
 }
@@ -193,7 +232,17 @@ class JsonStateRepository {
   }
 
   async health() {
-    return { backend: 'json', connected: true, transactional: false, productionReady: false, version: await this.version() };
+    return {
+      backend: 'json',
+      connected: true,
+      transactional: false,
+      productionReady: false,
+      migrationProofIntegrity: 'not_supported',
+      migrationProofReady: false,
+      snapshotIntegrity: 'not_supported',
+      snapshotRecoveryReady: false,
+      version: await this.version()
+    };
   }
 
   async claimWebhookEvent(provider, eventId) {
@@ -217,6 +266,12 @@ class JsonStateRepository {
   async restoreSnapshot() {
     const error = new Error('Snapshot recovery requires PostgreSQL transactional storage.');
     error.code = 'snapshot_recovery_requires_postgres';
+    throw error;
+  }
+
+  async recordMigrationProof() {
+    const error = new Error('JSON development storage cannot record a PostgreSQL import proof.');
+    error.code = 'migration_proof_requires_postgres';
     throw error;
   }
 
@@ -316,6 +371,19 @@ class PostgresStateRepository {
           UNIQUE (organization_id, version)
         )`);
         await client.query('CREATE INDEX IF NOT EXISTS woa_state_snapshots_org_created_idx ON woa_state_snapshots (organization_id, created_at DESC)');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_state_migration_proofs (
+          organization_id TEXT PRIMARY KEY REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          source_checksum TEXT NOT NULL,
+          canonical_source_checksum TEXT NOT NULL,
+          target_checksum TEXT NOT NULL,
+          source_record_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+          target_record_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+          imported_version BIGINT NOT NULL,
+          snapshot_id BIGINT NOT NULL,
+          snapshot_checksum TEXT NOT NULL,
+          actor TEXT NOT NULL DEFAULT '',
+          verified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
         await client.query(`CREATE TABLE IF NOT EXISTS woa_webhook_events (
           provider TEXT NOT NULL,
           event_id TEXT NOT NULL,
@@ -639,6 +707,90 @@ class PostgresStateRepository {
     }));
   }
 
+  async recordMigrationProof(proof = {}) {
+    await this.ensureSchema();
+    const sourceChecksum = String(proof.sourceChecksum || '').trim();
+    const canonicalSourceChecksum = String(proof.canonicalSourceChecksum || '').trim();
+    const targetChecksum = String(proof.targetChecksum || '').trim();
+    const importedVersion = Number(proof.importedVersion || 0);
+    const sourceRecordCounts = proof.sourceRecordCounts || {};
+    const targetRecordCounts = proof.targetRecordCounts || {};
+    if (!sourceChecksum || !canonicalSourceChecksum || !targetChecksum || !Number.isInteger(importedVersion) || importedVersion < 1) {
+      const error = new Error('PostgreSQL migration proof needs the source checksum, canonical checksum, target checksum, and imported version.');
+      error.code = 'migration_proof_invalid';
+      throw error;
+    }
+    if (canonicalSourceChecksum !== targetChecksum || stableJson(sourceRecordCounts) !== stableJson(targetRecordCounts)) {
+      const error = new Error('PostgreSQL migration proof failed: canonical source checksum or record counts do not match the imported state.');
+      error.code = 'migration_proof_mismatch';
+      throw error;
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query('SELECT version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+      if (!current.rowCount || Number(current.rows[0].version || 0) !== importedVersion || String(current.rows[0].checksum || '') !== targetChecksum) {
+        const error = new Error('PostgreSQL changed before the import proof was recorded. Re-run the read-only verification against the intended source; do not overwrite live state.');
+        error.code = 'migration_proof_state_changed';
+        throw error;
+      }
+      const snapshot = await client.query(`SELECT id, version, checksum, state
+        FROM woa_state_snapshots
+        WHERE organization_id = $1 AND version = $2
+        FOR UPDATE`, [this.organizationId, importedVersion]);
+      if (!snapshot.rowCount) {
+        const error = new Error('The matching PostgreSQL import snapshot is missing. Refusing to record a migration proof.');
+        error.code = 'migration_proof_snapshot_missing';
+        throw error;
+      }
+      const snapshotRow = snapshot.rows[0];
+      assertChecksum(snapshotRow.state, snapshotRow.checksum, 'PostgreSQL import snapshot');
+      if (String(snapshotRow.checksum || '') !== targetChecksum) {
+        const error = new Error('The PostgreSQL import snapshot does not match the verified target checksum.');
+        error.code = 'migration_proof_snapshot_mismatch';
+        throw error;
+      }
+      await client.query(`INSERT INTO woa_state_migration_proofs (
+        organization_id, source_checksum, canonical_source_checksum, target_checksum,
+        source_record_counts, target_record_counts, imported_version, snapshot_id,
+        snapshot_checksum, actor, verified_at
+      ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, now())
+      ON CONFLICT (organization_id) DO UPDATE SET
+        source_checksum = EXCLUDED.source_checksum,
+        canonical_source_checksum = EXCLUDED.canonical_source_checksum,
+        target_checksum = EXCLUDED.target_checksum,
+        source_record_counts = EXCLUDED.source_record_counts,
+        target_record_counts = EXCLUDED.target_record_counts,
+        imported_version = EXCLUDED.imported_version,
+        snapshot_id = EXCLUDED.snapshot_id,
+        snapshot_checksum = EXCLUDED.snapshot_checksum,
+        actor = EXCLUDED.actor,
+        verified_at = now()`, [
+        this.organizationId,
+        sourceChecksum,
+        canonicalSourceChecksum,
+        targetChecksum,
+        JSON.stringify(sourceRecordCounts),
+        JSON.stringify(targetRecordCounts),
+        importedVersion,
+        Number(snapshotRow.id),
+        String(snapshotRow.checksum || ''),
+        String(proof.actor || '').slice(0, 160)
+      ]);
+      const saved = await client.query(`SELECT source_checksum, canonical_source_checksum, target_checksum,
+        source_record_counts, target_record_counts, imported_version, snapshot_id,
+        snapshot_checksum, actor, verified_at
+        FROM woa_state_migration_proofs WHERE organization_id = $1`, [this.organizationId]);
+      await client.query('COMMIT');
+      return migrationProofEvidence(saved.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async restoreSnapshot(snapshotId, options = {}) {
     const id = Number(snapshotId || 0);
     if (!Number.isInteger(id) || id < 1) {
@@ -714,6 +866,16 @@ class PostgresStateRepository {
       const result = await this.pool.query(`SELECT state.state, state.version, state.checksum, state.updated_at,
         snapshot.id AS snapshot_id, snapshot.version AS snapshot_version, snapshot.checksum AS snapshot_checksum,
         snapshot.state AS snapshot_state, snapshot.created_at AS snapshot_created_at,
+        migration.source_checksum AS migration_source_checksum,
+        migration.canonical_source_checksum AS migration_canonical_source_checksum,
+        migration.target_checksum AS migration_target_checksum,
+        migration.source_record_counts AS migration_source_record_counts,
+        migration.target_record_counts AS migration_target_record_counts,
+        migration.imported_version AS migration_imported_version,
+        migration.snapshot_id AS migration_snapshot_id,
+        migration.snapshot_checksum AS migration_snapshot_checksum,
+        migration.actor AS migration_actor,
+        migration.verified_at AS migration_verified_at,
         (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count
         FROM woa_state AS state
         LEFT JOIN LATERAL (
@@ -723,6 +885,7 @@ class PostgresStateRepository {
           ORDER BY version DESC
           LIMIT 1
         ) AS snapshot ON true
+        LEFT JOIN woa_state_migration_proofs AS migration ON migration.organization_id = state.organization_id
         WHERE state.organization_id = $1`, [this.organizationId]);
       if (!result.rowCount) {
         return {
@@ -732,6 +895,8 @@ class PostgresStateRepository {
           productionReady: false,
           stateImported: false,
           integrity: 'missing',
+          migrationProofIntegrity: 'missing',
+          migrationProofReady: false,
           snapshotCount: 0,
           latestSnapshotId: 0,
           latestSnapshotVersion: 0,
@@ -759,6 +924,19 @@ class PostgresStateRepository {
         checksum: row.checksum,
         snapshotCount: row.snapshot_count
       });
+      const migration = row.migration_imported_version === null || row.migration_imported_version === undefined ? null : {
+        sourceChecksum: row.migration_source_checksum,
+        canonicalSourceChecksum: row.migration_canonical_source_checksum,
+        targetChecksum: row.migration_target_checksum,
+        sourceRecordCounts: row.migration_source_record_counts,
+        targetRecordCounts: row.migration_target_record_counts,
+        importedVersion: row.migration_imported_version,
+        snapshotId: row.migration_snapshot_id,
+        snapshotChecksum: row.migration_snapshot_checksum,
+        actor: row.migration_actor,
+        verifiedAt: row.migration_verified_at
+      };
+      const migrationProof = migrationProofEvidence(migration);
       return {
         backend: 'postgres',
         connected: true,
@@ -767,17 +945,22 @@ class PostgresStateRepository {
         stateImported: true,
         integrity: integrity.matches ? 'verified' : 'failed',
         ...recovery,
+        ...migrationProof,
         version: Number(row.version || 0),
         updatedAt: row.updated_at,
         error: !integrity.matches
           ? 'PostgreSQL state checksum verification failed.'
-          : recovery.snapshotRecoveryReady
-            ? ''
-            : recovery.snapshotIntegrity === 'missing'
+          : !recovery.snapshotRecoveryReady
+            ? recovery.snapshotIntegrity === 'missing'
               ? 'PostgreSQL state is healthy but no current transactional recovery snapshot exists.'
               : recovery.snapshotIntegrity === 'failed'
                 ? 'The latest PostgreSQL recovery snapshot checksum verification failed.'
                 : 'The latest PostgreSQL recovery snapshot does not match the current state.'
+            : !migrationProof.migrationProofReady
+              ? migrationProof.migrationProofIntegrity === 'missing'
+                ? 'PostgreSQL state is healthy but no verified JSON-to-PostgreSQL import proof exists.'
+                : 'The stored JSON-to-PostgreSQL import proof no longer matches its checksum or record-count evidence.'
+              : ''
       };
     } catch (error) {
       return { backend: 'postgres', connected: false, transactional: true, productionReady: false, error: String(error && error.message || error) };
@@ -804,6 +987,8 @@ module.exports = {
   checksumEvidence,
   assertChecksum,
   recoverySnapshotEvidence,
+  migrationRecordCounts,
+  migrationProofEvidence,
   identityEntries,
   identityConflicts,
   privateDocumentRows,
