@@ -161,6 +161,38 @@ class SecureDocumentStore {
     if (!response.ok && response.status !== 404) throw new Error('Private object storage delete failed (' + response.status + ').');
   }
 
+  async probe(options = {}) {
+    const status = this.status();
+    if (!status.configured) throw new Error(status.message);
+    const probeId = 'storage-probe-' + Date.now() + '-' + crypto.randomBytes(6).toString('hex');
+    const expected = Buffer.from('WheelsonAuto private storage validation ' + crypto.randomBytes(18).toString('hex'), 'utf8');
+    let stored = null;
+    let deleted = false;
+    try {
+      stored = await this.save({
+        id: probeId,
+        bytes: expected,
+        contentType: 'application/octet-stream',
+        originalName: 'wheelsonauto-storage-validation.bin',
+        organizationId: options.organizationId || 'org-wheelsonauto-storage-validation'
+      });
+      const recovered = await this.read(stored);
+      if (!recovered.equals(expected)) throw new Error('Private object storage validation read did not match the encrypted write.');
+      await this.deleteObject(stored.storageKey);
+      deleted = true;
+      return {
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        provider: this.provider,
+        encrypted: true,
+        objectDeleted: true
+      };
+    } catch (error) {
+      if (stored && stored.storageKey && !deleted) await this.deleteObject(stored.storageKey).catch(() => {});
+      throw error;
+    }
+  }
+
   async save({ id, bytes, contentType, originalName, organizationId } = {}) {
     if (!this.isConfigured()) throw new Error(this.status().message);
     if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error('Private document data is missing.');

@@ -63,6 +63,8 @@ async function main() {
     assert(!encrypted.equals(source), 'Private document bytes must be encrypted at rest.');
     assert((await store.read(stored)).equals(source), 'Encrypted private document reads must restore the original bytes.');
     await assert.rejects(() => store.read({ ...stored, encryption: { ...stored.encryption, authTag: Buffer.alloc(16).toString('base64') } }), /authenticate|Unsupported state|unable/i, 'Tampered encrypted document metadata must not decrypt.');
+    const storageProbe = await store.probe({ organizationId: 'org-test' });
+    assert(storageProbe.ok && storageProbe.encrypted && storageProbe.objectDeleted, 'Private document storage validation must prove encrypted write, read, and cleanup.');
 
     const recurring = {
       id: 'rec-foundation-1',

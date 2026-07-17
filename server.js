@@ -145,6 +145,7 @@ const WOA_DATA_BACKEND = String(process.env.WOA_DATA_BACKEND || 'json').trim().t
 const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.env.WOA_POSTGRES_SNAPSHOT_LIMIT || 180)));
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
+const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
 const operationalErrorAlerts = new Map();
@@ -6620,12 +6621,23 @@ function preserveStaffLoginSecrets(current, incoming) {
 function preserveServerOnlyIntegrationProofs(current, incoming) {
   const next = { ...(incoming || {}) };
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
-  if (!priorStripe.lastWebhookConfigurationFingerprint) return next;
+  const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
+  const preserveStripe = !!priorStripe.lastWebhookConfigurationFingerprint;
+  const preserveDocumentStorage = !!priorDocumentStorage.lastValidationConfigurationFingerprint;
+  if (!preserveStripe && !preserveDocumentStorage) return next;
   next.integrations = { ...((incoming && incoming.integrations) || {}) };
-  next.integrations.stripe = {
-    ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}),
-    lastWebhookConfigurationFingerprint: priorStripe.lastWebhookConfigurationFingerprint
-  };
+  if (preserveStripe) {
+    next.integrations.stripe = {
+      ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}),
+      lastWebhookConfigurationFingerprint: priorStripe.lastWebhookConfigurationFingerprint
+    };
+  }
+  if (preserveDocumentStorage) {
+    next.integrations.documentStorage = {
+      ...((incoming && incoming.integrations && incoming.integrations.documentStorage) || {}),
+      lastValidationConfigurationFingerprint: priorDocumentStorage.lastValidationConfigurationFingerprint
+    };
+  }
   return next;
 }
 function redactStaffSecrets(data) {
@@ -6641,6 +6653,7 @@ function redactStaffSecrets(data) {
     delete safe.security.ownerLogin.passwordSalt;
   }
   if (safe.integrations && safe.integrations.stripe) delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
+  if (safe.integrations && safe.integrations.documentStorage) delete safe.integrations.documentStorage.lastValidationConfigurationFingerprint;
   return safe;
 }
 function scrubOrganizationProviderProfile(organization) {
@@ -8192,14 +8205,58 @@ function stripeLiveWebhookEvidence(data = {}) {
     error: mismatchMessage || String(stripeState.lastWebhookError || '')
   };
 }
+function documentStorageConfigurationFingerprint() {
+  const storage = PRIVATE_DOCUMENT_STORE;
+  const material = [
+    storage.provider,
+    storage.key ? storage.key.toString('base64') : '',
+    storage.keyVersion,
+    storage.s3 && storage.s3.bucket || '',
+    storage.s3 && storage.s3.endpoint || '',
+    storage.s3 && storage.s3.region || '',
+    storage.s3 && storage.s3.pathStyle ? '1' : '0',
+    storage.s3 && storage.s3.accessKeyId || '',
+    storage.s3 && storage.s3.secretAccessKey || '',
+    storage.s3 && storage.s3.sessionToken || ''
+  ].join('\u0000');
+  return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(material).digest('hex');
+}
+function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STORE.status()) {
+  const storageState = data && data.integrations && data.integrations.documentStorage || {};
+  const expectedFingerprint = documentStorageConfigurationFingerprint();
+  const recordedFingerprint = String(storageState.lastValidationConfigurationFingerprint || '');
+  const configurationMatched = !!(recordedFingerprint && secureWebhookValueMatch(recordedFingerprint, expectedFingerprint));
+  const checkedAt = String(storageState.lastValidationAt || '');
+  const checkedAtMs = Date.parse(checkedAt);
+  const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
+  const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS;
+  const verified = storageState.lastValidationSuccess === true;
+  const live = !!status.productionReady && verified && configurationMatched && fresh;
+  let error = '';
+  if (!status.productionReady) error = status.message;
+  else if (!verified) error = String(storageState.lastValidationError || 'Run the owner-only private storage validation after configuring the bucket.');
+  else if (!configurationMatched) error = 'The recorded private-storage validation belongs to an older or unknown storage configuration. Run a new validation after the current Render settings are deployed.';
+  else if (!fresh) error = 'The private-storage validation is stale. Run a new owner validation before the controlled Stripe launch.';
+  return {
+    checkedAt,
+    verified,
+    configurationMatched,
+    fresh,
+    maxAgeHours: Math.round(WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000)),
+    live,
+    error
+  };
+}
 async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
   const state = data || await readData();
   const stripeWebhook = stripeLiveWebhookEvidence(state);
+  const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
+  if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
@@ -8210,6 +8267,7 @@ async function productionInfrastructurePreflight(data = null) {
   return {
     database,
     documentStorage,
+    documentStorageValidation,
     stripeWebhook,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
@@ -16934,6 +16992,48 @@ const server = http.createServer(async (req, res) => {
         ]
       });
     }
+    if (url.pathname === '/api/system/infrastructure/document-storage/validate' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can validate private document storage.' });
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.documentStorage = data.integrations.documentStorage || {};
+      try {
+        const result = await PRIVATE_DOCUMENT_STORE.probe({ organizationId: MAIN_ORG_ID });
+        Object.assign(data.integrations.documentStorage, {
+          lastValidationAt: result.checkedAt,
+          lastValidationSuccess: true,
+          lastValidationProvider: result.provider,
+          lastValidationConfigurationFingerprint: documentStorageConfigurationFingerprint(),
+          lastValidationError: ''
+        });
+        appendAuditLog(data, user, 'Private document storage validated', [result.provider, 'Encrypted write/read/delete proof passed']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        const preflight = await productionInfrastructurePreflight(data);
+        const liveReady = !!(preflight.documentStorageValidation && preflight.documentStorageValidation.live);
+        return json(res, 200, {
+          ok: true,
+          result,
+          documentStorageValidation: preflight.documentStorageValidation,
+          message: liveReady
+            ? 'Private document storage write/read/delete validation passed and is ready for the launch gate.'
+            : 'Private document storage I/O passed, but the Stripe launch gate remains blocked until S3-compatible production storage and the rest of the infrastructure preflight are complete.'
+        });
+      } catch (error) {
+        const message = String(error && error.message || error);
+        Object.assign(data.integrations.documentStorage, {
+          lastValidationAt: new Date().toISOString(),
+          lastValidationSuccess: false,
+          lastValidationProvider: PRIVATE_DOCUMENT_STORE.status().provider,
+          lastValidationConfigurationFingerprint: documentStorageConfigurationFingerprint(),
+          lastValidationError: message.slice(0, 500)
+        });
+        appendAuditLog(data, user, 'Private document storage validation failed', [message]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 502, { ok: false, error: message, documentStorageValidation: privateDocumentStorageEvidence(data) });
+      }
+    }
     if (url.pathname === '/api/system/recovery/snapshots' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view recovery snapshots.' });
       if (!STATE_REPOSITORY.isTransactional || !STATE_REPOSITORY.isTransactional()) {
@@ -17826,6 +17926,8 @@ module.exports = {
   applyHostedCheckoutWebhook,
   recordHostedCheckoutPayment,
   stripeLiveWebhookEvidence,
+  documentStorageConfigurationFingerprint,
+  privateDocumentStorageEvidence,
   validCalendarDateKey,
   calendarDayName,
   nextRecurringOccurrence,

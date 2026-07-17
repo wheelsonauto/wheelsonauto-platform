@@ -3068,6 +3068,27 @@ Operations=function(){
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
 
+var __woaSystemHealthStorageBase=systemHealthPanel;
+systemHealthPanel=function(){
+  var html=__woaSystemHealthStorageBase();
+  if(roleName()!=='owner')return html;
+  return html.replace('<button class="btn gold" data-action="check-system-readiness">Check readiness</button>','<div class="actions"><button class="btn gold" data-action="check-system-readiness">Check readiness</button><button class="btn" data-action="validate-document-storage">Validate private storage</button></div>');
+};
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="validate-document-storage"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if(roleName()!=='owner'){notify('Only the owner can validate private storage');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  var result=await post('/api/system/infrastructure/document-storage/validate',{});
+  button.disabled=false;
+  button.classList.remove('is-loading');
+  if(result&&result.ok){await refreshData(true);notify(result.message||'Private storage validation passed');return}
+  notify(result&&result.error||'Private storage validation failed');
+},true);
+
 function customerFileLargeNoteContext(){
   var fileId=val('fileId'),contract=(db.contracts||[]).find(function(row){return row.id===fileId}),customer=contract&&findCustomerByName(contract.customer)||{},vehicle=contract&&(findVehicle(contract.vehicleId||customer.vehicleId)||findVehicleByCustomer(contract.customer))||{};
   return{contract:contract,customer:customer,vehicle:vehicle,source:[contract,customer,vehicle].find(function(row){return row&&row.notesOmitted===true})||null}

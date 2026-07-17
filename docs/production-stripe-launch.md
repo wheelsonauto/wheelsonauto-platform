@@ -79,6 +79,20 @@ pnpm run migrate-private-documents -- /secure/path/to/copied-data.json
 Verify authenticated staff downloads before setting
 `WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1` in production.
 
+Before enabling production hardening, use **Settings -> System health ->
+Validate private storage** once from the deployed app. The owner-only route is:
+
+```text
+POST /api/system/infrastructure/document-storage/validate
+```
+
+It encrypts a random probe, writes it to the private bucket, reads and
+authenticates it, then deletes it. The launch gate requires this proof to match
+the current encryption key and object-storage configuration and refreshes it
+after 30 days by default. If the bucket, access key, endpoint, region, or
+encryption key changes, run the validation again before enabling
+`WOA_PRODUCTION_HARDENING_REQUIRED=1`.
+
 ## 3. Migrate Platform State to PostgreSQL
 
 After the test database has passed, provision the production PostgreSQL
@@ -121,7 +135,8 @@ GET /api/system/infrastructure/preflight
 ```
 
 It must show PostgreSQL as transactional/healthy, private document storage as
-production-ready, no identity conflicts, and no unresolved launch blockers.
+production-ready with a current write/read/delete validation, no identity
+conflicts, and no unresolved launch blockers.
 
 ## 4. Configure Stripe Without Switching Everyone
 

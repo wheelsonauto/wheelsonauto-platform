@@ -169,6 +169,8 @@ async function main() {
   process.env.WOA_BILLING_WEBHOOK_SECRET = 'direct-billing-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
+  process.env.WOA_DOCUMENT_STORAGE_PROVIDER = 'local';
+  process.env.WOA_DOCUMENT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
   delete require.cache[require.resolve('../server.js')];
   const {
     server,
@@ -199,6 +201,8 @@ async function main() {
     membersFromRecurringSubscriptions,
     mapCloverPayment,
     stripeLiveWebhookEvidence,
+    documentStorageConfigurationFingerprint,
+    privateDocumentStorageEvidence,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
@@ -1177,6 +1181,44 @@ async function main() {
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const managerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: managerCookie, json: {} });
+    assert(managerStorageValidation.status === 403, 'Manager must not validate the private production document-storage provider.');
+    const ownerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: ownerCookie, json: {} });
+    assert(ownerStorageValidation.status === 200 && ownerStorageValidation.json.ok && ownerStorageValidation.json.result && ownerStorageValidation.json.result.encrypted && ownerStorageValidation.json.result.objectDeleted, 'Owner private document-storage validation must prove encrypted write, read, and cleanup.');
+    assert(ownerStorageValidation.json.documentStorageValidation && ownerStorageValidation.json.documentStorageValidation.verified === true && ownerStorageValidation.json.documentStorageValidation.configurationMatched === true && ownerStorageValidation.json.documentStorageValidation.fresh === true && ownerStorageValidation.json.documentStorageValidation.live === false, 'Development-local storage validation may prove I/O but must never masquerade as live private object storage.');
+    const documentStorageFingerprint = documentStorageConfigurationFingerprint();
+    const currentDocumentStorageEvidence = privateDocumentStorageEvidence({
+      integrations: {
+        documentStorage: {
+          lastValidationAt: new Date().toISOString(),
+          lastValidationSuccess: true,
+          lastValidationConfigurationFingerprint: documentStorageFingerprint
+        }
+      }
+    }, { productionReady: true, message: '' });
+    assert(currentDocumentStorageEvidence.live === true, 'A current validation bound to the active production object-storage configuration must satisfy the private-storage launch gate.');
+    const staleDocumentStorageEvidence = privateDocumentStorageEvidence({
+      integrations: {
+        documentStorage: {
+          lastValidationAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+          lastValidationSuccess: true,
+          lastValidationConfigurationFingerprint: documentStorageFingerprint
+        }
+      }
+    }, { productionReady: true, message: '' });
+    assert(staleDocumentStorageEvidence.live === false && staleDocumentStorageEvidence.fresh === false && /stale/i.test(staleDocumentStorageEvidence.error), 'A stale private-storage validation must fail closed before live Stripe launch.');
+    const changedDocumentStorageEvidence = privateDocumentStorageEvidence({
+      integrations: {
+        documentStorage: {
+          lastValidationAt: new Date().toISOString(),
+          lastValidationSuccess: true,
+          lastValidationConfigurationFingerprint: 'old-object-storage-configuration'
+        }
+      }
+    }, { productionReady: true, message: '' });
+    assert(changedDocumentStorageEvidence.live === false && changedDocumentStorageEvidence.configurationMatched === false && /older or unknown/i.test(changedDocumentStorageEvidence.error), 'Changing private storage configuration must require a fresh validation.');
+    const ownerStorageValidationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(ownerStorageValidationState.status === 200 && ownerStorageValidationState.json.integrations && ownerStorageValidationState.json.integrations.documentStorage && !Object.prototype.hasOwnProperty.call(ownerStorageValidationState.json.integrations.documentStorage, 'lastValidationConfigurationFingerprint'), 'Private-storage configuration proof must stay server-only even in owner state responses.');
     const managerResetAttempt = await request(server, 'POST', '/api/reset', { cookie: managerCookie, json: {} });
     assert(managerResetAttempt.status === 403, 'Manager must never be able to reset platform data.');
     const ownerResetWithoutMaintenanceFlag = await request(server, 'POST', '/api/reset', { cookie: ownerCookie, json: {} });
