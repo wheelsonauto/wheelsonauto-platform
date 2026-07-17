@@ -3047,7 +3047,7 @@ var __woaOperationsBeforeNative=Operations;
 Operations=function(){
   if(tab==='Online'){var body=fastWorkspaceTabs([['Fleet','Fleet',(db.vehicles||[]).filter(isInventoryVehicle).length],['Online','Online',nativeOnlineVehicles().length],['Review','Prep / review',fleetPrepReviewRecords().jobs.length+fleetPrepReviewRecords().vehicles.length],['Assigned','Assigned',(db.vehicles||[]).filter(isAssignedFleetVehicle).length],['Service','Service',(db.maintenance||[]).filter(isOpenMaintenance).length],['Claims','Claims',(db.claims||[]).length]],'Online','staff-tabs')+nativeInventoryBoard(false);shell('Operations','',body,'');return}
   __woaOperationsBeforeNative();
-  requestAnimationFrame(function(){var bar=document.querySelector('.view-operations .tabs');if(bar&&!bar.querySelector('[data-tab="Online"]')){var button=document.createElement('button');button.dataset.tab='Online';button.textContent='Online '+nativeOnlineVehicles().length;var first=bar.querySelector('button');if(first)first.insertAdjacentElement('afterend',button);else bar.appendChild(button)}})
+  requestAnimationFrame(function(){var bar=document.querySelector('.view-operations .tabs');if(bar&&!bar.querySelector('[data-tab="Online"]')){var button=document.createElement('button'),count=nativeOnlineVehicles().length;button.dataset.tab='Online';button.className='fleet-stat-tab online';button.innerHTML='<i class="fleet-stat-icon" aria-hidden="true"></i><span><small>Online</small><strong>'+esc(count)+'</strong></span>';bar.classList.add('fleet-stat-tabs','workspace-count-tabs');var first=bar.querySelector('button');if(first)first.insertAdjacentElement('afterend',button);else bar.appendChild(button)}})
 };
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
@@ -3377,7 +3377,7 @@ function IntegratedOperations(){
   var tabs=document.querySelector('.main.view-operations .staff-tabs,.main.view-operations .tabs');
   if(tabs&&!tabs.querySelector('[data-tab="Verification"]')){
     var button=document.createElement('button'),review=(db.verificationCases||[]).filter(function(row){return!/verified|closed/i.test(String(row.status||''))}).length+verificationMissingRows('insurance').length+verificationMissingRows('driver_license').length;
-    button.dataset.tab='Verification';button.textContent='Verification '+review;tabs.appendChild(button)
+    button.dataset.tab='Verification';button.className='fleet-stat-tab prep';button.innerHTML='<i class="fleet-stat-icon" aria-hidden="true"></i><span><small>Verification</small><strong>'+esc(review)+'</strong></span>';tabs.classList.add('fleet-stat-tabs','workspace-count-tabs');tabs.appendChild(button)
   }
 }
 
@@ -3465,6 +3465,7 @@ function BusinessDashboard(){
   var roster=recurringRoster(),todayRows=roster.filter(function(r){return dueOrTouchedToday(r)}),cars=db.vehicles||[],jobs=customerMaintenanceJobs(),apps=db.applications||[],claims=db.claims||[];
   var expected=todayRows.reduce(function(sum,r){return sum+Number(r.amount||0)},0),collected=collectedAmountForDate(todayKey()),paymentAttention=roster.filter(function(r){return ['retry','contact','setup','notfound'].indexOf(paymentState(r).key)>=0}).length;
   var ready=cars.filter(isInventoryVehicle).length,serviceDue=jobs.filter(function(m){var due=dateKeyFrom(m.due||m.nextDue);return due&&due<=todayKey()&&isOpenMaintenance(m)}).length,activeApps=apps.filter(function(a){return !/denied|removed|contract/i.test(String(a.stage||a.status||'New'))}).length,openClaims=claims.filter(function(c){return !/paid|closed/i.test(String(c.status||'Open'))}).length;
+  var selected=['Overview','Closeout','Accounting','Risk'].indexOf(tab)>=0?tab:'Overview';
   var cards=[
     ['Money today',money(collected),'Expected '+money(expected),'Payments','Today','good'],
     ['Payment attention',paymentAttention,'Failed, setup, or not found','Payments','Today',paymentAttention?'warn':'good'],
@@ -3473,13 +3474,111 @@ function BusinessDashboard(){
     ['Applications',activeApps,'Needs review or handoff','Website','',activeApps?'blue':'good'],
     ['Open issues',openClaims,'Claims, tolls, and recovery','Operations','Claims',openClaims?'warn':'good']
   ];
-  var body='<section class="card section business-overview no-auto-search"><div class="section-head"><div><h2>Business overview</h2><p>Company health and attention only. Open a workspace to do the actual work.</p></div>'+badge(paymentAttention||serviceDue||openClaims?'Needs attention':'On track',paymentAttention||openClaims?'warn':'good')+'</div><div class="business-overview-grid">'+cards.map(function(c){return '<button class="business-overview-card '+c[5]+'" data-view="'+esc(c[3])+'" '+(c[4]?'data-tab="'+esc(c[4])+'"':'')+'><span>'+esc(c[0])+'</span><strong>'+esc(c[1])+'</strong><small>'+esc(c[2])+'</small></button>'}).join('')+'</div></section>'+portalVerificationCommandBoard(true);
-  shell('Business','Owner overview without repeating customer, payment, fleet, or transaction work.',body)
+  var body=fastWorkspaceTabs([['Overview','Overview'],['Closeout','Closeout'],['Accounting','Accounting'],['Risk','Risk']],selected,'business-tabs');
+  if(selected==='Overview')body+='<section class="card section business-overview no-auto-search"><div class="section-head"><div><h2>Business overview</h2><p>Company health and attention only. Open a workspace to do the actual work.</p></div>'+badge(paymentAttention||serviceDue||openClaims?'Needs attention':'On track',paymentAttention||openClaims?'warn':'good')+'</div><div class="business-overview-grid">'+cards.map(function(c){return '<button class="business-overview-card '+c[5]+'" data-view="'+esc(c[3])+'" '+(c[4]?'data-tab="'+esc(c[4])+'"':'')+'><span>'+esc(c[0])+'</span><strong>'+esc(c[1])+'</strong><small>'+esc(c[2])+'</small></button>'}).join('')+'</div></section>'+portalVerificationCommandBoard(true);
+  if(selected==='Closeout')body+=dailyCloseout();
+  if(selected==='Accounting')body+=integratedLedgerWorkspace()+accountingControlPanel()+carProfitabilityPanel();
+  if(selected==='Risk')body+=starSystemAuditorBoard()+disputeIdentityResolverBoard()+customerRiskReportPanel();
+  shell('Dashboard','Owner overview without repeating customer, payment, fleet, or transaction work.',body)
 }
 
+function WebsitePerformanceBoard(){
+  var vehicles=nativeOnlineVehicles(),apps=db.applications||[],sessions=db.onboardingSessions||[],published=vehicles.filter(function(v){return v.published}).length,available=vehicles.filter(function(v){return v.published&&!/unavailable/i.test(String(v.availability||'Available'))}).length,active=sessions.filter(function(s){return !/completed|cancelled|expired|replaced/i.test(String(s.status||''))}).length,completed=sessions.filter(function(s){return /completed|picked up|pickup confirmed/i.test(String(s.status||''))}).length,approved=apps.filter(function(a){return /approved|contract|active|pickup/i.test(String(a.status||a.stage||''))}).length,conversion=apps.length?Math.round((sessions.length/apps.length)*100):0;
+  var funnel=[['Published inventory',published,'Cars customers can choose','Inventory','good'],['Applications',apps.length,'Submitted customer files','Applications',apps.length?'blue':'warn'],['Approved / active',approved,'Approved, contracted, or picked up','Applications',approved?'good':'blue'],['Active onboarding',active,'Documents, e-sign, card, or pickup in progress','Applications',active?'warn':'good'],['Completed pickup',completed,'Finished native onboarding records','Applications',completed?'good':'blue'],['Application to onboarding',conversion+'%','Based on saved applications and onboarding sessions','Performance',conversion?'blue':'warn']];
+  return '<section class="card section website-performance-board"><div class="section-head"><div><h2>Website performance</h2><p>Real inventory and application conversion only. Visitor analytics will appear here after a site analytics provider is connected.</p></div><button class="btn" data-view="API Roadmap">Analytics setup</button></div><div class="business-overview-grid">'+funnel.map(function(row){return '<button class="business-overview-card '+row[4]+'" data-tab="'+esc(row[3])+'"><span>'+esc(row[0])+'</span><strong>'+esc(row[1])+'</strong><small>'+esc(row[2])+'</small></button>'}).join('')+'</div><div class="notice">No fake visit counts: inventory, applications, onboarding, and pickups come from WheelsonAuto records. Google Analytics or another provider can add visits, sources, and page conversion later.</div></section>'
+}
+
+function WebsiteWorkspace(){
+  var rows=nativeOnlineVehicles(),apps=db.applications||[],published=rows.filter(function(v){return v.published}).length,selected=['Overview','Inventory','Applications','Performance'].indexOf(tab)>=0?tab:'Overview';
+  var body=fastWorkspaceTabs([['Overview','Overview'],['Inventory','Inventory',rows.length],['Applications','Applications',apps.length],['Performance','Performance']],selected,'website-tabs');
+  if(selected==='Overview')body+='<section class="native-site-command"><div><span>Native WheelsonAuto website</span><strong>'+published+' '+(published===1?'car':'cars')+' live-ready</strong><small>Inventory, applications, onboarding, and performance now stay in one website workspace.</small></div><div class="actions"><a class="btn primary" href="/site-preview" target="_blank">Preview website</a><a class="btn" href="/inventory" target="_blank">Inventory</a>'+(isOwner()?'<button class="btn gold" data-action="native-import-shopify">Import Shopify once</button><button class="btn" data-action="native-site-settings">Defaults</button><button class="btn" data-action="native-edit-contract">Contract</button>':'')+'</div></section><div class="business-overview-grid website-overview-grid"><button class="business-overview-card good" data-tab="Inventory"><span>Published fleet</span><strong>'+published+'</strong><small>'+rows.length+' online inventory records</small></button><button class="business-overview-card blue" data-tab="Applications"><span>Applications</span><strong>'+apps.length+'</strong><small>Customer files from the public website</small></button><button class="business-overview-card warn" data-tab="Performance"><span>Performance</span><strong>Open</strong><small>Application and onboarding conversion</small></button></div>';
+  if(selected==='Inventory')body+=nativeInventoryBoard(false);
+  if(selected==='Applications')body+='<section class="card section native-website-apps" data-limit="24"><div class="section-head"><div><h2>Website applications</h2><p>Selected car and pricing are locked from the online record at submission.</p></div><button class="btn primary" data-view="Applications">Full onboarding</button></div>'+localSearch('Search applicant, phone, email, vehicle, or status')+'<div class="native-application-grid">'+(apps.length?apps.slice().sort(function(a,b){return String(b.submittedAt||'').localeCompare(String(a.submittedAt||''))}).map(nativeApplicationCard).join(''):'<div class="item">No native website applications yet.</div>')+'</div></section>';
+  if(selected==='Performance')body+=WebsitePerformanceBoard();
+  shell('Website','',body,'')
+}
+
+var __woaOwnerReportCompatibility=Reports;
+Reports=function(){
+  if(roleName()!=='owner')return __woaOwnerReportCompatibility();
+  if(tab==='Pipeline'){view='Website';tab='Performance';return WebsiteWorkspace()}
+  view='Dashboard';tab=tab==='Closeout'?'Closeout':tab==='Accounting'?'Accounting':tab==='Risk'?'Risk':'Overview';return BusinessDashboard()
+};
+
+var __woaBusinessShellBase=shell;
+shell=function(){
+  __woaBusinessShellBase.apply(null,arguments);
+  if(roleName()!=='owner'||!root)return;
+  root.querySelectorAll('[data-view="Reports"]').forEach(function(button){
+    var oldTab=button.dataset.tab||'',insideAccounting=!!button.closest('.accounting-board, .car-profitability-board, .toll-command-board'),insideStar=!!button.closest('.star-audit-shortcuts, .star-health-panel, .star-system-auditor');
+    if(oldTab==='Pipeline'){button.dataset.view='Website';button.dataset.tab='Performance';button.textContent=button.textContent.replace(/Reports/i,'Website');return}
+    button.dataset.view='Dashboard';button.dataset.tab=oldTab==='Closeout'?'Closeout':(oldTab==='Accounting'||insideAccounting)?'Accounting':(oldTab==='Risk'||insideStar)?'Risk':'Overview';button.textContent=button.textContent.replace(/Reports/i,button.dataset.tab==='Accounting'?'Accounting':button.dataset.tab==='Risk'?'Risk':'Business')
+  })
+};
+
+var __woaPremiumLocalSearchBase=localSearch;
+localSearch=function(placeholder){
+  return __woaPremiumLocalSearchBase(placeholder).replace('class="btn search-all"','class="btn primary search-all"')
+};
+
+function premiumFleetStatus(status,withCustomer,conflict){
+  var label=String(status||'Ready'),key='ready',lower=label.toLowerCase();
+  if(conflict||/service|maintenance|repair|blocked/.test(lower))key='service';
+  else if(/prep|review|inspection|hold|in lot/.test(lower))key='prep';
+  else if(withCustomer||/assigned|rented|active/.test(lower))key='assigned';
+  return '<span class="tag fleet-status-badge status-'+key+(conflict?' bad':'')+'"><i aria-hidden="true"></i>'+esc(label)+'</span>'
+}
+
+staffFleetCard=function(v,withCustomer){
+  var customer=withCustomer?(v.currentCustomer||'No customer linked'):'',conflict=String(v.assignmentConflict||'').trim(),c=customer&&findCustomerByName(customer)||{},contact=[c.phone,c.email].filter(Boolean).join(' - '),badges=premiumFleetStatus(v.status,withCustomer,conflict)+vehicleTrackingBadge(v)+(conflict?badge('Conflict','bad'):'');
+  return '<div class="mechanic-card staff-info-card premium-vehicle-card"><div class="item-row"><strong class="vehicle-card-name">'+esc(vehicleName(v))+'</strong><span>'+badges+'</span></div>'+(customer?'<div class="muted">'+esc(customer+(contact?' - '+contact:''))+'</div>':'')+(conflict?'<div class="notice danger compact-conflict">'+badge('Assignment conflict','bad')+' Claimed by '+esc(conflict)+'</div>':'')+'<div class="muted vehicle-identity-line">'+esc(vehicleIdentityLine(v,customer))+'</div><div class="muted vehicle-tracking-line">'+esc(vehicleTrackingLine(v))+'</div><div class="item-row vehicle-mileage-row"><div><strong class="vehicle-mileage">'+Number(v.mileage||0).toLocaleString()+'</strong><div class="muted">Mileage</div></div><button class="btn" data-action="open-vehicle" data-id="'+esc(v.id)+'">Edit</button></div></div>'
+};
+
+function fleetWorkspaceTone(name){
+  name=String(name||'').toLowerCase();
+  if(/service|claim/.test(name))return'service';
+  if(/prep|review|verification/.test(name))return'prep';
+  if(/assigned/.test(name))return'assigned';
+  if(/online/.test(name))return'online';
+  if(/ready|fleet|available/.test(name))return'ready';
+  return'neutral'
+}
+
+var __woaPremiumWorkspaceTabsBase=fastWorkspaceTabs;
+fastWorkspaceTabs=function(items,selected,extraClass){
+  var hasWorkspaceCounts=items.some(function(item){return item[2]!=null});
+  var isFleetWorkspace=(view==='Operations'&&items.some(function(item){return item[0]==='Fleet'})&&items.some(function(item){return item[0]==='Assigned'}))||(view==='Fleet'&&items.some(function(item){return item[0]==='Available'})&&items.some(function(item){return item[0]==='Assigned'}));
+  if(!hasWorkspaceCounts)return __woaPremiumWorkspaceTabsBase(items,selected,extraClass);
+  return '<div class="tabs '+esc(extraClass||'')+' workspace-count-tabs '+(isFleetWorkspace?'fleet-stat-tabs':'')+'">'+items.map(function(item){var count=item[2]==null?'':item[2],tone=fleetWorkspaceTone(item[0]);return '<button class="fleet-stat-tab '+tone+' '+(selected===item[0]?'active':'')+'" data-tab="'+esc(item[0])+'"><i class="fleet-stat-icon" aria-hidden="true"></i><span><small>'+esc(item[1])+'</small>'+(count===''?'':'<strong>'+esc(count)+'</strong>')+'</span></button>'}).join('')+'</div>'
+};
+
+function upgradeInjectedFleetTabs(){
+  if(!root)return;
+  var bar=root.querySelector('.view-operations .tabs,.view-fleet .tabs');if(!bar)return;
+  bar.classList.add('fleet-stat-tabs','workspace-count-tabs');
+  bar.querySelectorAll('button[data-tab]').forEach(function(button){
+    if(button.classList.contains('fleet-stat-tab'))return;
+    var textValue=String(button.textContent||'').trim(),match=textValue.match(/^(.*?)(?:\s+(\d+(?:\/\d+)?))?$/),label=match&&match[1]||textValue,count=match&&match[2]||'';
+    button.classList.add('fleet-stat-tab',fleetWorkspaceTone(button.dataset.tab||label));
+    button.innerHTML='<i class="fleet-stat-icon" aria-hidden="true"></i><span><small>'+esc(label)+'</small>'+(count?'<strong>'+esc(count)+'</strong>':'')+'</span>'
+  })
+}
+
+var __woaPremiumOperationsBase=Operations;
+Operations=function(){__woaPremiumOperationsBase();upgradeInjectedFleetTabs();requestAnimationFrame(upgradeInjectedFleetTabs)};
+OperationsTruthFocused=Operations;
+OperationsFocused=Operations;
+
 var __woaBusinessNavButtonBase=navButton;
-navButton=function(name){return __woaBusinessNavButtonBase(name).replace('<span>Dashboard</span>','<span>Business</span>')};
+navButton=function(name){return __woaBusinessNavButtonBase(name)};
+var __woaBusinessNavSectionsBase=navSections;
+navSections=function(){
+  if(roleName()!=='owner')return __woaBusinessNavSectionsBase();
+  var saved=savedNavGroups(),groups=[['Home',['Dashboard']],['Money & Customers',['Payments']],['Operations',['Operations']],['Office',['Messages']],['Admin',['Website','Settings','Companies','API Roadmap']]];
+  return groups.map(function(group){var items=group[1].filter(function(name){return nav.indexOf(name)>=0});if(!items.length)return'';if(items.length===1)return '<div class="nav-single">'+navButton(items[0])+'</div>';var active=items.indexOf(view)>=0,open=active||saved[group[0]]===true||(saved[group[0]]===undefined&&group[0]==='Home');return '<details class="nav-group" data-nav-group="'+esc(group[0])+'" '+(open?'open':'')+'><summary>'+esc(group[0])+'<small>'+items.length+'</small></summary><div>'+items.map(navButton).join('')+'</div></details>'}).join('')
+};
 var __woaBusinessQuickbarBase=mobileQuickbar;
-mobileQuickbar=function(){return __woaBusinessQuickbarBase().replace('<span>Dashboard</span>','<span>Business</span>')};
+mobileQuickbar=function(){var html=__woaBusinessQuickbarBase();return roleName()==='owner'?html.replace(/<button data-view="Reports"[\s\S]*?<\/button>/,''):html};
 Dashboard=BusinessDashboard;
+Website=WebsiteWorkspace;
 if(!isPublic&&view==='Dashboard')queueRender();

@@ -75,6 +75,86 @@
   .company-billing-row>.actions .btn{width:100%;min-width:0}
 }
 
+/* Premium fleet scanning and message-first workspace. */
+.view-operations>.fleet-stat-tabs{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(118px,1fr));
+  gap:8px;
+  padding:0!important;
+  margin-bottom:10px!important;
+  overflow:visible!important;
+  border:0!important;
+  background:transparent!important;
+}
+.view-operations>.fleet-stat-tabs .fleet-stat-tab{
+  display:grid;
+  grid-template-columns:30px minmax(0,1fr);
+  align-items:center;
+  gap:9px;
+  min-height:62px;
+  padding:9px 11px;
+  border:1px solid rgba(210,218,224,.16)!important;
+  border-radius:8px!important;
+  background:linear-gradient(145deg,rgba(229,235,239,.11),rgba(184,193,201,.035)),var(--staff-panel-raised)!important;
+  color:var(--staff-text)!important;
+  text-align:left;
+  box-shadow:inset 0 1px 0 rgba(239,243,246,.09),0 8px 20px rgba(0,0,0,.15)!important;
+}
+.view-operations>.fleet-stat-tabs .fleet-stat-tab:hover,
+.view-operations>.fleet-stat-tabs .fleet-stat-tab.active{
+  border-color:rgba(213,177,95,.34)!important;
+  background:linear-gradient(145deg,rgba(235,240,244,.14),rgba(213,177,95,.055)),var(--staff-panel-raised)!important;
+  transform:none!important;
+}
+.fleet-stat-icon{
+  display:grid;
+  place-items:center;
+  width:30px;
+  height:30px;
+  border:1px solid currentColor;
+  border-radius:50%;
+  color:#66cf91;
+  background:rgba(102,207,145,.10);
+}
+.fleet-stat-icon::before{content:"";width:9px;height:9px;border-radius:50%;background:currentColor;box-shadow:0 0 0 4px color-mix(in srgb,currentColor 14%,transparent)}
+.fleet-stat-tab.prep .fleet-stat-icon{color:#e2bd62;background:rgba(226,189,98,.10)}
+.fleet-stat-tab.assigned .fleet-stat-icon{color:#77aee8;background:rgba(119,174,232,.10)}
+.fleet-stat-tab.service .fleet-stat-icon{color:#e87979;background:rgba(232,121,121,.10)}
+.fleet-stat-tab.online .fleet-stat-icon{color:#d8c28c;background:rgba(216,194,140,.10)}
+.fleet-stat-tab.neutral .fleet-stat-icon{color:#aeb7be;background:rgba(174,183,190,.09)}
+.fleet-stat-tab>span{display:grid;gap:2px;min-width:0}
+.fleet-stat-tab small{color:var(--staff-muted);font-size:10px;font-weight:850;line-height:1.1}
+.fleet-stat-tab strong{color:var(--staff-text);font-size:20px;line-height:1}
+.premium-vehicle-card{row-gap:9px!important;padding:15px!important}
+.premium-vehicle-card .vehicle-card-name{font-size:16px!important;line-height:1.25}
+.premium-vehicle-card .vehicle-identity-line,.premium-vehicle-card .vehicle-tracking-line{line-height:1.48!important}
+.premium-vehicle-card .vehicle-mileage{font-size:18px!important;font-weight:950!important;color:#f7fbff!important}
+.fleet-status-badge{display:inline-flex!important;align-items:center;gap:6px}
+.fleet-status-badge>i{display:block;width:7px;height:7px;border-radius:50%;background:#66cf91;box-shadow:0 0 0 3px rgba(102,207,145,.12)}
+.fleet-status-badge.status-prep>i{background:#e2bd62;box-shadow:0 0 0 3px rgba(226,189,98,.12)}
+.fleet-status-badge.status-service>i{background:#e87979;box-shadow:0 0 0 3px rgba(232,121,121,.12)}
+.fleet-status-badge.status-assigned>i{background:#77aee8;box-shadow:0 0 0 3px rgba(119,174,232,.12)}
+.compact-fleet-board .local-search .search-all{min-width:104px}
+
+.view-messages>.topbar,
+.message-inbox-shell .message-list-head{display:none!important}
+.message-inbox-shell{height:calc(100dvh - 96px)}
+
+@media(max-width:900px){
+  .message-inbox-shell{height:calc(100dvh - 86px)}
+}
+
+@media(max-width:760px){
+  .view-operations>.fleet-stat-tabs{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .view-operations>.fleet-stat-tabs .fleet-stat-tab{grid-template-columns:22px minmax(0,1fr);min-height:50px;padding:7px 8px;gap:6px}
+  .fleet-stat-icon{width:22px;height:22px}
+  .fleet-stat-icon::before{width:7px;height:7px;box-shadow:none}
+  .fleet-stat-tab small{font-size:9px;white-space:normal}
+  .fleet-stat-tab strong{font-size:16px}
+  .premium-vehicle-card{padding:12px!important}
+  .message-inbox-shell{height:calc(100dvh - 150px);min-height:420px}
+}
+
 .provider-profile-heading{
   grid-column:1/-1;
   display:grid;
@@ -7123,4 +7203,125 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .admin-shell :is(.view-payments,.view-reports,.view-claims-issues)>.stats{display:none!important}
   .payment-action-bar>.actions{display:flex!important;justify-content:space-between!important;gap:7px!important;width:100%!important}
   .payment-action-bar>.actions>.btn{width:auto!important;min-width:126px!important}
+}
+
+/* Final cascade guard for the compact Operations and Messages workspaces. */
+.admin-shell .view-operations>.fleet-stat-tabs{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(118px,1fr))!important;
+  grid-auto-flow:row!important;
+  grid-auto-columns:auto!important;
+  overflow:visible!important;
+}
+.admin-shell .view-messages>.topbar,
+.admin-shell .message-inbox-shell .message-list-head{display:none!important}
+.admin-shell .message-inbox-shell{height:calc(100dvh - 96px)!important}
+
+@media(max-width:900px){
+  .admin-shell .message-inbox-shell{height:calc(100dvh - 86px)!important}
+}
+
+@media(max-width:760px){
+  .admin-shell .view-operations>.fleet-stat-tabs{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+  .admin-shell .message-inbox-shell{height:calc(100dvh - 150px)!important;min-height:420px!important}
+}
+
+/* Fleet status rail: one calm component, including API-injected tabs. */
+.admin-shell .workspace-count-tabs{
+  display:grid!important;
+  grid-template-columns:repeat(auto-fit,minmax(108px,1fr))!important;
+  grid-auto-flow:row!important;
+  gap:5px!important;
+  padding:5px!important;
+  overflow:visible!important;
+  border:1px solid rgba(210,218,224,.14)!important;
+  border-radius:8px!important;
+  background:rgba(18,21,24,.74)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-tab{
+  display:grid!important;
+  grid-template-columns:9px minmax(0,1fr)!important;
+  align-items:center!important;
+  gap:7px!important;
+  min-height:42px!important;
+  padding:7px 9px!important;
+  border:1px solid transparent!important;
+  border-radius:6px!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-tab:hover{
+  border-color:rgba(213,177,95,.18)!important;
+  background:rgba(213,177,95,.055)!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-tab.active{
+  border-color:rgba(213,177,95,.28)!important;
+  background:linear-gradient(145deg,rgba(230,235,239,.08),rgba(213,177,95,.07))!important;
+  box-shadow:inset 0 2px 0 rgba(213,177,95,.62)!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-icon{
+  width:8px!important;
+  height:8px!important;
+  border:0!important;
+  background:currentColor!important;
+  box-shadow:0 0 0 3px rgba(102,207,145,.10)!important;
+}
+.admin-shell .view-operations>.workspace-count-tabs .fleet-stat-icon{
+  color:#aeb7be!important;
+  background:#aeb7be!important;
+  box-shadow:0 0 0 3px rgba(174,183,190,.09)!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-icon::before{display:none!important}
+.admin-shell .workspace-count-tabs .fleet-stat-tab>span{display:flex!important;align-items:center;justify-content:space-between;gap:6px}
+.admin-shell .workspace-count-tabs .fleet-stat-tab small{font-size:10px!important;line-height:1.15!important;white-space:normal}
+.admin-shell .workspace-count-tabs .fleet-stat-tab strong{font-size:14px!important;line-height:1!important}
+
+@media(max-width:760px){
+  .admin-shell .workspace-count-tabs{grid-template-columns:repeat(3,minmax(0,1fr))!important;padding:4px!important}
+  .admin-shell .workspace-count-tabs .fleet-stat-tab{min-height:40px!important;padding:6px!important;gap:5px!important}
+  .admin-shell .workspace-count-tabs .fleet-stat-tab small{font-size:9px!important}
+  .admin-shell .workspace-count-tabs .fleet-stat-tab strong{font-size:12px!important}
+  .admin-shell .view-messages>.message-focused-tabs button{flex:0 0 auto!important;width:auto!important;min-width:max-content!important}
+  .admin-shell .view-messages>.message-focused-tabs .message-tabs-compose{position:sticky!important;right:0;z-index:2;width:36px!important;min-width:36px!important;margin-left:auto!important;padding:5px!important;font-size:0!important;justify-content:center!important;background:#1c2023!important;box-shadow:-9px 0 12px #111820!important}
+  .admin-shell .view-messages>.message-focused-tabs .message-tabs-compose::before{content:"+";font-size:20px;line-height:1;font-weight:700}
+}
+
+/* Palette balance: charcoal owns the canvas, gold marks intent, status colors stay compact. */
+.admin-shell>.main>.workspace-count-tabs,
+.admin-shell .workspace-count-tabs{
+  grid-column:1/-1!important;
+  width:100%!important;
+  max-width:100%!important;
+  min-width:0!important;
+  box-sizing:border-box!important;
+  justify-self:stretch!important;
+}
+.admin-shell>.main{align-content:start!important}
+.admin-shell .view-website>:is(.website-overview-grid,.native-site-command,.native-inventory-board,.native-website-apps){
+  grid-column:1/-1!important;
+  width:100%!important;
+  min-width:0!important;
+}
+.admin-shell .view-website>.website-overview-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+.admin-shell .btn:not(.primary):not(.gold):not(.danger):hover,
+.admin-shell :is(.tabs,.staff-tabs) button:not(.active):hover,
+.admin-shell .quickbar button:not(.active):hover{
+  background:linear-gradient(180deg,rgba(235,240,244,.12),rgba(255,255,255,.045))!important;
+  border-color:rgba(225,231,236,.24)!important;
+  color:#f4f5f5!important;
+}
+.admin-shell :is(.field input,.field select,.field textarea,.clover-field,.local-search input,.global-search input),
+.admin-shell .message-inbox-shell :is(input,select,textarea){
+  border-color:rgba(225,231,236,.18)!important;
+}
+.admin-shell :is(.field input,.field select,.field textarea,.clover-field,.local-search input,.global-search input):focus,
+.admin-shell .message-inbox-shell :is(input,select,textarea):focus{
+  border-color:rgba(240,217,147,.58)!important;
+  outline:2px solid rgba(213,177,95,.16)!important;
+  outline-offset:1px!important;
+}
+.admin-shell :is(.card,.item,.lead-card,.mechanic-card,.company-card,.due-row,.mini-row,.customer-pay-card,.native-online-card,.native-application-card,.native-review-file,.local-result-card):hover{
+  border-color:rgba(225,231,236,.23)!important;
+  box-shadow:inset 0 1px 0 rgba(242,245,247,.13),inset -1px 0 0 rgba(213,177,95,.08),0 12px 28px rgba(0,0,0,.22)!important;
 }

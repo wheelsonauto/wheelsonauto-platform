@@ -405,7 +405,7 @@ async function ownerInteractionSmoke() {
 
   context.view = 'Dashboard';
   context.render();
-  assertHealthy('Owner Business overview', html(context), ['Business overview', 'Money today', 'Payment attention']);
+  assertHealthy('Owner Dashboard overview', html(context), ['Dashboard', 'Business overview', 'Money today', 'Payment attention']);
   assert(!html(context).includes('dashboard-mobile-tabs'), 'Business must not repeat Dashboard work-list tabs.');
   await dispatchClick(context, { view: 'Payments', tab: 'Today' });
   assert(context.view === 'Payments' && context.tab === 'Today', 'Business payment tile should open Payments Today.');
@@ -550,7 +550,7 @@ function ownerSmoke() {
   const dedupedCloverWorkspace = renderView(context, 'Claims & Issues', 'Clover');
   assert(countOf(dedupedCloverWorkspace, 'smoke-clover-provider-duplicate') === 1, 'Clover reconciliation UI must render a provider payment id only once after duplicate sync rows merge.');
   const ownerDashboard = renderView(context, 'Dashboard', 'Board');
-  assertCompactBoard('Owner dashboard', ownerDashboard, ['Business', 'Business overview', 'Customer intake', 'Money today', 'Ready fleet', 'quickbar']);
+  assertCompactBoard('Owner dashboard', ownerDashboard, ['Dashboard', 'Business overview', 'Customer intake', 'Money today', 'Ready fleet', 'quickbar']);
   assertNo('Owner dashboard', ownerDashboard, ['Today&rsquo;s dues & contact', 'Today action list', 'Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
   [
@@ -583,10 +583,15 @@ function ownerSmoke() {
     ['Companies readiness', 'Companies', 'Readiness', ['Companies', 'Franchise readiness', 'company-readiness-grid', 'Subscription billing', 'company-billing-console', 'Manual ledger', 'Current rule'], false],
     ['API roadmap providers', 'API Roadmap', 'Providers', ['API Roadmap', 'Provider checklist', 'Total systems', 'Setup'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
-    ['Website', 'Website', undefined, ['Website'], false],
-    ['Reports summary', 'Reports', 'Summary', ['Reports', 'Summary', 'Owner snapshot', 'Daily closeout'], false],
-    ['Reports accounting', 'Reports', 'Accounting', ['Reports', 'Accounting', 'Source-linked accounting ledger', '/api/accounting/quickbooks.csv', 'balanced QuickBooks journal export', 'integration-workspace'], false],
-    ['Reports risk', 'Reports', 'Risk', ['Reports', 'Risk', 'Payment risk'], false]
+    ['Website overview', 'Website', 'Overview', ['Website', 'Native WheelsonAuto website', 'Published fleet'], false],
+    ['Website inventory', 'Website', 'Inventory', ['Website', 'Online fleet', 'native-inventory-board'], false],
+    ['Website applications', 'Website', 'Applications', ['Website', 'Website applications', 'native-website-apps'], false],
+    ['Website performance', 'Website', 'Performance', ['Website', 'Website performance', 'Application to onboarding'], false],
+    ['Dashboard overview', 'Dashboard', 'Overview', ['Dashboard', 'Business overview', 'Money today'], false],
+    ['Dashboard closeout', 'Dashboard', 'Closeout', ['Dashboard', 'Daily closeout', 'Expected today'], false],
+    ['Dashboard accounting', 'Dashboard', 'Accounting', ['Dashboard', 'Accounting', 'Source-linked accounting ledger', '/api/accounting/quickbooks.csv', 'balanced QuickBooks journal export', 'integration-workspace'], false],
+    ['Dashboard risk', 'Dashboard', 'Risk', ['Dashboard', 'Risk', 'Star system auditor', 'Dispute identity resolver', 'Customer risk report'], false],
+    ['Legacy owner Reports redirect', 'Reports', 'Accounting', ['Dashboard', 'Accounting', 'Source-linked accounting ledger'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
@@ -700,12 +705,15 @@ function heavyMessagesReportsSmoke() {
   const cachedQueueMs = Date.now() - cachedQueueStarted;
   assertHealthy('Cached heavy Messages queue', cachedQueue, ['Follow-up', 'Failed payments, card setup, open links']);
   assert(cachedQueueMs <= Math.max(250, firstQueueMs), 'Messages queue cache did not make repeated navigation proportional to visible work.');
-  ['Summary', 'Accounting', 'Risk', 'Pipeline'].forEach(tabName => {
-    const report = renderView(context, 'Reports', tabName);
-    assertHealthy('Heavy Reports ' + tabName, report, ['Reports', tabName]);
-    assert(report.length < 260000, 'Heavy Reports ' + tabName + ' rendered too much HTML at once.');
+  ['Overview', 'Closeout', 'Accounting', 'Risk'].forEach(tabName => {
+    const report = renderView(context, 'Dashboard', tabName);
+    assertHealthy('Heavy Dashboard ' + tabName, report, ['Dashboard', tabName]);
+    assert(report.length < 260000, 'Heavy Dashboard ' + tabName + ' rendered too much HTML at once.');
   });
-  assert(Date.now() - started < 3000, 'Heavy Messages/Reports render path took too long.');
+  const websitePerformance = renderView(context, 'Website', 'Performance');
+  assertHealthy('Heavy Website performance', websitePerformance, ['Website', 'Performance', 'Application to onboarding']);
+  assert(websitePerformance.length < 260000, 'Heavy Website performance rendered too much HTML at once.');
+  assert(Date.now() - started < 3000, 'Heavy Messages/Business render path took too long.');
 }
 
 async function main() {
