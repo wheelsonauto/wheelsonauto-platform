@@ -8128,32 +8128,46 @@ function checkoutStatus() {
         : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.')
   };
 }
-async function productionInfrastructurePreflight() {
+function stripeLiveWebhookEvidence(data = {}) {
+  const stripeState = data && data.integrations && data.integrations.stripe || {};
+  return {
+    receivedAt: String(stripeState.lastWebhookAt || ''),
+    type: String(stripeState.lastWebhookType || ''),
+    eventId: String(stripeState.lastWebhookEventId || ''),
+    live: stripeState.lastWebhookLivemode === true,
+    error: String(stripeState.lastWebhookError || '')
+  };
+}
+async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
+  const state = data || await readData();
+  const stripeWebhook = stripeLiveWebhookEvidence(state);
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
+  if (!stripeWebhook.live) missing.push('Stripe signed live webhook event');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   if (IDENTITY_PROVIDER === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');
   return {
     database,
     documentStorage,
+    stripeWebhook,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database, encrypted private storage, signed Stripe webhooks, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database, encrypted private storage, a signed live Stripe webhook, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
   if (!WOA_PRODUCTION_HARDENING_REQUIRED) return { skipped: true };
-  const preflight = await productionInfrastructurePreflight();
+  const preflight = await productionInfrastructurePreflight(await readData());
   if (!preflight.readyForLiveStripe) {
     const error = new Error('Production hardening is enabled, but launch safeguards are incomplete: ' + preflight.missing.join(', ') + '.');
     error.code = 'production_infrastructure_not_ready';
@@ -13089,6 +13103,8 @@ async function recordStripeWebhookEvent(event = {}) {
   stripeState.webhookEventIds = event.id ? [event.id, ...stripeState.webhookEventIds].slice(0, 500) : stripeState.webhookEventIds;
   stripeState.lastWebhookAt = new Date().toISOString();
   stripeState.lastWebhookType = type;
+  stripeState.lastWebhookEventId = event.id || '';
+  stripeState.lastWebhookLivemode = event.livemode === true;
   stripeState.lastWebhookError = '';
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
@@ -16834,7 +16850,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const health = systemHealthSnapshot(data, user);
       if (isOwnerUser(user)) {
-        const infrastructure = await productionInfrastructurePreflight();
+        const infrastructure = await productionInfrastructurePreflight(data);
         const identityConflicts = stateRepository.identityConflicts(data);
         health.infrastructure = {
           ...infrastructure,
@@ -16847,7 +16863,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/system/infrastructure/preflight' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view production infrastructure readiness.' });
       const data = await readData();
-      const infrastructure = await productionInfrastructurePreflight();
+      const infrastructure = await productionInfrastructurePreflight(data);
       const conflicts = stateRepository.identityConflicts(data);
       return json(res, 200, {
         ok: infrastructure.readyForLiveStripe && conflicts.length === 0,

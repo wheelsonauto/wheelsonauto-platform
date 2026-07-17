@@ -140,6 +140,9 @@ can use Stripe for new customers while existing customers migrate one at a
 time. Configure Stripe webhook events for successful/failed payment intents,
 refunds, disputes, setup intents, and Stripe Identity updates. The webhook
 must be signed and reach the live platform before it is treated as connected.
+The launch preflight records the most recent Stripe event and refuses to call
+the platform live-ready until it has received a signed event with Stripe's
+`livemode: true` flag. A copied secret or dashboard-only test is not enough.
 
 Run one complete controlled test record:
 
