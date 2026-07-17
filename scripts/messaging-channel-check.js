@@ -232,14 +232,21 @@ requireText('Star draft linked vehicle', createAiMessageDraft, 'vehicleId: messa
 requireText('Star draft linked company', createAiMessageDraft, 'organizationId: messageFields.organizationId || MAIN_ORG_ID');
 requireText('Star approval keeps linked VIN', approveAiMessage, 'vin: draft.vin ||');
 
-const emailSentState = emailChannelReadiness({ messages: [{ id: 'email-out', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }] }, true);
+const emailSentState = emailChannelReadiness({ messages: [{ id: 'email-out', externalId: 're_email_out', provider: 'resend', source: 'WheelsonAuto email notification', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }] }, true, 'resend');
 if (!emailSentState.emailOutboundVerified || emailSentState.emailInboundVerified) fail('Outbound email must be verified independently from inbound email.');
 const emailTwoWayState = emailChannelReadiness({ messages: [
-  { id: 'email-in', channel: 'Email', direction: 'Inbound', status: 'Received', createdAt: '2026-07-14T12:05:00.000Z' },
-  { id: 'email-out', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }
-] }, true);
+  { id: 'email-in', externalId: 're_email_in', provider: 'resend', source: 'Email webhook', channel: 'Email', direction: 'Inbound', status: 'Received', createdAt: '2026-07-14T12:05:00.000Z' },
+  { id: 'email-out', externalId: 're_email_out', provider: 'resend', source: 'WheelsonAuto email notification', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }
+] }, true, 'resend');
 if (!emailTwoWayState.emailOutboundVerified || !emailTwoWayState.emailInboundVerified) fail('Two-way email readiness must require independent outbound and inbound proof.');
-const emailFailedState = emailChannelReadiness({ messages: [{ id: 'email-fail', channel: 'Email', direction: 'Outbound', status: 'Email failed', createdAt: '2026-07-14T12:10:00.000Z' }] }, true);
+const emailDraftAfterVerifiedState = emailChannelReadiness({ messages: [
+  { id: 'email-draft', provider: 'resend', channel: 'Email', direction: 'Outbound', status: 'Email draft', createdAt: '2026-07-14T12:10:00.000Z' },
+  { id: 'email-out', externalId: 're_email_out', provider: 'resend', source: 'WheelsonAuto email notification', channel: 'Email', direction: 'Outbound notification', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }
+] }, true, 'resend');
+if (!emailDraftAfterVerifiedState.emailOutboundVerified) fail('A later saved draft must not erase a real provider-accepted outbound email proof.');
+const emailFailedState = emailChannelReadiness({ messages: [{ id: 'email-fail', provider: 'resend', source: 'WheelsonAuto email notification', channel: 'Email', direction: 'Outbound', status: 'Email failed', createdAt: '2026-07-14T12:10:00.000Z' }] }, true, 'resend');
 if (emailFailedState.emailOutboundVerified) fail('A failed email must never be presented as verified outbound delivery.');
+const wrongProviderEmailState = emailChannelReadiness({ messages: [{ id: 'email-sendgrid', externalId: 'sg_email_out', provider: 'sendgrid', source: 'WheelsonAuto email notification', channel: 'Email', direction: 'Outbound', status: 'Sent', createdAt: '2026-07-14T12:00:00.000Z' }] }, true, 'resend');
+if (wrongProviderEmailState.emailOutboundVerified) fail('Historical mail from a different provider must not prove the active email provider is ready.');
 
 console.log('Messaging channel check passed: Star, SMS, email sending, email inbound webhook, notification email, and channel UI are wired.');

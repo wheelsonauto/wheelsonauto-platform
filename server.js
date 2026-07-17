@@ -915,22 +915,43 @@ function telnyxCarrierReadiness(data = {}, provider = '') {
     carrierDeliveryError: String(latest.providerErrorMessage || '').trim()
   };
 }
-function emailChannelReadiness(data = {}, configured = false) {
+function emailChannelReadiness(data = {}, configured = false, provider = '') {
+  const expectedProvider = String(provider || '').toLowerCase();
+  const isExpectedProvider = record => {
+    const recordProvider = String(record && record.provider || '').toLowerCase();
+    if (!recordProvider || !['resend', 'sendgrid'].includes(recordProvider)) return false;
+    return !expectedProvider || expectedProvider === 'not_configured' || recordProvider === expectedProvider;
+  };
+  const isInbound = record => /inbound|received/.test(String(record && (record.direction || record.status) || '').toLowerCase());
+  const statusText = record => String(record && record.status || '').toLowerCase();
+  const providerAttempt = record => {
+    if (!isExpectedProvider(record)) return false;
+    const status = statusText(record);
+    return !!(String(record && record.externalId || '').trim() || /sent|delivered|accepted|queued|failed|error/.test(status));
+  };
+  const successfulProviderAttempt = record => {
+    const status = statusText(record);
+    return !!(providerAttempt(record) && String(record && record.externalId || '').trim() && /sent|delivered|accepted|queued/.test(status) && !/failed|error|draft|needed/.test(status));
+  };
+  const signedInbound = record => {
+    return !!(isInbound(record) && isExpectedProvider(record) && String(record && record.externalId || '').trim() && String(record && record.source || '') === 'Email webhook');
+  };
   const records = (data.messages || []).filter(record => String(record.channel || '').toLowerCase() === 'email');
   const byTime = records.slice().sort((a, b) => {
     const aTime = Date.parse(a.createdAt || a.receivedAt || a.sentAt || a.date || '') || 0;
     const bTime = Date.parse(b.createdAt || b.receivedAt || b.sentAt || b.date || '') || 0;
     return bTime - aTime;
   });
-  const latestOutbound = byTime.find(record => !/inbound|received/.test(String(record.direction || record.status || '').toLowerCase())) || {};
-  const latestInbound = byTime.find(record => /inbound|received/.test(String(record.direction || record.status || '').toLowerCase())) || {};
-  const outboundStatus = String(latestOutbound.status || '').toLowerCase();
-  const outboundVerified = !!(configured && /sent|delivered/.test(outboundStatus) && !/failed|draft|needed/.test(outboundStatus));
+  const latestOutbound = byTime.find(record => !isInbound(record)) || {};
+  const latestProviderOutbound = byTime.find(record => !isInbound(record) && providerAttempt(record)) || {};
+  const latestInbound = byTime.find(signedInbound) || {};
+  const providerAttemptFailed = /failed|error/.test(statusText(latestProviderOutbound));
+  const outboundVerified = !!(configured && successfulProviderAttempt(latestProviderOutbound) && !providerAttemptFailed);
   return {
     emailOutboundVerified: outboundVerified,
-    emailOutboundStatus: outboundStatus || (configured ? 'test_pending' : 'not_configured'),
-    emailLastSentAt: latestOutbound.createdAt || latestOutbound.sentAt || latestOutbound.date || '',
-    emailInboundVerified: !!latestInbound.id,
+    emailOutboundStatus: statusText(latestProviderOutbound) || statusText(latestOutbound) || (configured ? 'test_pending' : 'not_configured'),
+    emailLastSentAt: latestProviderOutbound.createdAt || latestProviderOutbound.sentAt || latestProviderOutbound.date || '',
+    emailInboundVerified: !!(configured && latestInbound.id),
     emailLastInboundAt: latestInbound.receivedAt || latestInbound.createdAt || latestInbound.date || ''
   };
 }
@@ -1051,10 +1072,9 @@ function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const saved = (((data.integrations || {}).messaging) || {});
   const provider = MESSAGING_PROVIDER || 'not_configured';
-  const emailIntegration = (((data.integrations || {}).email) || {});
-  const emailProvider = String(emailIntegration.provider || WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
-  const emailConfigured = !!(settings.emailEnabled && (emailProviderConfigured(emailProvider) || emailIntegration.connected));
-  const emailReadiness = emailChannelReadiness(data, emailConfigured);
+  const emailProvider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
+  const emailConfigured = !!(settings.emailEnabled && emailProviderConfigured(emailProvider));
+  const emailReadiness = emailChannelReadiness(data, emailConfigured, emailProvider);
   const configured = !!(
     settings.enabled &&
     MESSAGING_FROM_NUMBER &&
