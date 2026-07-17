@@ -176,6 +176,11 @@ It must show PostgreSQL as transactional/healthy, private document storage as
 production-ready with a current write/read/delete validation, no identity
 conflicts, and no unresolved launch blockers.
 
+PostgreSQL also gives the background autopay worker an organization-scoped
+advisory lock. A second app process will skip the same run instead of starting
+a competing charge pass; the lock is released automatically if its database
+session ends unexpectedly.
+
 ## 4. Configure Stripe Without Switching Everyone
 
 Store live keys only in Render:

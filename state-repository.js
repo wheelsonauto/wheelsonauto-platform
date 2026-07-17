@@ -107,6 +107,11 @@ function normalizeOrganizationId(value) {
   return String(value || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
 }
 
+function advisoryLockKeys(organizationId, name) {
+  const digest = crypto.createHash('sha256').update(normalizeOrganizationId(organizationId) + '\u0000' + String(name || '').trim(), 'utf8').digest();
+  return [digest.readInt32BE(0), digest.readInt32BE(4)];
+}
+
 function normalizeBackend(value) {
   const backend = String(value || 'json').trim().toLowerCase();
   return backend === 'postgres' || backend === 'postgresql' ? 'postgres' : 'json';
@@ -297,6 +302,15 @@ class JsonStateRepository {
       allowed: true,
       daily: { used: dailyUsed + 1, limit: dailyLimit },
       monthly: { used: monthlyUsed + 1, limit: monthlyLimit }
+    };
+  }
+
+  async acquireJobLock(name) {
+    return {
+      acquired: true,
+      backend: 'json',
+      name: String(name || '').trim(),
+      async release() {}
     };
   }
 
@@ -690,6 +704,40 @@ class PostgresStateRepository {
     }
   }
 
+  async acquireJobLock(name) {
+    const lockName = String(name || '').trim();
+    if (!lockName) throw new Error('A durable job-lock name is required.');
+    await this.ensureSchema();
+    const client = await this.pool.connect();
+    const [keyOne, keyTwo] = advisoryLockKeys(this.organizationId, lockName);
+    try {
+      const result = await client.query('SELECT pg_try_advisory_lock($1::integer, $2::integer) AS acquired', [keyOne, keyTwo]);
+      const acquired = result.rows[0] && result.rows[0].acquired === true;
+      if (!acquired) {
+        client.release();
+        return { acquired: false, backend: 'postgres', name: lockName, async release() {} };
+      }
+      let released = false;
+      return {
+        acquired: true,
+        backend: 'postgres',
+        name: lockName,
+        async release() {
+          if (released) return;
+          released = true;
+          try {
+            await client.query('SELECT pg_advisory_unlock($1::integer, $2::integer)', [keyOne, keyTwo]);
+          } finally {
+            client.release();
+          }
+        }
+      };
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+  }
+
   async listSnapshots(limit = 30) {
     await this.ensureSchema();
     const result = await this.pool.query(`SELECT id, version, checksum, reason, actor, created_at
@@ -989,6 +1037,7 @@ module.exports = {
   recoverySnapshotEvidence,
   migrationRecordCounts,
   migrationProofEvidence,
+  advisoryLockKeys,
   identityEntries,
   identityConflicts,
   privateDocumentRows,

@@ -16,6 +16,9 @@ async function main() {
     await fs.writeFile(seedFile, JSON.stringify({ vehicles: [], customers: [], payments: [], documents: [], eSignatures: [] }), 'utf8');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
+    const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
+    assert.strictEqual(jsonAutopayLock.acquired, true, 'The JSON development fallback should retain the in-process autopay lock contract.');
+    await jsonAutopayLock.release();
     await assert.rejects(() => repository.recordMigrationProof({}), /cannot record a PostgreSQL import proof/i, 'The JSON development fallback must never pretend it recorded production migration evidence.');
     assert.strictEqual(stateRepository.checksum({ b: 2, a: { z: 3, y: 4 } }), stateRepository.checksum({ a: { y: 4, z: 3 }, b: 2 }), 'State checksums must be stable when a JSONB database changes object key order.');
     const intactState = { records: [{ id: 'checksum-foundation-1', status: 'intact' }] };
@@ -110,7 +113,7 @@ async function main() {
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
 
-    console.log('Production foundation check passed: atomic state fallback, migration-proof guard, checksum fail-closed behavior, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, and Clover-to-Stripe duplicate protection are verified.');
+    console.log('Production foundation check passed: atomic state fallback, migration-proof guard, checksum fail-closed behavior, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

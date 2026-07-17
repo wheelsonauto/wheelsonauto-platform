@@ -13279,7 +13279,16 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
   const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  let autopayLock = null;
   try {
+    autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
+    if (!autopayLock.acquired) {
+      woaAutopayStatus.lastFinishedAt = new Date().toISOString();
+      woaAutopayStatus.lastResult = { dateKey, skipped: true, reason: 'another worker is running' };
+      woaAutopayStatus.lastError = '';
+      woaAutopayStatus.fatalError = '';
+      return { ok: true, skipped: true, reason: 'another worker is running', dateKey, status: woaAutopayStatus };
+    }
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
     for (const row of data.recurringPayments) {
@@ -13500,6 +13509,13 @@ async function runWheelsonAutoAutopay(options = {}) {
     await recordOperationalFailure('autopay-run', err, { recurringPaymentId: options.recurringPaymentId || '', route: 'WheelsonAuto background autopay', dateKey });
     return { ok: false, skipped: false, error: woaAutopayStatus.lastError, status: woaAutopayStatus };
   } finally {
+    if (autopayLock && typeof autopayLock.release === 'function') {
+      try {
+        await autopayLock.release();
+      } catch (error) {
+        void recordOperationalFailure('autopay-lock-release', error, { route: 'WheelsonAuto background autopay', dateKey }, { alert: true });
+      }
+    }
     woaAutopayStatus.inFlight = false;
   }
 }

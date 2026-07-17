@@ -32,7 +32,24 @@ async function main() {
     applicationName: 'wheelsonauto-postgres-runtime-check',
     seed: async () => ({ vehicles: [], customers: [], payments: [] })
   });
+  const competingRepository = stateRepository.createStateRepository({
+    backend: 'postgres',
+    databaseUrl,
+    organizationId,
+    snapshotLimit: 12,
+    applicationName: 'wheelsonauto-postgres-runtime-lock-check',
+    seed: async () => ({ vehicles: [], customers: [], payments: [] })
+  });
   try {
+    const firstAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
+    assert.strictEqual(firstAutopayLock.acquired, true, 'The first PostgreSQL autopay worker must acquire the durable job lock.');
+    const blockedAutopayLock = await competingRepository.acquireJobLock('wheelsonauto-autopay');
+    assert.strictEqual(blockedAutopayLock.acquired, false, 'A second PostgreSQL worker must not run the same autopay job concurrently.');
+    await firstAutopayLock.release();
+    const releasedAutopayLock = await competingRepository.acquireJobLock('wheelsonauto-autopay');
+    assert.strictEqual(releasedAutopayLock.acquired, true, 'The PostgreSQL autopay lock must be available to the next worker after the first worker releases it.');
+    await releasedAutopayLock.release();
+
     const firstState = {
       vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1' }],
       customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com' }],
@@ -92,9 +109,10 @@ async function main() {
     assert.strictEqual(health.snapshotRecoveryReady, true, 'A production-ready PostgreSQL repository must expose a verified current recovery snapshot.');
     assert.strictEqual(health.migrationProofIntegrity, 'verified', 'The PostgreSQL import proof must retain the source-to-target checksum/count evidence.');
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
-    console.log('PostgreSQL runtime recovery check passed: write, import proof, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
+    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, write, import proof, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
+    await competingRepository.close();
     await repository.close();
   }
 }
