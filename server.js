@@ -7,6 +7,7 @@ const nativeSite = require('./native-site');
 const onboarding = require('./onboarding-service');
 const integrationEngine = require('./integration-engine');
 const billingEngine = require('./billing-engine');
+const stripeAdapter = require('./stripe-adapter');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -55,6 +56,11 @@ const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
 const GOOGLE_CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || '';
 const GOOGLE_CALENDAR_ACCESS_TOKEN = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN || '';
 const WOA_PAYMENT_PROVIDER = String(process.env.WOA_PAYMENT_PROVIDER || 'clover').trim().toLowerCase();
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || process.env.WOA_STRIPE_SECRET_KEY || '';
+const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || process.env.WOA_STRIPE_PUBLISHABLE_KEY || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || process.env.WOA_STRIPE_WEBHOOK_SECRET || '';
+const STRIPE_API_BASE = (process.env.STRIPE_API_BASE || 'https://api.stripe.com/v1').replace(/\/+$/, '');
+const stripe = stripeAdapter.stripeClient({ secretKey: STRIPE_SECRET_KEY, apiBase: STRIPE_API_BASE });
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
@@ -88,7 +94,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-customer-truth-79">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-stripe-ready-80">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -6539,7 +6545,8 @@ function customerPortalHtml(account, state) {
   const portalDocumentForm = '<form method="POST" action="/customer/document-update" class="customer-message-form customer-document-form" data-customer-document-upload><label>Send document / proof update<select name="type"><option>Insurance proof</option><option>Driver license</option><option>Registration</option><option>Background check info</option><option>Proof of income</option><option>Other document</option></select></label><label>Choose secure file<input name="documentFile" type="file" accept="image/jpeg,image/png,application/pdf" required></label><label>Provider / agency<input name="provider" maxlength="120" placeholder="Insurance company, DMV, background provider..."></label><label>Policy / reference<input name="reference" maxlength="160" placeholder="Policy, notice, confirmation, or reference number"></label><label>Expiration / due date<input name="expires" type="date"></label><label>Notes<textarea name="notes" maxlength="1200" placeholder="Tell us what changed or what the office should verify."></textarea></label><button class="btn primary" type="submit">Upload securely</button><small data-document-upload-status>JPG, PNG, or PDF up to 5 MB. The file stays private and requires staff verification.</small></form>';
   const portalReceiptForm = '<form method="POST" action="/customer/receipt-request" class="customer-message-form customer-receipt-form"><label>Request payment receipt<input name="paymentHint" maxlength="160" placeholder="Payment date, amount, or note"></label><button class="btn primary" type="submit">Request receipt</button><small>This asks the office to verify the payment and send the correct receipt.</small></form>';
   const portalStatementForm = '<form method="POST" action="/customer/statement-request" class="customer-message-form customer-statement-form"><label>Request account document<select name="requestType"><option>Account statement</option><option>Payoff balance</option><option>Payment history</option><option>Balance letter</option></select></label><label>Note<input name="note" maxlength="200" placeholder="What do you need it for?"></label><button class="btn primary" type="submit">Request document</button><small>The office verifies the account before sending any statement, payoff, or balance document.</small></form>';
-  const cardChangeForm = customerPortalActionForm('/customer/card-change', 'Change card on file', 'Opens a secure Clover card setup link. WheelsonAuto never sees the full card number.', 'customer-card-form');
+  const currentCardProvider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+  const cardChangeForm = '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="' + escapeHtml(currentCardProvider) + '"><button class="btn primary" type="submit">Change card on file (' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ')</button><small>Opens secure ' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ' card setup. WheelsonAuto never sees the full card number.</small></form>' + (currentCardProvider !== 'stripe' && stripe.configured() ? '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="stripe"><button class="btn" type="submit">Prepare Stripe card</button><small>Saves a Stripe card without stopping Clover. The owner confirms the provider switch separately.</small></form>' : '');
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=secure-upload-2-mobile-workspaces"></script></body></html>';
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
@@ -7192,8 +7199,8 @@ async function cloverEcommerceFetch(pathname, options = {}) {
 }
 function checkoutStatus() {
   const provider = normalizedPaymentProvider();
-  const adapterReady = provider === 'clover' && !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
-  const signedWebhookReady = provider === 'clover' && !!CLOVER_HCO_WEBHOOK_SECRET;
+  const adapterReady = provider === 'stripe' ? stripe.configured() : provider === 'clover' && !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
+  const signedWebhookReady = provider === 'stripe' ? !!STRIPE_WEBHOOK_SECRET : provider === 'clover' && !!CLOVER_HCO_WEBHOOK_SECRET;
   const verifiedPaymentPipelineReady = adapterReady && signedWebhookReady;
   return {
     ok: verifiedPaymentPipelineReady,
@@ -7207,13 +7214,16 @@ function checkoutStatus() {
     ecommercePrivateKey: CLOVER_ECOMMERCE_PRIVATE_KEY ? 'stored in Render' : '',
     ecommercePublicKey: CLOVER_ECOMMERCE_PUBLIC_KEY ? 'stored in Render' : '',
     pageConfigUuid: CLOVER_HCO_PAGE_CONFIG_UUID ? 'stored in Render' : '',
+    stripeSecretKey: STRIPE_SECRET_KEY ? 'stored in Render' : '',
+    stripePublishableKey: STRIPE_PUBLISHABLE_KEY ? 'stored in Render' : '',
+    stripeWebhookSecret: STRIPE_WEBHOOK_SECRET ? 'stored in Render' : '',
     publicBaseUrl: PUBLIC_BASE_URL,
     message: verifiedPaymentPipelineReady
       ? 'Hosted Checkout and signed Clover payment reconciliation are ready through the provider adapter.'
       : adapterReady && !signedWebhookReady
         ? 'Clover can create checkout sessions, but verified payment reconciliation is not ready until CLOVER_HCO_WEBHOOK_SECRET is configured.'
       : (provider === 'stripe'
-        ? 'Stripe is selected, but its checkout/webhook adapter is not connected yet. Keep WOA_PAYMENT_PROVIDER=clover until Stripe keys and a controlled live test are ready.'
+        ? (adapterReady ? 'Stripe can create checkout and saved-card requests, but signed reconciliation is not ready until STRIPE_WEBHOOK_SECRET is configured.' : 'Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before selecting Stripe for live payments.')
         : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.')
   };
 }
@@ -7229,6 +7239,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
     ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
     ['CLOVER_HCO_WEBHOOK_SECRET', CLOVER_HCO_WEBHOOK_SECRET ? 'Set' : 'Missing', 'Signed Hosted Checkout payment reconciliation'],
+    ['STRIPE_SECRET_KEY', STRIPE_SECRET_KEY ? 'Set' : 'Optional', 'Stripe Checkout, card setup, saved-card charges, and migration'],
+    ['STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET ? 'Set' : 'Optional', 'Signed Stripe payment and dispute reconciliation'],
     ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed identity, insurance, and background provider callbacks; staff review remains live without a provider'],
     ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Identity and driver-license verification adapter'],
     ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
@@ -7241,7 +7253,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['WOA_BILLING_WEBHOOK_SECRET', BILLING_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed subscription and invoice callbacks; owner billing ledger remains live without a provider'],
     ['QUICKBOOKS_*', QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Set' : 'Manual-live', 'QuickBooks OAuth connection; internal accounting ledger and CSV remain live without it'],
     ['GOOGLE_CALENDAR_*', GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Set' : 'Manual-live', 'Automatic Google Calendar sync; ICS, add-to-calendar, and maps links remain live without it'],
-    ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
+    ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Default provider adapter; Clover remains active until each Stripe migration is owner-confirmed'],
     ['PUBLIC_BASE_URL', PUBLIC_BASE_URL ? 'Set' : 'Missing', 'Customer payment/card setup links'],
     ['WOA_SESSION_SECRET', SESSION_SIGNING_SECRET_CONFIGURED ? 'Set' : 'Missing', 'Stable signed staff/customer session cookies'],
     ['WOA_AUTOPAY_MS', process.env.WOA_AUTOPAY_MS ? 'Set' : 'Default', 'WheelsonAuto autopay monitor interval']
@@ -7306,6 +7318,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/billing/invoices/record', 'Owner-recorded company invoice/payment'),
     route('POST', '/api/webhooks/billing', 'Signed billing provider subscription/invoice callback'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
+    route('POST', '/api/integrations/payments/manual-charge', 'Provider-aware saved-card manual charges'),
+    route('POST', '/api/payment-provider/switch', 'Owner-confirmed Clover/Stripe autopay provider switch'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
     route('POST', '/api/integrations/clover/payments/match', 'Owner-confirmed Clover payment customer match'),
@@ -7313,6 +7327,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/clover/refunds/execute', 'Idempotent Clover Ecommerce full refund'),
     route('POST', '/api/integrations/clover/refunds/complete-manual', 'Confirm Clover POS/manual refund reference'),
     route('POST', '/api/integrations/clover/disputes/action', 'Owner dispute evidence and outcome workflow'),
+    route('POST', '/api/integrations/payments/disputes/action', 'Provider-aware owner dispute evidence and outcome workflow'),
     route('GET', '/api/accounting/ledger', 'Source-linked accounting ledger'),
     route('POST', '/api/accounting/ledger/rebuild', 'Rebuild ledger without losing provider sync references'),
     route('GET', '/api/accounting/export.csv', 'Source-linked accounting ledger CSV'),
@@ -7322,6 +7337,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/api/pickups/:id/calendar.ics', 'Download pickup appointment calendar file'),
     route('POST', '/api/woa-autopay/run', 'WheelsonAuto autopay monitor'),
     route('POST', '/api/webhooks/clover', 'Clover webhook intake'),
+    route('POST', '/api/webhooks/stripe', 'Signed Stripe payment, card setup, and dispute webhook intake'),
     route('POST', '/api/webhooks/messages', 'Inbound SMS webhook intake'),
     route('POST', '/api/webhooks/email', 'Inbound email webhook intake')
   ];
@@ -9587,6 +9603,7 @@ async function runAutoSync(options = {}) {
 }
 function cleanAutopayPayload(payload) {
   const amount = Number(payload.amount || 0);
+  const paymentProvider = normalizedPaymentProvider(payload.paymentProvider || payload.provider || WOA_PAYMENT_PROVIDER);
   return {
     id: payload.id || ('rec-' + Date.now()),
     applicationId: String(payload.applicationId || '').trim(),
@@ -9609,13 +9626,17 @@ function cleanAutopayPayload(payload) {
     chargeTime: String(payload.chargeTime || payload.paymentTime || '18:00').trim(),
     status: payload.status || 'Setup needed',
     tone: payload.tone || (payload.status === 'Active' ? 'good' : 'warn'),
-    provider: 'Clover',
+    provider: paymentProviderLabel(paymentProvider),
+    paymentProvider,
     cloverCustomerId: String(payload.cloverCustomerId || '').trim(),
     cloverSubscriptionId: String(payload.cloverSubscriptionId || '').trim(),
     cloverPaymentSource: String(payload.cloverPaymentSource || payload.paymentSource || payload.source || '').trim(),
+    stripeCustomerId: String(payload.stripeCustomerId || '').trim(),
+    stripePaymentMethodId: String(payload.stripePaymentMethodId || '').trim(),
+    stripeSetupIntentId: String(payload.stripeSetupIntentId || '').trim(),
     cardLabel: String(payload.cardLabel || '').trim(),
     cardLast4: String(payload.cardLast4 || '').trim(),
-    paymentSetup: payload.paymentSetup || 'Needs Clover setup',
+    paymentSetup: payload.paymentSetup || ('Needs ' + paymentProviderLabel(paymentProvider) + ' setup'),
     notes: String(payload.notes || '').trim(),
     createdAt: payload.createdAt || new Date().toISOString()
   };
@@ -10023,7 +10044,7 @@ function recurringCardChargeSource(row) {
 function hasWheelsonAutoSavedCard(row) {
   const setup = String(row && row.paymentSetup || '').toLowerCase();
   const source = String(row && row.source || '').toLowerCase();
-  return !!(row && row.cardSavedAt) || setup.includes('card saved') || source.includes('wheelsonauto card setup');
+  return !!(row && (row.cardSavedAt || row.stripeCardSavedAt || row.stripePaymentMethodId)) || setup.includes('card saved') || source.includes('wheelsonauto card setup');
 }
 function recurringCardLabel(row) {
   const card = firstCardFromRecurring(row);
@@ -10460,6 +10481,7 @@ function createCardSetupRequest(data, payload) {
     frequency: autopay.frequency,
     firstRun: autopay.nextRun,
     chargeTime: autopay.chargeTime,
+    paymentProvider: normalizedPaymentProvider(payload.paymentProvider || autopay.paymentProvider || autopay.provider || WOA_PAYMENT_PROVIDER),
     cloverPlanId: String(payload.cloverPlanId || payload.planId || '').trim(),
     cloverSubscriptionId: String(payload.cloverSubscriptionId || '').trim(),
     status: 'Open',
@@ -10476,6 +10498,10 @@ function createCardSetupRequest(data, payload) {
   autopay.cardSetupRequestId = request.id;
   autopay.cardSetupUrl = request.url;
   autopay.cloverPlanId = request.cloverPlanId;
+  if (!cardOnlyUpdate) {
+    autopay.paymentProvider = request.paymentProvider;
+    autopay.provider = paymentProviderLabel(request.paymentProvider);
+  }
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
   if (!cardOnlyUpdate && !payload.deferVehicleAssignment) assignAutopayVehicle(data, autopay);
   if (cardOnlyUpdate) {
@@ -10484,6 +10510,7 @@ function createCardSetupRequest(data, payload) {
       cardSetupUrl: request.url,
       cardChangePendingAt: new Date().toISOString(),
       paymentSetup: 'Card change link sent',
+      pendingCardProvider: request.paymentProvider,
       lastCardSetupReason: String(payload.reason || 'Change card on file').trim(),
       updatedAt: new Date().toISOString()
     });
@@ -10517,6 +10544,175 @@ function setupCardHtml(request, message = '') {
   const disabled = setupReady ? '' : ' disabled';
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '<script src="' + sdkUrl + '"></script></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save your card securely with Clover so WheelsonAuto can run authorized recurring and manual catch-up payments.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Card setup is not ready yet. WheelsonAuto needs the Clover Ecommerce public key and private key in Render.</div>' : '') + '<form id="cardSetupForm" class="form" style="margin-top:14px"><div class="field span2"><label>Name on card</label><input id="cardName" autocomplete="cc-name" value="' + escapeHtml(request.customer || '') + '"' + disabled + '></div><div class="field span2"><label>Card number</label><div id="cardNumber" class="clover-field"></div><div id="cardNumberErrors" class="small err"></div></div><div class="field"><label>Expiration</label><div id="cardDate" class="clover-field"></div><div id="cardDateErrors" class="small err"></div></div><div class="field"><label>CVV</label><div id="cardCvv" class="clover-field"></div><div id="cardCvvErrors" class="small err"></div></div><div class="field"><label>ZIP</label><div id="cardZip" class="clover-field"></div><div id="cardZipErrors" class="small err"></div></div><label class="check span2"><input id="consent" type="checkbox"' + disabled + '> I authorize WheelsonAuto to save this card with Clover and charge authorized recurring payments, retries, and manual catch-up payments for my account.</label><div class="notice span2">Your card is entered in Clover secure fields for tokenization. WheelsonAuto stores only the Clover saved-card/customer reference, not the card number or CVV.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Save card with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Cancel</a></div></form><div id="setupMessage" class="notice" style="display:none;margin-top:12px"></div></section></main></div><script>window.__CARD_SETUP__=' + JSON.stringify(config).replace(/</g, '\\u003c') + ';</script><script src="/card-setup.js?v=clover-iframe-1"></script></body></html>';
+}
+function stripeSetupCardHtml(request, message = '') {
+  const setupReady = stripe.configured();
+  const disabled = setupReady ? '' : ' disabled';
+  const amount = '$' + Number(request.amount || 0).toLocaleString();
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div></body></html>';
+}
+function stripeRecurringRowsForRequest(data, request) {
+  const rows = allRecurringRows(data);
+  const exact = rows.filter(row => row && (row.id === request.recurringPaymentId || row.cardSetupRequestId === request.id));
+  return exact.length ? exact : rows.filter(row => row && request.customer && normKey(row.customer) === normKey(request.customer));
+}
+function stripeMetadata(request = {}, extra = {}) {
+  return {
+    wheelsonauto: 'true',
+    flow: String(extra.flow || 'card_setup').slice(0, 40),
+    cardSetupRequestId: String(request.id || '').slice(0, 500),
+    paymentRequestId: String(request.paymentRequestId || '').slice(0, 500),
+    recurringPaymentId: String(request.recurringPaymentId || '').slice(0, 500),
+    applicationId: String(request.applicationId || '').slice(0, 500),
+    onboardingSessionId: String(request.onboardingSessionId || '').slice(0, 500),
+    customerName: String(request.customer || '').slice(0, 500),
+    vehicleId: String(request.vehicleId || '').slice(0, 500),
+    vin: String(request.vin || '').slice(0, 500),
+    licensePlate: String(request.licensePlate || request.plate || '').slice(0, 500),
+    ...extra
+  };
+}
+async function ensureStripeCustomer(data, request) {
+  const recurring = stripeRecurringRowsForRequest(data, request)[0] || {};
+  const saved = String(request.stripeCustomerId || recurring.stripeCustomerId || '').trim();
+  if (saved) return saved;
+  const customer = await stripe.createCustomer({
+    name: request.customer || undefined,
+    email: request.email || undefined,
+    phone: request.phone || undefined,
+    description: ['WheelsonAuto customer', request.customer, request.vehicle].filter(Boolean).join(' - ').slice(0, 350),
+    metadata: stripeMetadata(request, { flow: 'customer_record' })
+  });
+  request.stripeCustomerId = customer.id;
+  stripeRecurringRowsForRequest(data, request).forEach(row => { row.stripeCustomerId = customer.id; });
+  const profile = (data.customers || []).find(row => request.customer && normKey(row.name || row.customer) === normKey(request.customer));
+  if (profile) profile.stripeCustomerId = customer.id;
+  return customer.id;
+}
+async function attachStripeCardSetupCheckout(data, request, req) {
+  if (!stripe.configured()) throw Object.assign(new Error('Stripe card setup is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
+  if (request.stripeCheckoutHref && request.stripeCheckoutSessionId && Date.now() - Date.parse(request.stripeCheckoutCreatedAt || '') < 23 * 60 * 60 * 1000) {
+    return { id: request.stripeCheckoutSessionId, url: request.stripeCheckoutHref };
+  }
+  const customerId = await ensureStripeCustomer(data, request);
+  const session = await stripe.createSetupCheckoutSession({
+    mode: 'setup',
+    customer: customerId,
+    client_reference_id: request.id,
+    payment_method_types: ['card'],
+    billing_address_collection: 'auto',
+    customer_update: { name: 'auto', address: 'auto' },
+    setup_intent_data: {
+      description: ('WheelsonAuto ' + (request.frequency || 'recurring') + ' card authorization - ' + (request.customer || 'Customer')).slice(0, 500),
+      usage: 'off_session',
+      metadata: stripeMetadata(request)
+    },
+    metadata: stripeMetadata(request),
+    custom_text: { submit: { message: 'This securely saves your card for the WheelsonAuto schedule you authorized. It does not charge the card today.' } },
+    success_url: PUBLIC_BASE_URL + '/setup-card/' + encodeURIComponent(request.id) + '/stripe-success?session_id={CHECKOUT_SESSION_ID}',
+    cancel_url: PUBLIC_BASE_URL + '/setup-card/' + encodeURIComponent(request.id)
+  }, 'woa-stripe-setup-' + request.id);
+  const now = new Date().toISOString();
+  Object.assign(request, {
+    paymentProvider: 'stripe',
+    stripeCustomerId: customerId,
+    stripeCheckoutSessionId: session.id || '',
+    stripeCheckoutHref: session.url || '',
+    stripeCheckoutCreatedAt: now,
+    autopayConsentAt: request.autopayConsentAt || now,
+    autopayConsentIp: request.autopayConsentIp || requestIp(req),
+    autopayConsentUserAgent: request.autopayConsentUserAgent || String(req && req.headers && req.headers['user-agent'] || '').slice(0, 500),
+    status: 'Stripe secure setup opened'
+  });
+  await writeData(data);
+  return session;
+}
+function stripeObjectId(value) {
+  return typeof value === 'string' ? value : String(value && value.id || '');
+}
+async function completeStripeCardSetup(data, request, sessionInput) {
+  if (request.stripePaymentMethodId && /stripe card saved/i.test(String(request.status || ''))) {
+    return { recurring: stripeRecurringRowsForRequest(data, request)[0] || null, alreadyCompleted: true };
+  }
+  const sessionId = stripeObjectId(sessionInput) || request.stripeCheckoutSessionId;
+  if (!sessionId) throw new Error('Stripe checkout session was not provided.');
+  const session = typeof sessionInput === 'object' && sessionInput && sessionInput.mode ? sessionInput : await stripe.retrieveCheckoutSession(sessionId);
+  if (session.mode !== 'setup' || String(session.status || '').toLowerCase() !== 'complete') throw new Error('Stripe has not completed this card setup.');
+  const metadata = session.metadata || {};
+  if (metadata.cardSetupRequestId && metadata.cardSetupRequestId !== request.id) throw new Error('Stripe card setup did not match this WheelsonAuto request.');
+  let setupIntent = session.setup_intent;
+  if (typeof setupIntent === 'string' || !setupIntent || typeof setupIntent.payment_method === 'string') setupIntent = await stripe.retrieveSetupIntent(stripeObjectId(setupIntent));
+  if (!setupIntent || String(setupIntent.status || '').toLowerCase() !== 'succeeded') throw new Error('Stripe did not return a completed SetupIntent.');
+  const paymentMethod = setupIntent.payment_method || {};
+  const paymentMethodId = stripeObjectId(paymentMethod);
+  if (!paymentMethodId) throw new Error('Stripe did not return a reusable payment method.');
+  const card = paymentMethod.card || {};
+  const customerId = stripeObjectId(session.customer) || stripeObjectId(setupIntent.customer) || request.stripeCustomerId;
+  const completedAt = new Date().toISOString();
+  Object.assign(request, {
+    status: 'Stripe card saved - owner switch required',
+    completedAt,
+    paymentProvider: 'stripe',
+    stripeCheckoutSessionId: session.id || sessionId,
+    stripeSetupIntentId: setupIntent.id || '',
+    stripeCustomerId: customerId,
+    stripePaymentMethodId: paymentMethodId,
+    stripeCardBrand: card.brand || '',
+    stripeCardLast4: card.last4 || '',
+    stripeCardSavedAt: completedAt,
+    stripeMigrationStatus: 'Stripe card ready - Clover remains active until owner confirmation'
+  });
+  const rows = stripeRecurringRowsForRequest(data, request);
+  rows.forEach(row => {
+    const currentProvider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
+    const hasLiveClover = currentProvider === 'clover' && !!(row.cloverSubscriptionId || row.cloverPaymentSource || row.cloverCustomerId);
+    Object.assign(row, {
+      stripeCustomerId: customerId,
+      stripePaymentMethodId: paymentMethodId,
+      stripeSetupIntentId: setupIntent.id || '',
+      stripeCardBrand: card.brand || '',
+      stripeCardLast4: card.last4 || '',
+      stripeCardSavedAt: completedAt,
+      stripeMigrationStatus: hasLiveClover ? 'Stripe card ready - Clover remains active until owner confirmation' : 'Stripe active',
+      pendingCardProvider: '',
+      cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
+      cardChangePendingAt: '',
+      notes: [row.notes, 'Customer authorized a Stripe card through WheelsonAuto secure checkout.'].filter(Boolean).join('\n'),
+      updatedAt: completedAt
+    });
+    if (!hasLiveClover) Object.assign(row, {
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      paymentSetup: 'Stripe card saved and chargeable',
+      status: 'Active',
+      tone: 'good',
+      cardLabel: card.brand || row.cardLabel || '',
+      cardLast4: card.last4 || row.cardLast4 || '',
+      cardSavedAt: completedAt,
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto / Stripe'
+    });
+  });
+  const profile = (data.customers || []).find(row => request.customer && normKey(row.name || row.customer) === normKey(request.customer));
+  if (profile) Object.assign(profile, { stripeCustomerId: customerId, stripePaymentMethodId: paymentMethodId, stripeCardBrand: card.brand || '', stripeCardLast4: card.last4 || '', stripeCardSavedAt: completedAt, updatedAt: completedAt });
+  const onboardingSession = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
+  if (onboardingSession) Object.assign(onboardingSession, { cardCompletedAt: completedAt, autopayConsentAt: request.autopayConsentAt || completedAt, status: 'Card linked' });
+  await queueOwnerEmailNotification(data, 'card_setup_completed', {
+    customer: request.customer || 'Customer',
+    subject: 'Stripe card ready - ' + (request.customer || 'Customer'),
+    body: [
+      'A customer saved a Stripe card through WheelsonAuto.',
+      'Customer: ' + (request.customer || 'Customer'),
+      'Vehicle: ' + (request.vehicle || request.vin || 'Not linked'),
+      'Amount: ' + moneyText(request.amount || 0),
+      'Frequency: ' + (request.frequency || 'Not set'),
+      'Next run: ' + (request.firstRun || 'Not set'),
+      'Card: ' + ([card.brand, card.last4 && ('ending ' + card.last4)].filter(Boolean).join(' ') || 'Saved in Stripe'),
+      rows.some(row => normalizedPaymentProvider(row.paymentProvider || row.provider) === 'clover') ? 'Clover remains active until the owner confirms the switch.' : 'Stripe is active for this WheelsonAuto schedule.'
+    ].join('\n')
+  });
+  await writeData(data);
+  return { session, setupIntent, paymentMethod, recurring: rows[0] || null, alreadyCompleted: false };
 }
 async function completeCardSetup(data, request, payload) {
   const token = cleanPaymentSource(payload.token || payload.source || '');
@@ -10902,9 +11098,118 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
   });
   return payment;
 }
+async function chargeStripeSavedCard(data, recurring, payload = {}) {
+  if (!stripe.configured()) throw Object.assign(new Error('Stripe saved-card charging is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
+  const customerId = String(recurring.stripeCustomerId || '').trim();
+  const paymentMethodId = String(recurring.stripePaymentMethodId || '').trim();
+  if (!customerId || !paymentMethodId) throw new Error('Stripe card not found. Ask the customer to save a Stripe card through the WheelsonAuto customer portal.');
+  const amount = Number(payload.amount || recurring.amount || 0);
+  if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
+  const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const idempotencyKey = String(payload.idempotencyKey || (payload.automatic && scheduledDueKey
+    ? ['woa-stripe-auto', recurring.id || payload.recurringPaymentId, scheduledDueKey, cents(amount)].join('-')
+    : ['woa-stripe-manual', recurring.id || payload.recurringPaymentId, cents(amount), Date.now()].join('-'))).slice(0, 255);
+  const identity = recurringPaymentIdentity(data, recurring, payload);
+  const intent = await stripe.createPaymentIntent({
+    amount: cents(amount),
+    currency: 'usd',
+    customer: customerId,
+    payment_method: paymentMethodId,
+    payment_method_types: ['card'],
+    off_session: true,
+    confirm: true,
+    description: ('WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment - ' + (recurring.customer || 'Customer')).slice(0, 500),
+    receipt_email: recurring.email || undefined,
+    metadata: stripeMetadata({
+      recurringPaymentId: recurring.id || '',
+      customer: recurring.customer || '',
+      vehicleId: identity.vehicleId || recurring.vehicleId || '',
+      vin: identity.vin || recurring.vin || '',
+      licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || ''
+    }, { flow: payload.automatic ? 'autopay' : 'manual_charge', scheduledDueDate: scheduledDueKey || '', amount: String(cents(amount)) })
+  }, idempotencyKey);
+  const paid = String(intent.status || '').toLowerCase() === 'succeeded';
+  if (!paid) {
+    const error = new Error('Stripe returned ' + String(intent.status || 'an unconfirmed payment result') + '. The next charge date was not advanced.');
+    error.code = 'stripe_' + String(intent.status || 'unconfirmed');
+    error.paymentIntent = intent;
+    throw error;
+  }
+  const paymentAt = new Date(Number(intent.created || 0) * 1000 || Date.now());
+  const paymentAtIso = paymentAt.toISOString();
+  const paymentDateKey = localDateKey(paymentAt);
+  const priorNextRun = String(recurring.nextRun || '').trim();
+  const requestedNextRun = String(payload.nextRun || '').trim();
+  const shouldAdvancePastDue = scheduledDueKey && scheduledDueKey <= paymentDateKey;
+  const resolvedNextRun = String(requestedNextRun || (shouldAdvancePastDue ? nextFutureRecurringDate(recurring, paymentDateKey, scheduledDueKey) : priorNextRun) || priorNextRun).trim();
+  const chargeId = stripeObjectId(intent.latest_charge);
+  const payment = {
+    id: 'stripe-charge-' + (intent.id || Date.now()),
+    paymentProvider: 'stripe',
+    providerPaymentId: intent.id || '',
+    stripePaymentIntentId: intent.id || '',
+    stripeChargeId: chargeId,
+    date: businessLocaleString(paymentAt),
+    createdAt: paymentAtIso,
+    customer: recurring.customer || '',
+    phone: recurring.phone || '',
+    email: recurring.email || '',
+    vehicle: identity.vehicle || recurring.vehicle || '',
+    vehicleId: identity.vehicleId || recurring.vehicleId || '',
+    vin: identity.vin || recurring.vin || '',
+    licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || '',
+    plate: identity.plate || recurring.plate || recurring.licensePlate || '',
+    tempTag: identity.tempTag || recurring.tempTag || '',
+    tracker: identity.tracker || recurring.tracker || '',
+    method: 'Stripe saved card',
+    amount,
+    status: 'Paid',
+    tone: 'good',
+    source: 'Stripe saved-card charge',
+    notes: String(payload.note || '').trim(),
+    scheduledDueDate: scheduledDueKey,
+    recurringPaymentId: recurring.id || '',
+    stripeCustomerId: customerId,
+    stripePaymentMethodId: paymentMethodId
+  };
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  if (!data.payments.some(row => row.stripePaymentIntentId === intent.id)) data.payments.unshift(payment);
+  const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
+  attempts.unshift({ id: 'attempt-stripe-charge-' + (intent.id || Date.now()), date: payment.date, customer: payment.customer, amount, result: payment.status, method: payment.method, notes: payment.notes, vehicle: payment.vehicle, vehicleId: payment.vehicleId, vin: payment.vin, plate: payment.plate, tracker: payment.tracker, stripePaymentIntentId: intent.id || '', recurringPaymentId: payment.recurringPaymentId });
+  const patch = {
+    paymentProvider: 'stripe',
+    provider: 'Stripe',
+    status: 'Active',
+    tone: 'good',
+    retryCount: 0,
+    failedAttempts: 0,
+    nextRun: resolvedNextRun,
+    lastPaymentAt: paymentAtIso,
+    lastStripePaymentIntentId: intent.id || '',
+    lastStripeChargeId: chargeId,
+    lastPaymentResult: 'Paid',
+    lastPaymentNote: payment.notes,
+    paymentAttempts: attempts,
+    autopayManagedBy: 'WheelsonAuto / Stripe'
+  };
+  if (!payload.automatic) patch.lastManualChargeAt = paymentAtIso;
+  if (resolvedNextRun && resolvedNextRun !== priorNextRun) Object.assign(patch, {
+    paymentDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.paymentDay,
+    chargeDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.chargeDay,
+    lastScheduleAdvancedAt: paymentAtIso,
+    lastScheduleAdvancedFrom: scheduledDueKey || priorNextRun,
+    lastScheduleAdvanceSource: payload.automatic ? 'WheelsonAuto Stripe autopay' : 'Stripe manual catch-up charge'
+  });
+  updateRecurringChargeState(data, recurring.id, patch);
+  await writeData(data);
+  return { charge: intent, payment, recurring };
+}
 async function chargeSavedRecurringCard(data, payload, req) {
   const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
-  if (!recurring) throw new Error('Recurring customer was not found. Sync Clover recurring customers and try again.');
+  if (!recurring) throw new Error('Recurring customer was not found. Sync payment customers and try again.');
+  const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+  if (provider === 'stripe') return chargeStripeSavedCard(data, recurring, payload);
+  if (provider !== 'clover') throw new Error('Unsupported saved-card provider: ' + paymentProviderLabel(provider) + '.');
   let customerSource = recurringCustomerSource(recurring);
   let cardSource = recurringCardChargeSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
   if ((!customerSource || !cardSource) && recurring.cloverSubscriptionId) {
@@ -11093,7 +11398,7 @@ async function runWheelsonAutoAutopay(options = {}) {
           note: 'WheelsonAuto autopay charged for due date ' + scheduledDueDate
         }, null);
         if (!charged || !charged.payment || String(charged.payment.status || '').toLowerCase() !== 'paid') {
-          throw new Error('Clover returned ' + String(charged && charged.payment && charged.payment.status || 'an unconfirmed result') + '. The next charge date was not advanced.');
+          throw new Error(paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' returned ' + String(charged && charged.payment && charged.payment.status || 'an unconfirmed result') + '. The next charge date was not advanced.');
         }
         row.lastAutoChargeDate = dateKey;
         row.lastAutoChargeAt = new Date().toISOString();
@@ -11146,7 +11451,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         saveFailedChargeResult(data, row, {
           amount: row.amount,
           note: 'WheelsonAuto autopay failed for due date ' + scheduledDueDate
-        }, err, { dateKey, attempts, source: 'WheelsonAuto autopay failed charge' });
+        }, err, { dateKey, attempts, method: paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' saved card', source: 'WheelsonAuto autopay failed charge' });
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
         await queueOwnerEmailNotification(data, 'payment_failed', {
           customer: row.customer || 'Unknown customer',
@@ -11211,12 +11516,50 @@ async function attachCloverCheckout(data, request) {
   await writeData(data);
   return checkout;
 }
+async function attachStripeCheckout(data, request) {
+  if (!stripe.configured()) throw Object.assign(new Error('Stripe checkout is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
+  const customerId = await ensureStripeCustomer(data, request);
+  const metadata = stripeMetadata({ ...request, paymentRequestId: request.id }, { flow: 'payment' });
+  const session = await stripe.createSetupCheckoutSession({
+    mode: 'payment',
+    customer: customerId,
+    client_reference_id: request.id,
+    payment_method_types: ['card'],
+    line_items: [{
+      quantity: 1,
+      price_data: {
+        currency: 'usd',
+        unit_amount: cents(request.amount),
+        product_data: {
+          name: ['WheelsonAuto', request.paymentType || request.frequency || 'payment', request.customer].filter(Boolean).join(' - ').slice(0, 250),
+          description: [request.vehicle || 'WheelsonAuto account', request.vin ? 'VIN ' + request.vin : '', request.licensePlate ? 'Tag ' + request.licensePlate : ''].filter(Boolean).join(' | ').slice(0, 500)
+        }
+      }
+    }],
+    payment_intent_data: {
+      description: ('WheelsonAuto ' + (request.paymentType || request.frequency || 'payment') + ' - ' + (request.customer || 'Customer')).slice(0, 500),
+      receipt_email: request.email || undefined,
+      metadata
+    },
+    metadata,
+    success_url: PUBLIC_BASE_URL + '/pay/' + request.id + '/success?session_id={CHECKOUT_SESSION_ID}',
+    cancel_url: PUBLIC_BASE_URL + '/pay/' + request.id + '/failure'
+  }, 'woa-stripe-pay-' + request.id);
+  request.status = 'Stripe checkout ready';
+  request.paymentProvider = 'stripe';
+  request.stripeCustomerId = customerId;
+  request.stripeCheckoutSessionId = session.id || '';
+  request.providerCheckoutSessionId = session.id || '';
+  request.checkoutHref = session.url || '';
+  request.checkoutCreatedAt = new Date().toISOString();
+  await writeData(data);
+  return { ...session, href: session.url || '' };
+}
 async function attachHostedCheckout(data, request) {
   const provider = normalizedPaymentProvider(request && request.paymentProvider || WOA_PAYMENT_PROVIDER);
   if (provider === 'clover') return attachCloverCheckout(data, request);
-  const error = new Error(provider === 'stripe'
-    ? 'Stripe is selected, but its Checkout, webhook, saved-card, and charge adapters are not connected yet. Keep WOA_PAYMENT_PROVIDER=clover until Stripe is configured and live-tested.'
-    : 'Unsupported payment provider: ' + provider + '.');
+  if (provider === 'stripe') return attachStripeCheckout(data, request);
+  const error = new Error('Unsupported payment provider: ' + provider + '.');
   error.statusCode = 503;
   throw error;
 }
@@ -11252,6 +11595,183 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
     if (session && application && vehicle) finalizeNativePickup(data, session, application, vehicle);
   }
   return request;
+}
+
+function stripePaymentForObject(data, object = {}) {
+  const metadata = object.metadata || {};
+  const intentId = stripeObjectId(object.payment_intent) || (String(object.object || '') === 'payment_intent' ? object.id : '');
+  const chargeId = stripeObjectId(object.charge) || (String(object.object || '') === 'charge' ? object.id : '');
+  return (data.payments || []).find(row =>
+    metadata.paymentRequestId && row.paymentRequestId === metadata.paymentRequestId
+    || metadata.recurringPaymentId && row.recurringPaymentId === metadata.recurringPaymentId && intentId && row.stripePaymentIntentId === intentId
+    || intentId && [row.stripePaymentIntentId, row.providerPaymentId].map(String).includes(intentId)
+    || chargeId && String(row.stripeChargeId || '') === chargeId
+  ) || null;
+}
+function stripeRecurringForObject(data, object = {}, payment = null) {
+  const metadata = object.metadata || {};
+  return findRecurringRow(data, metadata.recurringPaymentId || payment && payment.recurringPaymentId || '')
+    || allRecurringRows(data).find(row => metadata.customerName && normKey(row.customer) === normKey(metadata.customerName))
+    || allRecurringRows(data).find(row => stripeObjectId(object.customer) && row.stripeCustomerId === stripeObjectId(object.customer))
+    || null;
+}
+function stripeDisputeEvidencePacket(data, claim, payment, recurring) {
+  const customerName = claim.customer || payment && payment.customer || recurring && recurring.customer || '';
+  const vehicle = reportVehicleFor(data, customerName, claim.vehicleId || payment && payment.vehicleId || recurring && recurring.vehicleId || '');
+  const contract = (data.contracts || []).find(row => customerName && normKey(row.customer || row.name) === normKey(customerName) && (!vehicle.id || !row.vehicleId || row.vehicleId === vehicle.id)) || {};
+  const signature = (data.eSignatures || []).find(row => row.id === contract.signatureId || row.onboardingSessionId && row.onboardingSessionId === contract.onboardingSessionId) || {};
+  const pickup = (data.pickupAppointments || []).find(row => row.id === contract.pickupAppointmentId || row.onboardingSessionId && row.onboardingSessionId === contract.onboardingSessionId || customerName && normKey(row.customer) === normKey(customerName) && /picked up|completed/i.test(String(row.status || ''))) || {};
+  const documents = (data.documents || []).filter(row => customerName && normKey(row.customer) === normKey(customerName) && /license|insurance|contract|receipt|payment/i.test(String([row.kind, row.type, row.title].filter(Boolean).join(' ')))).slice(0, 20);
+  const messages = (data.messages || []).filter(row => customerName && normKey(row.customer) === normKey(customerName)).slice(0, 30);
+  const priorPayments = (data.payments || []).filter(row => row !== payment && customerName && normKey(row.customer) === normKey(customerName) && /^paid\b/i.test(String(row.status || ''))).slice(0, 12);
+  const proof = [
+    { key: 'payment_match', label: 'Exact Stripe payment', ready: !!(payment && (payment.stripePaymentIntentId || payment.stripeChargeId)), reference: payment && (payment.stripePaymentIntentId || payment.stripeChargeId || payment.id) || '' },
+    { key: 'customer_identity', label: 'Customer identity/contact', ready: !!(customerName && (claim.email || payment && payment.email || recurring && recurring.email || claim.phone || payment && payment.phone || recurring && recurring.phone)), reference: customerName },
+    { key: 'vehicle_identity', label: 'Vehicle VIN/tag', ready: !!(vehicle.id && vehicle.vin && (vehicle.plate || vehicle.stock)), reference: [vehicleNameFromParts(vehicle), vehicle.vin, vehicle.plate || vehicle.stock].filter(Boolean).join(' | ') },
+    { key: 'agreement', label: 'Signed agreement', ready: !!(contract.id && (signature.id || contract.signedDocumentHash || contract.signatureId)), reference: signature.id || contract.signatureId || contract.id || '' },
+    { key: 'autopay_authorization', label: 'Recurring authorization', ready: !!(recurring && (recurring.autopayConsentAt || recurring.cardSavedAt || recurring.stripeCardSavedAt)), reference: recurring && (recurring.autopayConsentAt || recurring.stripeCardSavedAt || recurring.cardSavedAt) || '' },
+    { key: 'pickup', label: 'Vehicle pickup/handoff', ready: !!(pickup.id && /picked up|completed/i.test(String(pickup.status || ''))), reference: pickup.id || '' },
+    { key: 'communications', label: 'Customer communications', ready: messages.length > 0, reference: messages.length + ' linked message(s)' },
+    { key: 'prior_history', label: 'Prior successful payments', ready: priorPayments.length > 0, reference: priorPayments.length + ' prior paid transaction(s)' },
+    { key: 'documents', label: 'Receipts/ID/insurance records', ready: documents.length > 0, reference: documents.map(row => row.id).join(', ') }
+  ];
+  const timeline = [
+    contract.createdAt && { at: contract.createdAt, event: 'Customer agreement created', reference: contract.id },
+    signature.signedAt && { at: signature.signedAt, event: 'Agreement signed', reference: signature.id },
+    recurring && (recurring.autopayConsentAt || recurring.stripeCardSavedAt) && { at: recurring.autopayConsentAt || recurring.stripeCardSavedAt, event: 'Recurring card authorization recorded', reference: recurring.id },
+    pickup.completedAt && { at: pickup.completedAt, event: 'Vehicle picked up', reference: pickup.id },
+    payment && { at: payment.createdAt || payment.date, event: 'Disputed payment recorded', reference: payment.stripePaymentIntentId || payment.id },
+    claim.createdAt && { at: claim.createdAt, event: 'Stripe dispute opened', reference: claim.disputeId }
+  ].filter(Boolean).sort((a, b) => Date.parse(a.at || '') - Date.parse(b.at || ''));
+  return {
+    generatedAt: new Date().toISOString(),
+    generatedBy: 'Star evidence preparation',
+    customer: customerName,
+    paymentId: payment && payment.id || '',
+    recurringPaymentId: recurring && recurring.id || '',
+    vehicleId: vehicle.id || '',
+    vin: vehicle.vin || claim.vin || '',
+    licensePlate: vehicle.plate || vehicle.stock || claim.plate || '',
+    contractId: contract.id || '',
+    signatureId: signature.id || '',
+    pickupAppointmentId: pickup.id || '',
+    proof,
+    missing: proof.filter(item => !item.ready).map(item => item.label),
+    timeline,
+    messageIds: messages.map(row => row.id),
+    documentIds: documents.map(row => row.id),
+    priorPaymentIds: priorPayments.map(row => row.id),
+    guardrail: 'Owner must review reason-specific evidence and approve submission. Stripe and Star do not decide the outcome; the card issuer does.'
+  };
+}
+async function stripeDisputeClaim(data, dispute = {}) {
+  let charge = {};
+  let intent = {};
+  try {
+    if (stripeObjectId(dispute.charge)) charge = await stripe.retrieveCharge(stripeObjectId(dispute.charge));
+    if (stripeObjectId(charge.payment_intent || dispute.payment_intent)) intent = await stripe.retrievePaymentIntent(stripeObjectId(charge.payment_intent || dispute.payment_intent));
+  } catch (err) {
+    data.integrations = data.integrations || {};
+    data.integrations.stripe = data.integrations.stripe || {};
+    data.integrations.stripe.lastDisputeLookupError = String(err && err.message || err);
+  }
+  const metadata = { ...(intent.metadata || {}), ...(charge.metadata || {}), ...(dispute.metadata || {}) };
+  const enriched = { ...dispute, metadata, customer: stripeObjectId(intent.customer || charge.customer || dispute.customer), payment_intent: stripeObjectId(intent) || stripeObjectId(charge.payment_intent || dispute.payment_intent), charge: stripeObjectId(charge) || stripeObjectId(dispute.charge) };
+  const payment = stripePaymentForObject(data, enriched);
+  const recurring = stripeRecurringForObject(data, enriched, payment);
+  const identity = recurring ? recurringPaymentIdentity(data, recurring, payment || {}) : {};
+  const customer = payment && payment.customer || recurring && recurring.customer || metadata.customerName || 'Unmatched Stripe dispute';
+  const dueBy = Number(dispute.evidence_details && dispute.evidence_details.due_by || 0);
+  const statusMap = { warning_needs_response: 'Early fraud warning', needs_response: 'Needs response', under_review: 'Under review', won: 'Won', lost: 'Lost' };
+  const claimId = 'claim-stripe-dispute-' + String(dispute.id || crypto.randomBytes(8).toString('hex'));
+  let claim = (data.claims || []).find(row => row.id === claimId || row.stripeDisputeId === dispute.id);
+  const patch = {
+    id: claimId,
+    type: 'Stripe dispute',
+    source: 'Stripe signed webhook',
+    provider: 'Stripe',
+    disputeId: dispute.id || '',
+    stripeDisputeId: dispute.id || '',
+    paymentId: payment && payment.id || '',
+    stripePaymentIntentId: enriched.payment_intent || payment && payment.stripePaymentIntentId || '',
+    stripeChargeId: enriched.charge || payment && payment.stripeChargeId || '',
+    customer,
+    phone: payment && payment.phone || recurring && recurring.phone || '',
+    email: payment && payment.email || recurring && recurring.email || '',
+    vehicle: identity.vehicle || payment && payment.vehicle || recurring && recurring.vehicle || '',
+    vehicleId: identity.vehicleId || payment && payment.vehicleId || recurring && recurring.vehicleId || '',
+    vin: identity.vin || payment && payment.vin || recurring && recurring.vin || '',
+    plate: identity.plate || payment && (payment.plate || payment.licensePlate) || recurring && (recurring.plate || recurring.licensePlate) || '',
+    tracker: identity.tracker || payment && payment.tracker || recurring && recurring.tracker || '',
+    amount: Number(dispute.amount || 0) / 100,
+    currency: String(dispute.currency || 'usd').toUpperCase(),
+    reason: dispute.reason || '',
+    status: statusMap[dispute.status] || dispute.status || 'Needs response',
+    disputeWorkflowStatus: statusMap[dispute.status] || dispute.status || 'Needs response',
+    deadline: dueBy ? new Date(dueBy * 1000).toISOString() : '',
+    customerMatchStatus: payment && customer && !/^unmatched/i.test(customer) ? 'Matched to Stripe payment/customer' : 'Needs payment/customer match',
+    reference: enriched.payment_intent || enriched.charge || dispute.id || '',
+    notes: 'Created automatically from a signed Stripe dispute webhook. Star prepared linked evidence; owner approval is required before submission.',
+    createdAt: claim && claim.createdAt || (Number(dispute.created || 0) ? new Date(Number(dispute.created) * 1000).toISOString() : new Date().toISOString()),
+    updatedAt: new Date().toISOString()
+  };
+  if (claim) Object.assign(claim, patch);
+  else {
+    data.claims = Array.isArray(data.claims) ? data.claims : [];
+    claim = patch;
+    data.claims.unshift(claim);
+  }
+  claim.evidencePacket = stripeDisputeEvidencePacket(data, claim, payment, recurring);
+  claim.evidenceReadiness = claim.evidencePacket.missing.length ? 'Needs evidence' : 'Ready for owner review';
+  return claim;
+}
+async function recordStripeWebhookEvent(event = {}) {
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  data.integrations.stripe = data.integrations.stripe || {};
+  const stripeState = data.integrations.stripe;
+  stripeState.webhookEventIds = Array.isArray(stripeState.webhookEventIds) ? stripeState.webhookEventIds : [];
+  if (event.id && stripeState.webhookEventIds.includes(event.id)) return { ok: true, received: false, duplicate: true, eventId: event.id };
+  const type = String(event.type || '');
+  const object = event.data && event.data.object || {};
+  let cardSetupRequestId = '';
+  let paymentRequestId = '';
+  let disputeClaimId = '';
+  if (type === 'checkout.session.completed') {
+    const metadata = object.metadata || {};
+    if (object.mode === 'setup' || metadata.flow === 'card_setup') {
+      const request = (data.cardSetupRequests || []).find(row => row.id === metadata.cardSetupRequestId || row.id === object.client_reference_id || row.stripeCheckoutSessionId === object.id);
+      if (request) {
+        await completeStripeCardSetup(data, request, object);
+        cardSetupRequestId = request.id;
+      }
+    } else if (object.mode === 'payment' && String(object.payment_status || '').toLowerCase() === 'paid') {
+      const request = (data.paymentRequests || []).find(row => row.id === metadata.paymentRequestId || row.id === object.client_reference_id || row.stripeCheckoutSessionId === object.id || row.providerCheckoutSessionId === object.id);
+      if (request) {
+        const intentId = stripeObjectId(object.payment_intent);
+        recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: intentId, paidAt: Number(object.created || 0) ? new Date(Number(object.created) * 1000).toISOString() : new Date().toISOString() });
+        request.stripeCheckoutSessionId = object.id || '';
+        request.stripePaymentIntentId = intentId;
+        paymentRequestId = request.id;
+      }
+    }
+  }
+  if (/^charge\.dispute\.(created|updated|closed)$/.test(type)) {
+    const claim = await stripeDisputeClaim(data, object);
+    disputeClaimId = claim.id;
+    await queueOwnerEmailNotification(data, 'claim_dispute', {
+      customer: claim.customer || 'Unmatched Stripe dispute',
+      subject: 'Stripe dispute ' + (claim.status || 'needs review') + ' - ' + (claim.customer || claim.disputeId),
+      body: ['Stripe dispute received.', 'Customer: ' + (claim.customer || 'Unmatched'), 'Amount: ' + moneyText(claim.amount || 0), 'Reason: ' + (claim.reason || 'Not provided'), 'Deadline: ' + (claim.deadline || 'Not provided'), 'Payment: ' + (claim.stripePaymentIntentId || claim.stripeChargeId || 'Not matched'), 'Evidence: ' + (claim.evidenceReadiness || 'Needs review')].join('\n')
+    });
+  }
+  stripeState.webhookEventIds = event.id ? [event.id, ...stripeState.webhookEventIds].slice(0, 500) : stripeState.webhookEventIds;
+  stripeState.lastWebhookAt = new Date().toISOString();
+  stripeState.lastWebhookType = type;
+  stripeState.lastWebhookError = '';
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId };
 }
 
 function telnyxWebhookEventType(payload = {}) {
@@ -11612,15 +12132,28 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/apply' && req.method === 'GET') return send(res, 302, '', 'text/plain; charset=utf-8', { Location: '/inventory', 'Cache-Control': 'no-store' });
     if (url.pathname.startsWith('/setup-card/') && req.method === 'GET') {
-      const requestId = url.pathname.split('/').filter(Boolean)[1];
+      const parts = url.pathname.split('/').filter(Boolean);
+      const requestId = parts[1];
       const data = await readData();
       data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
       const request = data.cardSetupRequests.find(item => item.id === requestId);
       if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'));
+      if (parts[2] === 'stripe-success') {
+        try {
+          await completeStripeCardSetup(data, request, String(url.searchParams.get('session_id') || ''));
+          if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
+          return send(res, 200, paymentResultHtml('Card saved securely', 'Stripe confirmed the card setup. If Clover was already active, WheelsonAuto will keep it active until the owner confirms the provider switch.', '/customer', 'Back to my account'));
+        } catch (err) {
+          request.lastError = String(err && err.message || err);
+          request.lastFailedAt = new Date().toISOString();
+          await writeData(data);
+          return send(res, Number(err && err.statusCode || 400), stripeSetupCardHtml(request, request.lastError));
+        }
+      }
       if (String(request.status || '').toLowerCase().includes('card saved')) {
         return send(res, 200, paymentResultHtml('Card already saved', 'This WheelsonAuto card setup link has already been completed.'));
       }
-      return send(res, 200, setupCardHtml(request));
+      return send(res, 200, normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' ? stripeSetupCardHtml(request) : setupCardHtml(request));
     }
     if (url.pathname.startsWith('/pay/') && req.method === 'GET') {
       const parts = url.pathname.split('/').filter(Boolean);
@@ -11637,6 +12170,23 @@ const server = http.createServer(async (req, res) => {
         const returnedSessionId = String(url.searchParams.get('session_id') || '');
         const expectedSessionId = String(request.providerCheckoutSessionId || request.checkoutSessionId || '');
         if (returnedSessionId && expectedSessionId && returnedSessionId !== expectedSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned secure checkout did not match this WheelsonAuto payment request. No payment was recorded.'));
+        if (normalizedPaymentProvider(request.paymentProvider) === 'stripe' && returnedSessionId) {
+          try {
+            const session = await stripe.retrieveCheckoutSession(returnedSessionId);
+            const paymentIntent = session.payment_intent || {};
+            if (String(session.payment_status || '').toLowerCase() === 'paid' && stripeObjectId(paymentIntent)) {
+              recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: stripeObjectId(paymentIntent), paidAt: new Date(Number(session.created || 0) * 1000 || Date.now()).toISOString() });
+              request.stripePaymentIntentId = stripeObjectId(paymentIntent);
+              request.stripeCheckoutSessionId = session.id || returnedSessionId;
+              await protectConcurrentLocalWrites(data, { preferIncoming: true });
+              await writeData(data);
+              if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
+              return send(res, 200, paymentResultHtml('Payment received', 'Stripe verified this payment and WheelsonAuto updated the customer account.'));
+            }
+          } catch (err) {
+            request.lastVerificationError = String(err && err.message || err);
+          }
+        }
         request.status = 'Awaiting signed ' + paymentProviderLabel(request.paymentProvider) + ' confirmation';
         request.checkoutReturnedAt = new Date().toISOString();
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
@@ -12024,6 +12574,27 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 404, { ok: false, error: 'Unknown onboarding step.' });
     }
+    if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/stripe-checkout') && req.method === 'POST') {
+      const requestId = url.pathname.split('/').filter(Boolean)[3];
+      const rawBody = await readBody(req, 64 * 1024);
+      const form = new URLSearchParams(rawBody);
+      const data = await readData();
+      data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
+      const request = data.cardSetupRequests.find(item => item.id === requestId);
+      if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'));
+      if (form.get('consent') !== 'yes') return send(res, 400, stripeSetupCardHtml(request, 'Confirm the recurring card authorization before continuing.'));
+      try {
+        const session = await attachStripeCardSetupCheckout(data, request, req);
+        if (!session.url) throw new Error('Stripe did not return a secure checkout URL.');
+        return send(res, 303, '', 'text/plain', { Location: session.url, 'Cache-Control': 'no-store' });
+      } catch (err) {
+        request.status = 'Stripe setup needs attention';
+        request.lastError = String(err && err.message || err);
+        request.lastFailedAt = new Date().toISOString();
+        await writeData(data);
+        return send(res, Number(err && err.statusCode || 502), stripeSetupCardHtml(request, request.lastError));
+      }
+    }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
       const requestId = url.pathname.split('/').filter(Boolean)[3];
       const payload = await readJsonBody(req);
@@ -12143,6 +12714,20 @@ const server = http.createServer(async (req, res) => {
         await writeData(data);
       }
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
+    }
+    if (url.pathname === '/api/webhooks/stripe' && req.method === 'POST') {
+      if (!STRIPE_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'STRIPE_WEBHOOK_SECRET is not configured.' });
+      const rawBody = await readBody(req, 1024 * 1024);
+      const verification = stripeAdapter.verifyWebhook(rawBody, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+      if (!verification.ok) return json(res, 401, { ok: false, error: verification.reason || 'Unauthorized Stripe webhook.' });
+      let event;
+      try { event = JSON.parse(rawBody || '{}'); } catch { return json(res, 400, { ok: false, error: 'Stripe webhook body must be valid JSON.' }); }
+      try {
+        return json(res, 200, await recordStripeWebhookEvent(event));
+      } catch (err) {
+        console.error('Stripe webhook processing failed:', err && err.message || err);
+        return json(res, 500, { ok: false, error: 'Stripe webhook processing failed.' });
+      }
     }
     if (url.pathname === '/api/webhooks/clover' && req.method === 'POST') {
       const rawBody = await readBody(req, 256 * 1024);
@@ -13110,6 +13695,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/card-change' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const data = await readData();
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
@@ -13123,6 +13709,7 @@ const server = http.createServer(async (req, res) => {
       });
       const recurring = context.recurring || {};
       const customerName = context.customerName || account.customer || account.name || 'Customer';
+      const requestedProvider = normalizedPaymentProvider(form.get('paymentProvider') || recurring.paymentProvider || recurring.provider || WOA_PAYMENT_PROVIDER);
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       if (!recurring.id && !account.recurringPaymentId) {
         const message = {
@@ -13173,6 +13760,7 @@ const server = http.createServer(async (req, res) => {
         frequency: recurring.frequency || 'Weekly',
         nextRun: recurring.nextRun || localDateKey(),
         chargeTime: recurring.chargeTime || recurring.paymentTime || '18:00',
+        paymentProvider: requestedProvider,
         reason: 'Customer portal card change request',
         notes: 'Customer requested to change card on file from the WheelsonAuto portal.'
       });
@@ -13422,26 +14010,36 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, refund: request });
     }
-    if (url.pathname === '/api/integrations/clover/disputes/action' && req.method === 'POST') {
+    if ((url.pathname === '/api/integrations/clover/disputes/action' || url.pathname === '/api/integrations/payments/disputes/action') && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change a dispute response status.' });
       const payload = await readJsonBody(req, 128 * 1024);
       if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required before changing a dispute response status.' });
       const data = await readData();
-      const claim = (data.claims || []).find(row => row.id === payload.claimId && /clover|dispute|chargeback/i.test(String([row.type, row.source, row.provider].filter(Boolean).join(' '))));
-      if (!claim) return json(res, 404, { ok: false, error: 'Clover dispute case was not found.' });
+      const claim = (data.claims || []).find(row => row.id === payload.claimId && /clover|stripe|dispute|chargeback/i.test(String([row.type, row.source, row.provider].filter(Boolean).join(' '))));
+      if (!claim) return json(res, 404, { ok: false, error: 'Payment dispute case was not found.' });
       const action = String(payload.action || '').toLowerCase();
       const statuses = { evidence_ready: 'Evidence ready', submitted: 'Response submitted', won: 'Won', lost: 'Lost', closed: 'Closed' };
       if (!statuses[action]) return json(res, 400, { ok: false, error: 'Choose evidence_ready, submitted, won, lost, or closed.' });
-      if (action === 'evidence_ready' && (String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !claim.customer || !claim.paymentId && !claim.cloverPaymentId)) return json(res, 409, { ok: false, error: 'Match the customer and Clover payment before marking the evidence package ready.' });
+      const stripeClaim = /stripe/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' ')));
+      if (stripeClaim) {
+        const payment = (data.payments || []).find(row => row.id === claim.paymentId || claim.stripePaymentIntentId && row.stripePaymentIntentId === claim.stripePaymentIntentId) || null;
+        const recurring = findRecurringRow(data, payment && payment.recurringPaymentId || claim.recurringPaymentId || '');
+        claim.evidencePacket = stripeDisputeEvidencePacket(data, claim, payment, recurring);
+        claim.evidenceReadiness = claim.evidencePacket.missing.length ? 'Needs evidence' : 'Ready for owner review';
+      }
+      if (action === 'evidence_ready' && (String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !claim.customer || !claim.paymentId && !claim.cloverPaymentId && !claim.stripePaymentIntentId)) return json(res, 409, { ok: false, error: 'Match the customer and provider payment before marking the evidence package ready.' });
+      if (action === 'evidence_ready' && stripeClaim && claim.evidencePacket && claim.evidencePacket.missing.length) return json(res, 409, { ok: false, error: 'Evidence is still missing: ' + claim.evidencePacket.missing.join(', ') + '.' });
+      if (action === 'submitted' && !String(payload.providerSubmissionReference || '').trim()) return json(res, 409, { ok: false, error: 'Enter the Stripe/Clover submission confirmation reference before marking this dispute submitted.' });
       const now = new Date().toISOString();
       claim.status = statuses[action];
       claim.disputeWorkflowStatus = statuses[action];
       claim.disputeUpdatedAt = now;
       claim.disputeUpdatedBy = String(user.name || user.username || 'Owner');
       claim.notes = [claim.notes, String(payload.notes || '').trim()].filter(Boolean).join(' | ');
+      if (payload.providerSubmissionReference) claim.providerSubmissionReference = String(payload.providerSubmissionReference).trim();
       claim.workflowHistory = Array.isArray(claim.workflowHistory) ? claim.workflowHistory : [];
       claim.workflowHistory.push({ at: now, action, status: claim.status, by: claim.disputeUpdatedBy, notes: String(payload.notes || '').trim() });
-      appendAuditLog(data, user, 'Clover dispute status updated', [claim.customer || 'Unassigned', claim.reference || claim.disputeId || claim.id, claim.status]);
+      appendAuditLog(data, user, paymentProviderLabel(claim.provider || (stripeClaim ? 'stripe' : 'clover')) + ' dispute status updated', [claim.customer || 'Unassigned', claim.reference || claim.disputeId || claim.id, claim.status, claim.providerSubmissionReference || 'No provider reference']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, dispute: claim });
@@ -15027,7 +15625,50 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 201, { ok: true, autopay: created.autopay, setupLink: created.request });
     }
-    if (url.pathname === '/api/integrations/clover/manual-charge' && req.method === 'POST') {
+    if (url.pathname === '/api/payment-provider/switch' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can switch an active autopay provider.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required before switching an active autopay provider.' });
+      const data = await readData();
+      const recurring = findRecurringRow(data, String(payload.recurringPaymentId || payload.id || '').trim());
+      if (!recurring) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      const target = normalizedPaymentProvider(payload.paymentProvider || payload.provider);
+      const current = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+      if (!['clover', 'stripe'].includes(target)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe.' });
+      if (target === current) return json(res, 200, { ok: true, unchanged: true, paymentProvider: target, recurring });
+      if (target === 'stripe') {
+        if (!recurring.stripeCustomerId || !recurring.stripePaymentMethodId) return json(res, 409, { ok: false, error: 'Stripe card setup is not complete for this customer.' });
+        if ((recurring.cloverSubscriptionId || recurring.cloverPaymentSource) && payload.cloverStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that the Clover recurring schedule was stopped before activating Stripe. This prevents duplicate charges.' });
+      }
+      if (target === 'clover') {
+        if (!recurring.cloverCustomerId || !recurring.cloverPaymentSource) return json(res, 409, { ok: false, error: 'A chargeable Clover saved-card source is not linked to this customer.' });
+        if (current === 'stripe' && payload.stripeStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that Stripe autopay was stopped before reactivating Clover. This prevents duplicate charges.' });
+      }
+      const now = new Date().toISOString();
+      const patch = target === 'stripe' ? {
+        paymentProvider: 'stripe',
+        provider: 'Stripe',
+        paymentSetup: 'Stripe card saved and chargeable',
+        cardLabel: recurring.stripeCardBrand || recurring.cardLabel || '',
+        cardLast4: recurring.stripeCardLast4 || recurring.cardLast4 || '',
+        cardSavedAt: recurring.stripeCardSavedAt || recurring.cardSavedAt || now,
+        stripeMigrationStatus: 'Stripe active - Clover stop confirmed',
+        autopayManagedBy: 'WheelsonAuto / Stripe'
+      } : {
+        paymentProvider: 'clover',
+        provider: 'Clover',
+        paymentSetup: 'Clover card saved and chargeable',
+        stripeMigrationStatus: 'Clover active - Stripe stop confirmed',
+        autopayManagedBy: 'WheelsonAuto / Clover'
+      };
+      Object.assign(patch, { status: 'Active', tone: 'good', autoChargeEnabled: true, providerSwitchedAt: now, providerSwitchedBy: user.name || user.username || 'Owner', updatedAt: now });
+      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
+      appendAuditLog(data, user, 'Autopay provider switched', [recurring.customer || 'Unknown customer', paymentProviderLabel(current) + ' to ' + paymentProviderLabel(target), recurring.nextRun || 'No next date', recurring.chargeTime || 'No charge time']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, paymentProvider: target, recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId) });
+    }
+    if ((url.pathname === '/api/integrations/clover/manual-charge' || url.pathname === '/api/integrations/payments/manual-charge') && req.method === 'POST') {
       const payload = await readJsonBody(req);
       const data = await readData();
       try {
@@ -15046,7 +15687,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (recurring) {
           const attempts = Math.min(2, Number(recurring.retryCount || recurring.failedAttempts || 0) + 1);
-          const payment = saveFailedChargeResult(data, recurring, payload, err, { attempts, source: 'Manual saved-card charge failed' });
+          const payment = saveFailedChargeResult(data, recurring, payload, err, { attempts, method: paymentProviderLabel(recurring.paymentProvider || recurring.provider || 'clover') + ' saved card', source: 'Manual saved-card charge failed' });
           appendAuditLog(data, user, 'Manual saved-card charge failed', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || recurring.amount || 0), payment.status, String(err && err.message || err)]);
           await protectConcurrentLocalWrites(data);
           await writeData(data);
