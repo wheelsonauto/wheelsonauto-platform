@@ -1265,6 +1265,20 @@ async function main() {
       }
     });
     assert(currentOperationalAlertEvidence.live === true, 'A current provider delivery test bound to the active alert configuration must satisfy the failure-alert launch gate.');
+    const legacyOperationalAlertState = {
+      integrations: {
+        notifications: {
+          emailRecipients: ['owner-alerts@example.com'],
+          events: ['payment_failed'],
+          lastOperationalAlertAt: new Date().toISOString(),
+          lastOperationalAlertSuccess: true,
+          lastOperationalAlertExternalId: 'direct-operational-alert-proof'
+        }
+      }
+    };
+    legacyOperationalAlertState.integrations.notifications.lastOperationalAlertConfigurationFingerprint = operationalAlertConfigurationFingerprint(legacyOperationalAlertState);
+    const legacyOperationalAlertEvidence = operationalAlertEvidence(legacyOperationalAlertState);
+    assert(legacyOperationalAlertEvidence.live === true && legacyOperationalAlertEvidence.systemErrorEventEnabled === true, 'Legacy notification event lists must automatically include operational failure alerts when WOA_ERROR_ALERTS_ENABLED is active.');
     const staleOperationalAlertEvidence = operationalAlertEvidence({
       integrations: {
         notifications: {

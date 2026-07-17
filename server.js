@@ -863,10 +863,11 @@ function emailNotificationSettings(data = {}) {
   const recipients = rawRecipients.map(item => String(item || '').trim()).filter(Boolean);
   if (!recipients.length && WOA_EMAIL_OWNER_NOTIFY) recipients.push(WOA_EMAIL_OWNER_NOTIFY);
   const defaultEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message', 'system_error'];
+  const events = Array.isArray(saved.events) && saved.events.length ? saved.events.slice() : defaultEvents.slice();
   return {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
     emailRecipients: Array.from(new Set(recipients.map(item => item.toLowerCase()))),
-    events: Array.isArray(saved.events) && saved.events.length ? saved.events : defaultEvents,
+    events,
     lastTestAt: saved.lastTestAt || '',
     lastError: saved.lastError || ''
   };
@@ -883,7 +884,8 @@ function operationalAlertConfiguration(data = {}) {
   const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
   const recipients = settings.emailRecipients.map(value => String(value || '').trim().toLowerCase()).filter(Boolean).sort();
   const events = Array.from(new Set((settings.events || []).map(value => String(value || '').trim()).filter(Boolean))).sort();
-  const systemErrorEventEnabled = events.includes('system_error');
+  // Operational failures use their own Render-controlled alert switch, not the customer-notification event filter.
+  const systemErrorEventEnabled = WOA_ERROR_ALERTS_ENABLED || events.includes('system_error');
   const emailConfigured = emailProviderConfigured(provider);
   return {
     provider,
@@ -893,7 +895,7 @@ function operationalAlertConfiguration(data = {}) {
     alertsEnabled: WOA_ERROR_ALERTS_ENABLED,
     emailEnabled: settings.emailEnabled,
     systemErrorEventEnabled,
-    configured: !!(WOA_ERROR_ALERTS_ENABLED && settings.emailEnabled && emailConfigured && recipients.length && systemErrorEventEnabled)
+    configured: !!(WOA_ERROR_ALERTS_ENABLED && settings.emailEnabled && emailConfigured && recipients.length)
   };
 }
 function telnyxCarrierReadiness(data = {}, provider = '') {
@@ -2593,7 +2595,9 @@ async function recordOperationalFailure(source, error, context = {}, options = {
   operationalErrorAlerts.set(key, Date.now());
   try {
     const data = await readData();
-    const notification = await queueOwnerEmailNotification(data, 'system_error', {
+    const notification = await queueEmailNotification(data, {
+      to: emailNotificationSettings(data).emailRecipients[0],
+      event: 'system_error',
       customer: 'WheelsonAuto system',
       subject: 'WheelsonAuto needs review: ' + safeSource,
       body: [
@@ -8368,7 +8372,6 @@ function operationalAlertConfigurationFingerprint(data = {}) {
     configuration.emailEnabled ? '1' : '0',
     configuration.systemErrorEventEnabled ? '1' : '0',
     configuration.recipients.join(','),
-    configuration.events.join(','),
     WOA_ERROR_ALERT_WINDOW_MS,
     WOA_EMAIL_FROM,
     WOA_EMAIL_REPLY_TO,
@@ -8394,7 +8397,6 @@ function operationalAlertEvidence(data = {}) {
   else if (!configuration.emailEnabled) error = 'Email notifications are turned off in WheelsonAuto settings or Render.';
   else if (!configuration.emailConfigured) error = 'Configure a live Resend or SendGrid sender before validating operational alerts.';
   else if (!configuration.recipients.length) error = 'Add an owner alert email recipient before validating operational alerts.';
-  else if (!configuration.systemErrorEventEnabled) error = 'Enable the system_error notification event before validating operational alerts.';
   else if (!verified) error = String(notificationState.lastOperationalAlertError || 'Run the owner-only operational alert test after the current Render settings are deployed.');
   else if (!configurationMatched) error = 'The recorded operational alert test belongs to an older or unknown email configuration. Run a new owner test after the current Render settings are deployed.';
   else if (!fresh) error = 'The operational alert test is stale. Run a new owner test before the controlled Stripe launch.';
