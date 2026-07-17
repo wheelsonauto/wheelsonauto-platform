@@ -65,11 +65,15 @@ IDs, insurance, contracts, signatures, receipts, and dispute evidence should
 only be downloaded through the authenticated application route.
 
 If legacy files exist, make a backup first and test migration with a copied
-state file. The document migrator never deletes originals unless an explicit
-delete flag is supplied:
+state file. Run the production migration only in a maintenance window while
+application writes are paused. The document migrator creates an additional
+immutable pre-migration backup, encrypts each file, reads the exact bytes back
+to verify them before changing its record, and never deletes originals unless
+an explicit delete flag is supplied:
 
 ```sh
 WOA_PRIVATE_DOCUMENT_MIGRATION_CONFIRM=1 \
+WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM=1 \
 WOA_DOCUMENT_STORAGE_PROVIDER=s3 \
 WOA_DOCUMENT_ENCRYPTION_KEY='<base64 key>' \
 ...provider variables... \
@@ -78,6 +82,13 @@ pnpm run migrate-private-documents -- /secure/path/to/copied-data.json
 
 Verify authenticated staff downloads before setting
 `WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1` in production.
+
+The migration script has a repeat-safe test that proves the maintenance
+guard, backup, encryption/read-back, legacy retention, and no-op rerun path:
+
+```sh
+node scripts/private-document-migration-check.js
+```
 
 Before enabling production hardening, use **Settings -> System health ->
 Validate private storage** once from the deployed app. The owner-only route is:
