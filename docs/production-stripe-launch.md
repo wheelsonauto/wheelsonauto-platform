@@ -313,6 +313,17 @@ PostgreSQL, encrypted private storage, Stripe live/webhook settings, a stable
 session secret, or HTTPS public URL are missing. This is deliberate: it keeps a
 partial configuration from quietly processing live money or private documents.
 
+Before each deployment rehearsal, run the guard test as well:
+
+```sh
+pnpm run production-startup-gate-check
+```
+
+It launches a clean temporary process with hardened mode on but no provider
+credentials, PostgreSQL database, or private object store. The test passes only
+when that process exits before opening an HTTP listener and names the missing
+launch safeguards. It never reads or changes the live `data.json` file.
+
 ## 8. Recovery and Monitoring
 
 The owner can list PostgreSQL snapshots with:
