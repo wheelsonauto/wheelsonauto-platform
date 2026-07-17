@@ -18,7 +18,7 @@ assert(server.includes('passTimePortalMode: !config.configured'), 'Portal readin
 assert(server.includes("passTimeControlCommands: false"), 'PassTime control commands must stay disabled.');
 assert(styles.includes('.passtime-portal-panel'), 'WheelsonAuto portal-mode styling is missing.');
 assert(styles.includes('.tracker-portal-row'), 'Fleet tracker launcher styling is missing.');
-assert(index.includes('platform-20260717-passtime-portal-136'), 'Frontend cache version was not advanced.');
+assert(index.includes('platform-20260717-production-foundation-137'), 'Frontend cache version was not advanced.');
 assert(!app.includes("status:'Ready - PassTime API access needed'"), 'Frontend still labels portal mode as blocked on API access.');
 
 console.log('PassTime portal checks passed: reusable OASIS tab, themed setup, role guard, and dormant control path are enforced.');
