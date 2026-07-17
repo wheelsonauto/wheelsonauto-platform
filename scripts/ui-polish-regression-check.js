@@ -124,7 +124,7 @@ for (const action of ['sync-all', 'reactivate-customer', 'new-autopay']) {
   "['Overview','Closeout','Accounting','Risk']",
   "['Overview','Inventory','Applications','Performance']",
   'function WebsitePerformanceBoard()',
-  'integratedLedgerWorkspace()+accountingControlPanel()+carProfitabilityPanel()',
+  'integratedLedgerWorkspace()+carProfitabilityPanel()',
   'starSystemAuditorBoard()+disputeIdentityResolverBoard()+customerRiskReportPanel()',
   'var __woaOwnerReportCompatibility=Reports',
   'function premiumFleetStatus(status,withCustomer,conflict)',

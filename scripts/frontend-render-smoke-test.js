@@ -458,7 +458,7 @@ function ownerSmoke() {
   assert(context.apiProviders().find(row => row.id === 'insurance').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point insurance to the live verification adapter.');
   assert(context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/api/webhooks/stripe') && context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/identity'), 'Client fallback provider rows must expose Stripe Identity onboarding and signed Stripe callbacks.');
   assert(context.apiProviders().find(row => row.id === 'background-checks').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point background screening to the shared secure verification adapter.');
-  assert(context.apiProviders().find(row => row.id === 'background-checks').status === 'Ready - manual review', 'Background screening must be honestly usable for manual review while an authoritative provider remains optional.');
+  assert(context.apiProviders().find(row => row.id === 'background-checks').status === 'Ready - provider setup', 'Background screening must keep manual review usable while honestly showing that authoritative Checkr results still need provider setup.');
   assert(context.apiProviders().find(row => row.id === 'tracker-gps').endpoint.includes('/api/webhooks/tracker'), 'Client fallback provider rows must expose the live tracker adapter and signed callback.');
   assert(context.apiProviders().find(row => row.id === 'marketing').endpoint.includes('/api/webhooks/marketing'), 'Client fallback provider rows must expose the live marketing lead adapter and signed callback.');
   context.db.applications = context.db.applications || [];
@@ -562,15 +562,15 @@ function ownerSmoke() {
     ['Operations service', 'Operations', 'Service', ['Operations', 'Service work', 'staff-card-board']],
     ['Operations claims', 'Operations', 'Claims', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board']],
     ['Operations Clover', 'Operations', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'integration-workspace']],
-    ['Operations verification', 'Operations', 'Verification', ['Insurance', 'Verification review', 'integration-workspace']],
+    ['Operations verification', 'Operations', 'Verification', ['Verification', 'Verification review', 'integration-workspace']],
     ['Maintenance route', 'Maintenance', 'Open', ['Maintenance', 'Open service work', 'staff-card-board'], true],
     ['Dispatch command', 'Dispatch', undefined, ['Dispatch', 'Dispatch command', 'Work orders from tasks', 'Priority queue', 'Dispatch tasks'], true],
     ['Claims open', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board'], true],
     ['Claims Clover', 'Claims & Issues', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'Disputes', 'Refunds', 'Unmatched', 'integration-workspace'], true],
-    ['Verification review', 'Insurance', 'Review', ['Insurance', 'Verification review', 'Missing verified proof', 'Pending or expiring', 'integration-workspace'], true],
-    ['Verification insurance', 'Insurance', 'Insurance', ['Insurance', 'Insurance verification', 'signed provider adapter', 'integration-workspace'], true],
-    ['Verification identity', 'Insurance', 'Identity', ['Insurance', 'Identity &amp; driver license', 'last four', 'integration-workspace'], true],
-    ['Verification background', 'Insurance', 'Background', ['Insurance', 'Background checks', 'background check', 'last four', 'integration-workspace'], true],
+    ['Verification review', 'Insurance', 'Review', ['Verification', 'Verification review', 'Missing verified proof', 'Missing driving record', 'integration-workspace'], true],
+    ['Verification insurance', 'Insurance', 'Insurance', ['Verification', 'Insurance monitoring', 'Customer-authorized provider checks', 'integration-workspace'], true],
+    ['Verification identity', 'Insurance', 'Identity', ['Verification', 'Driver record &amp; identity', 'last four characters', 'integration-workspace'], true],
+    ['Verification background', 'Insurance', 'Background', ['Verification', 'Background checks', 'background check', 'last four characters', 'integration-workspace'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Ask Star', 'Review queue', 'message-star-focused', 'message-thread-grid'], false],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Follow-up', 'message-focused-list'], false],
     ['Documents', 'Documents', undefined, ['Documents', 'Customer requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
@@ -589,9 +589,9 @@ function ownerSmoke() {
     ['Website performance', 'Website', 'Performance', ['Website', 'Website performance', 'Application to onboarding'], false],
     ['Dashboard overview', 'Dashboard', 'Overview', ['Dashboard', 'Business overview', 'Money today'], false],
     ['Dashboard closeout', 'Dashboard', 'Closeout', ['Dashboard', 'Daily closeout', 'Expected today'], false],
-    ['Dashboard accounting', 'Dashboard', 'Accounting', ['Dashboard', 'Accounting', 'Source-linked accounting ledger', '/api/accounting/quickbooks.csv', 'balanced QuickBooks journal export', 'integration-workspace'], false],
+    ['Dashboard accounting', 'Dashboard', 'Accounting', ['Dashboard', 'Accounting ledger', 'One source of truth', '/api/accounting/quickbooks.csv', 'tamper-evident source hash', 'integration-workspace'], false],
     ['Dashboard risk', 'Dashboard', 'Risk', ['Dashboard', 'Risk', 'Star system auditor', 'Dispute identity resolver', 'Customer risk report'], false],
-    ['Legacy owner Reports redirect', 'Reports', 'Accounting', ['Dashboard', 'Accounting', 'Source-linked accounting ledger'], false]
+    ['Legacy owner Reports redirect', 'Reports', 'Accounting', ['Dashboard', 'Accounting ledger', 'One source of truth'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
@@ -618,11 +618,11 @@ function managerSmoke() {
     ['Manager tolls', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Open recovery', 'toll-recovery-list'], true],
     ['Manager claims', 'Claims & Issues', 'Open', ['Claims & Issues', 'Open claims, tolls &amp; issues', 'staff-card-board'], true],
     ['Manager Clover review', 'Claims & Issues', 'Clover', ['Claims & Issues', 'Clover reconciliation', 'Webhook', 'integration-workspace'], true],
-    ['Manager verification', 'Insurance', 'Review', ['Insurance', 'Verification review', 'integration-workspace'], true],
-    ['Manager background verification', 'Insurance', 'Background', ['Insurance', 'Background checks', 'integration-workspace'], true],
+    ['Manager verification', 'Insurance', 'Review', ['Verification', 'Verification review', 'integration-workspace'], true],
+    ['Manager background verification', 'Insurance', 'Background', ['Verification', 'Background checks', 'integration-workspace'], true],
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-shell', 'message-conversation-panel', 'message-empty-state'], false],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Operations snapshot'], false],
-    ['Manager accounting', 'Reports', 'Accounting', ['Reports', 'Source-linked accounting ledger', 'QuickBooks'], false],
+    ['Manager accounting', 'Reports', 'Accounting', ['Reports', 'Accounting ledger', 'QuickBooks'], false],
     ['Manager applications', 'Applications', 'Pipeline', ['Applications', 'New applications', 'native-applications-board'], false],
     ['Manager pickups', 'Applications', 'Pickups', ['Applications', 'Pickup schedule', '5150 NJ-42'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {

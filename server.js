@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const nativeSite = require('./native-site');
 const onboarding = require('./onboarding-service');
 const integrationEngine = require('./integration-engine');
+const riskProviders = require('./risk-provider-adapter');
 const billingEngine = require('./billing-engine');
 const stripeAdapter = require('./stripe-adapter');
 
@@ -44,6 +45,19 @@ const VERIFICATION_WEBHOOK_SECRET = process.env.WOA_VERIFICATION_WEBHOOK_SECRET 
 const IDENTITY_PROVIDER = String(process.env.WOA_IDENTITY_PROVIDER || 'manual').trim().toLowerCase();
 const INSURANCE_PROVIDER = String(process.env.WOA_INSURANCE_PROVIDER || 'manual').trim().toLowerCase();
 const BACKGROUND_PROVIDER = String(process.env.WOA_BACKGROUND_PROVIDER || 'manual').trim().toLowerCase();
+const CHECKR_API_KEY = process.env.CHECKR_API_KEY || process.env.WOA_CHECKR_API_KEY || '';
+const CHECKR_WEBHOOK_SECRET = process.env.CHECKR_WEBHOOK_SECRET || process.env.WOA_CHECKR_WEBHOOK_SECRET || CHECKR_API_KEY;
+const CHECKR_BACKGROUND_PACKAGE = process.env.CHECKR_BACKGROUND_PACKAGE || process.env.WOA_CHECKR_BACKGROUND_PACKAGE || '';
+const CHECKR_MVR_PACKAGE = process.env.CHECKR_MVR_PACKAGE || process.env.WOA_CHECKR_MVR_PACKAGE || '';
+const CHECKR_USE_CASE_CONFIRMED = process.env.CHECKR_USE_CASE_CONFIRMED === '1' || process.env.WOA_CHECKR_USE_CASE_CONFIRMED === '1';
+const CHECKR_API_BASE = (process.env.CHECKR_API_BASE || 'https://api.checkr.com/v1').replace(/\/+$/, '');
+const CANOPY_CONNECT_ALIAS = process.env.CANOPY_CONNECT_ALIAS || process.env.WOA_CANOPY_CONNECT_ALIAS || '';
+const CANOPY_CLIENT_ID = process.env.CANOPY_CLIENT_ID || process.env.WOA_CANOPY_CLIENT_ID || '';
+const CANOPY_CLIENT_SECRET = process.env.CANOPY_CLIENT_SECRET || process.env.WOA_CANOPY_CLIENT_SECRET || '';
+const CANOPY_TEAM_ID = process.env.CANOPY_TEAM_ID || process.env.WOA_CANOPY_TEAM_ID || '';
+const CANOPY_WEBHOOK_SECRET = process.env.CANOPY_WEBHOOK_SECRET || process.env.WOA_CANOPY_WEBHOOK_SECRET || '';
+const CANOPY_API_BASE = (process.env.CANOPY_API_BASE || 'https://app.usecanopy.com/api/v1.0.0').replace(/\/+$/, '');
+const VERIFICATION_MONITOR_MS = Math.max(15 * 60 * 1000, Number(process.env.WOA_VERIFICATION_MONITOR_MS || 6 * 60 * 60 * 1000));
 const TRACKER_PROVIDER = String(process.env.WOA_TRACKER_PROVIDER || 'manual').trim().toLowerCase();
 const TRACKER_WEBHOOK_SECRET = process.env.WOA_TRACKER_WEBHOOK_SECRET || process.env.TRACKER_WEBHOOK_SECRET || '';
 const MARKETING_PROVIDER = String(process.env.WOA_MARKETING_PROVIDER || 'manual').trim().toLowerCase();
@@ -98,7 +112,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-business-hub-112">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260717-risk-accounting-113">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -547,6 +561,8 @@ function repairDataIds(data) {
   data.refundRequests = Array.isArray(data.refundRequests) ? data.refundRequests : [];
   data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
   data.ledgerEntries = Array.isArray(data.ledgerEntries) ? data.ledgerEntries : [];
+  data.accountingAdjustments = Array.isArray(data.accountingAdjustments) ? data.accountingAdjustments : [];
+  data.accountingPeriods = Array.isArray(data.accountingPeriods) ? data.accountingPeriods : [];
   data.calendarEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
   data.publicSite = data.publicSite && typeof data.publicSite === 'object' ? data.publicSite : {};
   repairDuplicateVehicleIds(data);
@@ -620,7 +636,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -1161,6 +1177,161 @@ function verifyVerificationWebhook(rawBody, headers = {}) {
     const value = part.replace(/^(?:sha256=|v1=)/i, '');
     return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
   });
+}
+function checkrProviderConfig() {
+  return {
+    apiKey: CHECKR_API_KEY,
+    backgroundPackage: CHECKR_BACKGROUND_PACKAGE,
+    mvrPackage: CHECKR_MVR_PACKAGE,
+    useCaseConfirmed: CHECKR_USE_CASE_CONFIRMED,
+    baseUrl: CHECKR_API_BASE,
+    country: 'US',
+    state: process.env.WOA_BUSINESS_STATE || 'NJ',
+    city: process.env.WOA_BUSINESS_CITY || 'Blackwood'
+  };
+}
+function canopyProviderConfig() {
+  return {
+    publicAlias: CANOPY_CONNECT_ALIAS,
+    clientId: CANOPY_CLIENT_ID,
+    clientSecret: CANOPY_CLIENT_SECRET,
+    teamId: CANOPY_TEAM_ID,
+    baseUrl: CANOPY_API_BASE
+  };
+}
+function configuredVerificationProvider(type) {
+  const normalized = String(type || '').toLowerCase();
+  if (normalized === 'insurance') return CANOPY_CONNECT_ALIAS ? 'Canopy Connect' : (INSURANCE_PROVIDER !== 'manual' ? INSURANCE_PROVIDER : 'Manual');
+  if (normalized === 'background' || normalized === 'driver_record') return CHECKR_API_KEY ? 'Checkr' : (BACKGROUND_PROVIDER !== 'manual' ? BACKGROUND_PROVIDER : 'Manual');
+  return IDENTITY_PROVIDER === 'stripe' ? 'Stripe Identity' : 'Manual';
+}
+function verificationProviderReadiness() {
+  const checkr = checkrProviderConfig();
+  const canopy = canopyProviderConfig();
+  return {
+    checkr: {
+      configured: riskProviders.checkrConfigured(checkr),
+      credentialReady: !!CHECKR_API_KEY,
+      useCaseConfirmed: CHECKR_USE_CASE_CONFIRMED,
+      backgroundPackageReady: !!CHECKR_BACKGROUND_PACKAGE,
+      mvrPackageReady: !!CHECKR_MVR_PACKAGE,
+      signedWebhookReady: !!CHECKR_WEBHOOK_SECRET,
+      status: riskProviders.checkrConfigured(checkr) && CHECKR_USE_CASE_CONFIRMED ? 'Ready to test' : 'Provider setup needed'
+    },
+    canopy: {
+      configured: riskProviders.canopyConfigured(canopy),
+      customerLinkReady: !!CANOPY_CONNECT_ALIAS,
+      apiReadReady: !!(CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID),
+      signedWebhookReady: !!CANOPY_WEBHOOK_SECRET,
+      monitoringReady: !!(CANOPY_CONNECT_ALIAS && CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID && CANOPY_WEBHOOK_SECRET),
+      status: CANOPY_CONNECT_ALIAS ? (CANOPY_WEBHOOK_SECRET ? 'Ready to test' : 'Customer link ready; webhook setup needed') : 'Provider setup needed'
+    }
+  };
+}
+function verificationCaseForProviderEvent(data, event = {}) {
+  const ids = [event.caseId, event.externalCaseId, event.providerApplicantId, event.providerReportId, event.providerInvitationId, event.providerPullId].map(String).filter(Boolean);
+  return (data.verificationCases || []).find(row => ids.includes(String(row.id || ''))
+    || ids.includes(String(row.externalCaseId || ''))
+    || ids.includes(String(row.providerReportId || ''))
+    || ids.includes(String(row.providerApplicantId || ''))
+    || ids.includes(String(row.providerInvitationId || ''))
+    || ids.includes(String(row.providerPullId || '')));
+}
+function applyVerificationProviderResult(record, event = {}) {
+  integrationEngine.applyVerificationEvent(record, event);
+  if (event.providerSubmittedAt) record.providerSubmittedAt = String(event.providerSubmittedAt);
+  if (event.providerUpdatedAt) record.providerUpdatedAt = String(event.providerUpdatedAt);
+  if (event.occurredAt) record.providerOccurredAt = String(event.occurredAt);
+  if (event.customerActionUrl && /^https:\/\//i.test(String(event.customerActionUrl))) record.customerActionUrl = String(event.customerActionUrl);
+  if (event.reconnectUrl && /^https:\/\//i.test(String(event.reconnectUrl))) record.reconnectUrl = String(event.reconnectUrl);
+  const monitor = riskProviders.verificationMonitorState(record);
+  record.monitorLevel = monitor.level;
+  record.monitorAction = monitor.action;
+  record.daysRemaining = monitor.daysRemaining;
+  record.lastMonitoredAt = new Date().toISOString();
+  return record;
+}
+async function startVerificationProvider(data, record, payload = {}, user = {}) {
+  if (!record) throw new Error('Verification case was not found.');
+  if (payload.consentConfirmed !== true) throw new Error('Confirm the customer-authorized provider invitation before starting the check.');
+  const now = new Date().toISOString();
+  record.consentConfirmedAt = now;
+  record.consentConfirmedBy = String(user.name || user.username || user.role || 'Staff');
+  let result;
+  if (record.type === 'insurance') {
+    result = {
+      provider: 'Canopy Connect',
+      providerStatus: 'awaiting customer',
+      customerActionUrl: riskProviders.buildCanopyConnectUrl(record, canopyProviderConfig()),
+      providerSubmittedAt: now
+    };
+  } else if (record.type === 'background' || record.type === 'driver_record') {
+    if (payload.permissiblePurposeConfirmed !== true) throw new Error('Confirm the approved permissible purpose before starting a regulated driver/background check.');
+    record.permissiblePurposeConfirmedAt = now;
+    record.permissiblePurposeConfirmedBy = record.consentConfirmedBy;
+    result = await riskProviders.createCheckrInvitation(record, checkrProviderConfig());
+  } else {
+    throw new Error('Use the private onboarding identity flow for identity and driver-license verification.');
+  }
+  applyVerificationProviderResult(record, result);
+  record.history = Array.isArray(record.history) ? record.history : [];
+  record.history.push({ at: now, action: 'Provider workflow started', status: record.status, by: record.consentConfirmedBy });
+  return record;
+}
+async function refreshVerificationProvider(record) {
+  if (!record) throw new Error('Verification case was not found.');
+  let result;
+  if (/checkr/i.test(String(record.provider || ''))) {
+    result = await riskProviders.refreshCheckrCase(record, checkrProviderConfig());
+  } else if (/canopy/i.test(String(record.provider || ''))) {
+    result = await riskProviders.fetchCanopyPull(record.providerPullId || record.externalCaseId, canopyProviderConfig());
+  } else {
+    throw new Error('This case is manual and has no provider result to refresh.');
+  }
+  return applyVerificationProviderResult(record, result);
+}
+function verificationMonitorSummary(cases = []) {
+  const summary = { clear: 0, pending: 0, review: 0, warning: 0, urgent: 0, critical: 0, setup: 0, total: cases.length };
+  cases.forEach(record => {
+    const monitor = riskProviders.verificationMonitorState(record);
+    summary[monitor.level] = Number(summary[monitor.level] || 0) + 1;
+  });
+  summary.actionRequired = summary.review + summary.warning + summary.urgent + summary.critical + summary.setup;
+  return summary;
+}
+async function runVerificationMonitor(options = {}) {
+  const data = await readData();
+  data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
+  const now = new Date().toISOString();
+  let changed = 0;
+  data.verificationCases.forEach(record => {
+    const previous = [record.status, record.monitorLevel, record.monitorAction, record.daysRemaining].join('|');
+    record.status = integrationEngine.verificationCaseStatus(record);
+    const monitor = riskProviders.verificationMonitorState(record);
+    record.monitorLevel = monitor.level;
+    record.monitorAction = monitor.action;
+    record.daysRemaining = monitor.daysRemaining;
+    record.lastMonitoredAt = now;
+    const next = [record.status, record.monitorLevel, record.monitorAction, record.daysRemaining].join('|');
+    if (previous !== next) {
+      changed += 1;
+      record.history = Array.isArray(record.history) ? record.history : [];
+      record.history.push({ at: now, action: 'Automatic verification monitor', status: record.status, by: 'WheelsonAuto monitor' });
+    }
+  });
+  data.integrations = data.integrations || {};
+  data.integrations.verification = {
+    ...(data.integrations.verification || {}),
+    lastMonitorAt: now,
+    lastMonitorSource: String(options.source || 'manual'),
+    lastMonitorChanged: changed,
+    summary: verificationMonitorSummary(data.verificationCases)
+  };
+  if (changed || options.persist !== false) {
+    await protectConcurrentLocalWrites(data, { preferIncoming: true, preserveLatestIntegrations: false });
+    await writeData(data);
+  }
+  return { ok: true, changed, checked: data.verificationCases.length, summary: verificationMonitorSummary(data.verificationCases), finishedAt: now };
 }
 function verifyTrackerWebhook(rawBody, headers = {}) {
   if (!TRACKER_WEBHOOK_SECRET) return false;
@@ -2286,6 +2457,17 @@ function closeoutVerificationItems(data = {}) {
       detail: [row.type || 'Document', vehicleContext(row), row.reference || row.policyNumber || '', row.expires ? 'Expires ' + row.expires : '', row.proofUrl || row.url || ''].filter(Boolean).join(' | ')
     });
   });
+  (data.verificationCases || []).filter(row => {
+    const status = integrationEngine.verificationCaseStatus(row);
+    return !/verified|closed/i.test(status);
+  }).forEach(row => {
+    const status = integrationEngine.verificationCaseStatus(row);
+    items.push({
+      type: 'Verification review',
+      customer: row.customer || 'Unassigned',
+      detail: [String(row.type || 'Verification').replace(/_/g, ' '), status, row.provider || 'Manual', vehicleContext(row), row.monitorAction || '', row.expiresAt ? 'Expires ' + row.expiresAt : ''].filter(Boolean).join(' | ')
+    });
+  });
   (data.payments || []).filter(row => {
     const status = String(row.status || '').toLowerCase();
     return row.requiresVerification === true || status.includes('needs verification');
@@ -2732,11 +2914,22 @@ function reportDocumentClearedForCustomer(data = {}, name = '', kind = '') {
   const key = normKey(name);
   const docKind = String(kind || '').toLowerCase();
   if (!key || !docKind) return false;
-  return (data.documents || []).some(row => {
+  const kindTerms = docKind === 'driver record' ? ['driver record', 'mvr'] : docKind === 'background' ? ['background', 'screening'] : [docKind];
+  const verifiedDocument = (data.documents || []).some(row => {
     const customerKey = normKey(row.customer || row.name);
     const text = String([row.type, row.kind, row.title, row.provider, row.reference, row.notes].filter(Boolean).join(' ')).toLowerCase();
     const status = String(row.status || '').toLowerCase();
-    return customerKey === key && text.includes(docKind) && (status.includes('verified') || status.includes('active') || row.requiresVerification === false);
+    return customerKey === key && kindTerms.some(term => text.includes(term)) && (status.includes('verified') || status.includes('active') || row.requiresVerification === false);
+  });
+  if (verifiedDocument) return true;
+  const acceptedTypes = docKind === 'driver record' || docKind === 'mvr'
+    ? ['driver_record']
+    : docKind === 'driver license' || docKind === 'identity'
+      ? ['driver_license', 'identity']
+      : [docKind.replace(/\s+/g, '_')];
+  return (data.verificationCases || []).some(row => {
+    if (normKey(row.customer || row.name) !== key || !acceptedTypes.includes(String(row.type || '').toLowerCase())) return false;
+    return /verified|expiring/i.test(integrationEngine.verificationCaseStatus(row));
   });
 }
 function reportCustomerRisk(data = {}, name = '', recurring = {}, vehicle = {}) {
@@ -2750,6 +2943,7 @@ function reportCustomerRisk(data = {}, name = '', recurring = {}, vehicle = {}) 
   if ((vehicle.id || recurring.vehicle || customer.vehicle || contract.vehicle) && !String(vehicle.vin || recurring.vin || customer.vin || contract.vin || '').trim()) issues.push('Missing VIN');
   if ((vehicle.id || recurring.vehicle || customer.vehicle || contract.vehicle) && !String(vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || customer.licensePlate || contract.licensePlate || '').trim()) issues.push('Missing tag/plate');
   if (name && !reportDocumentClearedForCustomer(data, name, 'insurance')) issues.push('Insurance proof not verified');
+  if (name && !reportDocumentClearedForCustomer(data, name, 'driver record')) issues.push('Driver record not verified');
   if (name && !reportDocumentClearedForCustomer(data, name, 'background')) issues.push('Background check not verified');
   const status = closeoutRecurringState(recurring || {});
   if (['Failed once', 'Failed twice', 'Payment not found', 'Setup needed'].includes(status)) issues.push(status);
@@ -2945,6 +3139,12 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
     const tag = vehicle.plate || vehicle.stock || doc.plate || doc.licensePlate || '';
     addReportRow(rows, 'Documents / verification', doc.verifiedAt || doc.expires || doc.due || doc.createdAt || '', doc.customer || '', vehicle.id ? vehicleNameFromParts(vehicle) : (doc.vehicle || ''), vehicle.vin || doc.vin || '', tag, trackerName(vehicle) || trackerName(doc), doc.type || doc.kind || 'Document', 0, doc.status || 'Active', doc.provider || doc.agency || doc.visibility || 'Document vault', reportCsvNote([doc.policyNumber || doc.reference, doc.verifiedBy ? 'Verified by ' + doc.verifiedBy : '', doc.customerVisible ? 'Customer visible' : 'Staff only', doc.requiresVerification ? 'Needs verification' : '', doc.notes, doc.url || doc.proofUrl || '']));
   });
+  (scoped.verificationCases || []).forEach(record => {
+    const vehicle = reportVehicleFor(scoped, record.customer, record.vehicleId);
+    const tag = vehicle.plate || vehicle.stock || record.plate || '';
+    const status = integrationEngine.verificationCaseStatus(record);
+    addReportRow(rows, 'Provider verification', record.providerUpdatedAt || record.providerVerifiedAt || record.updatedAt || record.createdAt || '', record.customer || '', vehicle.id ? vehicleNameFromParts(vehicle) : (record.vehicle || ''), vehicle.vin || record.vin || '', tag, trackerName(vehicle) || trackerName(record), String(record.type || 'Verification').replace(/_/g, ' '), 0, status, record.provider || 'Manual', reportCsvNote([record.policyNumberLast4 ? 'Policy ending ' + record.policyNumberLast4 : '', record.referenceLast4 ? 'Reference ending ' + record.referenceLast4 : '', record.expiresAt ? 'Expires ' + record.expiresAt : '', record.monitorAction, record.notes]));
+  });
   closeoutVerificationItems(scoped).forEach(item => addReportRow(rows, 'Verification inbox', today, item.customer || 'Unassigned', '', '', '', '', item.type || 'Review', 0, 'Review', 'WheelsonAuto verification', item.detail || ''));
   const missingVin = (scoped.vehicles || []).filter(vehicle => !String(vehicle.vin || '').trim() && !/removed/i.test(String(vehicle.status || '')));
   const missingVehicle = recurringVehicleGapRows(scoped, recurring);
@@ -2976,6 +3176,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
   const pendingStarApprovals = pendingStarApprovalRows(scoped);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
+  const missingDriverRecord = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'driver record'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
   const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalLoginReady(customerPortalAccountForName(scoped, name)));
   staleAutopay.forEach(row => {
@@ -3009,6 +3210,7 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Open card setup links', openCardSetupRequests.length, openCardSetupRequests.length ? 'Review' : 'Clean', 'Star QA', staleCardSetupRequests.length ? staleCardSetupRequests.length + ' card setup link(s) are older than 24 hours and need follow-up' : 'Open card setup/change links waiting for customers to save cards');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Pending Star approvals', pendingStarApprovals.length, pendingStarApprovals.length ? 'Review' : 'Clean', 'Star QA', 'Star drafts that need admin approval or human review before any message, charge, card, claim, receipt, or account action moves forward');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing insurance proof');
+  addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Driver records', missingDriverRecord.length, missingDriverRecord.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing driver-record / MVR verification');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Background checks', missingBackground.length, missingBackground.length ? 'Review' : 'Clean', 'Star QA', 'Active customers missing background verification');
   addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Customer portal access', missingCustomerPortals.length, missingCustomerPortals.length ? 'Review' : 'Clean', 'Star QA', 'Active customers without a login-ready customer portal account');
   if (isOwnerUser(user)) addReportRow(rows, 'Star QA', today, 'All customers', '', '', '', '', 'Session signing secret', SESSION_SIGNING_SECRET_CONFIGURED ? 0 : 1, SESSION_SIGNING_SECRET_CONFIGURED ? 'Clean' : 'Review', 'Star QA', 'Set WOA_SESSION_SECRET or WOA_COOKIE_SECRET in Render so signed staff/customer sessions stay stable across deploys');
@@ -3062,6 +3264,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
     return !/removed|returned|history|archived/i.test(String(contract.status || customer.status || recurringRow.status || 'Active'));
   });
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'insurance'));
+  const missingDriverRecord = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'driver record'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(scoped, name, 'background'));
   const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalLoginReady(customerPortalAccountForName(scoped, name)));
   const verificationInbox = closeoutVerificationItems(scoped);
@@ -3097,7 +3300,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(4, 'stale_autopay_schedule', 'Stale autopay schedules', staleAutopay.length, staleAutopay.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows have past next-run dates without a paid, failed, setup, or removed state.');
   issue(5, 'vehicle_assignment_conflict', 'Vehicle assignment conflicts', assignmentConflicts.length, assignmentConflicts.length ? 'bad' : 'good', 'Operations', 'Assigned', 'Resolve cars claimed by more than one active customer/autopay before closeout, service, messages, or reports.');
   issue(5.5, 'customer_vehicle_text', 'Customer vehicle text', customerVehicleTextGaps.length, customerVehicleTextGaps.length ? (customerVehicleTextGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Payments', 'Active', 'Customer records with vehicle text that is not linked to a real fleet car must be fixed by choosing the correct vehicle by VIN/tag/tracker.');
-  issue(5.75, 'application_handoff', 'Application handoff', applicationHandoffGaps.length, applicationHandoffGaps.length ? (applicationHandoffGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Applications', 'Approved', 'Approved applicants need approval message, customer file, vehicle, autopay/card setup, portal login, insurance proof, and background proof before pickup.');
+  issue(5.75, 'application_handoff', 'Application handoff', applicationHandoffGaps.length, applicationHandoffGaps.length ? (applicationHandoffGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Applications', 'Approved', 'Approved applicants need approval message, customer file, vehicle, autopay/card setup, portal login, insurance proof, driver record, and background proof before pickup.');
   issue(6, 'setup_needed', 'Setup needed', setupNeeded.length, setupNeeded.length ? 'warn' : 'good', 'Payments', 'Today', 'Customers need card setup or card-on-file repair.');
   issue(7, 'missing_vehicle_link', 'Autopay vehicle link', missingVehicle.length, missingVehicle.length ? 'warn' : 'good', 'Payments', 'Active', 'Active autopay rows need car, VIN, tag, and tracker.');
   issue(7.5, 'vehicle_identity', 'Vehicle identity', vehicleIdentityGaps.length, vehicleIdentityGaps.length ? (vehicleIdentityGaps.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Operations', 'Fleet', 'Every active fleet car needs VIN, current tag/plate, and tracker so customers, service, claims, tolls, messages, and reports match the right car.');
@@ -3109,8 +3312,9 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   issue(8, 'missing_vin', 'Missing VIN', missingVin.length, missingVin.length ? 'warn' : 'good', 'Fleet', 'VIN review', 'Fleet records need VINs before claims, inspections, and disputes are tight.');
   issue(8, 'document_expiration', 'Document expiration', documentExpirationReview.length, documentExpirationReview.length ? (documentExpirationReview.some(row => row.tone === 'bad') ? 'bad' : 'warn') : 'good', 'Documents', '', 'Insurance, background, license, registration, and proof documents should be renewed before expiration.');
   issue(8, 'verification_inbox', 'Verification inbox', verificationInbox.length, verificationInbox.length ? 'warn' : 'good', 'Documents', '', 'Customer proof, paid-outside, service, toll, claim, or document reviews waiting.');
-  issue(9, 'insurance_proof', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing verified insurance proof.');
-  issue(10, 'background_checks', 'Background checks', missingBackground.length, missingBackground.length ? 'warn' : 'good', 'Insurance', '', 'Active customers missing background verification.');
+  issue(9, 'insurance_proof', 'Insurance proof', missingInsurance.length, missingInsurance.length ? 'warn' : 'good', 'Operations', 'Verification', 'Active customers missing verified insurance proof.');
+  issue(9.5, 'driver_records', 'Driver records / MVR', missingDriverRecord.length, missingDriverRecord.length ? 'warn' : 'good', 'Operations', 'Verification', 'Active customers missing a reviewed driver-record / MVR case.');
+  issue(10, 'background_checks', 'Background checks', missingBackground.length, missingBackground.length ? 'warn' : 'good', 'Operations', 'Verification', 'Active customers missing background verification.');
   issue(11, 'missing_contact', 'Missing contact', missingContact.length, missingContact.length ? 'warn' : 'good', 'Payments', 'Active', 'Customers need phone or email before Star can follow up.');
   issue(12, 'service_due', 'Service due', serviceDue.length, serviceDue.length ? 'warn' : 'good', 'Operations', 'Service', 'Open service or inspections are due/overdue.');
   issue(13, 'open_claims', 'Open claims/tolls', openClaims.length, openClaims.length ? 'warn' : 'good', 'Claims & Issues', '', 'Open recoveries, tolls, violations, disputes, or damage claims.');
@@ -3374,6 +3578,12 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
     if (vehicle && (row.vehicleId === vehicle.id || normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)))) return true;
     return false;
   }).slice(0, 10);
+  const verificationCases = (data.verificationCases || []).filter(row => {
+    if (rowOrganizationId(row) !== preferredOrgId) return false;
+    if (customerName && softNameMatch(row.customer, customerName)) return true;
+    if (vehicle && row.vehicleId === vehicle.id) return true;
+    return false;
+  }).slice(0, 10);
   const applications = (data.applications || []).filter(row => {
     if (customerName && softNameMatch(row.name || row.customer, customerName)) return true;
     if (phone && phoneKey(row.phone) === phone) return true;
@@ -3425,6 +3635,7 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
     claims,
     openClaims,
     documents,
+    verificationCases,
     applications,
     tasks,
     portalAccount,
@@ -3437,6 +3648,7 @@ function aiFindCustomerContext(data, payload = {}, user = { role: 'Owner' }) {
       vehicles: (data.vehicles || []).length,
       maintenance: (data.maintenance || []).length,
       claimsAndTolls: (data.claims || []).length,
+      verificationCases: (data.verificationCases || []).filter(inPreferredOrg).length,
       tasks: (data.tasks || []).length,
       apiProviders: (data.apiProviders || []).length,
       ezPassReady: !!(((data.integrations || {}).ezpass || {}).connected),
@@ -3472,6 +3684,7 @@ function aiContextSummary(context) {
     openPaymentLinks: (context.paymentRequests || []).map(row => ({ id: row.id || '', amount: aiMoney(row.amount || 0), status: row.status || 'Open', age: paymentRequestAgeLabel(row), urlReady: !!row.url })),
     openCardSetupLinks: (context.cardSetupRequests || []).map(row => ({ id: row.id || '', amount: aiMoney(row.amount || 0), status: row.status || 'Open', age: cardSetupRequestAgeLabel(row), urlReady: !!row.url })),
     documents: (context.documents || []).map(row => ({ id: row.id || '', type: row.type || 'Document', status: row.status || 'Saved', expires: row.expires || row.due || '', visible: !!(row.customerVisible || row.portalVisible) })).slice(0, 8),
+    verification: (context.verificationCases || []).map(row => ({ id: row.id || '', type: String(row.type || 'verification').replace(/_/g, ' '), status: integrationEngine.verificationCaseStatus(row), provider: row.provider || 'Manual', expires: row.expiresAt || '', monitoring: row.monitorAction || '' })).slice(0, 8),
     openTasks: (context.tasks || []).map(row => ({ id: row.id || '', title: row.title || row.type || 'Task', status: row.status || 'Open', due: row.due || '' })).slice(0, 8),
     recentMessages: (context.latestMessages || []).map(row => ({ date: row.createdAt || row.date || '', direction: row.direction || row.channel || '', status: row.status || '', subject: row.subject || row.template || '', body: String(row.body || '').slice(0, 180) })).slice(0, 6),
     modules: context.platformModules,
@@ -4341,6 +4554,7 @@ function applicationHandoffGapRows(data = {}) {
     if (recurringRow && !cardLinked) missing.push('card setup/status');
     if (!customerPortalLoginReady(portal || {})) missing.push('portal login');
     if (!reportDocumentClearedForCustomer(data, customer, 'insurance')) missing.push('insurance proof');
+    if (!reportDocumentClearedForCustomer(data, customer, 'driver record')) missing.push('driver record');
     if (!reportDocumentClearedForCustomer(data, customer, 'background')) missing.push('background proof');
     return {
       id: app.id || '',
@@ -4356,7 +4570,14 @@ function documentExpirationReviewRows(data = {}, todayKeyValue = localDateKey())
   const todayDate = new Date(todayKeyValue + 'T12:00:00');
   const limitDate = new Date(todayDate.getTime() + 30 * 24 * 60 * 60 * 1000);
   const limitKey = dateKey(limitDate);
-  return (Array.isArray(data.documents) ? data.documents : []).filter(doc => {
+  const sources = (Array.isArray(data.documents) ? data.documents : []).concat((data.verificationCases || []).map(row => ({
+    ...row,
+    type: String(row.type || 'Verification').replace(/_/g, ' '),
+    expires: row.expiresAt || row.expires || '',
+    title: String(row.type || 'Verification').replace(/_/g, ' ') + ' verification',
+    requiresVerification: !/verified|closed/i.test(integrationEngine.verificationCaseStatus(row))
+  })));
+  return sources.filter(doc => {
     const status = String(doc.status || '').toLowerCase();
     if (/rejected|closed|removed|archived/i.test(status)) return false;
     const due = recordDateKey(doc.expires || doc.expiration || doc.due || doc.nextDue || '');
@@ -4583,6 +4804,7 @@ function ifleetFunctionCoverageRows(data = {}) {
   const tollMatchReview = tollRecovery.filter(claim => weakClaimCustomer(claim.customer) || String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !(claim.vehicleId || claim.vin || claim.plate || claim.reference));
   const pendingStarApprovals = pendingStarApprovalRows(data);
   const missingInsurance = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(data, name, 'insurance'));
+  const missingDriverRecord = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(data, name, 'driver record'));
   const missingBackground = activeCustomerNames.filter(name => !reportDocumentClearedForCustomer(data, name, 'background'));
   const missingCustomerPortals = activeCustomerNames.filter(name => !customerPortalLoginReady(customerPortalAccountForName(data, name)));
   const apiProviderReview = apiProviderReviewRows(data);
@@ -4611,7 +4833,9 @@ function ifleetFunctionCoverageRows(data = {}) {
   add('tolls_violations', 'Tolls + violations', 'Manual-live', tollRecovery.length, tollMatchReview, 'Claims & Issues', '', 'Tolls and violations can be imported manually, matched by plate/VIN/customer, turned into recovery claims, and sent as draft payment follow-up.');
   add('claims_disputes', 'Claims + disputes', 'Manual-live', claims.length, claimEvidenceGaps, 'Claims & Issues', '', 'Damage, reimbursements, Clover disputes, chargebacks, proof, deadlines, and recovery status must stay tied to customer/payment/vehicle.');
   add('documents_proof', 'Documents + proof', 'Live', docs.length, documentExpirationReview, 'Documents', '', 'Insurance, background, license, registration, receipts, proof, and customer-uploaded documents need verification and expiration review.');
-  add('insurance_background', 'Insurance/background', 'Manual-live', missingInsurance.length + missingBackground.length, missingInsurance.length + missingBackground.length, 'Insurance', '', 'Insurance and background proof are tracked now; provider APIs later can verify and update expiration automatically.');
+  const verificationReadiness = verificationProviderReadiness();
+  const verificationState = verificationReadiness.canopy.monitoringReady && verificationReadiness.checkr.configured && verificationReadiness.checkr.useCaseConfirmed ? 'Provider-ready' : 'Manual-live / provider-ready';
+  add('insurance_background', 'Insurance / driver record / background', verificationState, missingInsurance.length + missingDriverRecord.length + missingBackground.length, missingInsurance.length + missingDriverRecord.length + missingBackground.length, 'Operations', 'Verification', 'Manual review, hosted customer authorization, provider-signed results, expiration monitoring, reconnect alerts, and staff decisions share one verification queue.');
   add('messaging_star', 'Messaging + Star', 'Draft-live', messages.length, pendingStarApprovals, 'Messages', 'Star', 'SMS/email inbox, templates, Star drafts, setup fallback, approval rules, and customer context are wired; provider send is enabled only after setup.');
   add('dispatch_work_orders', 'Dispatch/work orders', 'Live', tasks.length, 0, 'Dispatch', '', 'Dispatch tasks can hold tightening work, follow-ups, provider setup, service work, and manual API preparation.');
   add('reports_accounting', 'Reports/accounting', 'Live', payments.length, unmatchedPayments.length + (closeoutSignoffGap.needsSignoff ? 1 : 0), 'Reports', 'Summary', 'Reports export closeout, transactions, customer/fleet truth, service, claims, tolls, paid outside app, profitability, and Star QA rows.', unmatchedPayments.length > 0);
@@ -5881,7 +6105,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'websiteLeads', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'calendarEvents', 'trackerEvents', 'trackerUnmatched', 'marketingEvents'].forEach(key => {
+  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'websiteLeads', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'trackerEvents', 'trackerUnmatched', 'marketingEvents'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {
@@ -7359,6 +7583,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Set to stripe only after live Stripe Identity is enabled; customer-uploaded license files remain private'],
     ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
     ['WOA_BACKGROUND_PROVIDER', BACKGROUND_PROVIDER || 'manual', 'Background-screening verification adapter'],
+    ['CHECKR_API_KEY + packages', riskProviders.checkrConfigured(checkrProviderConfig()) && CHECKR_USE_CASE_CONFIRMED ? 'Set' : 'Provider setup needed', 'Hosted driver-record/MVR and background invitations; permissible-purpose confirmation is required'],
+    ['CANOPY_CONNECT_ALIAS', CANOPY_CONNECT_ALIAS ? 'Set' : 'Provider setup needed', 'Customer-authorized insurance connection link'],
+    ['CANOPY API + webhook', CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID && CANOPY_WEBHOOK_SECRET ? 'Set' : 'Provider setup needed', 'Policy retrieval, signed updates, reconnect flow, and ongoing insurance monitoring'],
     ['WOA_TRACKER_PROVIDER', TRACKER_PROVIDER || 'manual', 'Vehicle tracker/GPS provider adapter'],
     ['WOA_TRACKER_WEBHOOK_SECRET', TRACKER_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed tracker/GPS provider callbacks; manager updates remain live without a provider'],
     ['WOA_MARKETING_PROVIDER', MARKETING_PROVIDER || 'manual', 'Marketing and lead-source provider adapter'],
@@ -7416,10 +7643,15 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/system/launch-readiness/tasks', 'Launch readiness Dispatch task sync'),
     route('POST', '/api/verification/document', 'Staff document proof verification'),
     route('POST', '/api/verification/paid-outside', 'Owner paid-outside payment verification'),
-    route('GET', '/api/verification/status', 'Identity, driver-license, and insurance verification cases'),
+    route('GET', '/api/verification/status', 'Identity, MVR, background, and insurance monitoring cases'),
     route('POST', '/api/verification/cases', 'Create provider-neutral verification case'),
+    route('POST', '/api/verification/cases/start', 'Start a customer-authorized Checkr or Canopy provider workflow'),
+    route('POST', '/api/verification/cases/refresh', 'Refresh an authoritative provider result'),
+    route('POST', '/api/verification/monitor/run', 'Run insurance and verification expiration monitoring'),
     route('POST', '/api/verification/cases/review', 'Owner/manager verification review'),
     route('POST', '/api/webhooks/verification', 'Signed provider verification callback'),
+    route('POST', '/api/webhooks/checkr', 'Signed Checkr background and MVR callback'),
+    route('POST', '/api/webhooks/canopy', 'Signed Canopy insurance and monitoring callback'),
     route('GET', '/api/integrations/tracker/status', 'Owner/manager tracker health, vehicle matches, and missing-file queue'),
     route('POST', '/api/integrations/tracker/sync', 'Owner/manager tracker update adapter'),
     route('POST', '/api/webhooks/tracker', 'Signed tracker/GPS provider callback'),
@@ -7444,6 +7676,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/payments/disputes/action', 'Provider-aware owner dispute evidence and outcome workflow'),
     route('GET', '/api/accounting/ledger', 'Source-linked accounting ledger'),
     route('POST', '/api/accounting/ledger/rebuild', 'Rebuild ledger without losing provider sync references'),
+    route('POST', '/api/accounting/adjustments', 'Owner-created source-linked accounting adjustment'),
+    route('POST', '/api/accounting/reconcile', 'Owner accounting reconciliation decision'),
+    route('POST', '/api/accounting/periods/close', 'Owner month-close snapshot'),
     route('GET', '/api/accounting/export.csv', 'Source-linked accounting ledger CSV'),
     route('GET', '/api/accounting/quickbooks.csv', 'Balanced QuickBooks journal CSV'),
     route('GET', '/api/pickups/calendar', 'Pickup calendar, ICS, and maps records'),
@@ -8752,6 +8987,7 @@ function rematchSavedTollClaims(data, user) {
 }
 function defaultApiProviderRows(data = {}) {
   const messageStatus = publicMessagingStatus(data);
+  const verificationReadiness = verificationProviderReadiness();
   return [
     {
       id: 'clover-core',
@@ -8824,11 +9060,11 @@ function defaultApiProviderRows(data = {}) {
       liveTest: 'Run Test Star provider, confirm a Responses API answer, verify sanitization, then approve one non-sensitive draft.'
     },
     { id: 'ezpass', name: 'WheelsonAuto Toll Import / E-ZPass', group: 'Risk', status: 'Ready - WheelsonAuto import', owner: 'Owner', envKeys: 'No external key required for CSV/TSV/JSON import', endpoint: '/api/tolls/import', liveTest: 'Preview statement, verify plate/VIN/customer separation, import once, import again to prove duplicate protection, then create one recovery link.' },
-    { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review policy proof manually, verify the 30-day expiration queue, then accept one signed authoritative provider result.' },
+    { id: 'insurance', name: 'Insurance Verification + Monitoring', group: 'Risk', status: verificationReadiness.canopy.monitoringReady ? 'Testing - Canopy live proof needed' : (verificationReadiness.canopy.customerLinkReady ? 'Prepared - Canopy webhook needed' : 'Ready - manual review'), owner: 'Manager', envKeys: 'CANOPY_CONNECT_ALIAS, CANOPY_CLIENT_ID, CANOPY_CLIENT_SECRET, CANOPY_TEAM_ID, CANOPY_WEBHOOK_SECRET', endpoint: '/api/verification/cases/start, /api/verification/status, /api/verification/monitor/run, /api/webhooks/canopy', liveTest: 'Create one customer-authorized insurance link, receive a signed policy result, verify policy last-four/expiration, and confirm a monitoring refresh or reconnect alert.' },
     { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: STRIPE_IDENTITY_RUNTIME_READY ? (STRIPE_KEY_MODE === 'live' ? 'Testing - live Stripe Identity' : 'Testing - Stripe test mode') : (IDENTITY_PROVIDER === 'stripe' && stripe.configured() ? 'Prepared - Stripe test mode' : 'Ready - private manual review'), owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET', endpoint: '/api/public/onboarding/:token/identity, /api/webhooks/stripe', liveTest: 'Complete one hosted live-license and selfie check, verify the signed Stripe result, then approve insurance before signing.' },
-    { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_BACKGROUND_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Create a background review from an approved application, retain only the last four of any reference, then accept one signed authoritative provider result.' },
+    { id: 'background-checks', name: 'Driver Record / MVR + Background', group: 'Risk', status: verificationReadiness.checkr.configured && verificationReadiness.checkr.useCaseConfirmed ? 'Testing - Checkr live proof needed' : 'Ready - provider setup', owner: 'Manager', envKeys: 'CHECKR_API_KEY, CHECKR_MVR_PACKAGE, CHECKR_BACKGROUND_PACKAGE, CHECKR_USE_CASE_CONFIRMED, CHECKR_WEBHOOK_SECRET', endpoint: '/api/verification/cases/start, /api/verification/cases/refresh, /api/webhooks/checkr', liveTest: 'Send hosted customer invitations for one MVR and one background package, accept signed results, and prove that a Consider result remains staff review instead of automatic rejection.' },
     { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET', endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker', liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.' },
-    { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
+    { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Connected - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/adjustments, /api/accounting/reconcile, /api/accounting/periods/close, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the ledger, add one valid business adjustment, reconcile source entries, close a month, verify its source hash, and confirm the QuickBooks journal balances.' },
     { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
     { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_MARKETING_PROVIDER, WOA_MARKETING_WEBHOOK_SECRET', endpoint: '/api/integrations/marketing/status, /api/integrations/marketing/sync, /api/webhooks/marketing', liveTest: 'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.' },
     { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: BILLING_PROVIDER !== 'manual' && BILLING_WEBHOOK_SECRET ? 'Testing - signed event needed' : 'Ready - manual ledger', owner: 'Owner', envKeys: 'WOA_BILLING_PROVIDER, WOA_BILLING_WEBHOOK_SECRET', endpoint: '/api/billing/summary, /api/billing/subscriptions, /api/billing/invoices/record, /api/webhooks/billing', liveTest: 'Create one company subscription, verify usage limits and duplicate invoice protection, then accept one signed provider event without exposing provider references to managers.' }
@@ -8907,14 +9143,16 @@ function apiProviderTruthOverrides(data = {}) {
   const insuranceCases = verificationCases.filter(row => String(row.type || '') === 'insurance');
   const identityCases = verificationCases.filter(row => ['identity', 'driver_license'].includes(String(row.type || '')));
   const backgroundCases = verificationCases.filter(row => String(row.type || '') === 'background');
+  const driverRecordCases = verificationCases.filter(row => String(row.type || '') === 'driver_record');
+  const verificationReadiness = verificationProviderReadiness();
   const verificationEvidenceAt = rows => newestEvidenceAt(rows.map(row => row.providerVerifiedAt || row.reviewedAt || row.updatedAt || row.createdAt));
   const providerResultRecorded = rows => rows.some(row => row.externalCaseId && row.providerVerifiedAt && /verified|approved|clear|passed|active/i.test(String(row.providerStatus || row.status || '')));
-  const insuranceProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual');
+  const insuranceProviderReady = verificationReadiness.canopy.monitoringReady;
   const identityProviderReady = IDENTITY_PROVIDER === 'stripe' ? STRIPE_IDENTITY_RUNTIME_READY : !!(VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual');
-  const backgroundProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual');
+  const backgroundProviderReady = verificationReadiness.checkr.configured && verificationReadiness.checkr.useCaseConfirmed;
   const insuranceProviderLive = insuranceProviderReady && providerResultRecorded(insuranceCases);
   const identityProviderLive = identityProviderReady && providerResultRecorded(identityCases);
-  const backgroundProviderLive = backgroundProviderReady && providerResultRecorded(backgroundCases);
+  const backgroundProviderLive = backgroundProviderReady && providerResultRecorded(backgroundCases.concat(driverRecordCases));
   const trackerEvents = Array.isArray(data.trackerEvents) ? data.trackerEvents : [];
   const trackerUnmatched = Array.isArray(data.trackerUnmatched) ? data.trackerUnmatched : [];
   const trackerVehicleCount = (data.vehicles || []).filter(vehicle => vehicle.tracker && (vehicle.trackerStatus || vehicle.trackerLastPing)).length;
@@ -8934,6 +9172,8 @@ function apiProviderTruthOverrides(data = {}) {
   const activeCompanySubscriptions = companySubscriptions.filter(row => /active|trial/i.test(String(row.status || ''))).length;
   const pastDueCompanyInvoices = companyBillingInvoices.filter(row => /past.?due|open/i.test(String(row.status || ''))).length;
   const accountingEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+  const accountingSummary = integrationEngine.accountingLedgerSummary(accountingEntries, { month: localDateKey().slice(0, 7) });
+  const closedAccountingPeriods = (data.accountingPeriods || []).filter(row => row.status === 'Closed');
   const quickBooksReady = !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET);
   const pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
   const preparedPickupEvents = Array.isArray(data.calendarEvents) ? data.calendarEvents : [];
@@ -8980,13 +9220,13 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: tollImportResult
     },
     insurance: {
-      name: 'Insurance Verification',
-      status: insuranceProviderLive ? 'Connected' : (insuranceProviderReady ? 'Testing - signed result needed' : 'Ready - manual review'),
-      envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',
-      endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification',
-      liveTest: 'Review policy proof, verify the 30-day expiration queue, then accept one signed authoritative provider result.',
+      name: 'Insurance Verification + Monitoring',
+      status: insuranceProviderLive ? 'Connected' : (insuranceProviderReady ? 'Testing - signed Canopy result needed' : (verificationReadiness.canopy.customerLinkReady ? 'Prepared - monitoring setup needed' : 'Ready - manual review')),
+      envKeys: 'CANOPY_CONNECT_ALIAS, CANOPY_CLIENT_ID, CANOPY_CLIENT_SECRET, CANOPY_TEAM_ID, CANOPY_WEBHOOK_SECRET',
+      endpoint: '/api/verification/cases/start, /api/verification/monitor/run, /api/webhooks/canopy',
+      liveTest: 'Send one customer-authorized insurance link, accept a signed policy result, then verify expiration and reconnect monitoring.',
       lastTestAt: verificationEvidenceAt(insuranceCases),
-      lastTestResult: insuranceCases.length + ' insurance case(s) are tracked; manual review and expiration monitoring are live.' + (insuranceProviderLive ? ' A signed authoritative result has been verified.' : ' External policy validity remains provider-required.')
+      lastTestResult: insuranceCases.length + ' insurance case(s) are tracked; local expiration monitoring is live.' + (insuranceProviderLive ? ' A signed Canopy policy result has been verified.' : ' Authoritative policy validity and continuous refresh remain provider-required.')
     },
     'identity-verification': {
       name: 'Identity / Driver License Verification',
@@ -8998,13 +9238,13 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: identityCases.length + ' identity/license case(s) are tracked; customer-uploaded license copies remain private and Stripe verification URLs are never persisted.' + (identityProviderLive ? ' A signed Stripe Identity result has been verified.' : ' Live Stripe Identity activation is still required for automated real-world verification.')
     },
     'background-checks': {
-      name: 'Background Checks',
+      name: 'Driver Record / MVR + Background',
       status: backgroundProviderLive ? 'Connected' : (backgroundProviderReady ? 'Testing - signed result needed' : 'Ready - manual review'),
-      envKeys: 'WOA_BACKGROUND_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',
-      endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification',
-      liveTest: 'Create a background review from an approved application, retain only the last four of any reference, then accept one signed authoritative provider result.',
-      lastTestAt: verificationEvidenceAt(backgroundCases),
-      lastTestResult: backgroundCases.length + ' background case(s) are tracked; manual review, customer/vehicle linking, and last-four retention are live.' + (backgroundProviderLive ? ' A signed authoritative result has been verified.' : ' Real-world screening validity remains provider-required.')
+      envKeys: 'CHECKR_API_KEY, CHECKR_MVR_PACKAGE, CHECKR_BACKGROUND_PACKAGE, CHECKR_USE_CASE_CONFIRMED, CHECKR_WEBHOOK_SECRET',
+      endpoint: '/api/verification/cases/start, /api/verification/cases/refresh, /api/webhooks/checkr',
+      liveTest: 'Complete one hosted MVR and one background invitation, accept signed results, and prove Consider remains human review.',
+      lastTestAt: verificationEvidenceAt(backgroundCases.concat(driverRecordCases)),
+      lastTestResult: driverRecordCases.length + ' driver-record and ' + backgroundCases.length + ' background case(s) are tracked with hosted consent, vehicle linking, and last-four retention.' + (backgroundProviderLive ? ' A signed Checkr result has been verified.' : ' Real-world screening validity remains provider-required.')
     },
     'tracker-gps': {
       name: 'Tracker / GPS',
@@ -9035,12 +9275,12 @@ function apiProviderTruthOverrides(data = {}) {
     },
     accounting: {
       name: 'Accounting / QuickBooks',
-      status: quickBooksReady ? 'Testing - OAuth required' : 'Ready - internal ledger',
+      status: accountingEntries.length ? (quickBooksReady ? 'Connected internally - QuickBooks OAuth pending' : 'Connected - internal ledger') : 'Ready - rebuild ledger',
       envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET',
-      endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv',
-      liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.',
+      endpoint: '/api/accounting/ledger, /api/accounting/adjustments, /api/accounting/reconcile, /api/accounting/periods/close, /api/accounting/export.csv, /api/accounting/quickbooks.csv',
+      liveTest: 'Rebuild, reconcile sources, record a controlled adjustment, close a month, verify the source hash and balanced QuickBooks journal, then complete OAuth for direct sync.',
       lastTestAt: newestEvidenceAt(accountingEntries.map(row => row.updatedAt || row.date || row.createdAt)),
-      lastTestResult: accountingEntries.length + ' source-linked ledger entry/entries produce balanced QuickBooks journal rows. Direct sync is not connected until OAuth is completed and tested.'
+      lastTestResult: accountingEntries.length + ' source-linked ledger entry/entries produce balanced QuickBooks journal rows; ' + accountingSummary.needsReview + ' current-month entry/entries need reconciliation and ' + closedAccountingPeriods.length + ' month(s) are closed with source hashes. Direct QuickBooks sync remains OAuth-required.'
     },
     'pickup-calendar': {
       name: 'Pickup Calendar / Maps',
@@ -9595,7 +9835,7 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
@@ -12980,6 +13220,55 @@ const server = http.createServer(async (req, res) => {
         authorization: hostedSignatureValid ? 'Clover-Signature' : (cloverAppAuthValid ? 'X-Clover-Auth' : 'WheelsonAuto shared secret')
       }));
     }
+    if (url.pathname === '/api/webhooks/checkr' && req.method === 'POST') {
+      if (!CHECKR_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Checkr webhook verification is not configured.' });
+      const rawBody = await readBody(req, 512 * 1024);
+      if (!riskProviders.verifyCheckrWebhook(rawBody, req.headers['x-checkr-signature'], CHECKR_WEBHOOK_SECRET)) return json(res, 401, { ok: false, error: 'Unauthorized Checkr webhook.' });
+      let payload;
+      try { payload = rawBody ? JSON.parse(rawBody) : {}; } catch { return json(res, 400, { ok: false, error: 'Checkr webhook body must be valid JSON.' }); }
+      const event = riskProviders.parseCheckrWebhook(payload);
+      const data = await readData();
+      const record = verificationCaseForProviderEvent(data, event);
+      if (!record) return json(res, 200, { ok: true, received: false, unmatched: true });
+      record.providerEventIds = Array.isArray(record.providerEventIds) ? record.providerEventIds : [];
+      if (event.eventId && record.providerEventIds.includes(event.eventId)) return json(res, 200, { ok: true, received: false, duplicate: true });
+      applyVerificationProviderResult(record, event);
+      if (event.eventId) record.providerEventIds = [event.eventId, ...record.providerEventIds].slice(0, 100);
+      appendAuditLog(data, { name: 'Checkr', role: 'System' }, 'Checkr verification update', [record.customer, record.type, record.status, event.eventType || 'Provider event', 'HMAC signed']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, received: true, verificationCaseId: record.id, status: record.status });
+    }
+    if (url.pathname === '/api/webhooks/canopy' && req.method === 'POST') {
+      if (!CANOPY_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Canopy webhook verification is not configured.' });
+      const rawBody = await readBody(req, 512 * 1024);
+      if (!riskProviders.verifyCanopyWebhook(rawBody, req.headers['canopy-signature'], CANOPY_WEBHOOK_SECRET)) return json(res, 401, { ok: false, error: 'Unauthorized Canopy Connect webhook.' });
+      let payload;
+      try { payload = rawBody ? JSON.parse(rawBody) : {}; } catch { return json(res, 400, { ok: false, error: 'Canopy webhook body must be valid JSON.' }); }
+      const event = riskProviders.parseCanopyWebhook(payload);
+      const data = await readData();
+      const record = verificationCaseForProviderEvent(data, event);
+      if (!record) return json(res, 200, { ok: true, received: false, unmatched: true });
+      record.providerEventIds = Array.isArray(record.providerEventIds) ? record.providerEventIds : [];
+      if (event.eventId && record.providerEventIds.includes(event.eventId)) return json(res, 200, { ok: true, received: false, duplicate: true });
+      if (event.sequence && Number(record.providerSequence || 0) >= event.sequence) return json(res, 200, { ok: true, received: false, stale: true });
+      applyVerificationProviderResult(record, event);
+      if (event.sequence) record.providerSequence = event.sequence;
+      if (/POLICY_AVAILABLE|POLICIES_AVAILABLE|COMPLETE|MONITORING_EVENTS|DATA_UPDATED/.test(event.eventType) && CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID) {
+        try {
+          const pull = await riskProviders.fetchCanopyPull(event.providerPullId, canopyProviderConfig());
+          applyVerificationProviderResult(record, pull);
+          record.providerLastError = '';
+        } catch (error) {
+          record.providerLastError = String(error && error.message || error).slice(0, 280);
+        }
+      }
+      if (event.eventId) record.providerEventIds = [event.eventId, ...record.providerEventIds].slice(0, 100);
+      appendAuditLog(data, { name: 'Canopy Connect', role: 'System' }, 'Insurance monitoring update', [record.customer, record.status, event.eventType || 'Provider event', event.isMonitored ? 'Monitoring active' : 'Monitoring not confirmed', 'HMAC signed']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, received: true, verificationCaseId: record.id, status: record.status });
+    }
     if (url.pathname === '/api/webhooks/verification' && req.method === 'POST') {
       if (!VERIFICATION_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Verification webhook secret is not configured.' });
       const rawBody = await readBody(req, 256 * 1024);
@@ -14392,8 +14681,26 @@ const server = http.createServer(async (req, res) => {
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view verification cases.' });
       const data = await readData();
       const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
-      const cases = (scoped.verificationCases || []).map(row => ({ ...row, status: integrationEngine.verificationCaseStatus(row) }));
-      return json(res, 200, { ok: true, providers: { identity: IDENTITY_PROVIDER, identityMode: STRIPE_KEY_MODE, identityRuntimeReady: STRIPE_IDENTITY_RUNTIME_READY, insurance: INSURANCE_PROVIDER, background: BACKGROUND_PROVIDER, signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET || !!STRIPE_WEBHOOK_SECRET }, cases });
+      const cases = (scoped.verificationCases || []).map(row => {
+        const status = integrationEngine.verificationCaseStatus(row);
+        const monitor = riskProviders.verificationMonitorState({ ...row, status });
+        return { ...row, status, monitorLevel: monitor.level, monitorAction: monitor.action, daysRemaining: monitor.daysRemaining };
+      });
+      return json(res, 200, {
+        ok: true,
+        providers: {
+          identity: IDENTITY_PROVIDER,
+          identityMode: STRIPE_KEY_MODE,
+          identityRuntimeReady: STRIPE_IDENTITY_RUNTIME_READY,
+          insurance: configuredVerificationProvider('insurance'),
+          background: configuredVerificationProvider('background'),
+          driverRecord: configuredVerificationProvider('driver_record'),
+          signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET || !!STRIPE_WEBHOOK_SECRET,
+          ...verificationProviderReadiness()
+        },
+        monitor: { ...(scoped.integrations && scoped.integrations.verification || {}), summary: verificationMonitorSummary(cases) },
+        cases
+      });
     }
     if (url.pathname === '/api/verification/cases' && req.method === 'POST') {
       const role = String(user.role || '').toLowerCase();
@@ -14401,7 +14708,9 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJsonBody(req, 256 * 1024);
       const data = await readData();
       data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
-      const created = integrationEngine.verificationCase(data, { ...payload, organizationId: userOrganizationId(user) }, user);
+      const requestedProvider = String(payload.provider || '').trim();
+      const provider = !requestedProvider || /^auto/i.test(requestedProvider) ? configuredVerificationProvider(payload.type) : requestedProvider;
+      const created = integrationEngine.verificationCase(data, { ...payload, provider, organizationId: userOrganizationId(user) }, user);
       if (created.created) {
         created.record.organizationId = userOrganizationId(user);
         data.verificationCases.unshift(created.record);
@@ -14410,6 +14719,53 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, created.created ? 201 : 200, { ok: true, created: created.created, verificationCase: created.record });
+    }
+    if (url.pathname === '/api/verification/cases/start' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can start verification providers.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const data = await readData();
+      const record = (data.verificationCases || []).find(row => row.id === payload.caseId && rowVisibleToUserOrganization(row, user));
+      if (!record) return json(res, 404, { ok: false, error: 'Verification case was not found.' });
+      try {
+        await startVerificationProvider(data, record, payload, user);
+      } catch (error) {
+        return json(res, 409, { ok: false, error: String(error && error.message || error), providers: verificationProviderReadiness() });
+      }
+      appendAuditLog(data, user, 'Verification provider started', [record.customer, record.type, record.provider, record.status, record.vehicle || 'No vehicle linked']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, verificationCase: record, customerActionUrl: record.customerActionUrl || '' });
+    }
+    if (url.pathname === '/api/verification/cases/refresh' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can refresh verification providers.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const data = await readData();
+      const record = (data.verificationCases || []).find(row => row.id === payload.caseId && rowVisibleToUserOrganization(row, user));
+      if (!record) return json(res, 404, { ok: false, error: 'Verification case was not found.' });
+      try {
+        await refreshVerificationProvider(record);
+      } catch (error) {
+        record.providerLastError = String(error && error.message || error).slice(0, 280);
+        record.providerLastErrorAt = new Date().toISOString();
+        record.history = Array.isArray(record.history) ? record.history : [];
+        record.history.push({ at: record.providerLastErrorAt, action: 'Provider refresh failed', status: record.status, by: String(user.name || user.username || user.role || 'Staff') });
+        appendAuditLog(data, user, 'Verification provider refresh failed', [record.customer, record.type, record.provider, record.providerLastError]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 409, { ok: false, error: record.providerLastError });
+      }
+      appendAuditLog(data, user, 'Verification provider refreshed', [record.customer, record.type, record.provider, record.status]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, verificationCase: record });
+    }
+    if (url.pathname === '/api/verification/monitor/run' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can run verification monitoring.' });
+      const result = await runVerificationMonitor({ source: 'staff ' + String(user.name || user.username || user.role || 'monitor') });
+      return json(res, 200, result);
     }
     if (url.pathname === '/api/verification/cases/review' && req.method === 'POST') {
       const role = String(user.role || '').toLowerCase();
@@ -14430,7 +14786,16 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
       const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
-      return json(res, 200, { ok: true, generatedAt: new Date().toISOString(), quickBooks: { configured: !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET), realmId: QUICKBOOKS_REALM_ID ? 'stored in Render' : '', status: QUICKBOOKS_REALM_ID ? 'Credentials saved - OAuth connection still required' : 'Provider setup needed' }, entries });
+      const month = /^\d{4}-\d{2}$/.test(String(url.searchParams.get('month') || '')) ? String(url.searchParams.get('month')) : localDateKey().slice(0, 7);
+      return json(res, 200, {
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        month,
+        summary: integrationEngine.accountingLedgerSummary(entries, { month }),
+        periods: (scoped.accountingPeriods || []).slice().sort((a, b) => String(b.month).localeCompare(String(a.month))),
+        quickBooks: { configured: !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET), realmId: QUICKBOOKS_REALM_ID ? 'stored in Render' : '', status: QUICKBOOKS_REALM_ID ? 'Credentials saved - OAuth connection still required' : 'Provider setup needed' },
+        entries
+      });
     }
     if (url.pathname === '/api/accounting/ledger/rebuild' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can rebuild the accounting ledger.' });
@@ -14441,14 +14806,90 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, entries: data.ledgerEntries, rebuilt: data.ledgerEntries.length });
     }
+    if (url.pathname === '/api/accounting/adjustments' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can add accounting entries.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const amount = Math.round(Math.abs(Number(payload.amount || 0)) * 100) / 100;
+      if (!amount || amount > 1000000) return json(res, 400, { ok: false, error: 'Enter an accounting amount between $0.01 and $1,000,000.' });
+      const direction = String(payload.direction || '').toLowerCase();
+      if (!['credit', 'debit'].includes(direction)) return json(res, 400, { ok: false, error: 'Choose money in or money out.' });
+      const category = String(payload.category || '').trim().slice(0, 120);
+      const notes = String(payload.notes || payload.reason || '').trim().slice(0, 800);
+      if (!category || !notes) return json(res, 400, { ok: false, error: 'Category and explanation are required.' });
+      const data = await readData();
+      data.accountingAdjustments = Array.isArray(data.accountingAdjustments) ? data.accountingAdjustments : [];
+      const customer = String(payload.customer || '').trim().slice(0, 160);
+      const vehicle = reportVehicleFor(data, customer, payload.vehicleId || '') || {};
+      const now = new Date().toISOString();
+      const adjustment = {
+        id: 'accounting-adjustment-' + crypto.randomBytes(9).toString('hex'),
+        direction,
+        amount,
+        category,
+        date: validCalendarDateKey(payload.date) || localDateKey(),
+        customer,
+        vehicleId: String(payload.vehicleId || vehicle && vehicle.id || ''),
+        vehicle: String(payload.vehicle || vehicleNameFromParts(vehicle) || vehicle.name || ''),
+        vin: String(payload.vin || vehicle && vehicle.vin || ''),
+        plate: String(payload.plate || vehicle && (vehicle.plate || vehicle.stock) || ''),
+        method: String(payload.method || 'Manual accounting entry').trim().slice(0, 80),
+        reference: String(payload.reference || '').trim().slice(0, 120) || 'WOA-' + now.slice(0, 10) + '-' + crypto.randomBytes(3).toString('hex').toUpperCase(),
+        notes,
+        status: 'Recorded',
+        organizationId: userOrganizationId(user),
+        createdAt: now,
+        createdBy: String(user.name || user.username || user.role || 'Owner')
+      };
+      data.accountingAdjustments.unshift(adjustment);
+      data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+      appendAuditLog(data, user, 'Accounting entry added', [direction, moneyText(amount), category, customer || adjustment.reference]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 201, { ok: true, adjustment, ledgerEntry: data.ledgerEntries.find(row => row.sourceKey === 'adjustment:' + adjustment.id) });
+    }
+    if (url.pathname === '/api/accounting/reconcile' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can reconcile accounting entries.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      const data = await readData();
+      data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+      const entry = data.ledgerEntries.find(row => row.sourceKey === payload.sourceKey || row.id === payload.entryId);
+      if (!entry) return json(res, 404, { ok: false, error: 'Accounting entry was not found.' });
+      try { integrationEngine.reconcileAccountingEntry(entry, payload, user); }
+      catch (error) { return json(res, 400, { ok: false, error: String(error && error.message || error) }); }
+      appendAuditLog(data, user, 'Accounting entry reconciled', [entry.sourceKey, entry.reconciliationStatus, moneyText(entry.amount), entry.customer || entry.category]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, entry });
+    }
+    if (url.pathname === '/api/accounting/periods/close' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can close an accounting month.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      if (payload.confirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the month-close totals before locking the snapshot.' });
+      const data = await readData();
+      data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+      data.accountingPeriods = Array.isArray(data.accountingPeriods) ? data.accountingPeriods : [];
+      const existing = data.accountingPeriods.find(row => row.month === payload.month && row.status === 'Closed');
+      if (existing) return json(res, 200, { ok: true, duplicate: true, period: existing });
+      const summary = integrationEngine.accountingLedgerSummary(data.ledgerEntries, { month: payload.month });
+      if (!summary.readyToClose && payload.forceConfirmed !== true) return json(res, 409, { ok: false, error: 'This month still has unreconciled or incomplete entries.', summary });
+      let period;
+      try { period = integrationEngine.accountingPeriodSnapshot(data.ledgerEntries, payload.month, user); }
+      catch (error) { return json(res, 400, { ok: false, error: String(error && error.message || error) }); }
+      period.notes = String(payload.notes || '').trim().slice(0, 800);
+      data.accountingPeriods.unshift(period);
+      appendAuditLog(data, user, 'Accounting month closed', [period.month, period.entryCount + ' entries', moneyText(period.net) + ' net', period.unresolvedAtClose + ' unresolved']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 201, { ok: true, period });
+    }
     if (url.pathname === '/api/accounting/export.csv' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can export accounting records.' });
       const data = await readData();
       const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
       const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
-      const rows = [['Date', 'Category', 'Direction', 'Amount', 'Customer', 'Vehicle', 'VIN', 'Tag', 'Method', 'Status', 'Reference', 'QuickBooks status', 'Source key']]
-        .concat(entries.map(row => [row.date, row.category, row.direction, row.amount, row.customer, row.vehicle, row.vin, row.plate, row.method, row.status, row.reference, row.quickBooksStatus, row.sourceKey]));
+      const rows = [['Date', 'Category', 'Direction', 'Amount', 'Customer', 'Vehicle', 'VIN', 'Tag', 'Method', 'Status', 'Reference', 'Reconciliation', 'Reconciled by', 'QuickBooks status', 'Source key']]
+        .concat(entries.map(row => [row.date, row.category, row.direction, row.amount, row.customer, row.vehicle, row.vin, row.plate, row.method, row.status, row.reference, row.reconciliationStatus, row.reconciledBy, row.quickBooksStatus, row.sourceKey]));
       return send(res, 200, rows.map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n', 'text/csv; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-accounting-ledger.csv"', 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/api/accounting/quickbooks.csv' && req.method === 'GET') {
@@ -15989,6 +16430,8 @@ if (require.main === module) {
     setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
     setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
     setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => console.error('Background WOA autopay failed:', err && err.message || err)), WOA_AUTOPAY_MS);
+    setTimeout(() => runVerificationMonitor({ source: 'startup' }).catch(err => console.error('Startup verification monitor failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 8000);
+    setInterval(() => runVerificationMonitor({ source: 'background' }).catch(err => console.error('Background verification monitor failed:', err && err.message || err)), VERIFICATION_MONITOR_MS);
   });
 }
 module.exports = {
@@ -16070,6 +16513,15 @@ module.exports = {
   apiProviderLaunchGuidance,
   apiProviderRows,
   apiProviderReviewRows,
+  checkrProviderConfig,
+  canopyProviderConfig,
+  verificationProviderReadiness,
+  verificationCaseForProviderEvent,
+  applyVerificationProviderResult,
+  startVerificationProvider,
+  refreshVerificationProvider,
+  verificationMonitorSummary,
+  runVerificationMonitor,
   sessionSignature,
   verifySignedSessionCookie
 };

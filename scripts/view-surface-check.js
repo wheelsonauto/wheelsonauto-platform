@@ -401,7 +401,7 @@ assertIncludes('Insurance/background surface', insurance + app + server, [
   'verificationDocClearedForCustomer',
   'Background check not verified',
   'open-document',
-  'Only last 4 will be stored',
+  'only last 4 will be stored',
   'WOA_BACKGROUND_PROVIDER',
   '/api/verification/cases',
   '/api/webhooks/verification'

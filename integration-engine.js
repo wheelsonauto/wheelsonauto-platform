@@ -442,6 +442,8 @@ function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
   const raw = text(record.providerStatus || record.manualDecision || record.status).toLowerCase();
   const expires = dateKey(record.expiresAt || record.expires || record.expirationDate);
   if (/cancel|closed/.test(raw)) return 'Closed';
+  if (/reconnect required|customer action required/.test(raw)) return 'Customer action required';
+  if (/provider failed|provider error/.test(raw)) return 'Provider failed';
   if (/reject|fail|invalid|fraud|mismatch/.test(raw)) return 'Rejected';
   if (expires && expires < today) return 'Expired';
   if (expires) {
@@ -450,22 +452,23 @@ function verificationCaseStatus(record = {}, today = dateKey(new Date())) {
     if (expiryTime - todayTime <= 30 * DAY_MS) return 'Expiring';
   }
   if (/verified|approved|clear|passed|active/.test(raw)) return 'Verified';
+  if (/consider|review|escalated|disputed/.test(raw)) return 'Needs staff review';
   if (/provider setup|required|not connected/.test(raw)) return 'Provider setup needed';
-  if (/submitted|processing|provider pending|pending provider/.test(raw)) return 'Provider pending';
+  if (/submitted|processing|provider pending|pending provider|awaiting customer|data available/.test(raw)) return 'Provider pending';
   if (/correction|more information|resubmit/.test(raw)) return 'Correction requested';
   return 'Needs staff review';
 }
 
 function verificationCase(data, payload = {}, actor = {}) {
   const type = text(payload.type || payload.kind).toLowerCase().replace(/\s+/g, '_');
-  if (!['identity', 'driver_license', 'insurance', 'background'].includes(type)) throw new Error('Verification type must be identity, driver_license, insurance, or background.');
+  if (!['identity', 'driver_license', 'driver_record', 'insurance', 'background'].includes(type)) throw new Error('Verification type must be identity, driver_license, driver_record, insurance, or background.');
   const customer = text(payload.customer || payload.name);
   if (!customer) throw new Error('Choose a customer before creating a verification case.');
   const profile = customerProfile(data, customer);
   const vehicle = vehicleFor(data, { ...profile, ...payload, customer });
   const provider = text(payload.provider || (type === 'insurance'
     ? process.env.WOA_INSURANCE_PROVIDER
-    : type === 'background'
+    : type === 'background' || type === 'driver_record'
       ? process.env.WOA_BACKGROUND_PROVIDER
       : process.env.WOA_IDENTITY_PROVIDER) || 'manual');
   const now = new Date().toISOString();
@@ -495,6 +498,9 @@ function verificationCase(data, payload = {}, actor = {}) {
     status: provider.toLowerCase() === 'manual' ? 'Needs staff review' : (payload.externalCaseId ? 'Provider pending' : 'Provider setup needed'),
     providerStatus: text(payload.providerStatus),
     notes: text(payload.notes),
+    consentConfirmedAt: text(payload.consentConfirmedAt),
+    permissiblePurposeConfirmedAt: text(payload.permissiblePurposeConfirmedAt),
+    monitoringEnabled: type === 'insurance' && payload.monitoringEnabled !== false,
     createdAt: now,
     createdBy: text(actor.name || actor.username || actor.role || 'Staff'),
     history: [{ at: now, action: 'Case created', status: provider.toLowerCase() === 'manual' ? 'Needs staff review' : (payload.externalCaseId ? 'Provider pending' : 'Provider setup needed'), by: text(actor.name || actor.role || 'Staff') }]
@@ -534,10 +540,16 @@ function applyVerificationEvent(record, event = {}) {
   if (!record) throw new Error('Verification case was not found.');
   const now = new Date().toISOString();
   record.externalCaseId = text(event.externalCaseId || event.providerCaseId || event.id || record.externalCaseId);
-  record.providerStatus = text(event.status || event.providerStatus || event.result);
+  record.providerStatus = text(event.providerStatus || event.status || event.result);
   record.providerVerifiedAt = /verified|approved|clear|passed|active/i.test(record.providerStatus) ? now : record.providerVerifiedAt;
   if (event.expiresAt || event.expires || event.expirationDate) record.expiresAt = dateKey(event.expiresAt || event.expires || event.expirationDate);
   record.providerReference = text(event.reference || event.eventId || record.providerReference);
+  ['providerApplicantId', 'providerInvitationId', 'providerReportId', 'providerPullId', 'providerMonitoringId', 'carrier', 'policyNumberLast4', 'customerActionUrl', 'reconnectUrl'].forEach(key => {
+    if (event[key] !== undefined && event[key] !== null) record[key] = text(event[key]);
+  });
+  if (event.policyCount !== undefined) record.policyCount = Math.max(0, Number(event.policyCount || 0));
+  if (event.isMonitored !== undefined) record.monitoringEnabled = event.isMonitored === true;
+  if (Array.isArray(event.monitoredPolicySummary)) record.monitoredPolicySummary = event.monitoredPolicySummary.slice(0, 20);
   record.updatedAt = now;
   record.history = Array.isArray(record.history) ? record.history : [];
   record.history.push({ at: now, action: 'Provider update', status: record.providerStatus || 'Updated', by: text(event.provider || record.provider || 'Provider') });
@@ -606,6 +618,10 @@ function buildAccountingLedger(data = {}, existing = []) {
       quickBooksStatus: text(prior.quickBooksStatus || 'Not synced'),
       quickBooksEntityId: text(prior.quickBooksEntityId),
       quickBooksSyncedAt: text(prior.quickBooksSyncedAt),
+      reconciliationStatus: text(prior.reconciliationStatus || 'Needs review'),
+      reconciledAt: text(prior.reconciledAt),
+      reconciledBy: text(prior.reconciledBy),
+      reconciliationNote: text(prior.reconciliationNote),
       createdAt: text(prior.createdAt || row.createdAt || new Date().toISOString()),
       updatedAt: new Date().toISOString()
     });
@@ -627,7 +643,79 @@ function buildAccountingLedger(data = {}, existing = []) {
     if (!/paid|recovered|complete|closed/i.test(text(claim.status)) || !number(claim.paidAmount || claim.amount)) return;
     add('claim', claim.id, claim, claim.paidAmount || claim.amount, ledgerCategory(claim), 'credit', claim.status);
   });
+  (data.accountingAdjustments || []).forEach(adjustment => {
+    if (/void|deleted/i.test(text(adjustment.status))) return;
+    const direction = text(adjustment.direction).toLowerCase() === 'credit' ? 'credit' : 'debit';
+    add('adjustment', adjustment.id, adjustment, adjustment.amount, text(adjustment.category || (direction === 'credit' ? 'Other operating income' : 'Other operating expense')), direction, adjustment.status || 'Recorded');
+  });
   return entries.sort((a, b) => text(b.date).localeCompare(text(a.date)) || text(b.updatedAt).localeCompare(text(a.updatedAt)));
+}
+
+function accountingLedgerSummary(entries = [], options = {}) {
+  const month = /^\d{4}-\d{2}$/.test(text(options.month)) ? text(options.month) : '';
+  const filtered = (entries || []).filter(entry => !month || dateKey(entry.date || entry.createdAt).startsWith(month));
+  const credits = filtered.filter(entry => entry.direction === 'credit').reduce((sum, entry) => sum + Math.abs(number(entry.amount)), 0);
+  const debits = filtered.filter(entry => entry.direction === 'debit').reduce((sum, entry) => sum + Math.abs(number(entry.amount)), 0);
+  const needsReview = filtered.filter(entry => !/reconciled/i.test(text(entry.reconciliationStatus)));
+  const identityGaps = filtered.filter(entry => !text(entry.customer) && !/maintenance|expense|refund/i.test(text(entry.category)));
+  const referenceGaps = filtered.filter(entry => !text(entry.reference));
+  const byCategory = new Map();
+  filtered.forEach(entry => {
+    const category = text(entry.category || 'Uncategorized');
+    const existing = byCategory.get(category) || { category, credits: 0, debits: 0, net: 0, count: 0 };
+    const amount = Math.abs(number(entry.amount));
+    if (entry.direction === 'debit') existing.debits += amount;
+    else existing.credits += amount;
+    existing.net = existing.credits - existing.debits;
+    existing.count += 1;
+    byCategory.set(category, existing);
+  });
+  return {
+    month,
+    count: filtered.length,
+    credits,
+    debits,
+    net: credits - debits,
+    needsReview: needsReview.length,
+    identityGaps: identityGaps.length,
+    referenceGaps: referenceGaps.length,
+    readyToClose: filtered.length > 0 && needsReview.length === 0 && identityGaps.length === 0 && referenceGaps.length === 0,
+    byCategory: Array.from(byCategory.values()).sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+  };
+}
+
+function accountingPeriodSnapshot(entries = [], month, actor = {}) {
+  if (!/^\d{4}-\d{2}$/.test(text(month))) throw new Error('Choose a valid accounting month.');
+  const summary = accountingLedgerSummary(entries, { month });
+  if (!summary.count) throw new Error('That month has no accounting entries to close.');
+  const now = new Date().toISOString();
+  const sourceKeys = entries.filter(entry => dateKey(entry.date || entry.createdAt).startsWith(month)).map(entry => text(entry.sourceKey)).sort();
+  return {
+    id: stableId('accounting-period', [month]),
+    month,
+    status: 'Closed',
+    entryCount: summary.count,
+    credits: summary.credits,
+    debits: summary.debits,
+    net: summary.net,
+    unresolvedAtClose: summary.needsReview + summary.identityGaps + summary.referenceGaps,
+    sourceHash: crypto.createHash('sha256').update(sourceKeys.join('|')).digest('hex'),
+    closedAt: now,
+    closedBy: text(actor.name || actor.username || actor.role || 'Owner')
+  };
+}
+
+function reconcileAccountingEntry(entry, payload = {}, actor = {}) {
+  if (!entry) throw new Error('Accounting entry was not found.');
+  const decision = text(payload.status || payload.decision).toLowerCase();
+  if (!['reconciled', 'needs_review', 'needs review'].includes(decision)) throw new Error('Choose reconciled or needs review.');
+  const now = new Date().toISOString();
+  entry.reconciliationStatus = decision === 'reconciled' ? 'Reconciled' : 'Needs review';
+  entry.reconciledAt = decision === 'reconciled' ? now : '';
+  entry.reconciledBy = decision === 'reconciled' ? text(actor.name || actor.username || actor.role || 'Owner') : '';
+  entry.reconciliationNote = text(payload.notes || payload.note);
+  entry.updatedAt = now;
+  return entry;
 }
 
 function quickBooksOffsetAccount(entry = {}) {
@@ -773,6 +861,9 @@ module.exports = {
   reviewVerificationCase,
   applyVerificationEvent,
   buildAccountingLedger,
+  accountingLedgerSummary,
+  accountingPeriodSnapshot,
+  reconcileAccountingEntry,
   buildQuickBooksJournalRows,
   pickupCalendarEvent,
   buildPickupCalendarEvents
