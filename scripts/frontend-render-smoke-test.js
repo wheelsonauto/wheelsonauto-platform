@@ -455,7 +455,7 @@ function ownerSmoke() {
   context.db.integrations.apiProviderRuntime = [{ id: 'clover-core', name: 'Clover Core', group: 'Money', status: 'Connected', lastTestAt: '2026-07-14T12:00:00.000Z', lastTestResult: 'Runtime sync proof passed.' }];
   assert(context.apiProviders().find(row => row.id === 'clover-core').status === 'Connected', 'API Roadmap should use the live server provider status instead of the generic client default.');
   assert(context.apiProviders().find(row => row.id === 'insurance').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point insurance to the live verification adapter.');
-  assert(context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/api/webhooks/verification'), 'Client fallback provider rows must include identity and driver-license signed callbacks.');
+  assert(context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/api/webhooks/stripe') && context.apiProviders().find(row => row.id === 'identity-verification').endpoint.includes('/identity'), 'Client fallback provider rows must expose Stripe Identity onboarding and signed Stripe callbacks.');
   assert(context.apiProviders().find(row => row.id === 'background-checks').endpoint.includes('/api/verification/cases'), 'Client fallback provider rows must point background screening to the shared secure verification adapter.');
   assert(context.apiProviders().find(row => row.id === 'background-checks').status === 'Ready - manual review', 'Background screening must be honestly usable for manual review while an authoritative provider remains optional.');
   assert(context.apiProviders().find(row => row.id === 'tracker-gps').endpoint.includes('/api/webhooks/tracker'), 'Client fallback provider rows must expose the live tracker adapter and signed callback.');
@@ -553,7 +553,7 @@ function ownerSmoke() {
   assertNo('Owner dashboard', ownerDashboard, ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
   [
-    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payment actions', 'customer-pay-list']],
+    ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payments & customers', 'customer-pay-list']],
     ['Payments today', 'Payments', 'Today', ['Payments & Customers', 'Today action list', 'payment-command', 'customer-pay-list']],
     ['Payments history', 'Payments', 'History', ['Customer history', 'customer-pay-list']],
     ['Payments transactions', 'Payments', 'Transactions', ['Transactions', 'transaction-card', 'customer-pay-list']],

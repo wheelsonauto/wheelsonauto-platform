@@ -69,10 +69,17 @@ if (shell.includes('/logout')) fail('Log out must stay inside Settings.');
   'No duplicate workspaces',
   'No nested cards',
   'No unnecessary cards',
+  'No action walls',
   'Desktop, tablet, and phone'
 ].forEach(text => {
   if (!rules.includes(text)) fail('documented polish rule is missing: ' + text);
 });
+
+const focusedPayments = activeFunction('PaymentsFocused');
+for (const action of ['sync-all', 'reactivate-customer', 'new-autopay']) {
+  const count = (focusedPayments.match(new RegExp('data-action="' + action + '"', 'g')) || []).length;
+  if (count !== 1) fail('PaymentsFocused must expose one ' + action + ' action, found ' + count + '.');
+}
 
 [
   '.main>.topbar>.account-actions{display:none!important}',
@@ -81,15 +88,39 @@ if (shell.includes('/logout')) fail('Log out must stay inside Settings.');
   '.message-focused-list,.message-focused-review{height:calc(100dvh - 222px)',
   '.message-inbox-shell.message-mobile-thread-open .message-thread-list{display:none}',
   '.message-inbox-shell.message-mobile-thread-open .message-conversation-panel{display:grid}',
-  'Unified deep-blue glass workspace: restored pre-charcoal staff palette.',
-  '--staff-canvas:#0b1015',
-  '--staff-panel:#111820',
-  '--staff-panel-raised:#182028',
-  '--staff-accent:#6673be',
+  'Unified website-level charcoal glass workspace.',
+  '--staff-canvas:#0d0f10',
+  '--staff-panel:#181b1e',
+  '--staff-panel-raised:#202326',
+  '--staff-accent:#d5b15f',
+  'background:linear-gradient(155deg,rgba(213,177,95,.035),rgba(255,255,255,.018) 42%,rgba(255,255,255,.008)),rgba(24,27,30,.95)!important',
+  'background:linear-gradient(145deg,rgba(240,217,147,.18),rgba(213,177,95,.07)),rgba(24,27,30,.94)!important',
+  'background:linear-gradient(145deg,rgba(226,91,82,.18),rgba(142,45,42,.08)),rgba(27,24,25,.96)!important',
+  'background:linear-gradient(145deg,rgba(83,199,132,.16),rgba(42,117,78,.07))!important',
+  'background:linear-gradient(145deg,rgba(106,172,238,.15),rgba(57,101,148,.06))!important',
   'box-shadow:inset 0 1px 0 rgba(255,255,255,.11)'
 ].forEach(text => {
   if (!css.includes(text)) fail('responsive polish guard is missing: ' + text);
 });
+
+[
+  'function actionMenu(label,buttons)',
+  'function customerFileInline(name)',
+  "actionMenu('More'",
+  'actions customer-file-actions',
+  '<button class="btn primary" data-action="new-autopay">Add autopay</button>',
+  '.admin-shell>.sidebar{display:none!important}',
+  '.action-menu-panel{'
+].forEach(text => {
+  if (!(app + css).includes(text)) fail('action hierarchy/mobile shell guard is missing: ' + text);
+});
+
+if (css.includes('--staff-accent:#6673be') || css.includes('rgba(119,131,203,.12)')) {
+  fail('the retired blue-wash staff theme returned.');
+}
+if (css.slice(css.indexOf('Unified website-level charcoal glass workspace.')).includes('background:linear-gradient(180deg,var(--staff-accent-bright),var(--staff-accent))')) {
+  fail('solid gold staff buttons returned instead of the customer-portal glass treatment.');
+}
 
 if (/background\s*:\s*(#fff|white)\b/i.test(css.slice(css.lastIndexOf('/* Account/session actions live in Settings')))) {
   fail('a literal white background was added after the account/settings polish guard.');

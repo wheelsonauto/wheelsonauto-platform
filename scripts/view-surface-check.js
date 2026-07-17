@@ -457,7 +457,8 @@ const paymentCustomerCard = finalFunctionSlice(app, 'paymentCustomerCard');
 assertIncludes('Customer payment/history cards', paymentCustomerCard, [
   'historyChargeButtons',
   'textCustomerButton',
-  'customerFileButton',
+  'customerFileInline',
+  'actionMenu',
   'open-vehicle',
   'VIN missing'
 ]);

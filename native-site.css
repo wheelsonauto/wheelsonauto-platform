@@ -162,6 +162,8 @@ button,a,input,select,textarea{transition:border-color .18s ease,background-colo
 .step-success{background:rgba(111,211,154,.1);border:1px solid rgba(111,211,154,.35);color:#c5f2d6}
 .step-waiting{background:rgba(213,177,95,.1);border:1px solid rgba(213,177,95,.35);color:var(--gold-2)}
 .step-locked{background:#141618;border:1px solid var(--line);color:var(--muted)}
+.step-security{max-width:650px;margin:0 0 12px!important;color:var(--muted)}
+.step-alert{margin:0 0 12px;padding:11px 12px;border:1px solid rgba(255,141,141,.38);border-radius:6px;background:rgba(255,111,111,.09);color:#ffd2d2;font-size:13px;font-weight:750}
 .contract-review{margin-bottom:14px;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .contract-review summary{cursor:pointer;padding:13px;background:#121416;color:var(--gold-2);font-weight:800}
 .contract-paper{max-height:500px;overflow:auto;padding:22px;background:#f4f1e9;color:#181817;font-family:Georgia,"Times New Roman",serif;font-size:13px;line-height:1.5}

@@ -73,6 +73,8 @@ function stripeClient(options = {}) {
     createPaymentIntent: (payload, idempotencyKey) => request('POST', '/payment_intents', payload, { idempotencyKey }),
     retrievePaymentIntent: id => request('GET', '/payment_intents/' + encodeURIComponent(id), { expand: ['customer', 'payment_method', 'latest_charge'] }),
     retrieveCharge: id => request('GET', '/charges/' + encodeURIComponent(id), { expand: ['customer', 'payment_intent'] }),
+    createIdentityVerificationSession: (payload, idempotencyKey) => request('POST', '/identity/verification_sessions', payload, { idempotencyKey }),
+    retrieveIdentityVerificationSession: id => request('GET', '/identity/verification_sessions/' + encodeURIComponent(id)),
     submitDisputeEvidence: (id, payload, idempotencyKey) => request('POST', '/disputes/' + encodeURIComponent(id), payload, { idempotencyKey })
   };
 }

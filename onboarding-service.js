@@ -83,6 +83,8 @@ function createSession(data, application, actor, baseUrl, options = {}) {
     onlineVehicleId: application.onlineVehicleId || application.vehicleId || '',
     organizationId: application.organizationId || 'org-wheelsonauto',
     paymentProvider: text(options.paymentProvider || 'clover', 24).toLowerCase(),
+    identityProvider: text(options.identityProvider || 'manual', 24).toLowerCase(),
+    identityVerificationStatus: 'not_started',
     tokenHash: tokenHash(rawToken),
     status: 'Open',
     documentReviewStatus: 'Waiting on customer',

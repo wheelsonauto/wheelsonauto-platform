@@ -49,6 +49,8 @@ requireText('Mobile sticky modal actions', '.modal-body>.actions:last-child');
 requireText('Mobile quickbar fixed position', 'position:fixed');
 requireText('Mobile quickbar safe-area padding', 'safe-area-inset-bottom');
 requireText('Mobile quickbar labels', '.quickbar button span');
+requireText('Mobile staff logo removal', '.admin-shell>.sidebar{display:none!important}');
+requireText('Progressive action menu', '.action-menu-panel{');
 requireText('Mobile tabs wrap guard', 'Mobile tab fit guard: section tabs wrap instead of clipping off-screen.');
 requireText('Mobile Operations tab grid', '.admin-shell .view-operations>.staff-tabs');
 requireText('Mobile manager tab grid', '.admin-shell .view-manager-portal>.staff-tabs');
@@ -65,9 +67,9 @@ requireText('Website applications desktop span', '.view-website>.native-website-
 requireText('Applications workspace full-width guard', '.view-applications>.native-applications-board{grid-column:1/-1!important;margin:0}');
 requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
-requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', '#111820', 'border-color:rgba(240,184,58,.42)', '!important']);
-requireBlock('Modal inner cards', '.modal .card,', ['background:rgba(255,255,255,.055)', 'filter:none']);
-requireBlock('Modal hover readability', '.modal .card:hover,', ['background:rgba(240,184,58,.10)', 'filter:none', 'transform:none']);
+requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', 'rgba(24,27,30,.98)', 'border-color:rgba(255,255,255,.13)', '!important']);
+requireBlock('Modal inner cards', '.modal .card,', ['background:rgba(255,255,255,.045)', 'filter:none']);
+requireBlock('Modal hover readability', '.modal .card:hover,', ['background:rgba(255,255,255,.065)', 'filter:none', 'transform:none']);
 requireBlock('Message cards readability', '.view-messages .message-thread-card,', ['background:rgba(255,255,255,.06)', 'filter:none', 'backdrop-filter:none']);
 requireBlock('Message hover readability', '.view-messages .message-thread-card:hover,', ['background:rgba(240,184,58,.10)', 'filter:none', 'backdrop-filter:none']);
 requireBlock('Mechanic portal cards', '.view-mechanic-portal .mechanic-card,', ['background:rgba(255,255,255,.06)', '!important']);
@@ -92,8 +94,15 @@ requireText('Customer portal mobile visible workspace', '.customer-mobile-focuse
 requireText('Customer portal duplicate action helper removal', '.customer-next-actions{display:none}');
 
 const finalGuard = css.slice(css.indexOf('Final no-blur pass: every staff information surface stays sharp on hover.'));
-if (/filter\s*:\s*blur/i.test(finalGuard)) fail('A blur filter appears after the final no-blur guard.');
-if (/backdrop-filter\s*:\s*(?!none)/i.test(finalGuard)) fail('A non-none backdrop-filter appears after the final no-blur guard.');
+if (finalGuard.split('\n').some(line => /^\s*filter\s*:\s*blur/i.test(line))) {
+  fail('A blur filter appears after the final no-blur guard.');
+}
+const lateBackdropSelectors = [...finalGuard.matchAll(/([^{}]+)\{[^{}]*backdrop-filter\s*:\s*(?!none)([^;}]+)/gi)]
+  .map(match => match[1].trim())
+  .filter(selector => !/(?:\.admin-shell \.topbar|\.login-card|\.modal-backdrop)/.test(selector));
+if (lateBackdropSelectors.length) {
+  fail('Backdrop glass is limited to shell surfaces, not information cards:\n' + lateBackdropSelectors.join('\n'));
+}
 
 const lateWhiteBackgrounds = finalGuard
   .split('\n')

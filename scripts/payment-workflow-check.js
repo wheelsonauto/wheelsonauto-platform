@@ -116,7 +116,7 @@ requireText('Payments transaction tab', app, 'recentPayments(db.payments||[],250
   'remove-autopay',
   'delete-card-setup',
   'customerPortalButton',
-  'customerFileButton'
+  'actionMenu'
 ].forEach(action => requireText('Payment card actions', cardActions, action));
 
 [
@@ -245,7 +245,7 @@ if (app.includes('data-tab="Attention"') || app.includes("data-tab='Attention'")
   'Needs Clover/customer match',
   'apply-transaction-match',
   'Use match',
-  'customerFileButton'
+  'customerFileInline'
 ].forEach(text => requireText('Transaction customer matching card', paymentTransactionCard, text));
 [
   'extCustomer&&/\\s/.test(extCustomer)',

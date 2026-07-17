@@ -5,6 +5,7 @@ These rules are part of the release gate. A feature is not done merely because i
 - No duplicate workspaces: one tab must represent one clear job and only its selected workspace may render.
 - No nested cards: a card cannot be used as a page section or placed inside another card.
 - No unnecessary cards: repeated summaries, actions, customer lists, and status panels must be combined or removed.
+- No action walls: keep the immediate primary action visible and place occasional or destructive actions behind a contextual More control.
 - No unnecessary tabs: a single-item group opens directly, and related tasks share internal tabs instead of expanding navigation.
 - No session controls in operational headers: password reset and logout belong in Settings > Account.
 - No unreachable controls: modal and message actions must remain visible above mobile navigation and safe areas.

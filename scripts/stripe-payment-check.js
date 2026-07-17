@@ -38,6 +38,9 @@ async function run() {
   assert.strictEqual(captured.options.headers.Authorization, 'Bearer sk_test_private', 'Stripe secret key must only be sent in the Authorization header.');
   assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-test-key', 'Money actions must use an idempotency key.');
   assert(captured.options.body.includes('amount=22900'), 'Stripe charge amount must be encoded in cents.');
+  await client.createIdentityVerificationSession({ type: 'document', options: { document: { allowed_types: ['driving_license'], require_live_capture: true, require_matching_selfie: true } } }, 'woa-identity-test');
+  assert(captured.url.endsWith('/identity/verification_sessions'), 'Stripe Identity sessions must use the provider-hosted verification endpoint.');
+  assert(new URLSearchParams(captured.options.body).get('options[document][require_matching_selfie]') === 'true', 'Stripe Identity sessions must require a matching selfie.');
 
   [
     'STRIPE_SECRET_KEY',
@@ -49,6 +52,8 @@ async function run() {
     'stripePaymentMethodId',
     'chargeStripeSavedCard',
     'stripeDisputeEvidencePacket',
+    'identity.verification_session.verified',
+    'STRIPE_IDENTITY_RUNTIME_READY',
     'Owner must review reason-specific evidence',
     'Stripe card ready - Clover remains active until owner confirmation',
     'recurringCardReadyForProvider',
@@ -58,6 +63,7 @@ async function run() {
   assert(app.includes("r.stripeCustomerId&&r.stripePaymentMethodId"), 'Admin charge readiness must recognize only complete Stripe saved-card records.');
   assert(nativeSite.includes("recurring.stripeCustomerId && recurring.stripePaymentMethodId"), 'Public Stripe onboarding must require both Stripe customer and reusable payment-method references.');
   assert(nativeSite.includes('identity_selfie'), 'Public Stripe onboarding must include the required identity selfie step.');
+  assert(nativeSite.includes('data-onboarding-form="identity"'), 'Public onboarding must expose Stripe Identity inside the existing verification step.');
   assert(!server.includes('STRIPE_SECRET_KEY || \'sk_'), 'No Stripe secret fallback may be committed.');
 
   console.log('Stripe payment adapter, migration, webhook, and dispute checks passed.');

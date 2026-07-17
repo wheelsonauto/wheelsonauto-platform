@@ -62,6 +62,9 @@ const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || process.env
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || process.env.WOA_STRIPE_WEBHOOK_SECRET || '';
 const STRIPE_API_BASE = (process.env.STRIPE_API_BASE || 'https://api.stripe.com/v1').replace(/\/+$/, '');
 const stripe = stripeAdapter.stripeClient({ secretKey: STRIPE_SECRET_KEY, apiBase: STRIPE_API_BASE });
+const STRIPE_KEY_MODE = /^sk_live_/.test(STRIPE_SECRET_KEY) ? 'live' : /^sk_test_/.test(STRIPE_SECRET_KEY) ? 'test' : STRIPE_SECRET_KEY ? 'unknown' : 'missing';
+const WOA_STRIPE_IDENTITY_TEST_MODE = process.env.WOA_STRIPE_IDENTITY_TEST_MODE === '1';
+const STRIPE_IDENTITY_RUNTIME_READY = IDENTITY_PROVIDER === 'stripe' && stripe.configured() && (STRIPE_KEY_MODE === 'live' || WOA_STRIPE_IDENTITY_TEST_MODE);
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
@@ -95,7 +98,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-stripe-deep-blue-83">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-charcoal-glass-92">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -6841,6 +6844,100 @@ async function nativeOnboardingContext(data, publicToken) {
   const contract = onboarding.buildContract(data, application, vehicle, session, template);
   return { session, application, vehicle, template, contract };
 }
+function normalizedIdentityProvider(value) {
+  return String(value || 'manual').trim().toLowerCase() === 'stripe' ? 'stripe' : 'manual';
+}
+function stripeIdentityErrorSummary(object = {}) {
+  const error = object.last_error || {};
+  const code = onboarding.text(error.code || error.reason || '', 80).toLowerCase();
+  const messages = {
+    consent_declined: 'Identity verification consent was not completed. Continue when ready.',
+    document_expired: 'Stripe needs a current, unexpired driver license.',
+    document_type_not_supported: 'Stripe needs a supported driver license.',
+    document_unverified_other: 'Stripe could not verify that license. Try again with clear live images.',
+    selfie_document_mismatch: 'Stripe could not match the live selfie to the driver license. Try again in clear lighting.',
+    selfie_unverified_other: 'Stripe could not verify the live selfie. Try again in clear lighting.'
+  };
+  return { code, message: code ? (messages[code] || 'Stripe needs more identity information. Continue the secure verification and follow its instructions.') : '' };
+}
+function stripeIdentityCaseStatus(status) {
+  if (status === 'verified') return 'Verified';
+  if (status === 'processing') return 'Processing';
+  if (status === 'requires_input') return 'Needs customer input';
+  if (status === 'canceled') return 'Canceled';
+  if (status === 'redacted') return 'Verified - provider data redacted';
+  return 'Not started';
+}
+function applyStripeIdentitySession(data, session, application, object = {}, eventId = '') {
+  if (!session || !object || !object.id) return { changed: false, status: '' };
+  const incoming = ['requires_input', 'processing', 'verified', 'canceled', 'redacted'].includes(String(object.status || '').toLowerCase()) ? String(object.status).toLowerCase() : 'requires_input';
+  const current = String(session.identityVerificationStatus || 'not_started').toLowerCase();
+  const status = current === 'verified' && incoming !== 'verified' && incoming !== 'redacted' ? 'verified' : (incoming === 'redacted' && current === 'verified' ? 'verified' : incoming);
+  const now = new Date().toISOString();
+  const providerError = stripeIdentityErrorSummary(object);
+  const before = JSON.stringify([
+    session.stripeIdentityVerificationId,
+    session.identityVerificationStatus,
+    session.identityVerificationLastErrorCode,
+    session.identityVerificationLastError,
+    session.identityVerifiedAt,
+    session.identityDataRedactedAt
+  ]);
+  session.stripeIdentityVerificationId = String(object.id);
+  session.identityProvider = 'stripe';
+  session.identityVerificationStatus = status;
+  session.identityVerificationLastCheckedAt = now;
+  session.identityVerificationLivemode = !!object.livemode;
+  session.identityVerificationLastErrorCode = status === 'requires_input' ? providerError.code : '';
+  session.identityVerificationLastError = status === 'requires_input' ? providerError.message : '';
+  if (incoming === 'verified' && !session.identityVerifiedAt) session.identityVerifiedAt = now;
+  if (incoming === 'redacted') session.identityDataRedactedAt = now;
+  data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
+  let record = data.verificationCases.find(row => row.onboardingSessionId === session.id && row.provider === 'Stripe Identity');
+  const vehicle = application && onboarding.findPublicVehicle(data, application.onlineVehicleId || session.onlineVehicleId) || {};
+  const casePatch = {
+    organizationId: session.organizationId || application && application.organizationId || MAIN_ORG_ID,
+    applicationId: application && application.id || session.applicationId || '',
+    onboardingSessionId: session.id,
+    onlineVehicleId: vehicle.id || session.onlineVehicleId || '',
+    vehicleId: vehicle.platformVehicleId || application && application.vehicleId || '',
+    customer: application && application.name || '',
+    vehicle: vehicle.id ? nativeSite.vehicleTitle(vehicle) : application && application.vehicle || '',
+    vin: vehicle.vin || '',
+    plate: vehicle.plate || '',
+    type: 'identity',
+    provider: 'Stripe Identity',
+    externalCaseId: String(object.id),
+    referenceLast4: String(object.id).slice(-4),
+    providerStatus: incoming,
+    status: stripeIdentityCaseStatus(incoming),
+    updatedAt: now,
+    providerVerifiedAt: incoming === 'verified' ? (record && record.providerVerifiedAt || now) : (record && record.providerVerifiedAt || ''),
+    notes: providerError.message || (incoming === 'verified' ? 'Stripe verified the live driver license and matching selfie. Insurance still requires WheelsonAuto staff approval.' : 'Secure Stripe Identity onboarding result.'),
+    source: 'Native customer onboarding'
+  };
+  if (!record) {
+    record = { id: 'verification-stripe-identity-' + session.id, createdAt: now, providerEventIds: [] };
+    data.verificationCases.unshift(record);
+  }
+  Object.assign(record, casePatch);
+  record.providerEventIds = Array.isArray(record.providerEventIds) ? record.providerEventIds : [];
+  if (eventId && !record.providerEventIds.includes(eventId)) record.providerEventIds = [eventId, ...record.providerEventIds].slice(0, 100);
+  const after = JSON.stringify([
+    session.stripeIdentityVerificationId,
+    session.identityVerificationStatus,
+    session.identityVerificationLastErrorCode,
+    session.identityVerificationLastError,
+    session.identityVerifiedAt,
+    session.identityDataRedactedAt
+  ]);
+  return { changed: before !== after, status, verificationCaseId: record.id };
+}
+async function syncStripeIdentitySession(data, session, application) {
+  if (normalizedIdentityProvider(session && session.identityProvider) !== 'stripe' || !session.stripeIdentityVerificationId) return { changed: false, status: '' };
+  const object = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
+  return applyStripeIdentitySession(data, session, application, object);
+}
 function addDaysToDateKey(value, days) {
   const date = new Date(String(value || '').slice(0, 10) + 'T12:00:00Z');
   if (Number.isNaN(date.getTime())) return '';
@@ -7258,8 +7355,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_HCO_WEBHOOK_SECRET', CLOVER_HCO_WEBHOOK_SECRET ? 'Set' : 'Missing', 'Signed Hosted Checkout payment reconciliation'],
     ['STRIPE_SECRET_KEY', STRIPE_SECRET_KEY ? 'Set' : 'Optional', 'Stripe Checkout, card setup, saved-card charges, and migration'],
     ['STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET ? 'Set' : 'Optional', 'Signed Stripe payment and dispute reconciliation'],
-    ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed identity, insurance, and background provider callbacks; staff review remains live without a provider'],
-    ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Identity and driver-license verification adapter'],
+    ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed insurance and background provider callbacks; Stripe Identity uses the signed Stripe webhook'],
+    ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Set to stripe only after live Stripe Identity is enabled; customer-uploaded license files remain private'],
     ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
     ['WOA_BACKGROUND_PROVIDER', BACKGROUND_PROVIDER || 'manual', 'Background-screening verification adapter'],
     ['WOA_TRACKER_PROVIDER', TRACKER_PROVIDER || 'manual', 'Vehicle tracker/GPS provider adapter'],
@@ -8728,7 +8825,7 @@ function defaultApiProviderRows(data = {}) {
     },
     { id: 'ezpass', name: 'WheelsonAuto Toll Import / E-ZPass', group: 'Risk', status: 'Ready - WheelsonAuto import', owner: 'Owner', envKeys: 'No external key required for CSV/TSV/JSON import', endpoint: '/api/tolls/import', liveTest: 'Preview statement, verify plate/VIN/customer separation, import once, import again to prove duplicate protection, then create one recovery link.' },
     { id: 'insurance', name: 'Insurance Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_INSURANCE_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review policy proof manually, verify the 30-day expiration queue, then accept one signed authoritative provider result.' },
-    { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Review identity/license proof manually, confirm only the last four are retained, then accept one signed authoritative provider result.' },
+    { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: STRIPE_IDENTITY_RUNTIME_READY ? (STRIPE_KEY_MODE === 'live' ? 'Testing - live Stripe Identity' : 'Testing - Stripe test mode') : (IDENTITY_PROVIDER === 'stripe' && stripe.configured() ? 'Prepared - Stripe test mode' : 'Ready - private manual review'), owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET', endpoint: '/api/public/onboarding/:token/identity, /api/webhooks/stripe', liveTest: 'Complete one hosted live-license and selfie check, verify the signed Stripe result, then approve insurance before signing.' },
     { id: 'background-checks', name: 'Background Checks', group: 'Risk', status: VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual' ? 'Testing - signed provider callback' : 'Ready - manual review', owner: 'Manager', envKeys: 'WOA_BACKGROUND_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET', endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification', liveTest: 'Create a background review from an approved application, retain only the last four of any reference, then accept one signed authoritative provider result.' },
     { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET', endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker', liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.' },
     { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
@@ -8813,7 +8910,7 @@ function apiProviderTruthOverrides(data = {}) {
   const verificationEvidenceAt = rows => newestEvidenceAt(rows.map(row => row.providerVerifiedAt || row.reviewedAt || row.updatedAt || row.createdAt));
   const providerResultRecorded = rows => rows.some(row => row.externalCaseId && row.providerVerifiedAt && /verified|approved|clear|passed|active/i.test(String(row.providerStatus || row.status || '')));
   const insuranceProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(INSURANCE_PROVIDER || '').toLowerCase() !== 'manual');
-  const identityProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual');
+  const identityProviderReady = IDENTITY_PROVIDER === 'stripe' ? STRIPE_IDENTITY_RUNTIME_READY : !!(VERIFICATION_WEBHOOK_SECRET && String(IDENTITY_PROVIDER || '').toLowerCase() !== 'manual');
   const backgroundProviderReady = !!(VERIFICATION_WEBHOOK_SECRET && String(BACKGROUND_PROVIDER || '').toLowerCase() !== 'manual');
   const insuranceProviderLive = insuranceProviderReady && providerResultRecorded(insuranceCases);
   const identityProviderLive = identityProviderReady && providerResultRecorded(identityCases);
@@ -8893,12 +8990,12 @@ function apiProviderTruthOverrides(data = {}) {
     },
     'identity-verification': {
       name: 'Identity / Driver License Verification',
-      status: identityProviderLive ? 'Connected' : (identityProviderReady ? 'Testing - signed result needed' : 'Ready - manual review'),
-      envKeys: 'WOA_IDENTITY_PROVIDER, WOA_VERIFICATION_WEBHOOK_SECRET',
-      endpoint: '/api/verification/cases, /api/verification/status, /api/webhooks/verification',
-      liveTest: 'Review identity/license proof, confirm only the last four are retained, then accept one signed authoritative provider result.',
+      status: identityProviderLive ? 'Connected' : (identityProviderReady ? (STRIPE_KEY_MODE === 'live' ? 'Testing - Stripe verified result needed' : 'Testing - Stripe test mode') : (IDENTITY_PROVIDER === 'stripe' && stripe.configured() ? 'Prepared - live Stripe key needed' : 'Ready - private manual review')),
+      envKeys: 'WOA_IDENTITY_PROVIDER, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET',
+      endpoint: '/api/public/onboarding/:token/identity, /api/webhooks/stripe',
+      liveTest: 'Complete one hosted live-license and matching-selfie check, verify the signed Stripe result, then approve insurance before signing.',
       lastTestAt: verificationEvidenceAt(identityCases),
-      lastTestResult: identityCases.length + ' identity/license case(s) are tracked; only last-four references are retained.' + (identityProviderLive ? ' A signed authoritative result has been verified.' : ' Real-world identity validity remains provider-required.')
+      lastTestResult: identityCases.length + ' identity/license case(s) are tracked; customer-uploaded license copies remain private and Stripe verification URLs are never persisted.' + (identityProviderLive ? ' A signed Stripe Identity result has been verified.' : ' Live Stripe Identity activation is still required for automated real-world verification.')
     },
     'background-checks': {
       name: 'Background Checks',
@@ -11754,6 +11851,7 @@ async function recordStripeWebhookEvent(event = {}) {
   let cardSetupRequestId = '';
   let paymentRequestId = '';
   let disputeClaimId = '';
+  let identitySessionId = '';
   if (type === 'checkout.session.completed') {
     const metadata = object.metadata || {};
     if (object.mode === 'setup' || metadata.flow === 'card_setup') {
@@ -11773,6 +11871,23 @@ async function recordStripeWebhookEvent(event = {}) {
       }
     }
   }
+  if (/^identity\.verification_session\.(created|processing|verified|requires_input|canceled|redacted)$/.test(type)) {
+    const metadata = object.metadata || {};
+    const session = (data.onboardingSessions || []).find(row => row.stripeIdentityVerificationId === object.id)
+      || (metadata.onboardingSessionId && (data.onboardingSessions || []).find(row => row.id === metadata.onboardingSessionId));
+    if (session && (!session.stripeIdentityVerificationId || session.stripeIdentityVerificationId === object.id)) {
+      const application = (data.applications || []).find(row => row.id === session.applicationId);
+      applyStripeIdentitySession(data, session, application, object, event.id || '');
+      identitySessionId = session.id;
+      if (type === 'identity.verification_session.verified') {
+        await queueOwnerEmailNotification(data, 'identity_verified', {
+          customer: application && application.name || 'Onboarding customer',
+          subject: 'Identity verified - insurance review needed',
+          body: ['Stripe verified the live driver license and matching selfie.', 'Customer: ' + (application && application.name || 'Onboarding customer'), 'Onboarding: ' + session.id, 'Next: review full-coverage insurance in the WheelsonAuto application file before approving documents.'].join('\n')
+        });
+      }
+    }
+  }
   if (/^charge\.dispute\.(created|updated|closed)$/.test(type)) {
     const claim = await stripeDisputeClaim(data, object);
     disputeClaimId = claim.id;
@@ -11788,7 +11903,7 @@ async function recordStripeWebhookEvent(event = {}) {
   stripeState.lastWebhookError = '';
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
-  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId };
+  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId };
 }
 
 function telnyxWebhookEventType(payload = {}) {
@@ -12122,6 +12237,21 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const context = await nativeOnboardingContext(data, publicToken);
       if (!context) return send(res, 404, paymentResultHtml('Onboarding link not found', 'This secure link is invalid, expired, or replaced. Contact WheelsonAuto for a fresh link.'));
+      const identityReturned = url.searchParams.get('identity') === 'returned';
+      const identityLastChecked = Date.parse(context.session.identityVerificationLastCheckedAt || '') || 0;
+      const identityPollDue = context.session.identityVerificationStatus === 'processing' && Date.now() - identityLastChecked >= 30000;
+      if (STRIPE_IDENTITY_RUNTIME_READY && context.session.stripeIdentityVerificationId && (identityReturned || identityPollDue)) {
+        try {
+          await syncStripeIdentitySession(data, context.session, context.application);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        } catch {
+          context.session.identityVerificationLastCheckedAt = new Date().toISOString();
+          context.session.identityVerificationLastError = 'Stripe identity status is temporarily unavailable. Refresh this page or contact WheelsonAuto if it continues.';
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
+      }
       const appointment = finalizeNativePickup(data, context.session, context.application, context.vehicle);
       if (appointment) await writeData(data);
       const refreshedContract = onboarding.buildContract(data, context.application, context.vehicle, context.session, context.template);
@@ -12416,12 +12546,81 @@ const server = http.createServer(async (req, res) => {
       if (action === 'documents') {
         if (!session.profileCompletedAt) return json(res, 409, { ok: false, error: 'Complete the profile and pickup request first.' });
         const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR);
+        if (normalizedIdentityProvider(session.identityProvider) === 'stripe') {
+          session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
+          if (session.stripeIdentityVerificationId) session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
+          session.stripeIdentityVerificationId = '';
+          session.identityVerificationStatus = 'not_started';
+          session.identityVerificationLastErrorCode = '';
+          session.identityVerificationLastError = '';
+          session.identityVerifiedAt = '';
+        }
         session.documentReviewStatus = 'Waiting on staff';
         session.signatureReviewStatus = 'Waiting on customer';
         session.reviewStatus = 'Documents waiting';
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
         return json(res, 201, { ok: true, message: 'License, identity selfie, and insurance received for private staff review.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
+      }
+      if (action === 'identity') {
+        if (normalizedIdentityProvider(session.identityProvider) !== 'stripe') return json(res, 409, { ok: false, error: 'This onboarding file uses WheelsonAuto staff identity review.' });
+        if (!STRIPE_IDENTITY_RUNTIME_READY) {
+          const mode = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity is prepared in test mode but cannot verify live customers.' : 'Stripe Identity is not connected.';
+          return json(res, 503, { ok: false, error: mode + ' WheelsonAuto staff can continue with manual review until the live Stripe identity connection is enabled.' });
+        }
+        const identityRate = publicActionLimit(req, 'stripe-identity', 12, 60 * 60 * 1000);
+        if (!identityRate.allowed) return json(res, 429, { ok: false, error: 'Too many identity-verification attempts. Wait before trying again.' }, { 'Retry-After': String(identityRate.retryAfterSeconds) });
+        const onboardingState = nativeSite.onboardingStatus(data, session, application);
+        if (!onboardingState.documents) return json(res, 409, { ok: false, error: 'Upload the license, selfie, and insurance files before starting secure identity verification.' });
+        if (session.stripeIdentityVerificationId) {
+          const remote = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
+          const applied = applyStripeIdentitySession(data, session, application, remote);
+          if (applied.status === 'verified') {
+            await protectConcurrentLocalWrites(data, { preferIncoming: true });
+            await writeData(data);
+            return json(res, 200, { ok: true, message: 'Stripe already verified the license and selfie. WheelsonAuto is reviewing the insurance proof.' });
+          }
+          if (applied.status === 'processing') {
+            await protectConcurrentLocalWrites(data, { preferIncoming: true });
+            await writeData(data);
+            return json(res, 200, { ok: true, message: 'Stripe is processing the identity check. Refresh this page shortly.' });
+          }
+          if (remote.url) {
+            await protectConcurrentLocalWrites(data, { preferIncoming: true });
+            await writeData(data);
+            return json(res, 200, { ok: true, redirectUrl: remote.url, message: 'Opening the existing secure Stripe identity check.' });
+          }
+        }
+        const attempt = Number(session.identityVerificationAttempt || 0) + 1;
+        const verification = await stripe.createIdentityVerificationSession({
+          type: 'document',
+          client_reference_id: session.id,
+          return_url: returnUrl + '?identity=returned',
+          metadata: {
+            flow: 'wheelsonauto_onboarding_identity',
+            onboardingSessionId: session.id,
+            applicationId: application.id,
+            organizationId: session.organizationId || MAIN_ORG_ID
+          },
+          options: {
+            document: {
+              allowed_types: ['driving_license'],
+              require_live_capture: true,
+              require_matching_selfie: true
+            }
+          }
+        }, 'woa-identity-' + session.id + '-attempt-' + attempt);
+        if (!verification || !verification.id || !verification.url) return json(res, 502, { ok: false, error: 'Stripe did not return a secure identity-verification page.' });
+        if (session.stripeIdentityVerificationId && session.stripeIdentityVerificationId !== verification.id) {
+          session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
+          session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
+        }
+        session.identityVerificationAttempt = attempt;
+        applyStripeIdentitySession(data, session, application, verification);
+        appendAuditLog(data, { name: application.name || 'Onboarding customer', role: 'Customer' }, 'Stripe Identity verification opened', [session.id, verification.id, STRIPE_KEY_MODE]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 201, { ok: true, redirectUrl: verification.url, message: 'Opening secure Stripe Identity verification.' });
       }
       if (action === 'signature') {
         if (session.documentReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the driver license and full-coverage insurance before the agreement can be signed.' });
@@ -14194,7 +14393,7 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
       const cases = (scoped.verificationCases || []).map(row => ({ ...row, status: integrationEngine.verificationCaseStatus(row) }));
-      return json(res, 200, { ok: true, providers: { identity: IDENTITY_PROVIDER, insurance: INSURANCE_PROVIDER, background: BACKGROUND_PROVIDER, signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET }, cases });
+      return json(res, 200, { ok: true, providers: { identity: IDENTITY_PROVIDER, identityMode: STRIPE_KEY_MODE, identityRuntimeReady: STRIPE_IDENTITY_RUNTIME_READY, insurance: INSURANCE_PROVIDER, background: BACKGROUND_PROVIDER, signedWebhookReady: !!VERIFICATION_WEBHOOK_SECRET || !!STRIPE_WEBHOOK_SECRET }, cases });
     }
     if (url.pathname === '/api/verification/cases' && req.method === 'POST') {
       const role = String(user.role || '').toLowerCase();
@@ -14488,7 +14687,12 @@ const server = http.createServer(async (req, res) => {
       if (competingSession || vehicle.heldApplicationId && vehicle.heldApplicationId !== application.id) return json(res, 409, { ok: false, error: 'This vehicle is already held in another active onboarding file. Resolve that file before approving a second customer.' });
       const onboardingProvider = normalizedPaymentProvider(payload.paymentProvider || WOA_ONBOARDING_PAYMENT_PROVIDER);
       if (!['clover', 'stripe'].includes(onboardingProvider)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe for this onboarding payment path.' });
-      const session = onboarding.createSession(data, application, user, requestBaseUrl(req), { paymentProvider: onboardingProvider });
+      const onboardingIdentityProvider = IDENTITY_PROVIDER === 'stripe' ? 'stripe' : 'manual';
+      if (onboardingIdentityProvider === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) {
+        const reason = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity has only a test key.' : 'Stripe Identity does not have a usable live key.';
+        return json(res, 503, { ok: false, error: reason + ' Keep WOA_IDENTITY_PROVIDER=manual until live Stripe Identity is enabled, or finish the live Stripe setup before creating this customer link.' });
+      }
+      const session = onboarding.createSession(data, application, user, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
       const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
       Object.assign(application, { stage: 'Approved', status: 'Approved - onboarding sent', approvedAt: new Date().toISOString(), approvedBy: user.name || user.username || user.role, pricingSnapshot: application.pricingSnapshot || onboarding.pricingSnapshot(vehicle) });
       Object.assign(vehicle, { holdPreviousPublished: vehicle.holdPreviousPublished === undefined ? !!vehicle.published : vehicle.holdPreviousPublished, holdPreviousAvailability: vehicle.holdPreviousAvailability || vehicle.availability || 'Available', published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
@@ -14498,7 +14702,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, 'Application approved and onboarding created', [application.name || 'Applicant', nativeSite.vehicleTitle(vehicle), paymentProviderLabel(onboardingProvider), session.id]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, onboarding: { id: session.id, url: session.publicUrl, expiresAt: session.expiresAt, status: session.status, paymentProvider: onboardingProvider } });
+      return json(res, 201, { ok: true, onboarding: { id: session.id, url: session.publicUrl, expiresAt: session.expiresAt, status: session.status, paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider } });
     }
     if (url.pathname === '/api/onboarding/review' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can review customer onboarding.' });
@@ -14516,14 +14720,16 @@ const server = http.createServer(async (req, res) => {
         const documents = (data.documents || []).filter(row => row.onboardingSessionId === session.id);
         const kinds = new Set(documents.map(row => row.documentKind));
         if (!['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'].every(kind => kinds.has(kind))) return json(res, 409, { ok: false, error: 'License front, license back, identity selfie, and insurance proof must all be uploaded.' });
-        if (decision === 'approve' && payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the selfie matches the license photo, the license is valid, and full-coverage insurance is active before approval.' });
+        const stripeIdentity = normalizedIdentityProvider(session.identityProvider) === 'stripe';
+        if (decision === 'approve' && stripeIdentity && session.identityVerificationStatus !== 'verified') return json(res, 409, { ok: false, error: 'Stripe Identity must verify the live driver license and selfie before staff can approve the insurance and unlock the agreement.' });
+        if (decision === 'approve' && payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: stripeIdentity ? 'Confirm the Stripe Identity result is verified and full-coverage insurance is active before approval.' : 'Confirm the selfie matches the license photo, the license is valid, and full-coverage insurance is active before approval.' });
         session.documentReviewStatus = decision === 'approve' ? 'Approved' : 'Correction requested';
         session.documentsReviewedAt = reviewedAt;
         session.documentsReviewedBy = reviewer;
         session.documentReviewNotes = onboarding.text(payload.notes, 1600);
         session.reviewStatus = decision === 'approve' ? 'Documents approved - signature ready' : 'Document correction requested';
         documents.forEach(document => {
-          document.status = decision === 'approve' ? 'Verified' : 'Correction requested';
+          document.status = decision === 'approve' ? (stripeIdentity && document.documentKind !== 'insurance' ? 'Verified - Stripe Identity and staff' : 'Verified - staff') : 'Correction requested';
           document.verifiedAt = reviewedAt;
           document.verifiedBy = reviewer;
           document.reviewNotes = onboarding.text(payload.notes, 1600);
