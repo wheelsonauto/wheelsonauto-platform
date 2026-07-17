@@ -32,7 +32,8 @@
     "billing-engine-check": "node scripts/billing-engine-check.js",
     "stripe-payment-check": "node scripts/stripe-payment-check.js",
     "stripe-identity-check": "node scripts/stripe-identity-check.js",
-    "stripe-onboarding-check": "node scripts/stripe-onboarding-lifecycle-check.js"
+    "stripe-onboarding-check": "node scripts/stripe-onboarding-lifecycle-check.js",
+    "passtime-check": "node --check passtime-adapter.js && node --check scripts/passtime-gps-check.js && node scripts/passtime-gps-check.js"
   },
   "dependencies": {},
   "engines": {

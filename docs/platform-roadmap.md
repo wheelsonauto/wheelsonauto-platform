@@ -27,6 +27,7 @@ Current live release status:
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
 - Release asset version is `platform-20260714-final-46`.
 - API Roadmap now gives each provider one exact next action and the proof required before it can be labeled connected. Telnyx names account upgrade/10DLC/live delivery, Star names usable OpenAI API credit and provider test, Clover Ecommerce names a controlled saved-card charge, and Clover webhooks name a signed live event.
+- PassTime GPS has a read-only provider adapter and owner/manager sync control. It requires PassTime-issued Web Services details (`PASSTIME_API_BASE`, `PASSTIME_DEVICES_PATH`, and token or Basic credentials) before the platform can run the first live device sync. Exact tracker/VIN/tag matches update fleet location; uncertain devices remain in Missing file and remote starter controls are intentionally unsupported.
 - Provider setup preserves detailed runtime statuses such as `Testing - live charge needed` and `Blocked - OpenAI credit needed`; opening the form can no longer visually default an unfinished provider to `Connected`.
 - Built-in Clover, WheelsonAuto Autopay, Telnyx, email, and Star statuses are evidence-controlled and read-only in setup. Custom provider records keep an editable status selector.
 

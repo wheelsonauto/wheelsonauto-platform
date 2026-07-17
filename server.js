@@ -9,6 +9,7 @@ const integrationEngine = require('./integration-engine');
 const riskProviders = require('./risk-provider-adapter');
 const billingEngine = require('./billing-engine');
 const stripeAdapter = require('./stripe-adapter');
+const passTimeAdapter = require('./passtime-adapter');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -60,6 +61,33 @@ const CANOPY_API_BASE = (process.env.CANOPY_API_BASE || 'https://app.usecanopy.c
 const VERIFICATION_MONITOR_MS = Math.max(15 * 60 * 1000, Number(process.env.WOA_VERIFICATION_MONITOR_MS || 6 * 60 * 60 * 1000));
 const TRACKER_PROVIDER = String(process.env.WOA_TRACKER_PROVIDER || 'manual').trim().toLowerCase();
 const TRACKER_WEBHOOK_SECRET = process.env.WOA_TRACKER_WEBHOOK_SECRET || process.env.TRACKER_WEBHOOK_SECRET || '';
+const PASSTIME_API_BASE = process.env.PASSTIME_API_BASE || '';
+const PASSTIME_API_TOKEN = process.env.PASSTIME_API_TOKEN || '';
+const PASSTIME_API_USERNAME = process.env.PASSTIME_API_USERNAME || '';
+const PASSTIME_API_PASSWORD = process.env.PASSTIME_API_PASSWORD || '';
+const PASSTIME_ACCOUNT_ID = process.env.PASSTIME_ACCOUNT_ID || '';
+const PASSTIME_DEVICES_PATH = process.env.PASSTIME_DEVICES_PATH || '';
+const PASSTIME_AUTH_MODE = process.env.PASSTIME_AUTH_MODE || '';
+const PASSTIME_API_KEY_HEADER = process.env.PASSTIME_API_KEY_HEADER || 'x-api-key';
+const PASSTIME_ACCOUNT_HEADER = process.env.PASSTIME_ACCOUNT_HEADER || '';
+const PASSTIME_ACCOUNT_QUERY_PARAM = process.env.PASSTIME_ACCOUNT_QUERY_PARAM || '';
+const PASSTIME_TIMEOUT_MS = Math.max(3000, Number(process.env.PASSTIME_TIMEOUT_MS || 15000));
+const PASSTIME_SYNC_MS = Math.max(60000, Number(process.env.PASSTIME_SYNC_MS || 5 * 60 * 1000));
+const passTime = passTimeAdapter.createPassTimeClient({
+  baseUrl: PASSTIME_API_BASE,
+  token: PASSTIME_API_TOKEN,
+  apiKey: PASSTIME_API_TOKEN,
+  username: PASSTIME_API_USERNAME,
+  password: PASSTIME_API_PASSWORD,
+  accountId: PASSTIME_ACCOUNT_ID,
+  devicesPath: PASSTIME_DEVICES_PATH,
+  authMode: PASSTIME_AUTH_MODE,
+  apiKeyHeader: PASSTIME_API_KEY_HEADER,
+  accountHeader: PASSTIME_ACCOUNT_HEADER,
+  accountQueryParam: PASSTIME_ACCOUNT_QUERY_PARAM,
+  organizationId: 'org-wheelsonauto',
+  timeoutMs: PASSTIME_TIMEOUT_MS
+});
 const MARKETING_PROVIDER = String(process.env.WOA_MARKETING_PROVIDER || 'manual').trim().toLowerCase();
 const MARKETING_WEBHOOK_SECRET = process.env.WOA_MARKETING_WEBHOOK_SECRET || process.env.MARKETING_WEBHOOK_SECRET || '';
 const BILLING_PROVIDER = String(process.env.WOA_BILLING_PROVIDER || 'manual').trim().toLowerCase();
@@ -154,6 +182,16 @@ const telnyxDeliveryPollStatus = {
   inFlight: false,
   lastCheckedAt: '',
   lastUpdatedAt: '',
+  lastError: '',
+  lastResult: null,
+  lastLoggedAt: 0
+};
+const passTimePollStatus = {
+  enabled: TRACKER_PROVIDER === 'passtime',
+  intervalMs: PASSTIME_SYNC_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
   lastError: '',
   lastResult: null,
   lastLoggedAt: 0
@@ -1346,6 +1384,86 @@ function verifyTrackerWebhook(rawBody, headers = {}) {
     const value = part.replace(/^(?:sha256=|v1=)/i, '');
     return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
   });
+}
+function publicPassTimeReadiness(data = {}) {
+  const config = passTime.readiness();
+  const saved = (((data.integrations || {}).tracker) || {});
+  const lastResult = saved.lastResult || passTimePollStatus.lastResult || null;
+  const lastError = saved.lastError || passTimePollStatus.lastError || '';
+  const lastFinishedAt = saved.lastFinishedAt || passTimePollStatus.lastFinishedAt || '';
+  const operational = !!(config.configured && lastResult && !lastError && Number(lastResult.usable || 0) >= 0);
+  return {
+    provider: TRACKER_PROVIDER,
+    passTimeConfigured: config.configured,
+    passTimeOperational: operational,
+    passTimeReadOnly: true,
+    passTimeStatus: operational ? 'PassTime connected' : config.status,
+    passTimeMissing: config.missing,
+    passTimeAuthMode: config.authMode,
+    passTimeAccountScoped: config.accountScoped,
+    passTimeLastSyncAt: lastFinishedAt,
+    passTimeLastError: lastError,
+    passTimeLastResult: lastResult,
+    passTimeSyncIntervalMs: PASSTIME_SYNC_MS,
+    passTimeControlCommands: false
+  };
+}
+async function runPassTimeGpsSync(options = {}) {
+  if (TRACKER_PROVIDER !== 'passtime') return { ok: false, skipped: true, reason: 'WOA_TRACKER_PROVIDER is not set to passtime.' };
+  const readiness = passTime.readiness();
+  if (!readiness.configured) return { ok: false, skipped: true, reason: 'PassTime API setup is incomplete.', missing: readiness.missing };
+  if (passTimePollStatus.inFlight) return { ok: true, skipped: true, reason: 'PassTime GPS sync is already running.' };
+  passTimePollStatus.inFlight = true;
+  passTimePollStatus.lastStartedAt = new Date().toISOString();
+  try {
+    const providerResult = await passTime.listDevices({ organizationId: MAIN_ORG_ID });
+    const data = await readData();
+    const results = providerResult.events.map(event => integrationEngine.applyTrackerUpdate(data, event, {
+      name: 'PassTime GPS',
+      role: 'System',
+      organizationId: MAIN_ORG_ID
+    }, {
+      organizationId: MAIN_ORG_ID,
+      provider: 'passtime'
+    }));
+    const summary = {
+      fetched: providerResult.fetched,
+      usable: providerResult.usable,
+      ignored: providerResult.ignored,
+      received: results.filter(result => !result.duplicate).length,
+      matched: results.filter(result => result.matched && !result.duplicate).length,
+      missing: results.filter(result => !result.matched && !result.conflict && !result.duplicate).length,
+      conflicts: results.filter(result => result.conflict && !result.duplicate).length,
+      duplicates: results.filter(result => result.duplicate).length
+    };
+    passTimePollStatus.lastFinishedAt = new Date().toISOString();
+    passTimePollStatus.lastError = '';
+    passTimePollStatus.lastResult = summary;
+    data.integrations = data.integrations || {};
+    data.integrations.tracker = {
+      ...(data.integrations.tracker || {}),
+      provider: 'passtime',
+      readOnly: true,
+      lastStartedAt: passTimePollStatus.lastStartedAt,
+      lastFinishedAt: passTimePollStatus.lastFinishedAt,
+      lastSource: String(options.source || 'automatic'),
+      lastError: '',
+      lastResult: summary
+    };
+    if (summary.received || options.persist !== false) {
+      appendAuditLog(data, { name: 'PassTime GPS', role: 'System', organizationId: MAIN_ORG_ID }, 'PassTime GPS synchronized', [summary.fetched + ' fetched', summary.matched + ' matched', summary.missing + ' missing file', summary.conflicts + ' conflicts', summary.duplicates + ' duplicate', 'Read-only location sync']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, preserveLatestIntegrations: false });
+      await writeData(data);
+    }
+    return { ok: true, skipped: false, ...summary, checkedAt: passTimePollStatus.lastFinishedAt };
+  } catch (error) {
+    passTimePollStatus.lastFinishedAt = new Date().toISOString();
+    passTimePollStatus.lastError = String(error && error.message || error).slice(0, 300);
+    passTimePollStatus.lastResult = null;
+    return { ok: false, skipped: false, error: passTimePollStatus.lastError, checkedAt: passTimePollStatus.lastFinishedAt };
+  } finally {
+    passTimePollStatus.inFlight = false;
+  }
 }
 function verifyMarketingWebhook(rawBody, headers = {}) {
   if (!MARKETING_WEBHOOK_SECRET) return false;
@@ -7758,6 +7876,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CANOPY_CONNECT_ALIAS', CANOPY_CONNECT_ALIAS ? 'Set' : 'Provider setup needed', 'Customer-authorized insurance connection link'],
     ['CANOPY API + webhook', CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID && CANOPY_WEBHOOK_SECRET ? 'Set' : 'Provider setup needed', 'Policy retrieval, signed updates, reconnect flow, and ongoing insurance monitoring'],
     ['WOA_TRACKER_PROVIDER', TRACKER_PROVIDER || 'manual', 'Vehicle tracker/GPS provider adapter'],
+    ['PASSTIME_API_BASE / PASSTIME_DEVICES_PATH', passTime.readiness().configured ? 'Set' : 'Provider access needed', 'PassTime read-only device/location sync endpoints'],
+    ['PASSTIME_API_TOKEN', PASSTIME_API_TOKEN || PASSTIME_API_USERNAME ? 'Set' : 'Provider access needed', 'PassTime credential stays private in Render'],
     ['WOA_TRACKER_WEBHOOK_SECRET', TRACKER_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed tracker/GPS provider callbacks; manager updates remain live without a provider'],
     ['WOA_MARKETING_PROVIDER', MARKETING_PROVIDER || 'manual', 'Marketing and lead-source provider adapter'],
     ['WOA_MARKETING_WEBHOOK_SECRET', MARKETING_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed marketing provider callbacks; staff lead sync remains live without a provider'],
@@ -7825,6 +7945,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/webhooks/canopy', 'Signed Canopy insurance and monitoring callback'),
     route('GET', '/api/integrations/tracker/status', 'Owner/manager tracker health, vehicle matches, and missing-file queue'),
     route('POST', '/api/integrations/tracker/sync', 'Owner/manager tracker update adapter'),
+    route('POST', '/api/integrations/tracker/provider-sync', 'Owner/manager read-only PassTime device and location sync'),
     route('POST', '/api/webhooks/tracker', 'Signed tracker/GPS provider callback'),
     route('GET', '/api/integrations/marketing/status', 'Owner/manager lead-source health, conversion links, and review queue'),
     route('POST', '/api/integrations/marketing/sync', 'Owner/manager marketing lead adapter'),
@@ -9238,7 +9359,7 @@ function defaultApiProviderRows(data = {}) {
     { id: 'insurance', name: 'Insurance Verification + Monitoring', group: 'Risk', status: verificationReadiness.canopy.monitoringReady ? 'Testing - Canopy live proof needed' : (verificationReadiness.canopy.customerLinkReady ? 'Prepared - Canopy webhook needed' : 'Ready - manual review'), owner: 'Manager', envKeys: 'CANOPY_CONNECT_ALIAS, CANOPY_CLIENT_ID, CANOPY_CLIENT_SECRET, CANOPY_TEAM_ID, CANOPY_WEBHOOK_SECRET', endpoint: '/api/verification/cases/start, /api/verification/status, /api/verification/monitor/run, /api/webhooks/canopy', liveTest: 'Create one customer-authorized insurance link, receive a signed policy result, verify policy last-four/expiration, and confirm a monitoring refresh or reconnect alert.' },
     { id: 'identity-verification', name: 'Identity / Driver License Verification', group: 'Risk', status: STRIPE_IDENTITY_RUNTIME_READY ? (STRIPE_KEY_MODE === 'live' ? 'Testing - live Stripe Identity' : 'Testing - Stripe test mode') : (IDENTITY_PROVIDER === 'stripe' && stripe.configured() ? 'Prepared - Stripe test mode' : 'Ready - private manual review'), owner: 'Manager', envKeys: 'WOA_IDENTITY_PROVIDER, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET', endpoint: '/api/public/onboarding/:token/identity, /api/webhooks/stripe', liveTest: 'Complete one hosted live-license and selfie check, verify the signed Stripe result, then approve insurance before signing.' },
     { id: 'background-checks', name: 'Driver Record / MVR + Background', group: 'Risk', status: verificationReadiness.checkr.configured && verificationReadiness.checkr.useCaseConfirmed ? 'Testing - Checkr live proof needed' : 'Ready - provider setup', owner: 'Manager', envKeys: 'CHECKR_API_KEY, CHECKR_MVR_PACKAGE, CHECKR_BACKGROUND_PACKAGE, CHECKR_USE_CASE_CONFIRMED, CHECKR_WEBHOOK_SECRET', endpoint: '/api/verification/cases/start, /api/verification/cases/refresh, /api/webhooks/checkr', liveTest: 'Send hosted customer invitations for one MVR and one background package, accept signed results, and prove that a Consider result remains staff review instead of automatic rejection.' },
-    { id: 'tracker-gps', name: 'Tracker / GPS', group: 'Fleet', status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET', endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker', liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.' },
+    { id: 'tracker-gps', name: 'PassTime Tracker / GPS', group: 'Fleet', status: publicPassTimeReadiness(data).passTimeOperational ? 'Connected' : (passTime.readiness().configured ? 'Testing - PassTime live sync needed' : 'Ready - PassTime API access needed'), owner: 'Manager', envKeys: 'WOA_TRACKER_PROVIDER=passtime, PASSTIME_API_BASE, PASSTIME_DEVICES_PATH, PASSTIME_API_TOKEN or PASSTIME_API_USERNAME/PASSTIME_API_PASSWORD, optional PASSTIME_ACCOUNT_ID', endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/provider-sync, /api/integrations/tracker/sync, /api/webhooks/tracker', liveTest: 'Run one read-only PassTime sync, match exact device IDs to VIN/tag vehicles, verify owner/manager location, then confirm mechanics/customers cannot receive precise location or control commands.' },
     { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Connected - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/adjustments, /api/accounting/reconcile, /api/accounting/periods/close, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the ledger, add one valid business adjustment, reconcile source entries, close a month, verify its source hash, and confirm the QuickBooks journal balances.' },
     { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
     { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_MARKETING_PROVIDER, WOA_MARKETING_WEBHOOK_SECRET', endpoint: '/api/integrations/marketing/status, /api/integrations/marketing/sync, /api/webhooks/marketing', liveTest: 'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.' },
@@ -9331,8 +9452,9 @@ function apiProviderTruthOverrides(data = {}) {
   const trackerEvents = Array.isArray(data.trackerEvents) ? data.trackerEvents : [];
   const trackerUnmatched = Array.isArray(data.trackerUnmatched) ? data.trackerUnmatched : [];
   const trackerVehicleCount = (data.vehicles || []).filter(vehicle => vehicle.tracker && (vehicle.trackerStatus || vehicle.trackerLastPing)).length;
-  const trackerProviderReady = !!(TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual');
-  const trackerProviderLive = trackerProviderReady && trackerEvents.some(row => row.authorization === 'HMAC-SHA256');
+  const passTimeReadiness = publicPassTimeReadiness(data);
+  const trackerProviderReady = !!((TRACKER_PROVIDER === 'passtime' && passTimeReadiness.passTimeConfigured) || (TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual'));
+  const trackerProviderLive = !!(passTimeReadiness.passTimeOperational || (trackerProviderReady && trackerEvents.some(row => row.authorization === 'HMAC-SHA256')));
   const marketingLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
   const marketingEvents = Array.isArray(data.marketingEvents) ? data.marketingEvents : [];
   const marketingProviderReady = !!(MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual');
@@ -9422,13 +9544,13 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: driverRecordCases.length + ' driver-record and ' + backgroundCases.length + ' background case(s) are tracked with hosted consent, vehicle linking, and last-four retention.' + (backgroundProviderLive ? ' A signed Checkr result has been verified.' : ' Real-world screening validity remains provider-required.')
     },
     'tracker-gps': {
-      name: 'Tracker / GPS',
-      status: trackerProviderLive ? 'Connected' : (trackerProviderReady ? 'Testing - signed event needed' : 'Ready - manual adapter'),
-      envKeys: 'WOA_TRACKER_PROVIDER, WOA_TRACKER_WEBHOOK_SECRET',
-      endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/sync, /api/webhooks/tracker',
-      liveTest: 'Match one exact tracker/device ID to its vehicle, verify last ping/location for owner and manager, then confirm mechanics and customers cannot receive precise location.',
-      lastTestAt: newestEvidenceAt(trackerEvents.map(row => row.receivedAt || row.lastPing)),
-      lastTestResult: trackerVehicleCount + ' vehicle tracker(s) expose status/last-ping evidence; ' + trackerUnmatched.length + ' update(s) remain in Missing file.' + (trackerProviderLive ? ' A signed provider event was accepted.' : ' Manual updates are live; provider-backed location remains unverified until one signed event is accepted.')
+      name: 'PassTime Tracker / GPS',
+      status: trackerProviderLive ? 'Connected' : (trackerProviderReady ? 'Testing - PassTime live sync needed' : 'Ready - PassTime API access needed'),
+      envKeys: 'WOA_TRACKER_PROVIDER=passtime, PASSTIME_API_BASE, PASSTIME_DEVICES_PATH, PASSTIME_API_TOKEN or PASSTIME_API_USERNAME/PASSTIME_API_PASSWORD, optional PASSTIME_ACCOUNT_ID',
+      endpoint: '/api/integrations/tracker/status, /api/integrations/tracker/provider-sync, /api/integrations/tracker/sync, /api/webhooks/tracker',
+      liveTest: 'Run one read-only PassTime sync, match exact device IDs to VIN/tag vehicles, verify owner/manager location, then confirm mechanics/customers cannot receive precise location or control commands.',
+      lastTestAt: passTimeReadiness.passTimeLastSyncAt || newestEvidenceAt(trackerEvents.map(row => row.receivedAt || row.lastPing)),
+      lastTestResult: trackerVehicleCount + ' vehicle tracker(s) expose status/last-ping evidence; ' + trackerUnmatched.length + ' update(s) remain in Missing file.' + (passTimeReadiness.passTimeOperational ? ' PassTime read-only device/location sync completed successfully.' : (passTimeReadiness.passTimeConfigured ? ' PassTime credentials are configured; one controlled provider sync is still required.' : ' PassTime Web Services endpoint and credentials must be issued by PassTime before live sync.'))
     },
     marketing: {
       name: 'Marketing / Lead Sources',
@@ -9504,8 +9626,8 @@ function apiProviderLaunchGuidance(provider = {}) {
       ? ['Monitor signed identity/license results and expiration warnings.', 'A signed provider result with only the last-four reference retained.']
       : ['Use manual review now; connect an authoritative identity provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result, with no full license identifier stored.'],
     'tracker-gps': connected
-      ? ['Monitor tracker freshness and clear the Missing file queue when devices or tags change.', 'A signed tracker event tied to the correct company, vehicle, VIN/tag, last ping, and manager-visible location.']
-      : ['Use the manager tracker adapter now; connect a GPS provider to the signed webhook and submit one exact device/vehicle event before marking it connected.', 'Exact device/VIN/tag match, duplicate protection, Missing file handling, and proof that mechanic/customer responses omit precise location.'],
+      ? ['Monitor PassTime freshness and clear the Missing file queue when devices, VINs, or tags change.', 'A successful read-only PassTime sync tied to the correct company, vehicle, device, VIN/tag, last ping, and manager-visible location.']
+      : ['Get the PassTime Web Services endpoint and API credentials, add them in Render, then run one read-only provider sync before marking GPS connected.', 'Exact PassTime device/VIN/tag match, duplicate protection, Missing file handling, and proof that mechanic/customer responses omit precise location and control commands.'],
     accounting: ['Use the balanced QuickBooks journal export now; complete QuickBooks OAuth before testing direct sync.', 'Every source entry balances debits and credits, then a successful OAuth-backed sandbox/company sync.'],
     'pickup-calendar': ['Use directions, Google add-to-calendar, and ICS now; connect Calendar credentials only when automatic sync is needed.', 'A pickup event with the correct customer, car, address, local time, and deterministic calendar ID.']
   };
@@ -14755,11 +14877,16 @@ const server = http.createServer(async (req, res) => {
       }));
       const events = (scoped.trackerEvents || []).slice(0, 200).map(scrubPrivateOperationalFields);
       const unmatched = (scoped.trackerUnmatched || []).slice(0, 200).map(scrubPrivateOperationalFields);
+      const passTimeReadiness = publicPassTimeReadiness(data);
       return json(res, 200, {
         ok: true,
         provider: TRACKER_PROVIDER,
         signedWebhookReady: !!TRACKER_WEBHOOK_SECRET,
-        status: TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed provider event needed' : 'Ready - manual adapter',
+        status: TRACKER_PROVIDER === 'passtime'
+          ? passTimeReadiness.passTimeStatus
+          : (TRACKER_WEBHOOK_SECRET && TRACKER_PROVIDER !== 'manual' ? 'Testing - signed provider event needed' : 'Ready - manual adapter'),
+        ...passTimeReadiness,
+        providerSync: { ...passTimePollStatus, inFlight: !!passTimePollStatus.inFlight },
         vehicles,
         events,
         unmatched,
@@ -14792,6 +14919,12 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, ...summary, results: results.map(result => ({ id: result.record && result.record.id, vehicleId: result.record && result.record.vehicleId, matchStatus: result.record && result.record.matchStatus, duplicate: result.duplicate, reason: result.reason || '' })) });
+    }
+    if (url.pathname === '/api/integrations/tracker/provider-sync' && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can synchronize PassTime GPS.' });
+      const result = await runPassTimeGpsSync({ source: 'dashboard', persist: true });
+      return json(res, result.ok ? 200 : (result.skipped ? 409 : 502), result);
     }
     if (url.pathname === '/api/integrations/marketing/status' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
@@ -16690,6 +16823,19 @@ if (require.main === module) {
     setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => console.error('Background WOA autopay failed:', err && err.message || err)), WOA_AUTOPAY_MS);
     setTimeout(() => runVerificationMonitor({ source: 'startup' }).catch(err => console.error('Startup verification monitor failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 8000);
     setInterval(() => runVerificationMonitor({ source: 'background' }).catch(err => console.error('Background verification monitor failed:', err && err.message || err)), VERIFICATION_MONITOR_MS);
+    if (TRACKER_PROVIDER === 'passtime' && passTime.readiness().configured) {
+      setTimeout(() => runPassTimeGpsSync({ source: 'startup' })
+        .then(result => console.log(result && result.ok ? 'PassTime GPS startup sync matched ' + result.matched + ' vehicle(s).' : 'PassTime GPS startup sync skipped: ' + (result.reason || result.error || 'not ready')))
+        .catch(err => console.error('PassTime GPS startup sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 12000);
+      setInterval(() => runPassTimeGpsSync({ source: 'background' })
+        .then(result => {
+          if (!result || result.skipped || result.ok) return;
+          if (Date.now() - passTimePollStatus.lastLoggedAt < 60 * 1000) return;
+          passTimePollStatus.lastLoggedAt = Date.now();
+          console.error('PassTime GPS background sync failed:', result.error || result.reason || 'Unknown error');
+        })
+        .catch(err => console.error('PassTime GPS background sync failed:', err && err.message || err)), PASSTIME_SYNC_MS);
+    }
   });
 }
 module.exports = {
@@ -16780,6 +16926,8 @@ module.exports = {
   refreshVerificationProvider,
   verificationMonitorSummary,
   runVerificationMonitor,
+  publicPassTimeReadiness,
+  runPassTimeGpsSync,
   sessionSignature,
   verifySignedSessionCookie
 };
