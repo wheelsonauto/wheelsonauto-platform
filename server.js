@@ -7941,7 +7941,7 @@ function nativeOnboardingProvider(session, recurring) {
 }
 function recurringCardReadyForProvider(recurring, provider) {
   if (!recurring) return false;
-  if (normalizedPaymentProvider(provider) === 'stripe') return !!(String(recurring.stripeCustomerId || '').trim() && String(recurring.stripePaymentMethodId || '').trim());
+  if (normalizedPaymentProvider(provider) === 'stripe') return !!(String(recurring.stripeCustomerId || '').trim() && String(recurring.stripePaymentMethodId || '').trim() && !stripeCardAuthenticationRequired(recurring));
   return !!(String(recurring.cloverPaymentSource || recurring.paymentSourceId || '').trim());
 }
 function nativeOnboardingPaymentRequests(data, session, application, provider = '') {
@@ -12114,6 +12114,12 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       pendingCardProvider: '',
       cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
       cardChangePendingAt: '',
+      stripeCardAuthenticationSetupNeeded: false,
+      stripeCardAuthenticationRequiredAt: '',
+      stripeCardAuthenticationPaymentIntentId: '',
+      stripeCardAuthenticationError: '',
+      lastStripeAuthenticationResolvedAt: completedAt,
+      lastStripeAuthenticationResolution: request.cardOnlyUpdate ? 'Customer completed secure Stripe card update.' : row.lastStripeAuthenticationResolution || '',
       notes: [row.notes, 'Customer authorized a Stripe card through WheelsonAuto secure checkout.'].filter(Boolean).join('\n'),
       updatedAt: completedAt
     });
@@ -12396,6 +12402,15 @@ function isDuplicateBillingPeriodError(err) {
 function assertRecurringChargeAllowed(data, recurring, payload, provider) {
   const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
   const allowAdditionalManualCharge = payload.automatic !== true && payload.allowAdditionalManualCharge === true;
+  const selectedProvider = normalizedPaymentProvider(provider || recurring.paymentProvider || recurring.provider || 'clover');
+  if (selectedProvider === 'stripe' && stripeCardAuthenticationRequired(recurring)) {
+    const error = new Error('Stripe needs this customer to re-authenticate or update their card before another saved-card charge. Send a secure Stripe card-update link; WheelsonAuto will not retry this card automatically.');
+    error.code = 'stripe_authentication_required';
+    error.statusCode = 409;
+    error.cardAuthenticationRequired = true;
+    error.paymentIntent = recurring.stripeCardAuthenticationPaymentIntentId || recurring.lastStripePaymentIntentId || '';
+    throw error;
+  }
   if (scheduledDueKey && !allowAdditionalManualCharge && scheduledDueKey <= localDateKey()) {
     const syncedPayment = successfulRecurringPaymentEvidence(data, recurring, scheduledDueKey, localDateKey());
     if (syncedPayment) {
@@ -12406,7 +12421,6 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
   }
   if (scheduledDueKey) stripeMigration.assertBillingPeriodOpen(data, recurring, scheduledDueKey, { allowAdditionalManualCharge });
   const migration = stripeMigration.migrationRecord(recurring);
-  const selectedProvider = normalizedPaymentProvider(provider || recurring.paymentProvider || recurring.provider || 'clover');
   if (selectedProvider === 'stripe' && stripeMigration.hasCloverSource(recurring)) {
     if (migration.state === stripeMigration.STATES.STRIPE_SETUP_SENT || migration.state === stripeMigration.STATES.STRIPE_CARD_SAVED) {
       const error = new Error('Stripe card setup is complete, but the Stripe cutover has not been scheduled. Keep Clover active until the owner schedules a protected cutover date.');
@@ -12540,7 +12554,7 @@ function stripeChargeAttemptFor(row, payload = {}, scheduledDueKey = '', amount 
   }
   const automatic = payload.automatic === true;
   const sequence = automatic
-    ? Math.max(1, Number(row && (row.retryCount || row.failedAttempts) || 0) + 1)
+    ? Math.max(1, Number(row && row.stripeAutopayChargeSequence || 0) + 1, Number(row && (row.retryCount || row.failedAttempts) || 0) + 1)
     : Math.max(1, Number(row && row.stripeManualChargeSequence || 0) + 1);
   const idempotencyKey = String(payload.idempotencyKey || [
     'woa-stripe',
@@ -12573,7 +12587,10 @@ function updateStripeChargeAttempt(data, recurring, attempt, patch = {}) {
     lastStripeChargeIdempotencyKey: next.idempotencyKey || ''
   };
   if (next.paymentIntentId) recurringPatch.lastStripePaymentIntentId = next.paymentIntentId;
-  if (!next.automatic && ['succeeded', 'failed'].includes(String(next.status || '').toLowerCase())) {
+  if (next.automatic && ['succeeded', 'failed', 'authentication_required'].includes(String(next.status || '').toLowerCase())) {
+    recurringPatch.stripeAutopayChargeSequence = Math.max(Number(recurring && recurring.stripeAutopayChargeSequence || 0), Number(next.sequence || 0));
+  }
+  if (!next.automatic && ['succeeded', 'failed', 'authentication_required'].includes(String(next.status || '').toLowerCase())) {
     recurringPatch.stripeManualChargeSequence = Math.max(Number(recurring && recurring.stripeManualChargeSequence || 0), Number(next.sequence || 0));
   }
   updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, recurringPatch);
@@ -12590,6 +12607,33 @@ function stripeConfirmationPendingError(cause, attempt) {
 }
 function isStripeConfirmationPendingError(err) {
   return !!(err && (err.confirmationPending || err.ambiguous || String(err.code || '') === 'stripe_confirmation_pending'));
+}
+function stripeCardAuthenticationRequired(row = {}) {
+  if (!row) return false;
+  if (row.stripeCardAuthenticationSetupNeeded === true || String(row.stripeCardAuthenticationSetupNeeded || '').toLowerCase() === 'true') return true;
+  const status = String(row.status || '').toLowerCase();
+  const setup = String(row.paymentSetup || '').toLowerCase();
+  return /stripe.*(?:authentication|re-authentication)|(?:authentication|re-authentication).*stripe/.test(status) || /stripe.*(?:authentication|re-authentication)|(?:authentication|re-authentication).*stripe/.test(setup);
+}
+function isStripeAuthenticationRequired(value) {
+  if (!value) return false;
+  if (value.cardAuthenticationRequired === true) return true;
+  const intent = value.paymentIntent && typeof value.paymentIntent === 'object' ? value.paymentIntent : value;
+  const details = intent && (intent.last_payment_error || intent.lastPaymentError || intent.error) || value.last_payment_error || value.lastPaymentError || value.error || {};
+  const status = String(intent && intent.status || value.status || '').toLowerCase();
+  const code = String(value.code || value.declineCode || details.code || details.decline_code || '').toLowerCase();
+  return status === 'requires_action' || code === 'authentication_required' || code === 'stripe_authentication_required';
+}
+function stripeAuthenticationRequiredError(cause, attempt = null, intent = null) {
+  const source = intent || cause && cause.paymentIntent || cause || {};
+  const error = new Error('Stripe requires customer authentication for this saved card. WheelsonAuto paused autopay without consuming a retry; send a secure Stripe card-update link before charging again.');
+  error.code = 'stripe_authentication_required';
+  error.statusCode = 409;
+  error.cardAuthenticationRequired = true;
+  error.paymentIntent = stripeObjectId(source) || stripeObjectId(cause && cause.paymentIntent) || '';
+  error.stripeAttempt = attempt || null;
+  error.providerError = String(cause && (cause.providerError || cause.message) || '').slice(0, 500);
+  return error;
 }
 function isPaymentNotFoundError(err) {
   const message = String(err && err.message || err || '').toLowerCase();
@@ -12660,6 +12704,125 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts
   });
+  return payment;
+}
+function saveStripeAuthenticationRequiredResult(data, row, payload = {}, err, options = {}) {
+  const stamp = new Date().toISOString();
+  const message = String(err && (err.providerError || err.message) || err || 'Stripe requires customer authentication for this saved card.');
+  const amount = Number(payload.amount || row.amount || 0);
+  const identity = recurringPaymentIdentity(data, row, payload);
+  const scheduledDueDate = validCalendarDateKey(payload.scheduledDueDate || options.scheduledDueDate || recurringDateKey(row));
+  const stripePaymentIntentId = stripeObjectId(options.stripePaymentIntentId || err && err.paymentIntent || row.stripeChargeAttempt && row.stripeChargeAttempt.paymentIntentId || row.lastStripePaymentIntentId);
+  const attempt = row.stripeChargeAttempt && Object.keys(row.stripeChargeAttempt).length
+    ? row.stripeChargeAttempt
+    : {
+      idempotencyKey: '',
+      automatic: options.automatic === true,
+      amountCents: cents(amount),
+      scheduledDueDate,
+      billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+      source: options.source || 'Stripe saved-card authentication required'
+    };
+  const protectedAttempt = updateStripeChargeAttempt(data, row, attempt, {
+    status: 'authentication_required',
+    paymentIntentId: stripePaymentIntentId || attempt.paymentIntentId || '',
+    authenticationRequiredAt: stamp,
+    providerError: message
+  });
+  const status = 'Setup needed - Stripe card authentication';
+  const paymentPatch = {
+    status,
+    tone: 'warn',
+    autoChargeEnabled: false,
+    paymentSetup: 'Stripe card needs customer authentication',
+    stripeCardAuthenticationSetupNeeded: true,
+    stripeCardAuthenticationRequiredAt: stamp,
+    stripeCardAuthenticationPaymentIntentId: stripePaymentIntentId || '',
+    stripeCardAuthenticationError: message,
+    stripeChargeAttempt: protectedAttempt,
+    lastAutoChargeResult: status,
+    lastAutoChargeError: message,
+    lastAutoChargeAttemptDate: options.dateKey || localDateKey(),
+    lastAutoChargeAttemptAt: stamp,
+    lastPaymentResult: status,
+    lastPaymentNote: message,
+    retryCount: Number(row.retryCount || row.failedAttempts || 0),
+    failedAttempts: Number(row.failedAttempts || row.retryCount || 0),
+    ...(stripePaymentIntentId ? { lastStripePaymentIntentId: stripePaymentIntentId } : {})
+  };
+  updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, paymentPatch);
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  const existing = data.payments.find(payment =>
+    stripePaymentIntentId && String(payment && payment.stripePaymentIntentId || '') === stripePaymentIntentId
+    || !stripePaymentIntentId && String(payment && payment.recurringPaymentId || '') === String(row.id || '') && String(payment && payment.scheduledDueDate || '') === scheduledDueDate && /stripe card authentication/i.test(String(payment && payment.status || ''))
+  );
+  if (existing) {
+    if (!stripeMigration.paymentIsPaid(existing.status)) {
+      Object.assign(existing, {
+        status: 'Stripe card authentication required',
+        tone: 'warn',
+        source: options.source || existing.source || 'Stripe saved-card authentication required',
+        notes: appendUniqueNote(existing.notes || '', message),
+        scheduledDueDate: existing.scheduledDueDate || scheduledDueDate,
+        billingPeriodKey: existing.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueDate),
+        recurringPaymentId: existing.recurringPaymentId || row.id || '',
+        paymentProvider: 'stripe',
+        providerPaymentId: stripePaymentIntentId || existing.providerPaymentId || '',
+        stripePaymentIntentId: stripePaymentIntentId || existing.stripePaymentIntentId || '',
+        stripeIdempotencyKey: existing.stripeIdempotencyKey || protectedAttempt.idempotencyKey || '',
+        ...identity
+      });
+    }
+    return existing;
+  }
+  const payment = {
+    id: 'payment-stripe-authentication-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
+    date: businessLocaleString(),
+    createdAt: stamp,
+    customer: row.customer || payload.customer || 'Unknown customer',
+    phone: row.phone || payload.phone || '',
+    email: row.email || payload.email || '',
+    method: 'Stripe saved card',
+    amount,
+    status: 'Stripe card authentication required',
+    tone: 'warn',
+    source: options.source || 'Stripe saved-card authentication required',
+    notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
+    scheduledDueDate,
+    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+    recurringPaymentId: row.id || '',
+    paymentProvider: 'stripe',
+    providerPaymentId: stripePaymentIntentId || '',
+    stripePaymentIntentId,
+    stripeIdempotencyKey: String(protectedAttempt.idempotencyKey || ''),
+    stripeCustomerId: row.stripeCustomerId || '',
+    stripePaymentMethodId: row.stripePaymentMethodId || '',
+    ...identity
+  };
+  data.payments.unshift(payment);
+  const paymentAttempts = Array.isArray(row.paymentAttempts) ? row.paymentAttempts.slice() : [];
+  if (!paymentAttempts.some(item => stripePaymentIntentId && String(item && item.stripePaymentIntentId || '') === stripePaymentIntentId || !stripePaymentIntentId && item && item.result === status && String(item.scheduledDueDate || '') === scheduledDueDate)) {
+    paymentAttempts.unshift({
+      id: 'attempt-stripe-authentication-' + Date.now(),
+      date: payment.date,
+      customer: payment.customer,
+      amount,
+      result: status,
+      method: payment.method,
+      notes: payment.notes,
+      vehicle: payment.vehicle,
+      vehicleId: payment.vehicleId,
+      vin: payment.vin,
+      plate: payment.plate,
+      tracker: payment.tracker,
+      paymentProvider: 'stripe',
+      stripePaymentIntentId,
+      stripeIdempotencyKey: payment.stripeIdempotencyKey,
+      scheduledDueDate,
+      recurringPaymentId: payment.recurringPaymentId
+    });
+  }
+  updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, { paymentAttempts });
   return payment;
 }
 function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
@@ -12791,6 +12954,15 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
       await writeData(data);
       throw stripeConfirmationPendingError(error, pendingAttempt);
     }
+    if (isStripeAuthenticationRequired(error)) {
+      const protectedAttempt = updateStripeChargeAttempt(data, recurring, attempt, {
+        status: 'authentication_required',
+        paymentIntentId: stripeObjectId(error && error.paymentIntent),
+        authenticationRequiredAt: new Date().toISOString(),
+        providerError: String(error && (error.providerError || error.message) || '').slice(0, 500)
+      });
+      throw stripeAuthenticationRequiredError(error, protectedAttempt, error && error.paymentIntent);
+    }
     updateStripeChargeAttempt(data, recurring, attempt, {
       status: 'failed',
       failedAt: new Date().toISOString(),
@@ -12821,6 +12993,15 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
       await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'persist Stripe processing payment state' });
       await writeData(data);
       throw stripeConfirmationPendingError(null, pendingAttempt);
+    }
+    if (isStripeAuthenticationRequired(intent)) {
+      const protectedAttempt = updateStripeChargeAttempt(data, recurring, attempt, {
+        status: 'authentication_required',
+        paymentIntentId: stripeObjectId(intent),
+        authenticationRequiredAt: new Date().toISOString(),
+        providerError: String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe requires customer authentication.')
+      });
+      throw stripeAuthenticationRequiredError(intent, protectedAttempt, intent);
     }
     updateStripeChargeAttempt(data, recurring, attempt, {
       status: 'failed',
@@ -13065,7 +13246,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, confirmationPending: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   try {
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
@@ -13122,6 +13303,36 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeResult = 'Paid';
         result.charged += 1;
       } catch (err) {
+        if (isStripeAuthenticationRequired(err)) {
+          const payment = saveStripeAuthenticationRequiredResult(data, row, {
+            amount: row.amount,
+            scheduledDueDate,
+            note: 'WheelsonAuto autopay paused because Stripe needs customer authentication for due date ' + scheduledDueDate
+          }, err, {
+            automatic: true,
+            dateKey,
+            source: 'WheelsonAuto autopay Stripe authentication required'
+          });
+          queueCustomerMessage(data, row, 'Stripe card update needed', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your saved card needs to be re-authenticated before we can process your payment of $' + Number(row.amount || 0).toLocaleString() + '. Please contact us so we can send a secure card-update link.', 'warn');
+          await queueOwnerEmailNotification(data, 'stripe_authentication_required', {
+            customer: row.customer || 'Unknown customer',
+            subject: 'Stripe card update needed - ' + (row.customer || 'Unknown customer'),
+            body: [
+              'Stripe requires customer authentication for a saved-card payment.',
+              'WheelsonAuto paused autopay without counting a failed retry or charging again.',
+              'Customer: ' + (row.customer || 'Unknown customer'),
+              'Amount: $' + Number(row.amount || 0).toLocaleString(),
+              'Due date: ' + scheduledDueDate,
+              'Vehicle: ' + (row.vehicle || row.vin || 'Not linked'),
+              'Status: ' + payment.status,
+              'Next action: create/send a secure Stripe card-update link.',
+              'Provider detail: ' + String(err && (err.providerError || err.message) || '')
+            ].join('\n')
+          });
+          result.authenticationRequired += 1;
+          result.errors.push((row.customer || row.id) + ': ' + payment.status);
+          continue;
+        }
         if (isStripeConfirmationPendingError(err)) {
           const pendingAttempt = row.stripeChargeAttempt || err.stripeAttempt || {};
           const pendingKey = String(pendingAttempt.idempotencyKey || 'Stripe confirmation pending');
@@ -13555,10 +13766,23 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
   if (!recurring) return { matched: false, reason: 'No unambiguous WheelsonAuto recurring customer matched this Stripe failed payment intent.', paymentIntentId: intentId };
   const existing = (data.payments || []).find(row => String(row && row.stripePaymentIntentId || '') === intentId);
   if (existing && stripeMigration.paymentIsPaid(existing.status)) return { matched: true, ignored: true, reason: 'A later Stripe success is already recorded for this payment intent.', recurringPaymentId: recurring.id || '', paymentIntentId: intentId };
-  if (existing) return { matched: true, duplicate: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: existing.id || '' };
   const metadata = intent.metadata || {};
   const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.scheduledDueDate || recurringDateKey(recurring));
   const providerError = String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe reported a failed saved-card payment.');
+  if (isStripeAuthenticationRequired(intent)) {
+    const payment = saveStripeAuthenticationRequiredResult(data, recurring, {
+      amount: Number(intent.amount || 0) / 100 || recurring.amount,
+      scheduledDueDate: scheduledDueKey,
+      note: 'Stripe signed webhook reported that customer authentication is required for this saved card.'
+    }, stripeAuthenticationRequiredError(intent, recurring.stripeChargeAttempt || null, intent), {
+      automatic: String(metadata.flow || '').toLowerCase() === 'autopay',
+      dateKey: localDateKey(stripePaymentIntentDate(intent)),
+      source: 'Stripe signed payment webhook authentication required',
+      stripePaymentIntentId: intentId
+    });
+    return { matched: true, authenticationRequired: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id || '', status: payment.status || '' };
+  }
+  if (existing) return { matched: true, duplicate: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: existing.id || '' };
   const currentAttempt = recurring.stripeChargeAttempt || {};
   updateStripeChargeAttempt(data, recurring, currentAttempt && Object.keys(currentAttempt).length ? currentAttempt : {
     idempotencyKey: '',
@@ -13807,7 +14031,7 @@ async function recordStripeWebhookEvent(event = {}) {
     }
   }
   if (type === 'payment_intent.succeeded' && isWheelsonAutoStripeSavedCardIntent(object)) stripePaymentIntentResult = applyStripePaymentIntentSucceeded(data, object);
-  if (type === 'payment_intent.payment_failed' && isWheelsonAutoStripeSavedCardIntent(object)) stripePaymentIntentResult = applyStripePaymentIntentFailed(data, object);
+  if ((type === 'payment_intent.payment_failed' || type === 'payment_intent.requires_action') && isWheelsonAutoStripeSavedCardIntent(object)) stripePaymentIntentResult = applyStripePaymentIntentFailed(data, object);
   if (/^identity\.verification_session\.(created|processing|verified|requires_input|canceled|redacted)$/.test(type)) {
     const metadata = object.metadata || {};
     const session = (data.onboardingSessions || []).find(row => row.stripeIdentityVerificationId === object.id)
@@ -18462,6 +18686,22 @@ const server = http.createServer(async (req, res) => {
           await protectConcurrentLocalWrites(data);
           await writeData(data);
           return json(res, 409, { ok: false, error: String(err && err.message || err), duplicateBlocked: true, payment: err.existingPayment || null });
+        }
+        if (recurring && isStripeAuthenticationRequired(err)) {
+          const payment = saveStripeAuthenticationRequiredResult(data, recurring, payload, err, {
+            automatic: payload.automatic === true,
+            source: 'Manual saved-card charge Stripe authentication required'
+          });
+          appendAuditLog(data, user, 'Stripe card authentication required', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || recurring.amount || 0), payment.scheduledDueDate || recurring.nextRun || 'No billing date', 'Autopay paused; secure card update required']);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'record Stripe card authentication-required state' });
+          await writeData(data);
+          return json(res, 409, {
+            ok: false,
+            cardAuthenticationRequired: true,
+            error: payment.status + ': ' + String(err && err.message || err),
+            payment,
+            recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId)
+          });
         }
         if (recurring && isStripeConfirmationPendingError(err)) {
           const pendingAttempt = recurring.stripeChargeAttempt || err.stripeAttempt || {};

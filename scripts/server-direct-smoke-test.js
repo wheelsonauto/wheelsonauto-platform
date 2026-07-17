@@ -2958,6 +2958,193 @@ async function main() {
     });
     assert(stripeDuplicateAfterWebhook.status === 409 && stripeDuplicateAfterWebhook.json.duplicateBlocked, 'A reconciled timed-out Stripe payment must block a second charge for the same billing period.');
 
+    const stripeAuthenticationRecurringId = 'direct-stripe-authentication-required';
+    const stripeAuthenticationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    stripeAuthenticationState.json.recurringPayments.unshift({
+      id: stripeAuthenticationRecurringId,
+      customer: 'Direct Stripe Authentication Customer',
+      phone: '3135550778',
+      email: 'stripe-authentication@example.com',
+      vehicle: '2024 Stripe Authentication Car',
+      vehicleId: 'veh-direct-stripe-authentication',
+      vin: 'DIRECTSTRIPEAUTHVIN',
+      plate: 'DIR-STRIPE-AUTH',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_direct_authentication',
+      stripePaymentMethodId: 'pm_direct_authentication',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Stripe card saved and chargeable',
+      autopayManagedBy: 'WheelsonAuto / Stripe'
+    });
+    const stripeAuthenticationSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeAuthenticationState.json });
+    assert(stripeAuthenticationSeed.status === 200 && stripeAuthenticationSeed.json.ok, 'Stripe authentication-required smoke setup failed.');
+    const stripeAuthenticationFetch = global.fetch;
+    let stripeAuthenticationProviderCalls = 0;
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('api.stripe.com/v1/payment_intents')) {
+        stripeAuthenticationProviderCalls += 1;
+        return {
+          ok: false,
+          status: 402,
+          text: async () => JSON.stringify({ error: { type: 'card_error', code: 'authentication_required', message: 'Customer authentication is required for this payment.', payment_intent: 'pi_direct_authentication_001' } })
+        };
+      }
+      return stripeAuthenticationFetch(url, options);
+    };
+    let stripeAuthenticationCharge;
+    try {
+      stripeAuthenticationCharge = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+        cookie: ownerCookie,
+        json: { recurringPaymentId: stripeAuthenticationRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+      });
+    } finally {
+      global.fetch = stripeAuthenticationFetch;
+    }
+    assert(stripeAuthenticationCharge.status === 409 && stripeAuthenticationCharge.json.cardAuthenticationRequired === true, 'A Stripe authentication-required response must pause the card instead of being treated as a normal failed retry: ' + JSON.stringify(stripeAuthenticationCharge.json || stripeAuthenticationCharge.text));
+    assert(stripeAuthenticationProviderCalls === 1, 'The authentication-required scenario should send exactly one provider request.');
+    const stripeAuthenticationRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeAuthenticationRow = stripeAuthenticationRead.json.recurringPayments.find(row => row.id === stripeAuthenticationRecurringId);
+    const stripeAuthenticationPayment = (stripeAuthenticationRead.json.payments || []).find(payment => payment.stripePaymentIntentId === 'pi_direct_authentication_001');
+    assert(stripeAuthenticationRow && stripeAuthenticationRow.status === 'Setup needed - Stripe card authentication' && stripeAuthenticationRow.autoChargeEnabled === false && Number(stripeAuthenticationRow.retryCount || 0) === 0 && stripeAuthenticationRow.stripeChargeAttempt && stripeAuthenticationRow.stripeChargeAttempt.status === 'authentication_required', 'Stripe authentication-required state must pause automatic charging without consuming either retry.');
+    assert(stripeAuthenticationRow.stripeAutopayChargeSequence === 1 && stripeAuthenticationPayment && stripeAuthenticationPayment.customer === 'Direct Stripe Authentication Customer' && stripeAuthenticationPayment.vin === 'DIRECTSTRIPEAUTHVIN' && stripeAuthenticationPayment.status === 'Stripe card authentication required', 'Stripe authentication-required records must keep the exact customer, vehicle, and payment-intent evidence.');
+    const stripeAuthenticationBlockedRepeat = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeAuthenticationRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+    });
+    assert(stripeAuthenticationBlockedRepeat.status === 409 && stripeAuthenticationBlockedRepeat.json.cardAuthenticationRequired === true && stripeAuthenticationProviderCalls === 1, 'A paused Stripe card must not send another provider request until the customer updates it.');
+    const stripeAuthenticationSetup = await request(server, 'POST', '/api/card-setup-requests', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: stripeAuthenticationRecurringId,
+        reactivateExisting: true,
+        cardOnlyUpdate: true,
+        paymentProvider: 'stripe',
+        customer: 'Direct Stripe Authentication Customer',
+        phone: '3135550778',
+        email: 'stripe-authentication@example.com',
+        vehicle: '2024 Stripe Authentication Car',
+        vehicleId: 'veh-direct-stripe-authentication',
+        vin: 'DIRECTSTRIPEAUTHVIN',
+        licensePlate: 'DIR-STRIPE-AUTH',
+        amount: 229,
+        frequency: 'Weekly',
+        nextRun: autopayTodayKey,
+        chargeTime: '18:00',
+        reason: 'Stripe authentication-required card update'
+      }
+    });
+    assert(stripeAuthenticationSetup.status === 201 && stripeAuthenticationSetup.json.ok && stripeAuthenticationSetup.json.setupLink.cardOnlyUpdate, 'Stripe authentication-required state should create a customer-safe card-update link.');
+    const stripeAuthenticationSetupId = stripeAuthenticationSetup.json.setupLink.id;
+    const stripeAuthenticationSetupObject = {
+      object: 'checkout.session',
+      id: 'cs_direct_authentication_replacement',
+      mode: 'setup',
+      status: 'complete',
+      customer: 'cus_direct_authentication',
+      client_reference_id: stripeAuthenticationSetupId,
+      metadata: { cardSetupRequestId: stripeAuthenticationSetupId },
+      setup_intent: {
+        object: 'setup_intent',
+        id: 'seti_direct_authentication_replacement',
+        status: 'succeeded',
+        customer: 'cus_direct_authentication',
+        payment_method: { id: 'pm_direct_authentication_replacement', card: { brand: 'visa', last4: '4242' } }
+      }
+    };
+    const stripeAuthenticationSetupBody = JSON.stringify({ id: 'evt_direct_stripe_authentication_card_updated', type: 'checkout.session.completed', livemode: true, created: Math.floor(Date.now() / 1000), data: { object: stripeAuthenticationSetupObject } });
+    const stripeAuthenticationSetupTimestamp = String(Math.floor(Date.now() / 1000));
+    const stripeAuthenticationSetupSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeAuthenticationSetupTimestamp + '.' + stripeAuthenticationSetupBody).digest('hex');
+    const stripeAuthenticationSetupWebhook = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeAuthenticationSetupTimestamp + ',v1=' + stripeAuthenticationSetupSignature }, raw: stripeAuthenticationSetupBody });
+    assert(stripeAuthenticationSetupWebhook.status === 200 && stripeAuthenticationSetupWebhook.json.cardSetupRequestId === stripeAuthenticationSetupId, 'A signed Stripe card-setup webhook must resolve the paused card-update request.');
+    const stripeAuthenticationResumedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeAuthenticationResumedRow = stripeAuthenticationResumedState.json.recurringPayments.find(row => row.id === stripeAuthenticationRecurringId);
+    assert(stripeAuthenticationResumedRow && stripeAuthenticationResumedRow.status === 'Active' && stripeAuthenticationResumedRow.autoChargeEnabled === true && stripeAuthenticationResumedRow.stripeCardAuthenticationSetupNeeded === false && !stripeAuthenticationResumedRow.stripeCardAuthenticationRequiredAt && stripeAuthenticationResumedRow.stripePaymentMethodId === 'pm_direct_authentication_replacement', 'A completed secure Stripe card update must clear the authentication pause and restore only that customer\'s scheduled autopay.');
+    const stripeAuthenticationRetryFetch = global.fetch;
+    let stripeAuthenticationRetryKey = '';
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('api.stripe.com/v1/payment_intents')) {
+        stripeAuthenticationRetryKey = String(options.headers && options.headers['Idempotency-Key'] || '');
+        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'pi_direct_authentication_replacement_001', status: 'succeeded', amount: 22900, amount_received: 22900, customer: 'cus_direct_authentication', payment_method: 'pm_direct_authentication_replacement', latest_charge: 'ch_direct_authentication_replacement_001', created: Math.floor(Date.now() / 1000) }) };
+      }
+      return stripeAuthenticationRetryFetch(url, options);
+    };
+    let stripeAuthenticationRetry;
+    try {
+      stripeAuthenticationRetry = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+        cookie: ownerCookie,
+        json: { recurringPaymentId: stripeAuthenticationRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+      });
+    } finally {
+      global.fetch = stripeAuthenticationRetryFetch;
+    }
+    assert(stripeAuthenticationRetry.status === 201 && stripeAuthenticationRetry.json.payment && stripeAuthenticationRetry.json.payment.status === 'Paid' && /attempt-2$/.test(stripeAuthenticationRetryKey), 'After a customer updates the Stripe card, the resumed charge must use a new protected idempotency attempt instead of replaying the authentication-required attempt.');
+
+    const stripeWebhookAuthenticationRecurringId = 'direct-stripe-webhook-authentication-required';
+    const stripeWebhookAuthenticationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    stripeWebhookAuthenticationState.json.recurringPayments.unshift({
+      id: stripeWebhookAuthenticationRecurringId,
+      customer: 'Direct Stripe Webhook Authentication Customer',
+      phone: '3135550779',
+      email: 'stripe-webhook-authentication@example.com',
+      vehicle: '2024 Stripe Webhook Authentication Car',
+      vehicleId: 'veh-direct-stripe-webhook-authentication',
+      vin: 'DIRECTSTRIPEWEBAUTHVIN',
+      plate: 'DIR-STRIPE-WEB-AUTH',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_direct_webhook_authentication',
+      stripePaymentMethodId: 'pm_direct_webhook_authentication',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Stripe card saved and chargeable',
+      autopayManagedBy: 'WheelsonAuto / Stripe'
+    });
+    const stripeWebhookAuthenticationSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeWebhookAuthenticationState.json });
+    assert(stripeWebhookAuthenticationSeed.status === 200 && stripeWebhookAuthenticationSeed.json.ok, 'Stripe webhook authentication-required smoke setup failed.');
+    const stripeWebhookAuthenticationObject = {
+      object: 'payment_intent',
+      id: 'pi_direct_webhook_authentication_001',
+      status: 'requires_action',
+      amount: 22900,
+      customer: 'cus_direct_webhook_authentication',
+      payment_method: 'pm_direct_webhook_authentication',
+      created: Math.floor(Date.now() / 1000),
+      last_payment_error: { code: 'authentication_required', message: 'Customer must authenticate this saved card.' },
+      metadata: {
+        recurringPaymentId: stripeWebhookAuthenticationRecurringId,
+        flow: 'autopay',
+        scheduledDueDate: autopayTodayKey,
+        billingPeriodKey: 'due:' + autopayTodayKey,
+        amount: '22900'
+      }
+    };
+    const stripeWebhookAuthenticationBody = JSON.stringify({ id: 'evt_direct_stripe_webhook_authentication_required', type: 'payment_intent.requires_action', livemode: true, created: Math.floor(Date.now() / 1000), data: { object: stripeWebhookAuthenticationObject } });
+    const stripeWebhookAuthenticationTimestamp = String(Math.floor(Date.now() / 1000));
+    const stripeWebhookAuthenticationSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeWebhookAuthenticationTimestamp + '.' + stripeWebhookAuthenticationBody).digest('hex');
+    const stripeWebhookAuthentication = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeWebhookAuthenticationTimestamp + ',v1=' + stripeWebhookAuthenticationSignature }, raw: stripeWebhookAuthenticationBody });
+    assert(stripeWebhookAuthentication.status === 200 && stripeWebhookAuthentication.json.stripePaymentIntentResult && stripeWebhookAuthentication.json.stripePaymentIntentResult.authenticationRequired, 'A signed Stripe requires-action webhook must pause the correct saved card.');
+    const stripeWebhookAuthenticationRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeWebhookAuthenticationRow = stripeWebhookAuthenticationRead.json.recurringPayments.find(row => row.id === stripeWebhookAuthenticationRecurringId);
+    assert(stripeWebhookAuthenticationRow && stripeWebhookAuthenticationRow.status === 'Setup needed - Stripe card authentication' && stripeWebhookAuthenticationRow.autoChargeEnabled === false && Number(stripeWebhookAuthenticationRow.failedAttempts || 0) === 0 && stripeWebhookAuthenticationRow.stripeChargeAttempt.status === 'authentication_required', 'Signed Stripe authentication-required webhooks must preserve the card-update workflow and never create a failed-twice state.');
+
     const jsonRecoverySnapshots = await request(server, 'GET', '/api/system/recovery/snapshots', { cookie: ownerCookie });
     assert(jsonRecoverySnapshots.status === 409 && /PostgreSQL/i.test(jsonRecoverySnapshots.json.error || ''), 'JSON development storage must not pretend it can perform transactional snapshot recovery.');
     const jsonRecoveryRestore = await request(server, 'POST', '/api/system/recovery/restore', {

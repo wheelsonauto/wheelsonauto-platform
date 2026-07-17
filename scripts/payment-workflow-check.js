@@ -102,6 +102,7 @@ requireText('Payments transaction tab', app, 'recentPayments(db.payments||[],250
   'payment not found',
   'pending today',
   'stripe confirmation pending',
+  'stripe card update required',
   'failed once',
   'failed twice',
   'paid',

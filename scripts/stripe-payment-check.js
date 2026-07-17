@@ -89,10 +89,16 @@ async function run() {
     'Owner must review reason-specific evidence',
     'Stripe card ready - Clover remains active until owner confirmation',
     'recurringCardReadyForProvider',
-    'paymentProviderLabel(paymentProvider)'
+    'paymentProviderLabel(paymentProvider)',
+    'stripe_authentication_required',
+    'stripeCardAuthenticationSetupNeeded',
+    'payment_intent.requires_action',
+    'stripeAutopayChargeSequence',
+    'saveStripeAuthenticationRequiredResult'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   assert(app.includes('id="rPaymentProvider"'), 'Admin recurring setup must expose a Clover/Stripe provider choice.');
   assert(app.includes("r.stripeCustomerId&&r.stripePaymentMethodId"), 'Admin charge readiness must recognize only complete Stripe saved-card records.');
+  assert(app.includes('stripe card update required'), 'Admin payment status must clearly show when Stripe requires a customer card update.');
   assert(nativeSite.includes("recurring.stripeCustomerId && recurring.stripePaymentMethodId"), 'Public Stripe onboarding must require both Stripe customer and reusable payment-method references.');
   assert(nativeSite.includes('identity_selfie'), 'Public Stripe onboarding must include the required identity selfie step.');
   assert(nativeSite.includes('data-onboarding-form="identity"'), 'Public onboarding must expose Stripe Identity inside the existing verification step.');
