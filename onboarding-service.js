@@ -67,7 +67,7 @@ function pricingSnapshot(vehicle = {}) {
   };
 }
 
-function createSession(data, application, actor, baseUrl) {
+function createSession(data, application, actor, baseUrl, options = {}) {
   ensureCollections(data);
   const rawToken = crypto.randomBytes(28).toString('hex');
   const now = new Date();
@@ -82,6 +82,7 @@ function createSession(data, application, actor, baseUrl) {
     applicationId: application.id,
     onlineVehicleId: application.onlineVehicleId || application.vehicleId || '',
     organizationId: application.organizationId || 'org-wheelsonauto',
+    paymentProvider: text(options.paymentProvider || 'clover', 24).toLowerCase(),
     tokenHash: tokenHash(rawToken),
     status: 'Open',
     documentReviewStatus: 'Waiting on customer',
@@ -250,9 +251,9 @@ async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload') {
 
 async function saveDocuments(data, session, application, files, dataDir) {
   ensureCollections(data);
-  const required = ['driver_license_front', 'driver_license_back', 'insurance'];
+  const required = ['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'];
   const byKind = new Map((files || []).map(file => [String(file.kind || ''), file]));
-  if (!required.every(kind => byKind.has(kind))) throw new Error('License front, license back, and insurance proof are all required.');
+  if (!required.every(kind => byKind.has(kind))) throw new Error('License front, license back, identity selfie, and insurance proof are all required.');
   const saved = [];
   for (const kind of required) {
     const file = byKind.get(kind) || {};
@@ -264,7 +265,7 @@ async function saveDocuments(data, session, application, files, dataDir) {
       onboardingSessionId: session.id,
       onlineVehicleId: session.onlineVehicleId,
       customer: application.name || '',
-      type: kind === 'insurance' ? 'Insurance' : kind === 'driver_license_front' ? 'Driver license front' : 'Driver license back',
+      type: kind === 'insurance' ? 'Insurance' : kind === 'identity_selfie' ? 'Identity selfie' : kind === 'driver_license_front' ? 'Driver license front' : 'Driver license back',
       documentKind: kind,
       originalName: stored.originalName,
       contentType: stored.contentType,

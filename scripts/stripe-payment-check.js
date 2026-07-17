@@ -7,6 +7,7 @@ const stripeAdapter = require('../stripe-adapter');
 const root = path.join(__dirname, '..');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const nativeSite = fs.readFileSync(path.join(root, 'native-site.js'), 'utf8');
 
 async function run() {
   const form = stripeAdapter.formBody({
@@ -41,6 +42,7 @@ async function run() {
   [
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
+    'WOA_ONBOARDING_PAYMENT_PROVIDER',
     "'/api/webhooks/stripe'",
     "'/api/payment-provider/switch'",
     'cloverStoppedConfirmed',
@@ -48,10 +50,14 @@ async function run() {
     'chargeStripeSavedCard',
     'stripeDisputeEvidencePacket',
     'Owner must review reason-specific evidence',
-    'Stripe card ready - Clover remains active until owner confirmation'
+    'Stripe card ready - Clover remains active until owner confirmation',
+    'recurringCardReadyForProvider',
+    'paymentProviderLabel(paymentProvider)'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   assert(app.includes('id="rPaymentProvider"'), 'Admin recurring setup must expose a Clover/Stripe provider choice.');
   assert(app.includes("r.stripeCustomerId&&r.stripePaymentMethodId"), 'Admin charge readiness must recognize only complete Stripe saved-card records.');
+  assert(nativeSite.includes("recurring.stripeCustomerId && recurring.stripePaymentMethodId"), 'Public Stripe onboarding must require both Stripe customer and reusable payment-method references.');
+  assert(nativeSite.includes('identity_selfie'), 'Public Stripe onboarding must include the required identity selfie step.');
   assert(!server.includes('STRIPE_SECRET_KEY || \'sk_'), 'No Stripe secret fallback may be committed.');
 
   console.log('Stripe payment adapter, migration, webhook, and dispute checks passed.');

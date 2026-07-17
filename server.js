@@ -56,6 +56,7 @@ const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
 const GOOGLE_CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || '';
 const GOOGLE_CALENDAR_ACCESS_TOKEN = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN || '';
 const WOA_PAYMENT_PROVIDER = String(process.env.WOA_PAYMENT_PROVIDER || 'clover').trim().toLowerCase();
+const WOA_ONBOARDING_PAYMENT_PROVIDER = String(process.env.WOA_ONBOARDING_PAYMENT_PROVIDER || WOA_PAYMENT_PROVIDER || 'clover').trim().toLowerCase();
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || process.env.WOA_STRIPE_SECRET_KEY || '';
 const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || process.env.WOA_STRIPE_PUBLISHABLE_KEY || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || process.env.WOA_STRIPE_WEBHOOK_SECRET || '';
@@ -94,7 +95,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-stripe-ready-80">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-stripe-deep-blue-83">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -6867,18 +6868,34 @@ function activeHostedCheckoutHref(request) {
 function nativeOnboardingRecurring(data, session, application) {
   return (data.recurringPayments || []).find(row => row.onboardingSessionId === session.id || row.applicationId === application.id) || null;
 }
-function nativeOnboardingPaymentRequests(data, session, application) {
-  return (data.paymentRequests || []).filter(row => row.onboardingSessionId === session.id || row.applicationId === application.id);
+function nativeOnboardingProvider(session, recurring) {
+  const provider = normalizedPaymentProvider(session && session.paymentProvider || recurring && (recurring.paymentProvider || recurring.provider) || WOA_ONBOARDING_PAYMENT_PROVIDER);
+  return provider === 'stripe' ? 'stripe' : 'clover';
+}
+function recurringCardReadyForProvider(recurring, provider) {
+  if (!recurring) return false;
+  if (normalizedPaymentProvider(provider) === 'stripe') return !!(String(recurring.stripeCustomerId || '').trim() && String(recurring.stripePaymentMethodId || '').trim());
+  return !!(String(recurring.cloverPaymentSource || recurring.paymentSourceId || '').trim());
+}
+function nativeOnboardingPaymentRequests(data, session, application, provider = '') {
+  const wantedProvider = provider ? normalizedPaymentProvider(provider) : '';
+  return (data.paymentRequests || []).filter(row => {
+    if (row.onboardingSessionId !== session.id && row.applicationId !== application.id) return false;
+    if (!wantedProvider) return true;
+    return normalizedPaymentProvider(row.paymentProvider || 'clover') === wantedProvider;
+  });
 }
 function nativeOnboardingReadyForPickup(data, session, application) {
   const pricing = application.pricingSnapshot || {};
   const recurring = nativeOnboardingRecurring(data, session, application);
-  const requests = nativeOnboardingPaymentRequests(data, session, application);
+  const provider = nativeOnboardingProvider(session, recurring);
+  const requests = nativeOnboardingPaymentRequests(data, session, application, provider);
   const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
   const firstWeek = requests.find(row => row.paymentType === 'First weekly payment');
-  const cardReady = !!(recurring && (recurring.cloverPaymentSource || recurring.paymentSourceId || /chargeable|active|linked|card saved/i.test(String(recurring.status || recurring.paymentSetup || ''))));
+  const cardReady = recurringCardReadyForProvider(recurring, provider);
   return {
     ready: session.documentReviewStatus === 'Approved' && session.signatureReviewStatus === 'Approved' && cardReady && (Number(pricing.downPayment || 0) <= 0 || nativePaymentPaid(deposit)) && nativePaymentPaid(firstWeek),
+    paymentProvider: provider,
     recurring,
     deposit,
     firstWeek
@@ -12404,7 +12421,7 @@ const server = http.createServer(async (req, res) => {
         session.reviewStatus = 'Documents waiting';
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return json(res, 201, { ok: true, message: 'License and insurance received for private staff review.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
+        return json(res, 201, { ok: true, message: 'License, identity selfie, and insurance received for private staff review.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
       }
       if (action === 'signature') {
         if (session.documentReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the driver license and full-coverage insurance before the agreement can be signed.' });
@@ -12460,9 +12477,11 @@ const server = http.createServer(async (req, res) => {
         if (session.signatureReviewStatus !== 'Approved' || session.reviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the license-signature comparison before card setup.' });
         if (payload.autopayConsent !== true) return json(res, 400, { ok: false, error: 'Card-on-file and weekly autopay authorization is required.' });
         const existingRecurring = nativeOnboardingRecurring(data, session, application);
-        if (existingRecurring && (existingRecurring.cloverPaymentSource || /linked|card saved|chargeable/i.test(String(existingRecurring.paymentSetup || existingRecurring.status || '')))) return json(res, 200, { ok: true, message: 'Card is already linked. Continue to the required payments.' });
-        const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && !/saved|complete|cancel|failed/i.test(String(row.status || '')));
-        if (openSetup) return json(res, 200, { ok: true, redirectUrl: openSetup.url, message: 'Opening the existing secure Clover card setup.' });
+        const paymentProvider = nativeOnboardingProvider(session, existingRecurring);
+        const providerName = paymentProviderLabel(paymentProvider);
+        if (recurringCardReadyForProvider(existingRecurring, paymentProvider)) return json(res, 200, { ok: true, message: providerName + ' card is already linked. Continue to the required payments.' });
+        const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && normalizedPaymentProvider(row.paymentProvider || 'clover') === paymentProvider && !/saved|complete|cancel|failed/i.test(String(row.status || '')));
+        if (openSetup) return json(res, 200, { ok: true, redirectUrl: openSetup.url, message: 'Opening the existing secure ' + providerName + ' card setup.' });
         const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || {};
         const consentAt = new Date().toISOString();
         const setup = createCardSetupRequest(data, {
@@ -12478,6 +12497,7 @@ const server = http.createServer(async (req, res) => {
           vin: vehicle.vin || linkedVehicle.vin || '',
           licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
           amount: Number(application.pricingSnapshot && application.pricingSnapshot.weeklyPayment || vehicle.weeklyPayment || 0),
+          paymentProvider,
           frequency: 'Weekly',
           firstRun: addDaysToDateKey(session.requestedPickupDate, 7),
           chargeTime: '18:00',
@@ -12500,16 +12520,18 @@ const server = http.createServer(async (req, res) => {
         application.cardSetupRequestId = setup.request.id;
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return json(res, 201, { ok: true, redirectUrl: setup.request.url, message: 'Opening Clover secure card setup.' });
+        return json(res, 201, { ok: true, redirectUrl: setup.request.url, message: 'Opening ' + providerName + ' secure card setup.' });
       }
       if (action === 'payment') {
         const recurring = nativeOnboardingRecurring(data, session, application);
-        const cardReady = !!(recurring && (recurring.cloverPaymentSource || /linked|card saved|chargeable|active/i.test(String(recurring.paymentSetup || recurring.status || ''))));
-        if (!cardReady) return json(res, 409, { ok: false, error: 'Complete Clover card setup before making the required payments.' });
+        const paymentProvider = nativeOnboardingProvider(session, recurring);
+        const providerName = paymentProviderLabel(paymentProvider);
+        const cardReady = recurringCardReadyForProvider(recurring, paymentProvider);
+        if (!cardReady) return json(res, 409, { ok: false, error: 'Complete ' + providerName + ' card setup before making the required payments.' });
         const kind = payload.paymentType === 'deposit' ? 'deposit' : payload.paymentType === 'first_week' ? 'first_week' : '';
         if (!kind) return json(res, 400, { ok: false, error: 'Choose the deposit or first weekly payment.' });
         const pricing = application.pricingSnapshot || onboarding.pricingSnapshot(vehicle);
-        const requests = nativeOnboardingPaymentRequests(data, session, application);
+        const requests = nativeOnboardingPaymentRequests(data, session, application, paymentProvider);
         const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
         if (kind === 'first_week' && Number(pricing.downPayment || 0) > 0 && !nativePaymentPaid(deposit)) return json(res, 409, { ok: false, error: 'The nonrefundable down payment must complete before the first weekly payment.' });
         const label = kind === 'deposit' ? 'Nonrefundable down payment' : 'First weekly payment';
@@ -12546,6 +12568,7 @@ const server = http.createServer(async (req, res) => {
           vin: vehicle.vin || linkedVehicle.vin || '',
           licensePlate: vehicle.plate || linkedVehicle.plate || linkedVehicle.stock || '',
           amount,
+          paymentProvider,
           frequency: kind === 'deposit' ? 'One time' : 'First week',
           paymentType: label,
           reason: label,
@@ -14463,17 +14486,19 @@ const server = http.createServer(async (req, res) => {
       if (!vehicle) return json(res, 409, { ok: false, error: 'The application is not connected to a native online vehicle.' });
       const competingSession = data.onboardingSessions.find(row => row.onlineVehicleId === vehicle.id && row.applicationId !== application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
       if (competingSession || vehicle.heldApplicationId && vehicle.heldApplicationId !== application.id) return json(res, 409, { ok: false, error: 'This vehicle is already held in another active onboarding file. Resolve that file before approving a second customer.' });
-      const session = onboarding.createSession(data, application, user, requestBaseUrl(req));
+      const onboardingProvider = normalizedPaymentProvider(payload.paymentProvider || WOA_ONBOARDING_PAYMENT_PROVIDER);
+      if (!['clover', 'stripe'].includes(onboardingProvider)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe for this onboarding payment path.' });
+      const session = onboarding.createSession(data, application, user, requestBaseUrl(req), { paymentProvider: onboardingProvider });
       const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
       Object.assign(application, { stage: 'Approved', status: 'Approved - onboarding sent', approvedAt: new Date().toISOString(), approvedBy: user.name || user.username || user.role, pricingSnapshot: application.pricingSnapshot || onboarding.pricingSnapshot(vehicle) });
       Object.assign(vehicle, { holdPreviousPublished: vehicle.holdPreviousPublished === undefined ? !!vehicle.published : vehicle.holdPreviousPublished, holdPreviousAvailability: vehicle.holdPreviousAvailability || vehicle.availability || 'Available', published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
       if (linkedVehicle) Object.assign(linkedVehicle, { holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready', status: 'Pending application', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({ id: 'msg-onboarding-' + crypto.randomBytes(7).toString('hex'), applicationId: application.id, customer: application.name || '', phone: application.phone || '', email: application.email || '', direction: 'Draft', channel: 'SMS', template: 'Application approved', subject: 'Application approved', status: 'Ready to send', tone: 'blue', body: 'Hi ' + (application.firstName || application.name || 'there') + ', your WheelsonAuto application for the ' + nativeSite.vehicleTitle(vehicle) + ' was approved. Complete your secure onboarding within seven days: ' + session.publicUrl, createdAt: new Date().toISOString(), source: 'Native onboarding' });
-      appendAuditLog(data, user, 'Application approved and onboarding created', [application.name || 'Applicant', nativeSite.vehicleTitle(vehicle), session.id]);
+      appendAuditLog(data, user, 'Application approved and onboarding created', [application.name || 'Applicant', nativeSite.vehicleTitle(vehicle), paymentProviderLabel(onboardingProvider), session.id]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, onboarding: { id: session.id, url: session.publicUrl, expiresAt: session.expiresAt, status: session.status } });
+      return json(res, 201, { ok: true, onboarding: { id: session.id, url: session.publicUrl, expiresAt: session.expiresAt, status: session.status, paymentProvider: onboardingProvider } });
     }
     if (url.pathname === '/api/onboarding/review' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can review customer onboarding.' });
@@ -14490,8 +14515,8 @@ const server = http.createServer(async (req, res) => {
       if (payload.stage === 'documents') {
         const documents = (data.documents || []).filter(row => row.onboardingSessionId === session.id);
         const kinds = new Set(documents.map(row => row.documentKind));
-        if (!['driver_license_front', 'driver_license_back', 'insurance'].every(kind => kinds.has(kind))) return json(res, 409, { ok: false, error: 'License front, license back, and insurance proof must all be uploaded.' });
-        if (decision === 'approve' && payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm identity, license validity, and full-coverage insurance before approval.' });
+        if (!['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'].every(kind => kinds.has(kind))) return json(res, 409, { ok: false, error: 'License front, license back, identity selfie, and insurance proof must all be uploaded.' });
+        if (decision === 'approve' && payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the selfie matches the license photo, the license is valid, and full-coverage insurance is active before approval.' });
         session.documentReviewStatus = decision === 'approve' ? 'Approved' : 'Correction requested';
         session.documentsReviewedAt = reviewedAt;
         session.documentsReviewedBy = reviewer;

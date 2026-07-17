@@ -157,7 +157,7 @@
       var token = onboardingToken(), kind = form.getAttribute('data-onboarding-form'), payload = values(form), url = '/api/public/onboarding/' + encodeURIComponent(token) + '/' + kind;
       try{
         if(kind === 'documents'){
-          payload.documents = await Promise.all(['driver_license_front','driver_license_back','insurance'].map(async function(name){
+          payload.documents = await Promise.all(['driver_license_front','driver_license_back','identity_selfie','insurance'].map(async function(name){
             var input = form.elements[name], document = await filePayload(input && input.files && input.files[0]); document.kind = name; return document;
           }));
         }

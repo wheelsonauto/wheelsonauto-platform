@@ -140,6 +140,21 @@ async function main() {
   process.env.WOA_MESSAGING_ENABLED = '0';
   process.env.PUBLIC_BASE_URL = 'http://127.0.0.1:4181';
   assert(nativeSite.localDateKey(new Date('2026-07-15T23:30:00-04:00')) === '2026-07-15', 'Pickup date bounds must use New Jersey local calendar dates instead of shifting through UTC after evening hours.');
+  const stripeStatusFixture = {
+    documents: [
+      { applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', documentKind: 'driver_license_front' },
+      { applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', documentKind: 'driver_license_back' },
+      { applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', documentKind: 'identity_selfie' },
+      { applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', documentKind: 'insurance' }
+    ],
+    recurringPayments: [{ applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', paymentProvider: 'stripe', cloverPaymentSource: 'clv_should_not_unlock_stripe', status: 'Active' }],
+    paymentRequests: []
+  };
+  const stripeStateWithoutStripeCard = nativeSite.onboardingStatus(stripeStatusFixture, { id: 'session-stripe-state', paymentProvider: 'stripe', documentReviewStatus: 'Waiting on staff' }, { id: 'app-stripe-state', pricingSnapshot: {} });
+  assert(stripeStateWithoutStripeCard.documents && !stripeStateWithoutStripeCard.card && stripeStateWithoutStripeCard.paymentProvider === 'stripe', 'Stripe onboarding must require the selfie and must not accept a Clover card source as Stripe-ready.');
+  stripeStatusFixture.recurringPayments[0].stripeCustomerId = 'cus_stripe_state';
+  stripeStatusFixture.recurringPayments[0].stripePaymentMethodId = 'pm_stripe_state';
+  assert(nativeSite.onboardingStatus(stripeStatusFixture, { id: 'session-stripe-state', paymentProvider: 'stripe' }, { id: 'app-stripe-state', pricingSnapshot: {} }).card, 'Stripe onboarding should unlock only after both Stripe customer and payment-method references are saved.');
 
   const initial = {
     business: { name: 'WheelsonAuto' },
@@ -190,6 +205,7 @@ async function main() {
     const ownerCookie = String(login.cookie).split(';')[0];
     const linkResponse = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId } });
     assert(linkResponse.status === 201 && linkResponse.json.onboarding.url, 'Owner should be able to approve the application and create one secure onboarding link.');
+    assert(linkResponse.json.onboarding.paymentProvider === 'clover', 'The onboarding session should lock its configured payment provider instead of changing mid-flow.');
     const onboardingId = linkResponse.json.onboarding.id;
     const token = linkResponse.json.onboarding.url.split('/onboard/')[1];
     const onboardingPage = await request(server, 'GET', '/onboard/' + token);
@@ -236,9 +252,10 @@ async function main() {
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
       { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
       { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
+      { kind: 'identity_selfie', name: 'identity-selfie.png', type: 'image/png', dataUrl: image },
       { kind: 'insurance', name: 'insurance.png', type: 'image/png', dataUrl: image }
     ] } });
-    assert(documents.status === 201 && documents.json.documents.length === 3, 'All three private identity/insurance documents should save.');
+    assert(documents.status === 201 && documents.json.documents.length === 4, 'License front/back, identity selfie, and insurance should all save as private documents.');
     const earlySignature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Native Applicant', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
     assert(earlySignature.status === 409, 'Contract signing must remain locked until staff approves documents.');
 
@@ -325,7 +342,7 @@ async function main() {
     assert(idempotent.documents.filter(row => row.paymentRequestId === 'plink-native-first' && row.kind === 'Receipt').length === 1, 'Repeated Clover webhook must not duplicate receipts.');
     assert(/paid/i.test(idempotent.paymentRequests.find(row => row.id === 'plink-native-first').status), 'A late duplicate decline must never downgrade an already-verified paid request.');
 
-    console.log('Native onboarding check passed: published inventory, application security, document/signature gates, card consent, signed Clover reconciliation, separate receipts, pickup, and pickup-anchored weekly autopay are connected.');
+    console.log('Native onboarding check passed: published inventory, application security, selfie/document/signature gates, provider-locked card consent, signed Clover reconciliation, separate receipts, pickup, and pickup-anchored weekly autopay are connected.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
