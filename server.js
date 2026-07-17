@@ -8740,6 +8740,7 @@ async function productionInfrastructurePreflight(data = null) {
   const resendEmail = resendLiveLaunchEvidence(state);
   const starAi = starAiLiveLaunchEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
+  const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
   if (!database.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
@@ -8764,6 +8765,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
+  if (identityWarnings.length) missing.push('complete vehicle VIN identity review');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   return {
     database,
@@ -8776,6 +8778,7 @@ async function productionInfrastructurePreflight(data = null) {
     resendEmail,
     starAi,
     ownerAuthentication,
+    identityWarnings,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
@@ -18273,6 +18276,7 @@ const server = http.createServer(async (req, res) => {
         health.infrastructure = {
           ...infrastructure,
           identityConflicts: identityConflicts.slice(0, 20),
+          identityWarnings: stateRepository.identityWarnings(data).slice(0, 20),
           openJobErrors: await STATE_REPOSITORY.recentJobErrors(12)
         };
       }
@@ -18283,10 +18287,12 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const infrastructure = await productionInfrastructurePreflight(data);
       const conflicts = stateRepository.identityConflicts(data);
+      const warnings = stateRepository.identityWarnings(data);
       return json(res, 200, {
-        ok: infrastructure.readyForLiveStripe && conflicts.length === 0,
+        ok: infrastructure.readyForLiveStripe && conflicts.length === 0 && warnings.length === 0,
         ...infrastructure,
         identityConflicts: conflicts.slice(0, 50),
+        identityWarnings: warnings.slice(0, 50),
         openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
         requiredBeforeLiveStripe: [
           'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL and verified JSON-to-PostgreSQL import proof',

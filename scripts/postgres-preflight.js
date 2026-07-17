@@ -12,6 +12,7 @@ async function main() {
   const source = await migrationSource.readSource(dataFile);
   const state = source.state;
   const conflicts = stateRepository.identityConflicts(state);
+  const warnings = stateRepository.identityWarnings(state);
   const privateDocuments = stateRepository.privateDocumentRows(state);
   const encryptedDocuments = privateDocuments.filter(row => row.storageKey && row.encryption && row.encryption.algorithm === 'AES-256-GCM');
   const legacyDocuments = privateDocuments.filter(row => !encryptedDocuments.includes(row));
@@ -22,6 +23,7 @@ async function main() {
     canonicalStateChecksum: stateRepository.checksum(state),
     postgresqlImportAllowed: conflicts.length === 0,
     conflicts,
+    warnings,
     counts: {
       vehicles: Array.isArray(state.vehicles) ? state.vehicles.length : 0,
       customers: Array.isArray(state.customers) ? state.customers.length : 0,
@@ -33,7 +35,9 @@ async function main() {
     },
     nextSteps: conflicts.length
       ? ['Resolve each listed immutable VIN, plate, email, or payment-id conflict without deleting business history.', 'Run this preflight again until postgresqlImportAllowed is true.']
-      : ['Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test passes.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
+      : (warnings.length
+        ? ['Review and complete each missing vehicle VIN before enabling a controlled Stripe launch. PostgreSQL import remains available, but launch readiness stays blocked until these identity warnings are cleared.', 'Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test passes.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
+        : ['Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test passes.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'])
   };
   console.log(JSON.stringify(report, null, 2));
   process.exitCode = conflicts.length ? 2 : 0;

@@ -197,6 +197,24 @@ function identityConflicts(state = {}) {
   return conflicts;
 }
 
+function identityWarnings(state = {}) {
+  const warnings = [];
+  (state.vehicles || []).forEach((vehicle, index) => {
+    if (normalizedIdentity(vehicle && vehicle.vin)) return;
+    const id = rowId(vehicle, 'vehicle-' + index);
+    const label = [vehicle && vehicle.year, vehicle && vehicle.make, vehicle && vehicle.model].filter(Boolean).join(' ').trim()
+      || String(vehicle && (vehicle.name || vehicle.vehicle) || id).trim();
+    warnings.push({
+      kind: 'vehicle_missing_vin',
+      resourceType: 'vehicle',
+      resourceId: id,
+      label: label || id,
+      message: 'Vehicle is missing VIN: ' + (label || id)
+    });
+  });
+  return warnings;
+}
+
 function privateDocumentRows(state = {}) {
   const documents = Array.isArray(state.documents) ? state.documents : [];
   const signatures = Array.isArray(state.eSignatures) ? state.eSignatures : [];
@@ -1302,6 +1320,7 @@ module.exports = {
   advisoryLockKeys,
   identityEntries,
   identityConflicts,
+  identityWarnings,
   privateDocumentRows,
   JsonStateRepository,
   PostgresStateRepository,

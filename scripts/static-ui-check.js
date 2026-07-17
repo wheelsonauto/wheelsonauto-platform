@@ -221,7 +221,9 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Telnyx SMS',
   'Resend email',
   'Star AI',
-  'Open job errors'
+  'Open job errors',
+  'Vehicle identity review',
+  'VIN review'
 ]);
 
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
