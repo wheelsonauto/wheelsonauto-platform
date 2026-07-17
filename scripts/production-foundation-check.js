@@ -7,8 +7,10 @@ const path = require('node:path');
 const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
 const stripeMigration = require('../stripe-migration');
+const { runCliArgumentChecks } = require('./cli-argument-check');
 
 async function main() {
+  runCliArgumentChecks();
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-production-foundation-'));
   try {
     const seedFile = path.join(temp, 'seed.json');

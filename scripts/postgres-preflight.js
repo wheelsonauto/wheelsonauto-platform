@@ -3,9 +3,10 @@
 const path = require('node:path');
 const stateRepository = require('../state-repository');
 const migrationSource = require('../postgres-migration-source');
+const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
-const dataFile = path.resolve(process.argv[2] || path.join(root, 'data.json'));
+const dataFile = path.resolve(firstUserArgument() || path.join(root, 'data.json'));
 
 async function main() {
   const source = await migrationSource.readSource(dataFile);

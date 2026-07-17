@@ -5,10 +5,11 @@ const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const secureDocumentStore = require('../secure-document-store');
+const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
 const dataDir = path.resolve(process.env.DATA_DIR || root);
-const dataFile = path.resolve(process.argv[2] || path.join(dataDir, 'data.json'));
+const dataFile = path.resolve(firstUserArgument() || path.join(dataDir, 'data.json'));
 const localRoot = path.join(dataDir, 'private-documents');
 
 function inside(parent, target) {

@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { stateForUserRead } = require('../server');
+const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
 const noteCollections = ['customers', 'contracts', 'vehicles'];
@@ -58,7 +59,8 @@ function loadJson(file) {
 }
 
 function main() {
-  const requested = process.argv[2] ? path.resolve(root, process.argv[2]) : path.join(root, 'seed.json');
+  const targetArgument = firstUserArgument();
+  const requested = targetArgument ? path.resolve(root, targetArgument) : path.join(root, 'seed.json');
   const source = loadJson(requested);
   const sourceResult = checkClientStateBudget(path.basename(requested), source);
   const syntheticResult = checkClientStateBudget('Synthetic oversized-note fixture', syntheticOversizedFixture(source));

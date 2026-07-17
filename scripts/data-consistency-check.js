@@ -1,8 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
-const target = process.argv[2] ? path.resolve(process.cwd(), process.argv[2]) : path.join(root, 'seed.json');
+const targetArgument = firstUserArgument();
+const target = targetArgument ? path.resolve(process.cwd(), targetArgument) : path.join(root, 'seed.json');
 const data = JSON.parse(fs.readFileSync(target, 'utf8'));
 
 const errors = [];
