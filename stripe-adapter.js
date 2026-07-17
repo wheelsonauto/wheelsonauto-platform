@@ -19,7 +19,7 @@ function formBody(payload = {}) {
   return form;
 }
 
-function stripeError(body, status) {
+function stripeError(body, status, requestOptions = {}) {
   const details = body && body.error || body || {};
   const error = new Error(String(details.message || 'Stripe request failed.') + (details.decline_code ? ' (' + details.decline_code + ')' : ''));
   error.statusCode = Number(status || 502);
@@ -27,12 +27,33 @@ function stripeError(body, status) {
   error.declineCode = String(details.decline_code || '');
   error.type = String(details.type || '');
   error.paymentIntent = details.payment_intent || null;
+  error.idempotencyKey = String(requestOptions.idempotencyKey || '');
+  // A provider 5xx can arrive after Stripe accepted the idempotent request.
+  // Treat it as unconfirmed so callers reuse the same key instead of charging again.
+  error.ambiguous = error.statusCode >= 500;
+  error.retryable = error.ambiguous || error.statusCode === 429;
+  return error;
+}
+
+function stripeTransportError(cause, requestOptions = {}) {
+  const timedOut = cause && cause.name === 'AbortError';
+  const error = new Error(timedOut
+    ? 'Stripe did not confirm this request before WheelsonAuto timed out. It may still be processing, so the same protected attempt must be reconciled before another charge.'
+    : 'WheelsonAuto could not confirm whether Stripe received this request. It may still be processing, so the same protected attempt must be reconciled before another charge.');
+  error.statusCode = 503;
+  error.code = 'stripe_confirmation_pending';
+  error.ambiguous = true;
+  error.retryable = true;
+  error.timedOut = !!timedOut;
+  error.idempotencyKey = String(requestOptions.idempotencyKey || '');
+  error.providerError = String(cause && cause.message || cause || '').slice(0, 500);
   return error;
 }
 
 function stripeClient(options = {}) {
   const secretKey = String(options.secretKey || '').trim();
   const apiBase = String(options.apiBase || 'https://api.stripe.com/v1').replace(/\/+$/, '');
+  const defaultTimeoutMs = Math.max(1000, Math.min(120000, Number(options.timeoutMs || process.env.WOA_STRIPE_REQUEST_TIMEOUT_MS || 30000)));
   // Resolve the default at request time so tests and operational failover
   // wrappers can replace the platform fetch implementation safely.
   const requestFetch = options.fetch || ((...args) => global.fetch(...args));
@@ -50,19 +71,30 @@ function stripeClient(options = {}) {
     const verb = String(method || 'GET').toUpperCase();
     const form = formBody(payload);
     const url = apiBase + pathname + (verb === 'GET' && form.toString() ? '?' + form.toString() : '');
-    const response = await requestFetch(url, {
-      method: verb,
-      headers: {
-        Authorization: 'Bearer ' + secretKey,
-        ...(verb === 'GET' ? {} : { 'Content-Type': 'application/x-www-form-urlencoded' }),
-        ...(requestOptions.idempotencyKey ? { 'Idempotency-Key': String(requestOptions.idempotencyKey).slice(0, 255) } : {})
-      },
-      body: verb === 'GET' ? undefined : form.toString()
-    });
+    const timeoutMs = Math.max(1000, Math.min(120000, Number(requestOptions.timeoutMs || defaultTimeoutMs)));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await requestFetch(url, {
+        method: verb,
+        headers: {
+          Authorization: 'Bearer ' + secretKey,
+          ...(verb === 'GET' ? {} : { 'Content-Type': 'application/x-www-form-urlencoded' }),
+          ...(requestOptions.idempotencyKey ? { 'Idempotency-Key': String(requestOptions.idempotencyKey).slice(0, 255) } : {})
+        },
+        body: verb === 'GET' ? undefined : form.toString(),
+        signal: controller.signal
+      });
+    } catch (error) {
+      throw stripeTransportError(error, requestOptions);
+    } finally {
+      clearTimeout(timeout);
+    }
     const raw = await response.text();
     let body = {};
     try { body = raw ? JSON.parse(raw) : {}; } catch { body = { message: raw || 'Stripe returned an unreadable response.' }; }
-    if (!response.ok) throw stripeError(body, response.status);
+    if (!response.ok) throw stripeError(body, response.status, requestOptions);
     return body;
   }
 
@@ -102,4 +134,4 @@ function verifyWebhook(rawBody, signatureHeader, secret, toleranceSeconds = 300,
   return { ok, reason: ok ? '' : 'Stripe webhook signature did not match.', timestamp };
 }
 
-module.exports = { formBody, stripeClient, verifyWebhook };
+module.exports = { formBody, stripeClient, stripeTransportError, verifyWebhook };

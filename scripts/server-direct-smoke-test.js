@@ -2844,6 +2844,103 @@ async function main() {
     });
     assert(fallbackDuplicateBlock.status === 409 && fallbackDuplicateBlock.json.duplicateBlocked, 'A synced paid provider transaction without a billing marker must still block a duplicate Stripe charge: ' + JSON.stringify(fallbackDuplicateBlock.json || fallbackDuplicateBlock.text));
 
+    const stripeTimeoutRecurringId = 'direct-stripe-timeout-reconcile';
+    const stripeTimeoutState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    stripeTimeoutState.json.recurringPayments.unshift({
+      id: stripeTimeoutRecurringId,
+      customer: 'Direct Stripe Timeout Customer',
+      phone: '3135550777',
+      email: 'stripe-timeout@example.com',
+      vehicle: '2024 Stripe Timeout Car',
+      vehicleId: 'veh-direct-stripe-timeout',
+      vin: 'DIRECTSTRIPETIMEOUTVIN',
+      plate: 'DIR-STRIPE-TIMEOUT',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_direct_timeout',
+      stripePaymentMethodId: 'pm_direct_timeout',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Stripe card saved and chargeable',
+      autopayManagedBy: 'WheelsonAuto / Stripe'
+    });
+    const stripeTimeoutSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeTimeoutState.json });
+    assert(stripeTimeoutSeed.status === 200 && stripeTimeoutSeed.json.ok, 'Stripe timeout reconciliation smoke setup failed.');
+    const stripeTimeoutFetch = global.fetch;
+    let stripeTimeoutProviderCalls = 0;
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('api.stripe.com/v1/payment_intents')) {
+        stripeTimeoutProviderCalls += 1;
+        const error = new Error('Direct Stripe timeout after provider acceptance.');
+        error.name = 'AbortError';
+        throw error;
+      }
+      return stripeTimeoutFetch(url, options);
+    };
+    let stripeTimeoutCharge;
+    try {
+      stripeTimeoutCharge = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+        cookie: ownerCookie,
+        json: { recurringPaymentId: stripeTimeoutRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+      });
+    } finally {
+      global.fetch = stripeTimeoutFetch;
+    }
+    assert(stripeTimeoutCharge.status === 202 && stripeTimeoutCharge.json.confirmationPending === true, 'A timed-out Stripe saved-card request must remain confirmation pending instead of being marked failed.');
+    assert(stripeTimeoutProviderCalls === 1, 'The timeout scenario should send exactly one provider payment request.');
+    const stripeTimeoutPendingState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeTimeoutPendingRow = stripeTimeoutPendingState.json.recurringPayments.find(row => row.id === stripeTimeoutRecurringId);
+    assert(stripeTimeoutPendingRow && stripeTimeoutPendingRow.status === 'Stripe confirmation pending' && stripeTimeoutPendingRow.retryCount === 0 && stripeTimeoutPendingRow.stripeChargeAttempt && stripeTimeoutPendingRow.stripeChargeAttempt.idempotencyKey, 'A timed-out Stripe charge must persist one protected idempotency attempt without consuming a failed-payment retry.');
+    assert(!(stripeTimeoutPendingState.json.payments || []).some(payment => payment.recurringPaymentId === stripeTimeoutRecurringId && /failed/i.test(String(payment.status || ''))), 'A Stripe confirmation timeout must not create a false failed-payment transaction.');
+    const stripeTimeoutWebhookObject = {
+      object: 'payment_intent',
+      id: 'pi_direct_timeout_001',
+      status: 'succeeded',
+      amount: 22900,
+      amount_received: 22900,
+      currency: 'usd',
+      customer: 'cus_direct_timeout',
+      payment_method: 'pm_direct_timeout',
+      latest_charge: 'ch_direct_timeout_001',
+      created: Math.floor(Date.now() / 1000),
+      metadata: {
+        recurringPaymentId: stripeTimeoutRecurringId,
+        flow: 'autopay',
+        scheduledDueDate: autopayTodayKey,
+        billingPeriodKey: 'due:' + autopayTodayKey,
+        amount: '22900'
+      }
+    };
+    const stripeTimeoutWebhookBody = JSON.stringify({ id: 'evt_direct_stripe_timeout_succeeded', type: 'payment_intent.succeeded', livemode: true, created: Math.floor(Date.now() / 1000), data: { object: stripeTimeoutWebhookObject } });
+    const stripeTimeoutWebhookTimestamp = String(Math.floor(Date.now() / 1000));
+    const stripeTimeoutWebhookSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeTimeoutWebhookTimestamp + '.' + stripeTimeoutWebhookBody).digest('hex');
+    const stripeTimeoutWebhook = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeTimeoutWebhookTimestamp + ',v1=' + stripeTimeoutWebhookSignature }, raw: stripeTimeoutWebhookBody });
+    assert(stripeTimeoutWebhook.status === 200 && stripeTimeoutWebhook.json.stripePaymentIntentResult && stripeTimeoutWebhook.json.stripePaymentIntentResult.matched, 'A signed Stripe success webhook must reconcile a timed-out saved-card attempt to the exact customer.');
+    const stripeTimeoutResolvedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeTimeoutResolvedRow = stripeTimeoutResolvedState.json.recurringPayments.find(row => row.id === stripeTimeoutRecurringId);
+    const stripeTimeoutPayment = (stripeTimeoutResolvedState.json.payments || []).find(payment => payment.stripePaymentIntentId === 'pi_direct_timeout_001');
+    assert(stripeTimeoutResolvedRow && stripeTimeoutResolvedRow.status === 'Active' && stripeTimeoutResolvedRow.nextRun > autopayTodayKey && stripeTimeoutResolvedRow.stripeChargeAttempt.status === 'succeeded', 'Stripe webhook reconciliation must clear the pending state and advance the original weekly schedule exactly once.');
+    assert(stripeTimeoutPayment && stripeTimeoutPayment.customer === 'Direct Stripe Timeout Customer' && stripeTimeoutPayment.vin === 'DIRECTSTRIPETIMEOUTVIN' && stripeTimeoutPayment.amount === 229 && stripeTimeoutPayment.status === 'Paid', 'Stripe webhook reconciliation must save the paid transaction with customer and vehicle evidence.');
+    assert((stripeTimeoutResolvedState.json.documents || []).some(document => document.stripePaymentIntentId === 'pi_direct_timeout_001' && document.kind === 'Receipt'), 'A reconciled Stripe payment must create one customer-visible receipt evidence record.');
+    const stripeFailureAfterSuccessObject = { ...stripeTimeoutWebhookObject, status: 'requires_payment_method', last_payment_error: { message: 'Out-of-order failure event' } };
+    const stripeFailureAfterSuccessBody = JSON.stringify({ id: 'evt_direct_stripe_timeout_failed_late', type: 'payment_intent.payment_failed', livemode: true, created: Math.floor(Date.now() / 1000), data: { object: stripeFailureAfterSuccessObject } });
+    const stripeFailureAfterSuccessSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeTimeoutWebhookTimestamp + '.' + stripeFailureAfterSuccessBody).digest('hex');
+    const stripeFailureAfterSuccess = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeTimeoutWebhookTimestamp + ',v1=' + stripeFailureAfterSuccessSignature }, raw: stripeFailureAfterSuccessBody });
+    assert(stripeFailureAfterSuccess.status === 200 && stripeFailureAfterSuccess.json.stripePaymentIntentResult && stripeFailureAfterSuccess.json.stripePaymentIntentResult.ignored, 'An out-of-order Stripe failure webhook must never downgrade an already-reconciled payment.');
+    const stripeDuplicateAfterWebhook = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeTimeoutRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+    });
+    assert(stripeDuplicateAfterWebhook.status === 409 && stripeDuplicateAfterWebhook.json.duplicateBlocked, 'A reconciled timed-out Stripe payment must block a second charge for the same billing period.');
+
     const jsonRecoverySnapshots = await request(server, 'GET', '/api/system/recovery/snapshots', { cookie: ownerCookie });
     assert(jsonRecoverySnapshots.status === 409 && /PostgreSQL/i.test(jsonRecoverySnapshots.json.error || ''), 'JSON development storage must not pretend it can perform transactional snapshot recovery.');
     const jsonRecoveryRestore = await request(server, 'POST', '/api/system/recovery/restore', {

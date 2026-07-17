@@ -9259,6 +9259,9 @@ function normalizedPaymentRecordId(value) {
 function paymentRecordIds(item) {
   item = item || {};
   return [
+    item.stripePaymentIntentId,
+    item.stripeChargeId,
+    item.providerPaymentId,
     item.cloverPaymentId,
     item.cloverChargeId,
     item.paymentId,
@@ -12333,7 +12336,8 @@ function businessMinutesNow(date = new Date()) {
 }
 function retryDelayPassed(row, date = new Date()) {
   const attempts = Number(row && (row.retryCount || row.failedAttempts) || 0);
-  if (attempts < 1) return true;
+  const confirmationPending = stripeChargeAttemptIsPending(row && row.stripeChargeAttempt) || /confirmation pending/.test(String(row && row.status || ''));
+  if (attempts < 1 && !confirmationPending) return true;
   const last = new Date(String(row.lastAutoChargeAttemptAt || row.lastFailedAt || ''));
   if (Number.isNaN(last.getTime())) return true;
   return date.getTime() - last.getTime() >= 60 * 60 * 1000;
@@ -12446,7 +12450,7 @@ function finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso) {
 function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
   const status = String(row && row.status || '').toLowerCase();
   if (Number(row && (row.retryCount || row.failedAttempts) || 0) >= 2) return false;
-  if (status !== 'active' && !status.includes('1x failed')) return false;
+  if (status !== 'active' && !status.includes('1x failed') && !status.includes('confirmation pending')) return false;
   if (!isWheelsonAutoManagedAutopay(row)) return false;
   if (!stripeMigration.automaticChargeAllowed(row, normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover'), dateKey)) return false;
   const dueKey = recurringDateKey(row);
@@ -12479,6 +12483,84 @@ function patchRecurringAdminState(data, id, patch) {
 }
 function chargeReference() {
   return ('WOA' + Date.now().toString(36)).slice(-12).toUpperCase();
+}
+function stripeChargeAttemptIsPending(attempt) {
+  return !!(attempt && ['requesting', 'confirmation_pending', 'processing'].includes(String(attempt.status || '').toLowerCase()));
+}
+function pendingStripeChargeAttempt(row, scheduledDueKey = '') {
+  const attempt = row && row.stripeChargeAttempt;
+  if (!stripeChargeAttemptIsPending(attempt)) return null;
+  const due = validCalendarDateKey(scheduledDueKey);
+  const attemptDue = validCalendarDateKey(attempt.scheduledDueDate || '');
+  if (due || attemptDue) return due && due === attemptDue ? attempt : null;
+  return attempt;
+}
+function stripeChargeAttemptFor(row, payload = {}, scheduledDueKey = '', amount = 0) {
+  const amountCents = cents(amount);
+  const pending = pendingStripeChargeAttempt(row, scheduledDueKey);
+  if (pending) {
+    if (Number(pending.amountCents || 0) !== amountCents) {
+      const error = new Error('Stripe is still confirming the earlier $' + Number(pending.amountCents || 0) / 100 + ' charge attempt for this billing date. Do not change the amount or start another charge until it is reconciled.');
+      error.code = 'stripe_confirmation_pending';
+      error.statusCode = 409;
+      error.confirmationPending = true;
+      error.stripeAttempt = pending;
+      throw error;
+    }
+    return { ...pending, resumed: true };
+  }
+  const automatic = payload.automatic === true;
+  const sequence = automatic
+    ? Math.max(1, Number(row && (row.retryCount || row.failedAttempts) || 0) + 1)
+    : Math.max(1, Number(row && row.stripeManualChargeSequence || 0) + 1);
+  const idempotencyKey = String(payload.idempotencyKey || [
+    'woa-stripe',
+    automatic ? 'auto' : 'manual',
+    row && (row.id || payload.recurringPaymentId) || 'recurring',
+    scheduledDueKey || 'unscheduled',
+    amountCents,
+    'attempt',
+    sequence
+  ].join('-')).slice(0, 255);
+  return {
+    idempotencyKey,
+    automatic,
+    sequence,
+    amountCents,
+    scheduledDueDate: scheduledDueKey || '',
+    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueKey),
+    status: 'requesting',
+    startedAt: new Date().toISOString(),
+    source: automatic ? 'WheelsonAuto Stripe autopay' : 'WheelsonAuto Stripe manual charge'
+  };
+}
+function updateStripeChargeAttempt(data, recurring, attempt, patch = {}) {
+  const updatedAt = new Date().toISOString();
+  const next = { ...attempt, ...patch, updatedAt };
+  const recurringPatch = {
+    stripeChargeAttempt: next,
+    lastStripeChargeAttemptAt: updatedAt,
+    lastStripeChargeAttemptStatus: next.status || '',
+    lastStripeChargeIdempotencyKey: next.idempotencyKey || ''
+  };
+  if (next.paymentIntentId) recurringPatch.lastStripePaymentIntentId = next.paymentIntentId;
+  if (!next.automatic && ['succeeded', 'failed'].includes(String(next.status || '').toLowerCase())) {
+    recurringPatch.stripeManualChargeSequence = Math.max(Number(recurring && recurring.stripeManualChargeSequence || 0), Number(next.sequence || 0));
+  }
+  updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, recurringPatch);
+  return next;
+}
+function stripeConfirmationPendingError(cause, attempt) {
+  const error = new Error('Stripe has not confirmed this charge yet. WheelsonAuto saved the protected attempt and will reconcile the same attempt before any retry.');
+  error.code = 'stripe_confirmation_pending';
+  error.statusCode = 202;
+  error.confirmationPending = true;
+  error.stripeAttempt = attempt || null;
+  error.providerError = String(cause && (cause.providerError || cause.message) || '').slice(0, 500);
+  return error;
+}
+function isStripeConfirmationPendingError(err) {
+  return !!(err && (err.confirmationPending || err.ambiguous || String(err.code || '') === 'stripe_confirmation_pending'));
 }
 function isPaymentNotFoundError(err) {
   const message = String(err && err.message || err || '').toLowerCase();
@@ -12558,6 +12640,11 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
   const attempts = Math.min(2, Number(options.attempts || row.retryCount || row.failedAttempts || 0));
   const status = attempts >= 2 ? '2x failed - contact customer' : '1x failed - retrying';
   const identity = recurringPaymentIdentity(data, row, payload);
+  const paymentProvider = normalizedPaymentProvider(options.paymentProvider || row.paymentProvider || row.provider || 'clover');
+  const stripeAttempt = row && row.stripeChargeAttempt || {};
+  const stripePaymentIntentId = paymentProvider === 'stripe'
+    ? stripeObjectId(options.stripePaymentIntentId || err && err.paymentIntent || stripeAttempt.paymentIntentId)
+    : '';
   const payment = {
     id: 'payment-failed-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
     date: businessLocaleString(),
@@ -12569,11 +12656,17 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     source: options.source || 'WheelsonAuto failed charge',
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     recurringPaymentId: row.id || '',
+    paymentProvider,
+    providerPaymentId: stripePaymentIntentId || '',
+    stripePaymentIntentId,
+    stripeIdempotencyKey: paymentProvider === 'stripe' ? String(stripeAttempt.idempotencyKey || options.stripeIdempotencyKey || '') : '',
     cloverCustomerId: row.cloverCustomerId || '',
     cloverSubscriptionId: row.cloverSubscriptionId || '',
     ...identity
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
+  const existingProviderFailure = stripePaymentIntentId && data.payments.find(existing => String(existing && existing.stripePaymentIntentId || '') === stripePaymentIntentId && !/^paid\b/i.test(String(existing && existing.status || '')));
+  if (existingProviderFailure) return existingProviderFailure;
   data.payments.unshift(payment);
   const paymentAttempts = Array.isArray(row.paymentAttempts) ? row.paymentAttempts.slice() : [];
   paymentAttempts.unshift({
@@ -12589,6 +12682,9 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     vin: payment.vin,
     plate: payment.plate,
     tracker: payment.tracker,
+    paymentProvider,
+    stripePaymentIntentId,
+    stripeIdempotencyKey: payment.stripeIdempotencyKey || '',
     recurringPaymentId: payment.recurringPaymentId
   });
   updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
@@ -12602,6 +12698,7 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     lastAutoChargeAttemptAt: stamp,
     lastPaymentResult: status,
     lastPaymentNote: payment.notes,
+    ...(stripePaymentIntentId ? { lastStripePaymentIntentId: stripePaymentIntentId } : {}),
     paymentAttempts
   });
   return payment;
@@ -12616,30 +12713,92 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
   if (!customerId || !paymentMethodId) throw new Error('Stripe card not found. Ask the customer to save a Stripe card through the WheelsonAuto customer portal.');
   const scheduledDueKey = chargeGuard.scheduledDueKey;
   const billingPeriodKey = stripeMigration.billingPeriodKey(scheduledDueKey);
-  const idempotencyKey = String(payload.idempotencyKey || (payload.automatic && scheduledDueKey
-    ? ['woa-stripe-auto', recurring.id || payload.recurringPaymentId, scheduledDueKey, cents(amount)].join('-')
-    : ['woa-stripe-manual', recurring.id || payload.recurringPaymentId, cents(amount), Date.now()].join('-'))).slice(0, 255);
+  let attempt = stripeChargeAttemptFor(recurring, payload, scheduledDueKey, amount);
+  if (!attempt.resumed) {
+    attempt = updateStripeChargeAttempt(data, recurring, attempt, { status: 'requesting' });
+    await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'persist Stripe saved-card charge attempt' });
+    await writeData(data);
+  }
+  const idempotencyKey = attempt.idempotencyKey;
   const identity = recurringPaymentIdentity(data, recurring, payload);
-  const intent = await stripe.createPaymentIntent({
-    amount: cents(amount),
-    currency: 'usd',
-    customer: customerId,
-    payment_method: paymentMethodId,
-    payment_method_types: ['card'],
-    off_session: true,
-    confirm: true,
-    description: ('WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment - ' + (recurring.customer || 'Customer')).slice(0, 500),
-    receipt_email: recurring.email || undefined,
-    metadata: stripeMetadata({
-      recurringPaymentId: recurring.id || '',
-      customer: recurring.customer || '',
-      vehicleId: identity.vehicleId || recurring.vehicleId || '',
-      vin: identity.vin || recurring.vin || '',
-      licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || ''
-    }, { flow: payload.automatic ? 'autopay' : 'manual_charge', scheduledDueDate: scheduledDueKey || '', billingPeriodKey, amount: String(cents(amount)) })
-  }, idempotencyKey);
+  let intent;
+  try {
+    intent = await stripe.createPaymentIntent({
+      amount: cents(amount),
+      currency: 'usd',
+      customer: customerId,
+      payment_method: paymentMethodId,
+      payment_method_types: ['card'],
+      off_session: true,
+      confirm: true,
+      description: ('WheelsonAuto ' + (recurring.frequency || 'recurring') + ' payment - ' + (recurring.customer || 'Customer')).slice(0, 500),
+      receipt_email: recurring.email || undefined,
+      metadata: stripeMetadata({
+        recurringPaymentId: recurring.id || '',
+        customer: recurring.customer || '',
+        vehicleId: identity.vehicleId || recurring.vehicleId || '',
+        vin: identity.vin || recurring.vin || '',
+        licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || ''
+      }, { flow: payload.automatic ? 'autopay' : 'manual_charge', scheduledDueDate: scheduledDueKey || '', billingPeriodKey, amount: String(cents(amount)) })
+    }, idempotencyKey);
+  } catch (error) {
+    if (isStripeConfirmationPendingError(error)) {
+      const pendingAttempt = updateStripeChargeAttempt(data, recurring, attempt, {
+        status: 'confirmation_pending',
+        confirmationPendingAt: new Date().toISOString(),
+        providerError: String(error && (error.providerError || error.message) || '').slice(0, 500)
+      });
+      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, {
+        status: 'Stripe confirmation pending',
+        tone: 'warn',
+        retryCount: Number(recurring.retryCount || recurring.failedAttempts || 0),
+        failedAttempts: Number(recurring.failedAttempts || recurring.retryCount || 0),
+        lastAutoChargeResult: 'Stripe confirmation pending',
+        lastAutoChargeError: pendingAttempt.providerError || 'Stripe confirmation is pending.',
+        lastAutoChargeAttemptDate: localDateKey(),
+        lastAutoChargeAttemptAt: pendingAttempt.confirmationPendingAt
+      });
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'persist Stripe confirmation pending state' });
+      await writeData(data);
+      throw stripeConfirmationPendingError(error, pendingAttempt);
+    }
+    updateStripeChargeAttempt(data, recurring, attempt, {
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      paymentIntentId: stripeObjectId(error && error.paymentIntent),
+      providerError: String(error && error.message || error).slice(0, 500)
+    });
+    throw error;
+  }
   const paid = String(intent.status || '').toLowerCase() === 'succeeded';
   if (!paid) {
+    const intentStatus = String(intent.status || 'unconfirmed').toLowerCase();
+    if (intentStatus === 'processing') {
+      const pendingAttempt = updateStripeChargeAttempt(data, recurring, attempt, {
+        status: 'processing',
+        paymentIntentId: stripeObjectId(intent),
+        confirmationPendingAt: new Date().toISOString()
+      });
+      updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, {
+        status: 'Stripe confirmation pending',
+        tone: 'warn',
+        retryCount: Number(recurring.retryCount || recurring.failedAttempts || 0),
+        failedAttempts: Number(recurring.failedAttempts || recurring.retryCount || 0),
+        lastAutoChargeResult: 'Stripe confirmation pending',
+        lastAutoChargeError: 'Stripe is still processing the saved-card payment.',
+        lastAutoChargeAttemptDate: localDateKey(),
+        lastAutoChargeAttemptAt: pendingAttempt.confirmationPendingAt
+      });
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'persist Stripe processing payment state' });
+      await writeData(data);
+      throw stripeConfirmationPendingError(null, pendingAttempt);
+    }
+    updateStripeChargeAttempt(data, recurring, attempt, {
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      paymentIntentId: stripeObjectId(intent),
+      providerError: 'Stripe returned ' + intentStatus + '.'
+    });
     const error = new Error('Stripe returned ' + String(intent.status || 'an unconfirmed payment result') + '. The next charge date was not advanced.');
     error.code = 'stripe_' + String(intent.status || 'unconfirmed');
     error.paymentIntent = intent;
@@ -12681,12 +12840,19 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     billingPeriodKey,
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: customerId,
-    stripePaymentMethodId: paymentMethodId
+    stripePaymentMethodId: paymentMethodId,
+    stripeIdempotencyKey: idempotencyKey
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   if (!data.payments.some(row => row.stripePaymentIntentId === intent.id)) data.payments.unshift(payment);
   const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
-  attempts.unshift({ id: 'attempt-stripe-charge-' + (intent.id || Date.now()), date: payment.date, customer: payment.customer, amount, result: payment.status, method: payment.method, notes: payment.notes, vehicle: payment.vehicle, vehicleId: payment.vehicleId, vin: payment.vin, plate: payment.plate, tracker: payment.tracker, stripePaymentIntentId: intent.id || '', recurringPaymentId: payment.recurringPaymentId });
+  if (!attempts.some(row => String(row && row.stripePaymentIntentId || '') === String(intent.id || ''))) attempts.unshift({ id: 'attempt-stripe-charge-' + (intent.id || Date.now()), date: payment.date, customer: payment.customer, amount, result: payment.status, method: payment.method, notes: payment.notes, vehicle: payment.vehicle, vehicleId: payment.vehicleId, vin: payment.vin, plate: payment.plate, tracker: payment.tracker, stripePaymentIntentId: intent.id || '', stripeIdempotencyKey: idempotencyKey, recurringPaymentId: payment.recurringPaymentId });
+  const settledAttempt = updateStripeChargeAttempt(data, recurring, attempt, {
+    status: 'succeeded',
+    paymentIntentId: intent.id || '',
+    chargeId,
+    succeededAt: paymentAtIso
+  });
   const patch = {
     paymentProvider: 'stripe',
     provider: 'Stripe',
@@ -12698,6 +12864,8 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     lastPaymentAt: paymentAtIso,
     lastStripePaymentIntentId: intent.id || '',
     lastStripeChargeId: chargeId,
+    stripeChargeAttempt: settledAttempt,
+    lastStripeChargeIdempotencyKey: idempotencyKey,
     lastPaymentResult: 'Paid',
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts,
@@ -12868,7 +13036,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, confirmationPending: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   try {
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
@@ -12925,6 +13093,32 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeResult = 'Paid';
         result.charged += 1;
       } catch (err) {
+        if (isStripeConfirmationPendingError(err)) {
+          const pendingAttempt = row.stripeChargeAttempt || err.stripeAttempt || {};
+          const pendingKey = String(pendingAttempt.idempotencyKey || 'Stripe confirmation pending');
+          if (row.lastStripeConfirmationPendingNotifiedKey !== pendingKey) {
+            updateRecurringChargeState(data, row.id, {
+              lastStripeConfirmationPendingNotifiedKey: pendingKey,
+              lastStripeConfirmationPendingNotifiedAt: new Date().toISOString()
+            });
+            await queueOwnerEmailNotification(data, 'stripe_confirmation_pending', {
+              customer: row.customer || 'Unknown customer',
+              subject: 'Stripe confirmation pending - ' + (row.customer || 'Unknown customer'),
+              body: [
+                'Stripe did not confirm a saved-card charge yet.',
+                'WheelsonAuto preserved the idempotent attempt and will reconcile it before any retry.',
+                'Customer: ' + (row.customer || 'Unknown customer'),
+                'Amount: $' + Number(row.amount || 0).toLocaleString(),
+                'Due date: ' + scheduledDueDate,
+                'Vehicle: ' + (row.vehicle || row.vin || 'Not linked'),
+                'Status: Stripe confirmation pending',
+                'Provider detail: ' + String(err && (err.providerError || err.message) || '')
+              ].join('\n')
+            });
+          }
+          result.confirmationPending += 1;
+          continue;
+        }
         if (isDuplicateBillingPeriodError(err)) {
           const nextRun = nextFutureRecurringDate(row, dateKey, scheduledDueDate);
           if (nextRun && nextRun !== scheduledDueDate) {
@@ -13140,6 +13334,231 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   return request;
 }
 
+function stripeRecurringForPaymentIntent(data, intent = {}) {
+  const metadata = intent.metadata || {};
+  const explicitId = String(metadata.recurringPaymentId || '').trim();
+  if (explicitId) return findRecurringRow(data, explicitId);
+  const customerId = stripeObjectId(intent.customer);
+  if (!customerId) return null;
+  const byId = new Map();
+  allRecurringRows(data).filter(row => row && String(row.stripeCustomerId || '') === customerId).forEach(row => {
+    const id = String(row.id || row.cloverSubscriptionId || '');
+    if (id && !byId.has(id)) byId.set(id, row);
+  });
+  return byId.size === 1 ? [...byId.values()][0] : null;
+}
+function stripePaymentIntentDate(intent = {}) {
+  const created = Number(intent.created || 0);
+  return new Date(created > 0 ? created * 1000 : Date.now());
+}
+function isWheelsonAutoStripeSavedCardIntent(intent = {}) {
+  const flow = String(intent && intent.metadata && intent.metadata.flow || '').trim().toLowerCase();
+  return flow === 'autopay' || flow === 'manual_charge';
+}
+function stripeAttemptMatchesPaymentIntent(attempt = {}, intent = {}, scheduledDueKey = '') {
+  if (!attempt || !stripeChargeAttemptIsPending(attempt)) return false;
+  const intentId = stripeObjectId(intent);
+  if (attempt.paymentIntentId && intentId) return attempt.paymentIntentId === intentId;
+  const attemptDue = validCalendarDateKey(attempt.scheduledDueDate || '');
+  const due = validCalendarDateKey(scheduledDueKey);
+  return (!attemptDue && !due) || (!!attemptDue && attemptDue === due);
+}
+function recordStripePaymentReceipt(data, payment = {}) {
+  const intentId = String(payment.stripePaymentIntentId || '').trim();
+  if (!intentId) return;
+  data.documents = Array.isArray(data.documents) ? data.documents : [];
+  if (data.documents.some(document => document && document.kind === 'Receipt' && String(document.stripePaymentIntentId || '') === intentId)) return;
+  data.documents.unshift({
+    id: 'receipt-stripe-' + intentId,
+    recurringPaymentId: payment.recurringPaymentId || '',
+    paymentProvider: 'stripe',
+    providerPaymentId: intentId,
+    stripePaymentIntentId: intentId,
+    stripeChargeId: payment.stripeChargeId || '',
+    customer: payment.customer || '',
+    vehicle: payment.vehicle || '',
+    vehicleId: payment.vehicleId || '',
+    vin: payment.vin || '',
+    licensePlate: payment.licensePlate || payment.plate || '',
+    title: 'Stripe payment receipt',
+    type: 'Payment receipt',
+    kind: 'Receipt',
+    amount: Number(payment.amount || 0),
+    method: 'Stripe saved card',
+    status: 'Paid',
+    date: payment.createdAt || new Date().toISOString(),
+    customerVisible: true,
+    portalVisible: true,
+    source: 'Stripe signed payment webhook'
+  });
+}
+function applyStripePaymentIntentSucceeded(data, intent = {}) {
+  const intentId = stripeObjectId(intent);
+  if (!intentId) return { matched: false, reason: 'Stripe payment intent ID is missing.' };
+  const recurring = stripeRecurringForPaymentIntent(data, intent);
+  if (!recurring) return { matched: false, reason: 'No unambiguous WheelsonAuto recurring customer matched this Stripe payment intent.', paymentIntentId: intentId };
+  const metadata = intent.metadata || {};
+  const currentAttempt = recurring.stripeChargeAttempt || {};
+  const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || currentAttempt.scheduledDueDate || recurringDateKey(recurring));
+  const billingPeriodKey = String(metadata.billingPeriodKey || currentAttempt.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueKey)).trim();
+  const paymentAt = stripePaymentIntentDate(intent);
+  const paymentAtIso = paymentAt.toISOString();
+  const paymentDateKey = localDateKey(paymentAt);
+  const identity = recurringPaymentIdentity(data, recurring);
+  const chargeId = stripeObjectId(intent.latest_charge || intent.charge);
+  const receivedCents = Number(intent.amount_received || intent.amount || 0);
+  const amount = receivedCents > 0 ? receivedCents / 100 : Number(recurring.amount || 0);
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  const existing = data.payments.find(row => String(row && row.stripePaymentIntentId || '') === intentId);
+  const alreadyPaid = !!(existing && stripeMigration.paymentIsPaid(existing.status));
+  const payment = {
+    ...(existing || { id: 'stripe-charge-' + intentId }),
+    paymentProvider: 'stripe',
+    providerPaymentId: intentId,
+    stripePaymentIntentId: intentId,
+    stripeChargeId: chargeId,
+    date: businessLocaleString(paymentAt),
+    createdAt: paymentAtIso,
+    customer: recurring.customer || '',
+    phone: recurring.phone || '',
+    email: recurring.email || '',
+    vehicle: identity.vehicle || recurring.vehicle || '',
+    vehicleId: identity.vehicleId || recurring.vehicleId || '',
+    vin: identity.vin || recurring.vin || '',
+    licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || '',
+    plate: identity.plate || recurring.plate || recurring.licensePlate || '',
+    tempTag: identity.tempTag || recurring.tempTag || '',
+    tracker: identity.tracker || recurring.tracker || '',
+    method: 'Stripe saved card',
+    amount,
+    status: 'Paid',
+    tone: 'good',
+    source: 'Stripe signed payment webhook',
+    notes: appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'),
+    scheduledDueDate: scheduledDueKey,
+    billingPeriodKey,
+    recurringPaymentId: recurring.id || '',
+    stripeCustomerId: stripeObjectId(intent.customer) || recurring.stripeCustomerId || '',
+    stripePaymentMethodId: stripeObjectId(intent.payment_method) || recurring.stripePaymentMethodId || '',
+    stripeIdempotencyKey: currentAttempt.idempotencyKey || ''
+  };
+  if (existing) Object.assign(existing, payment);
+  else data.payments.unshift(payment);
+  const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
+  if (!attempts.some(row => String(row && row.stripePaymentIntentId || '') === intentId)) attempts.unshift({
+    id: 'attempt-stripe-webhook-' + intentId,
+    date: payment.date,
+    customer: payment.customer,
+    amount,
+    result: 'Paid',
+    method: payment.method,
+    notes: payment.notes,
+    vehicle: payment.vehicle,
+    vehicleId: payment.vehicleId,
+    vin: payment.vin,
+    plate: payment.plate,
+    tracker: payment.tracker,
+    stripePaymentIntentId: intentId,
+    stripeIdempotencyKey: payment.stripeIdempotencyKey,
+    recurringPaymentId: payment.recurringPaymentId
+  });
+  const priorNextRun = String(recurring.nextRun || '').trim();
+  const resolvedNextRun = alreadyPaid
+    ? priorNextRun
+    : String(scheduledDueKey && scheduledDueKey <= paymentDateKey
+      ? (nextFutureRecurringDate(recurring, paymentDateKey, scheduledDueKey) || priorNextRun)
+      : priorNextRun).trim();
+  let settledAttempt = currentAttempt;
+  if (stripeAttemptMatchesPaymentIntent(currentAttempt, intent, scheduledDueKey) || !stripeChargeAttemptIsPending(currentAttempt)) {
+    settledAttempt = updateStripeChargeAttempt(data, recurring, currentAttempt && Object.keys(currentAttempt).length ? currentAttempt : {
+      idempotencyKey: '',
+      automatic: String(metadata.flow || '').toLowerCase() === 'autopay',
+      amountCents: receivedCents,
+      scheduledDueDate: scheduledDueKey,
+      billingPeriodKey
+    }, {
+      status: 'succeeded',
+      paymentIntentId: intentId,
+      chargeId,
+      succeededAt: paymentAtIso,
+      source: 'Stripe signed payment webhook'
+    });
+  }
+  const patch = {
+    paymentProvider: 'stripe',
+    provider: 'Stripe',
+    status: 'Active',
+    tone: 'good',
+    retryCount: 0,
+    failedAttempts: 0,
+    nextRun: resolvedNextRun,
+    lastPaymentAt: paymentAtIso,
+    lastStripePaymentIntentId: intentId,
+    lastStripeChargeId: chargeId,
+    lastPaymentResult: 'Paid',
+    lastPaymentNote: payment.notes,
+    paymentAttempts: attempts,
+    autopayManagedBy: 'WheelsonAuto / Stripe',
+    stripeChargeAttempt: settledAttempt,
+    lastStripeChargeIdempotencyKey: settledAttempt.idempotencyKey || currentAttempt.idempotencyKey || ''
+  };
+  if (String(metadata.flow || '').toLowerCase() === 'autopay') Object.assign(patch, {
+    lastAutoChargeDate: paymentDateKey,
+    lastAutoChargeAt: paymentAtIso,
+    lastAutoChargeResult: 'Paid'
+  });
+  if (!alreadyPaid) Object.assign(patch, finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso));
+  if (resolvedNextRun && resolvedNextRun !== priorNextRun) Object.assign(patch, {
+    paymentDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.paymentDay,
+    chargeDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.chargeDay,
+    lastScheduleAdvancedAt: paymentAtIso,
+    lastScheduleAdvancedFrom: scheduledDueKey || priorNextRun,
+    lastScheduleAdvanceSource: 'Stripe signed payment webhook'
+  });
+  updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
+  recordStripePaymentReceipt(data, payment);
+  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id, alreadyPaid, advanced: resolvedNextRun !== priorNextRun };
+}
+function applyStripePaymentIntentFailed(data, intent = {}) {
+  const intentId = stripeObjectId(intent);
+  if (!intentId) return { matched: false, reason: 'Stripe payment intent ID is missing.' };
+  const recurring = stripeRecurringForPaymentIntent(data, intent);
+  if (!recurring) return { matched: false, reason: 'No unambiguous WheelsonAuto recurring customer matched this Stripe failed payment intent.', paymentIntentId: intentId };
+  const existing = (data.payments || []).find(row => String(row && row.stripePaymentIntentId || '') === intentId);
+  if (existing && stripeMigration.paymentIsPaid(existing.status)) return { matched: true, ignored: true, reason: 'A later Stripe success is already recorded for this payment intent.', recurringPaymentId: recurring.id || '', paymentIntentId: intentId };
+  if (existing) return { matched: true, duplicate: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: existing.id || '' };
+  const metadata = intent.metadata || {};
+  const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.scheduledDueDate || recurringDateKey(recurring));
+  const providerError = String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe reported a failed saved-card payment.');
+  const currentAttempt = recurring.stripeChargeAttempt || {};
+  updateStripeChargeAttempt(data, recurring, currentAttempt && Object.keys(currentAttempt).length ? currentAttempt : {
+    idempotencyKey: '',
+    automatic: String(metadata.flow || '').toLowerCase() === 'autopay',
+    amountCents: Number(intent.amount || 0),
+    scheduledDueDate: scheduledDueKey,
+    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueKey)
+  }, {
+    status: 'failed',
+    paymentIntentId: intentId,
+    failedAt: new Date().toISOString(),
+    providerError
+  });
+  const attempts = Math.min(2, Number(recurring.retryCount || recurring.failedAttempts || 0) + 1);
+  const payment = saveFailedChargeResult(data, recurring, {
+    amount: Number(intent.amount || 0) / 100 || recurring.amount,
+    scheduledDueDate: scheduledDueKey,
+    note: 'Stripe signed payment webhook reported a failed saved-card payment.'
+  }, Object.assign(new Error(providerError), { paymentIntent: intent }), {
+    attempts,
+    dateKey: localDateKey(stripePaymentIntentDate(intent)),
+    method: 'Stripe saved card',
+    source: 'Stripe signed payment webhook',
+    paymentProvider: 'stripe',
+    stripePaymentIntentId: intentId
+  });
+  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id || '', status: payment.status || '' };
+}
+
 function stripePaymentForObject(data, object = {}) {
   const metadata = object.metadata || {};
   const intentId = stripeObjectId(object.payment_intent) || (String(object.object || '') === 'payment_intent' ? object.id : '');
@@ -13338,6 +13757,7 @@ async function recordStripeWebhookEvent(event = {}) {
   let disputeClaimId = '';
   let identitySessionId = '';
   let refundRequestId = '';
+  let stripePaymentIntentResult = null;
   if (type === 'checkout.session.completed') {
     const metadata = object.metadata || {};
     if (object.mode === 'setup' || metadata.flow === 'card_setup') {
@@ -13357,6 +13777,8 @@ async function recordStripeWebhookEvent(event = {}) {
       }
     }
   }
+  if (type === 'payment_intent.succeeded' && isWheelsonAutoStripeSavedCardIntent(object)) stripePaymentIntentResult = applyStripePaymentIntentSucceeded(data, object);
+  if (type === 'payment_intent.payment_failed' && isWheelsonAutoStripeSavedCardIntent(object)) stripePaymentIntentResult = applyStripePaymentIntentFailed(data, object);
   if (/^identity\.verification_session\.(created|processing|verified|requires_input|canceled|redacted)$/.test(type)) {
     const metadata = object.metadata || {};
     const session = (data.onboardingSessions || []).find(row => row.stripeIdentityVerificationId === object.id)
@@ -13396,7 +13818,7 @@ async function recordStripeWebhookEvent(event = {}) {
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
   await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
-  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId, refundRequestId };
+  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId, refundRequestId, stripePaymentIntentResult };
   } catch (error) {
     await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error).catch(() => {});
     await recordOperationalFailure('stripe-webhook', error, { eventId: event.id || '', route: '/api/webhooks/stripe' });
@@ -18003,6 +18425,25 @@ const server = http.createServer(async (req, res) => {
           await protectConcurrentLocalWrites(data);
           await writeData(data);
           return json(res, 409, { ok: false, error: String(err && err.message || err), duplicateBlocked: true, payment: err.existingPayment || null });
+        }
+        if (recurring && isStripeConfirmationPendingError(err)) {
+          const pendingAttempt = recurring.stripeChargeAttempt || err.stripeAttempt || {};
+          appendAuditLog(data, user, 'Stripe charge confirmation pending', [recurring.customer || 'Unknown customer', moneyText(payload.amount || recurring.amount || 0), pendingAttempt.scheduledDueDate || recurring.nextRun || 'No billing date', 'Same idempotent attempt will be reconciled before retry']);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'record manual Stripe confirmation pending response' });
+          await writeData(data);
+          const status = Number(err.statusCode || 202) === 409 ? 409 : 202;
+          return json(res, status, {
+            ok: status === 202,
+            confirmationPending: true,
+            error: String(err && err.message || err),
+            recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId),
+            pendingAttempt: {
+              status: pendingAttempt.status || 'confirmation_pending',
+              scheduledDueDate: pendingAttempt.scheduledDueDate || '',
+              amountCents: Number(pendingAttempt.amountCents || 0),
+              startedAt: pendingAttempt.startedAt || pendingAttempt.confirmationPendingAt || ''
+            }
+          });
         }
         if (recurring && isPaymentNotFoundError(err)) {
           const payment = savePaymentNotFoundResult(data, recurring, payload, err, { source: 'Manual saved-card charge payment not found' });

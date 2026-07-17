@@ -46,6 +46,29 @@ async function run() {
   assert(captured.url.endsWith('/identity/verification_sessions'), 'Stripe Identity sessions must use the provider-hosted verification endpoint.');
   assert(new URLSearchParams(captured.options.body).get('options[document][require_matching_selfie]') === 'true', 'Stripe Identity sessions must require a matching selfie.');
 
+  const uncertainClient = stripeAdapter.stripeClient({
+    secretKey: 'sk_test_private',
+    fetch: async () => {
+      const error = new Error('The network connection was lost.');
+      error.name = 'AbortError';
+      throw error;
+    }
+  });
+  await assert.rejects(
+    () => uncertainClient.createPaymentIntent({ amount: 22900, currency: 'usd' }, 'woa-timeout-key'),
+    error => error && error.code === 'stripe_confirmation_pending' && error.ambiguous === true && error.timedOut === true && error.idempotencyKey === 'woa-timeout-key',
+    'A timeout after an idempotent money request must be classified as confirmation pending, never as a clean decline.'
+  );
+  const serverErrorClient = stripeAdapter.stripeClient({
+    secretKey: 'sk_test_private',
+    fetch: async () => ({ ok: false, status: 500, text: async () => JSON.stringify({ error: { message: 'Temporary Stripe error' } }) })
+  });
+  await assert.rejects(
+    () => serverErrorClient.createPaymentIntent({ amount: 22900, currency: 'usd' }, 'woa-500-key'),
+    error => error && error.ambiguous === true && error.retryable === true && error.idempotencyKey === 'woa-500-key',
+    'Stripe 5xx responses must remain tied to the original idempotency key for safe reconciliation.'
+  );
+
   [
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
