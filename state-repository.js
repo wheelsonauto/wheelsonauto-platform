@@ -198,6 +198,9 @@ class JsonStateRepository {
     // cross-request/cross-instance quota used in production.
     this.aiUsageReservations = new Map();
     this.webhookEventClaims = new Map();
+    this.jobErrorFile = options.jobErrorFile || (this.dataFile ? this.dataFile + '.job-errors.json' : '');
+    this.jobErrorLimit = Math.max(10, Math.min(250, Number(options.jobErrorLimit || 80)));
+    this.jobErrorWrite = Promise.resolve();
   }
 
   isTransactional() {
@@ -279,10 +282,53 @@ class JsonStateRepository {
     this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), lastError: String(error && error.message || error || '').slice(0, 3000) });
   }
 
-  async recordJobError() {}
+  async readJobErrors() {
+    if (!this.jobErrorFile) return [];
+    try {
+      const stored = JSON.parse(await fs.readFile(this.jobErrorFile, 'utf8'));
+      const rows = Array.isArray(stored) ? stored : (Array.isArray(stored.errors) ? stored.errors : []);
+      return rows.filter(row => row && typeof row === 'object').map(row => ({
+        id: String(row.id || '').slice(0, 160),
+        source: String(row.source || 'server').slice(0, 120),
+        severity: String(row.severity || 'error').slice(0, 20),
+        message: String(row.message || 'Unknown error').slice(0, 3000),
+        context: clone(row.context || {}),
+        createdAt: String(row.createdAt || row.created_at || ''),
+        resolvedAt: String(row.resolvedAt || row.resolved_at || '')
+      }));
+    } catch {
+      return [];
+    }
+  }
 
-  async recentJobErrors() {
-    return [];
+  async recordJobError(source, error, context = {}, severity = 'error') {
+    if (!this.jobErrorFile) return;
+    const run = async () => {
+      const rows = await this.readJobErrors();
+      const entry = {
+        id: 'json-error-' + Date.now() + '-' + crypto.randomBytes(5).toString('hex'),
+        source: String(source || 'server').slice(0, 120),
+        severity: String(severity || 'error').slice(0, 20),
+        message: String(error && error.message || error || 'Unknown error').slice(0, 3000),
+        context: clone(context || {}),
+        createdAt: new Date().toISOString()
+      };
+      const directory = path.dirname(this.jobErrorFile);
+      const temporary = this.jobErrorFile + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(temporary, JSON.stringify({ version: 1, errors: [entry, ...rows].slice(0, this.jobErrorLimit) }, null, 2), 'utf8');
+      await fs.rename(temporary, this.jobErrorFile);
+    };
+    const pending = this.jobErrorWrite.then(run, run);
+    this.jobErrorWrite = pending.catch(() => {});
+    return pending;
+  }
+
+  async recentJobErrors(limit = 20) {
+    await this.jobErrorWrite;
+    return (await this.readJobErrors())
+      .filter(row => !row.resolvedAt)
+      .slice(0, Math.max(1, Math.min(100, Number(limit || 20))));
   }
 
   async listSnapshots() {

@@ -71,6 +71,14 @@ async function main() {
     const written = await repository.write(next);
     assert.strictEqual(written.state.vehicles[0].vin, next.vehicles[0].vin, 'The state repository must persist a complete state snapshot.');
     assert.strictEqual((await repository.read()).exists, true, 'The local repository must report a persisted state after write.');
+    const stateBeforeJsonJobError = await fs.readFile(dataFile, 'utf8');
+    await repository.recordJobError('json-fallback-monitor', new Error('Controlled JSON fallback error'), { route: 'foundation check' });
+    const jsonJobErrors = await repository.recentJobErrors(5);
+    assert.strictEqual(jsonJobErrors.length, 1, 'The JSON fallback must retain a bounded operational error record until PostgreSQL is enabled.');
+    assert.strictEqual(jsonJobErrors[0].source, 'json-fallback-monitor', 'The JSON fallback error record must retain its source.');
+    assert.strictEqual(jsonJobErrors[0].context.route, 'foundation check', 'The JSON fallback error record must retain safe context.');
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), stateBeforeJsonJobError, 'Recording a JSON fallback operational error must not rewrite business data.json.');
+    assert((await fs.stat(dataFile + '.job-errors.json')).size > 0, 'The JSON fallback error log must live beside, not inside, the protected business state file.');
     const aiReservation = await repository.reserveAiUsage({ dayKey: '2026-07-17', monthKey: '2026-07', dailyLimit: 1, monthlyLimit: 2 });
     assert.strictEqual(aiReservation.allowed, true, 'The local development guard must reserve the first Star model request.');
     const aiBlocked = await repository.reserveAiUsage({ dayKey: '2026-07-17', monthKey: '2026-07', dailyLimit: 1, monthlyLimit: 2 });
