@@ -174,13 +174,16 @@ if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/messages'\)/.test(api
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/reports'\)/.test(apiAllowedForUser)) fail('Mechanic API report routes are not blocked.');
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/system'\)/.test(apiAllowedForUser)) fail('Mechanic API system routes are not blocked.');
 if (!/role === 'mechanic' \|\| role === 'manager'/.test(apiAllowedForUser)) fail('Mechanic/manager payment route block is missing.');
-assertIncludes('Manager provider adapter exceptions', strings(apiAllowedForUser), ['/api/integrations/tracker', '/api/integrations/marketing']);
-assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications']);
+assertIncludes('Manager provider adapter exceptions', strings(apiAllowedForUser), ['/api/integrations/tracker', '/api/integrations/marketing', '/api/billing/summary']);
+assertIncludes('Owner-only API prefixes', strings(apiAllowedForUser), ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/billing', '/api/notifications']);
 if (!strings(apiAllowedForUser).includes('/api/reset')) fail('Platform data reset must be owner-only at the API role boundary.');
 if (!/\['manager', 'mechanic'\]\.includes\(role\)/.test(apiAllowedForUser)) fail('Unknown or legacy staff roles must default to no API access.');
 if (!/filter\(staffStatusActive\)/.test(activeStaffSessionUser) || !/activeStaffSessionCache/.test(activeStaffSessionUser)) fail('Signed staff sessions must be revalidated against the current active account record.');
 if (!/woa_session/.test(crossOriginSessionWrite) || !/woa_customer_session/.test(crossOriginSessionWrite)) fail('Cross-origin write protection must cover staff and customer session cookies.');
 assertIncludes('Staff state scrub collections', strings(stateForUserRead), ['paymentRequests']);
+if (!/delete safe\.subscriptions;/.test(stateForUserRead) || !/delete safe\.billingInvoices;/.test(stateForUserRead) || !/delete safe\.billingEvents;/.test(stateForUserRead)) {
+  fail('Staff billing state must remove subscription, invoice, and provider-event ledgers.');
+}
 if (!/if \(!owner\) safe = dataScopedToOrganization\(safe, userOrganizationId\(user\)\);[\s\S]*enrichLinkedProfiles\(safe\);/.test(stateForUserRead)) {
   fail('Staff read state should scope to the user company before profile enrichment.');
 }

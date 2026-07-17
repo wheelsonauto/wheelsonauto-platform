@@ -163,6 +163,8 @@ async function main() {
   process.env.WOA_TRACKER_WEBHOOK_SECRET = 'direct-tracker-secret';
   process.env.WOA_MARKETING_PROVIDER = 'direct-marketing-adapter';
   process.env.WOA_MARKETING_WEBHOOK_SECRET = 'direct-marketing-secret';
+  process.env.WOA_BILLING_PROVIDER = 'direct-billing-adapter';
+  process.env.WOA_BILLING_WEBHOOK_SECRET = 'direct-billing-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
   delete require.cache[require.resolve('../server.js')];
@@ -184,11 +186,20 @@ async function main() {
     repairDataIds,
     enrichLinkedProfiles,
     nearEndpointNameMatch,
+    calendarDayName,
+    nextRecurringOccurrence,
+    nextFutureRecurringDate,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
 
   try {
+    assert(calendarDayName('2026-07-10') === 'Friday', 'Calendar-only autopay dates must not shift to Thursday through UTC parsing.');
+    assert(nextRecurringOccurrence({ frequency: 'Daily' }, '2026-07-10') === '2026-07-11', 'Daily autopay should advance by one day.');
+    assert(nextRecurringOccurrence({ frequency: 'Weekly' }, '2026-07-10') === '2026-07-17', 'Weekly autopay should advance by seven days.');
+    assert(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-10') === '2026-07-24', 'Bi-weekly autopay should advance by fourteen days.');
+    assert(nextFutureRecurringDate({ frequency: 'Weekly', nextRun: '2026-07-10' }, '2026-07-16') === '2026-07-17', 'An overdue Friday schedule should advance to the next future Friday instead of drifting to the runner day.');
+
     const sharedContactAccountData = {
       customerAccounts: [{
         id: 'customer-account-existing-shared-contact',
@@ -964,12 +975,67 @@ async function main() {
     assert(franchiseStaff.status === 200 && franchiseStaff.json.ok && franchiseStaff.json.staff.companyName === 'Direct Franchise Test', 'Staff account should attach only to saved company/franchise records.');
 
     const franchiseManagerCookie = await login(server, { username: 'direct-franchise-manager', password: 'DirectFranchiseManager123!' });
+    const billingMainManagerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const billingMechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const franchiseState = await request(server, 'GET', '/api/state', { cookie: franchiseManagerCookie });
     assert(franchiseState.status === 200 && franchiseState.json && Array.isArray(franchiseState.json.organizations), 'Franchise manager state did not load.');
     assert((franchiseState.json.organizations || []).length === 1 && franchiseState.json.organizations[0].id === 'direct-franchise', 'Franchise manager should only see their company account.');
     assert(!Object.prototype.hasOwnProperty.call(franchiseState.json.organizations[0], 'serviceStreet') && !Object.prototype.hasOwnProperty.call(franchiseState.json.organizations[0], 'businessEmail') && !Object.prototype.hasOwnProperty.call(franchiseState.json.organizations[0], 'taxIdStatus'), 'Manager state should not expose owner provider-onboarding profile details.');
     assert(!(franchiseState.json.vehicles || []).some(vehicle => vehicle.id === 'veh-001'), 'Franchise manager should not see main WheelsonAuto fleet records.');
     assert(!JSON.stringify(franchiseState.json).includes('Direct Dispute Customer'), 'Franchise manager should not see main customer/payment/dispute records.');
+
+    const franchiseSubscription = await request(server, 'POST', '/api/billing/subscriptions', {
+      cookie: ownerCookie,
+      json: {
+        organizationId: 'direct-franchise',
+        plan: 'Starter',
+        status: 'Trialing',
+        amount: 149,
+        currentPeriodStart: '2026-07-01',
+        currentPeriodEnd: '2026-07-31',
+        provider: 'direct-billing-adapter',
+        providerCustomerId: 'direct-private-billing-customer',
+        providerSubscriptionId: 'direct-private-billing-subscription'
+      }
+    });
+    assert(franchiseSubscription.status === 201 && franchiseSubscription.json.ok && franchiseSubscription.json.summary.subscription.plan === 'Starter', 'Owner should create one company-scoped subscription.');
+    const updatedFranchiseSubscription = await request(server, 'POST', '/api/billing/subscriptions', {
+      cookie: ownerCookie,
+      json: { organizationId: 'direct-franchise', plan: 'Growth', status: 'Active', amount: 249, fleetLimit: 90 }
+    });
+    assert(updatedFranchiseSubscription.status === 200 && updatedFranchiseSubscription.json.summary.subscription.id === franchiseSubscription.json.summary.subscription.id && updatedFranchiseSubscription.json.summary.capacity.fleet.limit === 90, 'Updating a company subscription should preserve one row and its stable identity.');
+    const blockedManagerSubscriptionWrite = await request(server, 'POST', '/api/billing/subscriptions', { cookie: franchiseManagerCookie, json: { organizationId: 'direct-franchise', plan: 'Enterprise' } });
+    assert(blockedManagerSubscriptionWrite.status === 403, 'Manager must not change company subscriptions.');
+    const franchiseInvoice = await request(server, 'POST', '/api/billing/invoices/record', {
+      cookie: ownerCookie,
+      json: { organizationId: 'direct-franchise', providerInvoiceId: 'direct-franchise-invoice-1', amount: 249, status: 'Paid', periodStart: '2026-07-01', periodEnd: '2026-07-31' }
+    });
+    assert(franchiseInvoice.status === 201 && franchiseInvoice.json.ok, 'Owner should record a company invoice.');
+    const duplicateFranchiseInvoice = await request(server, 'POST', '/api/billing/invoices/record', {
+      cookie: ownerCookie,
+      json: { organizationId: 'direct-franchise', providerInvoiceId: 'direct-franchise-invoice-1', amount: 249, status: 'Paid' }
+    });
+    assert(duplicateFranchiseInvoice.status === 200 && duplicateFranchiseInvoice.json.created === false && duplicateFranchiseInvoice.json.summary.invoices.filter(invoice => invoice.providerInvoiceId === 'direct-franchise-invoice-1').length === 1, 'Repeated company invoice references must update instead of duplicate.');
+    const franchiseBillingSummary = await request(server, 'GET', '/api/billing/summary', { cookie: franchiseManagerCookie });
+    assert(franchiseBillingSummary.status === 200 && franchiseBillingSummary.json.summary.organization.id === 'direct-franchise' && franchiseBillingSummary.json.summary.subscription.plan === 'Growth', 'Manager should see only their own company billing summary.');
+    assert(!JSON.stringify(franchiseBillingSummary.json).includes('direct-private-billing-customer') && !JSON.stringify(franchiseBillingSummary.json).includes('direct-private-billing-subscription') && !JSON.stringify(franchiseBillingSummary.json).includes('direct-franchise-invoice-1'), 'Manager billing summary must not expose provider customer, subscription, or invoice references.');
+    const mainManagerBillingSummary = await request(server, 'GET', '/api/billing/summary?organizationId=direct-franchise', { cookie: billingMainManagerCookie });
+    assert(mainManagerBillingSummary.status === 200 && mainManagerBillingSummary.json.summary.organization.id === 'org-wheelsonauto' && mainManagerBillingSummary.json.summary.invoices.length === 0, 'A manager must not select another company through the billing summary query.');
+    const mechanicBillingSummary = await request(server, 'GET', '/api/billing/summary', { cookie: billingMechanicCookie });
+    assert(mechanicBillingSummary.status === 403, 'Mechanic must not view company billing data.');
+    const blockedBillingWebhook = await request(server, 'POST', '/api/webhooks/billing', { headers: { 'x-billing-webhook-secret': 'wrong-secret' }, json: { eventId: 'billing-provider-blocked', organizationId: 'direct-franchise', type: 'invoice.paid' } });
+    assert(blockedBillingWebhook.status === 401, 'Billing provider webhook must reject invalid credentials.');
+    const signedBillingPayload = { eventId: 'billing-provider-signed-1', organizationId: 'direct-franchise', provider: 'direct-billing-adapter', type: 'invoice.paid', invoiceId: 'direct-provider-invoice-2', amount: 249, status: 'paid' };
+    const signedBillingBody = JSON.stringify(signedBillingPayload);
+    const billingTimestamp = String(Math.floor(Date.now() / 1000));
+    const billingSignature = crypto.createHmac('sha256', 'direct-billing-secret').update(billingTimestamp + '.' + signedBillingBody).digest('hex');
+    const signedBillingWebhook = await request(server, 'POST', '/api/webhooks/billing', { headers: { 'x-billing-timestamp': billingTimestamp, 'x-billing-signature': 'sha256=' + billingSignature }, json: signedBillingPayload });
+    assert(signedBillingWebhook.status === 200 && signedBillingWebhook.json.authorization === 'HMAC-SHA256' && signedBillingWebhook.json.received === 1 && signedBillingWebhook.json.invoices === 1, 'Timestamped HMAC billing event should update the company invoice ledger.');
+    const repeatedBillingWebhook = await request(server, 'POST', '/api/webhooks/billing', { headers: { 'x-billing-timestamp': billingTimestamp, 'x-billing-signature': 'sha256=' + billingSignature }, json: signedBillingPayload });
+    assert(repeatedBillingWebhook.status === 200 && repeatedBillingWebhook.json.duplicates === 1 && repeatedBillingWebhook.json.received === 0, 'Repeated signed billing events must remain idempotent.');
+    const ownerBillingSubscriptions = await request(server, 'GET', '/api/billing/subscriptions', { cookie: ownerCookie });
+    const directFranchiseBilling = ownerBillingSubscriptions.json.summaries.find(summary => summary.organization.id === 'direct-franchise');
+    assert(ownerBillingSubscriptions.status === 200 && directFranchiseBilling && directFranchiseBilling.invoices.length === 2 && ownerBillingSubscriptions.json.events.some(event => event.authorization === 'HMAC-SHA256'), 'Owner billing control should show the exact subscription, deduplicated invoices, and signed provider evidence.');
 
     const franchiseWriteState = JSON.parse(JSON.stringify(franchiseState.json));
     franchiseWriteState.vehicles = [{
@@ -2194,6 +2260,16 @@ async function main() {
     assert(alertRead.json.messages.some(message => message.event === 'maintenance_due' && message.customer === 'Direct Maintenance Customer'), 'Maintenance due notification should be saved.');
     assert(alertRead.json.messages.some(message => message.event === 'claim_dispute' && /Direct|Unassigned|Unmatched/i.test(message.customer || message.subject || '')), 'Claim/dispute notification should be saved.');
 
+    const autopayTodayParts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const autopayTodayKey = (autopayTodayParts.find(part => part.type === 'year') || {}).value + '-' + (autopayTodayParts.find(part => part.type === 'month') || {}).value + '-' + (autopayTodayParts.find(part => part.type === 'day') || {}).value;
+    const autopayDateOffset = days => {
+      const date = new Date(autopayTodayKey + 'T12:00:00Z');
+      date.setUTCDate(date.getUTCDate() + days);
+      return date.toISOString().slice(0, 10);
+    };
+    const stalePaidDueDate = autopayDateOffset(-14);
+    const overdueChargeDueDate = autopayDateOffset(-7);
+    const amountEditNextRun = autopayDateOffset(14);
     const autopayState = JSON.parse(JSON.stringify(notificationState.json));
     autopayState.recurringPayments = autopayState.recurringPayments || [];
     autopayState.recurringPayments.unshift({
@@ -2251,17 +2327,118 @@ async function main() {
       cloverCustomerId: 'custfail002',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
+    }, {
+      id: 'direct-autopay-paid-stale',
+      customer: 'Direct Paid Stale Schedule',
+      phone: '3135550666',
+      email: 'paid-stale@example.com',
+      vehicle: '2019 Honda Accord',
+      vin: 'DIRECTPAIDSTALEVIN',
+      amount: 279,
+      frequency: 'Weekly',
+      nextRun: stalePaidDueDate,
+      paymentDay: calendarDayName(stalePaidDueDate),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      cloverCustomerId: 'custpaidstale001',
+      paymentSetup: 'Card saved through WheelsonAuto',
+      cardSavedAt: new Date().toISOString(),
+      lastPaymentResult: 'Paid',
+      lastPaymentAt: new Date().toISOString(),
+      lastCloverChargeId: 'charge-paid-stale-001'
+    }, {
+      id: 'direct-autopay-success-overdue',
+      customer: 'Direct Overdue Charge',
+      phone: '3135550777',
+      email: 'overdue-charge@example.com',
+      vehicle: '2020 Toyota Camry',
+      vin: 'DIRECTOVERDUEVIN',
+      amount: 91,
+      frequency: 'Weekly',
+      nextRun: overdueChargeDueDate,
+      paymentDay: calendarDayName(overdueChargeDueDate),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      cloverCustomerId: 'custsuccess001',
+      paymentSetup: 'Card saved through WheelsonAuto',
+      cardSavedAt: new Date().toISOString()
+    }, {
+      id: 'direct-autopay-amount-edit',
+      customer: 'Direct Amount Edit',
+      phone: '3135550888',
+      email: 'amount-edit@example.com',
+      vehicle: '2021 Kia K5',
+      vin: 'DIRECTAMOUNTEDITVIN',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: amountEditNextRun,
+      paymentDay: calendarDayName(amountEditNextRun),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      cloverCustomerId: 'custamount001',
+      paymentSetup: 'Card saved through WheelsonAuto',
+      cardSavedAt: new Date().toISOString()
     });
     const autopayWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: autopayState });
     assert(autopayWrite.status === 200 && autopayWrite.json.ok, 'Autopay smoke setup failed.');
+    const wrongAmountEditDay = calendarDayName(amountEditNextRun) === 'Thursday' ? 'Friday' : 'Thursday';
+    const amountOnlyEdit = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: 'direct-autopay-amount-edit',
+        amount: 279,
+        frequency: 'Weekly',
+        nextRun: amountEditNextRun,
+        paymentDay: wrongAmountEditDay,
+        chargeTime: '18:00',
+        status: 'Active',
+        autopayManagedBy: 'WheelsonAuto'
+      }
+    });
+    assert(amountOnlyEdit.status === 200 && amountOnlyEdit.json.ok && amountOnlyEdit.json.amountChanged && !amountOnlyEdit.json.scheduleChanged, 'Changing only an autopay amount should not be treated as a schedule change.');
+    assert(amountOnlyEdit.json.paymentDay === calendarDayName(amountEditNextRun), 'The server must derive the weekly charge day from the calendar date instead of saving a conflicting weekday.');
+    const amountEditRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const amountEditRow = amountEditRead.json.recurringPayments.find(row => row.id === 'direct-autopay-amount-edit');
+    assert(amountEditRow && amountEditRow.amount === 279 && amountEditRow.nextRun === amountEditNextRun && amountEditRow.paymentDay === calendarDayName(amountEditNextRun) && amountEditRow.chargeTime === '18:00' && amountEditRow.frequency === 'Weekly' && amountEditRow.status === 'Active' && amountEditRow.autoChargeEnabled === true, 'An amount edit must preserve date, weekday, time, frequency, status, and enabled autopay state.');
     const enrichedPaymentLink = await request(server, 'POST', '/api/payment-links', {
       cookie: ownerCookie,
       json: { recurringPaymentId: 'direct-autopay-fail-once' }
     });
     assert(enrichedPaymentLink.status === 201 && enrichedPaymentLink.json.ok, 'Owner payment-link creation failed.');
     assert(enrichedPaymentLink.json.paymentLink.customer === 'Direct Failed Once' && enrichedPaymentLink.json.paymentLink.vehicle === '2017 Ford Fusion' && enrichedPaymentLink.json.paymentLink.vin === 'DIRECTFAILEDONCE' && enrichedPaymentLink.json.paymentLink.amount === 77, 'Payment links should inherit customer, vehicle, VIN, and amount from the recurring row.');
-    const autopayRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie: ownerCookie, json: {} });
-    assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 1, 'Autopay payment-not-found path did not run.');
+    const autopayOriginalFetch = global.fetch;
+    let successfulAutopayChargeCalls = 0;
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('/v1/charges')) {
+        const body = JSON.parse(String(options.body || '{}'));
+        if (body.source === 'custsuccess001') {
+          successfulAutopayChargeCalls += 1;
+          return { ok: true, status: 200, async text() { return JSON.stringify({ id: 'charge-direct-overdue-001', status: 'succeeded', paid: true, captured: true }); } };
+        }
+        return { ok: false, status: 402, async text() { return JSON.stringify({ message: 'Direct card decline' }); } };
+      }
+      if (String(url).includes('api.resend.com')) return { ok: true, status: 200, async json() { return { id: 'direct-email-autopay' }; }, async text() { return JSON.stringify({ id: 'direct-email-autopay' }); } };
+      return autopayOriginalFetch(url, options);
+    };
+    let autopayRun;
+    let secondAutopayRun;
+    try {
+      autopayRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie: ownerCookie, json: {} });
+      secondAutopayRun = await request(server, 'POST', '/api/woa-autopay/run', { cookie: ownerCookie, json: {} });
+    } finally {
+      global.fetch = autopayOriginalFetch;
+    }
+    assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 1 && autopayRun.json.charged === 1 && autopayRun.json.reconciled === 1, 'Autopay should charge one overdue unpaid row, reconcile one already-paid stale row, and keep the payment-not-found path visible.');
+    assert(successfulAutopayChargeCalls === 1 && secondAutopayRun.json.charged === 0, 'Repeating the autopay runner must not charge a completed scheduled occurrence twice.');
     const autopayRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(autopayRead.json.messages.some(message => message.event === 'payment_not_found' && message.customer === 'Direct Missing Token'), 'Payment-not-found notification should be saved in Messages.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Once' && /1x failed/i.test(message.subject || '')), '1x failed payment notification should be saved in Messages.');
@@ -2271,6 +2448,10 @@ async function main() {
     assert(autopayRead.json.payments.some(payment => payment.customer === 'Direct Failed Twice' && String(payment.status || '').includes('2x failed') && payment.vin === 'DIRECTFAILEDTWICE'), '2x failed autopay should save a named failed transaction with vehicle evidence.');
     const failedTwiceRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-fail-twice');
     assert(failedTwiceRow && String(failedTwiceRow.status || '').includes('2x failed'), 'Second failed autopay should mark the customer as 2x failed.');
+    const reconciledPaidRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-paid-stale');
+    assert(reconciledPaidRow && reconciledPaidRow.nextRun > autopayTodayKey && calendarDayName(reconciledPaidRow.nextRun) === calendarDayName(stalePaidDueDate) && reconciledPaidRow.lastScheduleReconciledFrom === stalePaidDueDate, 'A manually paid stale schedule should move to its next future weekday without another card charge.');
+    const overdueChargedRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-success-overdue');
+    assert(overdueChargedRow && overdueChargedRow.nextRun > autopayTodayKey && calendarDayName(overdueChargedRow.nextRun) === calendarDayName(overdueChargeDueDate) && overdueChargedRow.lastAutoChargeResult === 'Paid', 'A successful overdue autopay must persist the next future occurrence on the original weekday.');
 
     const managerMessage = await request(server, 'POST', '/api/messages/send', {
       cookie: managerCookie,

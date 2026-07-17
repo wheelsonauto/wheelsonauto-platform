@@ -390,6 +390,11 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'Do not store an EIN, SSN, card number, API key, or provider secret here.',
   'Provider profile needed',
   'Provider profile ready',
+  'Subscription billing',
+  'company-billing-console',
+  'One company, one plan, one usage summary',
+  'manage-company-subscription',
+  'record-company-invoice',
   'new-org',
   'save-org'
 ].forEach(text => requireText('Company/franchise foundation UI', organizations + app, text));
@@ -594,6 +599,19 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   'Choose a saved company/store for this staff account.',
   'Duplicate company/franchise names should be blocked'
 ].forEach(text => requireText('Backend company/franchise foundation', server + fs.readFileSync(path.join(root, 'scripts/server-direct-smoke-test.js'), 'utf8'), text));
+
+[
+  'billingEngine',
+  '/api/billing/summary',
+  '/api/billing/subscriptions',
+  '/api/billing/invoices/record',
+  '/api/webhooks/billing',
+  'WOA_BILLING_PROVIDER',
+  'WOA_BILLING_WEBHOOK_SECRET',
+  'Company subscription created',
+  'Company invoice recorded',
+  'Repeated signed billing events must remain idempotent.'
+].forEach(text => requireText('Backend company billing foundation', server + fs.readFileSync(path.join(root, 'scripts/server-direct-smoke-test.js'), 'utf8'), text));
 
 [
   'cleanApiProviderPayload',

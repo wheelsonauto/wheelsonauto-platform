@@ -4,6 +4,77 @@
   --good:#177245;--warn:#a96500;--bad:#b42318;--shadow:0 12px 34px rgba(20,25,31,.09);
 }
 
+/* Company subscription controls stay compact inside the existing readiness card. */
+.company-billing-console{
+  margin-top:10px;
+  padding-top:12px;
+  border-top:1px solid rgba(240,184,58,.18);
+  min-width:0;
+}
+.company-billing-console .section-head{margin-bottom:8px}
+.company-billing-console h3{margin:0;color:#f7df9b;font-size:15px}
+.company-billing-console .section-head p{margin:3px 0 0;color:#9fabb5;font-size:11px;line-height:1.35}
+.company-billing-metrics{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:7px;
+  margin-bottom:8px;
+}
+.company-billing-metrics span{
+  min-width:0;
+  padding:8px 9px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:7px;
+  background:#11171c;
+  color:#aeb9c2;
+  font-size:10px;
+  text-align:center;
+  overflow-wrap:anywhere;
+}
+.company-billing-metrics b{display:block;color:#fff;font-size:14px;margin-bottom:2px}
+.company-billing-list{display:grid;gap:7px;min-width:0}
+.company-billing-row{
+  display:grid;
+  grid-template-columns:minmax(150px,1.1fr) minmax(100px,.55fr) minmax(270px,1.35fr) minmax(120px,.65fr) auto;
+  gap:10px;
+  align-items:center;
+  min-width:0;
+  padding:10px 11px;
+  border:1px solid rgba(240,184,58,.16);
+  border-radius:8px;
+  background:#151b21;
+}
+.company-billing-identity,.company-billing-status,.company-billing-invoice{min-width:0}
+.company-billing-identity strong,.company-billing-invoice strong{display:block;color:#eef2f5;overflow-wrap:anywhere}
+.company-billing-identity small,.company-billing-status small,.company-billing-invoice small{display:block;margin-top:3px;color:#9fabb5;font-size:10px;line-height:1.3;overflow-wrap:anywhere}
+.company-billing-usage{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;min-width:0}
+.company-billing-usage span{min-width:0;padding:5px 6px;border:1px solid rgba(255,255,255,.08);border-radius:6px;color:#9fabb5;font-size:9px;text-align:center;overflow-wrap:anywhere}
+.company-billing-usage b{display:block;color:#f7df9b;font-size:10px}
+.company-billing-row>.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.company-billing-row>.actions .btn{min-width:76px;justify-content:center}
+.company-billing-console>.notice{margin:8px 0 0}
+
+@media(max-width:1180px){
+  .company-billing-row{grid-template-columns:minmax(150px,1fr) minmax(100px,.55fr) minmax(250px,1.25fr) auto}
+  .company-billing-invoice{grid-column:1/3}
+  .company-billing-row>.actions{grid-column:4;grid-row:1/3}
+}
+@media(max-width:900px){
+  .company-billing-row{grid-template-columns:minmax(0,1fr) auto}
+  .company-billing-usage{grid-column:1/-1}
+  .company-billing-invoice{grid-column:1}
+  .company-billing-row>.actions{grid-column:2;grid-row:auto}
+}
+@media(max-width:760px){
+  .company-billing-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .company-billing-row{grid-template-columns:minmax(0,1fr);gap:7px;padding:9px}
+  .company-billing-status,.company-billing-invoice{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .company-billing-status small,.company-billing-invoice small{margin-top:0;text-align:right}
+  .company-billing-usage{grid-column:1}
+  .company-billing-row>.actions{grid-column:1;grid-row:auto}
+  .company-billing-row>.actions .btn{width:100%;min-width:0}
+}
+
 .provider-profile-heading{
   grid-column:1/-1;
   display:grid;
@@ -5824,10 +5895,13 @@ body.fast-tab-switch .admin-shell .section{
     overflow:visible!important;
   }
   .company-summary-stats .stat{min-width:0!important}
-  .companies-overview-grid,
-  .company-readiness-grid{
+  .companies-overview-grid{
     grid-template-columns:1fr;
     gap:8px;
+  }
+  .company-readiness-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
   }
   .company-overview-row{
     grid-template-columns:1fr;
@@ -5841,7 +5915,12 @@ body.fast-tab-switch .admin-shell .section{
     grid-template-columns:repeat(2,minmax(0,1fr));
   }
   .company-overview-row>.actions .btn{width:100%;justify-content:center}
-  .company-readiness-item{min-height:0}
+  .company-readiness-item{
+    min-height:132px;
+    padding:9px;
+  }
+  .company-readiness-item strong{font-size:15px}
+  .company-readiness-item small{font-size:11px;line-height:1.28}
   .company-readiness-footer{
     display:grid;
     grid-template-columns:1fr;

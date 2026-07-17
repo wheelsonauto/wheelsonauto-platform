@@ -260,6 +260,8 @@ const criticalActionRequirements = [
   ['Customer portal login save flow', 'save-customer-login', ['/api/customer-accounts', 'customerLoginName', 'await refreshData(true)', 'closeModal()', 'Settings()']],
   ['Customer portal draft creation flow', 'create-missing-customer-logins', ['/api/customer-accounts/create-missing-drafts', 'await refreshData(true)', 'portal draft']],
   ['Company account save flow', 'save-org', ['/api/organizations', 'await refreshData(true)', 'closeModal()', 'Organizations()']],
+  ['Company subscription save flow', 'save-company-subscription', ['/api/billing/subscriptions', 'organizationId:button.dataset.id', 'await refreshData(true)', 'closeModal()', 'Organizations()']],
+  ['Company invoice save flow', 'save-company-invoice', ['/api/billing/invoices/record', 'providerInvoiceId:val', 'await refreshData(true)', 'closeModal()', 'Organizations()']],
   ['Staff account save flow', 'save-staff', ['/api/staff-accounts', 'await refreshData(true)', 'closeModal()', 'Settings()']],
   ['API provider save flow', 'save-api-provider', ['/api/api-providers', 'await refreshData(true)', 'closeModal()', 'ApiRoadmap()']],
   ['API task creation flow', 'create-api-task', ['/api/tasks', 'await refreshData(true)', 'closeModal()', 'Dispatch()']],

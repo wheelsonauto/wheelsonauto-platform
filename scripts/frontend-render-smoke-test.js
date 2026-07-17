@@ -574,7 +574,7 @@ function ownerSmoke() {
     ['Companies overview', 'Companies', 'Overview', ['Companies', 'Company control', 'Setup attention', 'company-overview-row'], false],
     ['Companies accounts', 'Companies', 'Accounts', ['Companies', 'Company accounts', 'company-accounts-panel', 'Add company'], false],
     ['Companies staff', 'Companies', 'Staff', ['Companies', 'Staff by company', 'company-staff-panel', 'Add staff'], false],
-    ['Companies readiness', 'Companies', 'Readiness', ['Companies', 'Franchise readiness', 'company-readiness-grid', 'Current rule'], false],
+    ['Companies readiness', 'Companies', 'Readiness', ['Companies', 'Franchise readiness', 'company-readiness-grid', 'Subscription billing', 'company-billing-console', 'Manual ledger', 'Current rule'], false],
     ['API roadmap providers', 'API Roadmap', 'Providers', ['API Roadmap', 'Provider checklist', 'Total systems', 'Setup'], true],
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website', 'Website', undefined, ['Website'], false],

@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const nativeSite = require('./native-site');
 const onboarding = require('./onboarding-service');
 const integrationEngine = require('./integration-engine');
+const billingEngine = require('./billing-engine');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -46,6 +47,8 @@ const TRACKER_PROVIDER = String(process.env.WOA_TRACKER_PROVIDER || 'manual').tr
 const TRACKER_WEBHOOK_SECRET = process.env.WOA_TRACKER_WEBHOOK_SECRET || process.env.TRACKER_WEBHOOK_SECRET || '';
 const MARKETING_PROVIDER = String(process.env.WOA_MARKETING_PROVIDER || 'manual').trim().toLowerCase();
 const MARKETING_WEBHOOK_SECRET = process.env.WOA_MARKETING_WEBHOOK_SECRET || process.env.MARKETING_WEBHOOK_SECRET || '';
+const BILLING_PROVIDER = String(process.env.WOA_BILLING_PROVIDER || 'manual').trim().toLowerCase();
+const BILLING_WEBHOOK_SECRET = process.env.WOA_BILLING_WEBHOOK_SECRET || process.env.BILLING_WEBHOOK_SECRET || '';
 const QUICKBOOKS_REALM_ID = process.env.QUICKBOOKS_REALM_ID || '';
 const QUICKBOOKS_CLIENT_ID = process.env.QUICKBOOKS_CLIENT_ID || '';
 const QUICKBOOKS_CLIENT_SECRET = process.env.QUICKBOOKS_CLIENT_SECRET || '';
@@ -85,7 +88,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-marketing-adapter-74">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-autopay-guard-78">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -407,6 +410,9 @@ function ensureBaseOrganization(data) {
   }
   data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
   data.customerAccounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  data.subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+  data.billingInvoices = Array.isArray(data.billingInvoices) ? data.billingInvoices : [];
+  data.billingEvents = Array.isArray(data.billingEvents) ? data.billingEvents : [];
   data.auditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
   [...data.staffAccounts, ...data.customerAccounts].forEach(account => {
     if (!account.organizationId) account.organizationId = MAIN_ORG_ID;
@@ -601,7 +607,7 @@ async function readData() {
       await writeData(seed);
       return repairDataIds(seed);
     } catch {
-      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
     }
   }
 }
@@ -1166,6 +1172,20 @@ function verifyMarketingWebhook(rawBody, headers = {}) {
   const signedBody = timestamp + '.' + String(rawBody || '');
   const expectedHex = crypto.createHmac('sha256', MARKETING_WEBHOOK_SECRET).update(signedBody).digest('hex');
   const expectedBase64 = crypto.createHmac('sha256', MARKETING_WEBHOOK_SECRET).update(signedBody).digest('base64');
+  return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
+    const value = part.replace(/^(?:sha256=|v1=)/i, '');
+    return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
+  });
+}
+function verifyBillingWebhook(rawBody, headers = {}) {
+  if (!BILLING_WEBHOOK_SECRET) return false;
+  const timestamp = String(headers['x-billing-timestamp'] || headers['x-woa-webhook-timestamp'] || '');
+  const unixSeconds = Number(timestamp);
+  const supplied = String(headers['x-billing-signature'] || headers['x-woa-webhook-signature'] || '');
+  if (!unixSeconds || !supplied || Math.abs(Date.now() / 1000 - unixSeconds) > 300) return false;
+  const signedBody = timestamp + '.' + String(rawBody || '');
+  const expectedHex = crypto.createHmac('sha256', BILLING_WEBHOOK_SECRET).update(signedBody).digest('hex');
+  const expectedBase64 = crypto.createHmac('sha256', BILLING_WEBHOOK_SECRET).update(signedBody).digest('base64');
   return supplied.split(/[\s,]+/).filter(Boolean).some(part => {
     const value = part.replace(/^(?:sha256=|v1=)/i, '');
     return secureWebhookValueMatch(value.toLowerCase(), expectedHex.toLowerCase()) || secureWebhookValueMatch(value, expectedBase64);
@@ -5590,6 +5610,23 @@ function cleanOrganizationPayload(payload, existing = null) {
     updatedAt: now
   };
 }
+function applySubscriptionToOrganization(data, subscription) {
+  if (!subscription) return null;
+  const organization = (data.organizations || []).find(row => String(row.id || '') === String(subscription.organizationId || ''));
+  if (!organization) return null;
+  organization.plan = subscription.plan || organization.plan || 'Internal';
+  const billingStatusBySubscription = {
+    Active: subscription.provider && subscription.provider !== 'manual' ? 'Active subscription billing' : 'Active - manual billing',
+    Trialing: 'Trial subscription',
+    'Past due': 'Past due',
+    Paused: 'Billing paused',
+    Canceled: 'Billing canceled',
+    Draft: 'Billing setup required'
+  };
+  organization.billingStatus = billingStatusBySubscription[subscription.status] || 'Billing setup required';
+  organization.updatedAt = new Date().toISOString();
+  return organization;
+}
 function isOwnerUser(user) {
   return String(user && user.role || '').toLowerCase() === 'owner';
 }
@@ -5597,8 +5634,8 @@ function apiAllowedForUser(user, pathname) {
   if (isOwnerUser(user)) return true;
   const role = String(user && user.role || '').toLowerCase();
   if (!['manager', 'mechanic'].includes(role)) return false;
-  if (role === 'manager' && (pathname.startsWith('/api/integrations/tracker') || pathname.startsWith('/api/integrations/marketing'))) return true;
-  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/notifications', '/api/reset'];
+  if (role === 'manager' && (pathname.startsWith('/api/integrations/tracker') || pathname.startsWith('/api/integrations/marketing') || pathname === '/api/billing/summary')) return true;
+  const ownerOnly = ['/api/integrations', '/api/sync', '/api/import', '/api/woa-autopay', '/api/api-providers', '/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/billing', '/api/notifications', '/api/reset'];
   if (ownerOnly.some(prefix => pathname.startsWith(prefix))) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/messages')) return false;
   if (role === 'mechanic' && pathname.startsWith('/api/reports')) return false;
@@ -5609,6 +5646,9 @@ function apiAllowedForUser(user, pathname) {
 function stateForUserWrite(current, incoming, user) {
   if (isOwnerUser(user)) {
     const next = preserveStaffLoginSecrets(current, incoming);
+    ['subscriptions', 'billingInvoices', 'billingEvents'].forEach(key => {
+      next[key] = Array.isArray(current[key]) ? current[key] : [];
+    });
     if (Array.isArray(next.documents)) next.documents = next.documents.map(document => {
       const clean = { ...document };
       delete clean.privateFileAvailable;
@@ -5634,7 +5674,7 @@ function stateForUserWrite(current, incoming, user) {
   return next;
 }
 function auditChangedSections(current = {}, next = {}) {
-  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'websiteLeads', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts'];
+  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'websiteLeads', 'staffAccounts', 'customerAccounts', 'organizations', 'subscriptions', 'billingInvoices', 'billingEvents', 'dailyCloseouts'];
   const details = [];
   keys.forEach(key => {
     const beforeRows = Array.isArray(current[key]) ? auditComparableRows(current[key]) : [];
@@ -5806,6 +5846,12 @@ function stateForUserRead(data, user) {
     safe.integrations.clover.hostedCheckoutWebhookReady = !!CLOVER_HCO_WEBHOOK_SECRET;
     safe.integrations.clover.appWebhookAuthReady = !!CLOVER_WEBHOOK_SECRET;
     safe.integrations.clover.appWebhookVerificationCodeReady = !!safe.integrations.clover.pendingVerificationCode;
+    safe.integrations.billing = {
+      provider: BILLING_PROVIDER,
+      configured: BILLING_PROVIDER !== 'manual' && !!BILLING_WEBHOOK_SECRET,
+      signedWebhookReady: !!BILLING_WEBHOOK_SECRET,
+      status: BILLING_PROVIDER !== 'manual' && BILLING_WEBHOOK_SECRET ? 'Testing - signed provider event needed' : 'Ready - manual subscription ledger'
+    };
     safe.integrations.apiProviderRuntime = apiProviderRows(safe);
   }
   if (owner) return safe;
@@ -5815,6 +5861,9 @@ function stateForUserRead(data, user) {
   delete safe.staffAccounts;
   delete safe.customerAccounts;
   delete safe.auditLogs;
+  delete safe.subscriptions;
+  delete safe.billingInvoices;
+  delete safe.billingEvents;
   if (safe.integrations) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
@@ -7185,6 +7234,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['WOA_TRACKER_WEBHOOK_SECRET', TRACKER_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed tracker/GPS provider callbacks; manager updates remain live without a provider'],
     ['WOA_MARKETING_PROVIDER', MARKETING_PROVIDER || 'manual', 'Marketing and lead-source provider adapter'],
     ['WOA_MARKETING_WEBHOOK_SECRET', MARKETING_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed marketing provider callbacks; staff lead sync remains live without a provider'],
+    ['WOA_BILLING_PROVIDER', BILLING_PROVIDER || 'manual', 'Company subscription billing provider adapter'],
+    ['WOA_BILLING_WEBHOOK_SECRET', BILLING_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed subscription and invoice callbacks; owner billing ledger remains live without a provider'],
     ['QUICKBOOKS_*', QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Set' : 'Manual-live', 'QuickBooks OAuth connection; internal accounting ledger and CSV remain live without it'],
     ['GOOGLE_CALENDAR_*', GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Set' : 'Manual-live', 'Automatic Google Calendar sync; ICS, add-to-calendar, and maps links remain live without it'],
     ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Provider adapter selection; Clover is live and Stripe remains a future adapter'],
@@ -7246,6 +7297,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/api/integrations/marketing/status', 'Owner/manager lead-source health, conversion links, and review queue'),
     route('POST', '/api/integrations/marketing/sync', 'Owner/manager marketing lead adapter'),
     route('POST', '/api/webhooks/marketing', 'Signed marketing and lead-source provider callback'),
+    route('GET', '/api/billing/summary', 'Company-scoped subscription usage and invoice summary'),
+    route('GET', '/api/billing/subscriptions', 'Owner company subscription control'),
+    route('POST', '/api/billing/subscriptions', 'Owner company subscription create/update'),
+    route('POST', '/api/billing/invoices/record', 'Owner-recorded company invoice/payment'),
+    route('POST', '/api/webhooks/billing', 'Signed billing provider subscription/invoice callback'),
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
@@ -8639,7 +8695,7 @@ function defaultApiProviderRows(data = {}) {
     { id: 'accounting', name: 'Accounting / QuickBooks', group: 'Finance', status: QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET ? 'Testing - OAuth required' : 'Ready - internal ledger', owner: 'Owner', envKeys: 'QUICKBOOKS_REALM_ID, QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET', endpoint: '/api/accounting/ledger, /api/accounting/export.csv, /api/accounting/quickbooks.csv', liveTest: 'Rebuild the source ledger, verify every QuickBooks journal balances, then complete OAuth before testing direct sync.' },
     { id: 'pickup-calendar', name: 'Pickup Calendar / Maps', group: 'Operations', status: GOOGLE_CALENDAR_ID && GOOGLE_CALENDAR_ACCESS_TOKEN ? 'Testing - automatic sync pending' : 'Ready - manual calendar', owner: 'Manager', envKeys: 'GOOGLE_CALENDAR_ID, GOOGLE_CALENDAR_ACCESS_TOKEN', endpoint: '/api/pickups/calendar, /api/pickups/:id/calendar, /api/pickups/:id/calendar.ics', liveTest: 'Prepare a pickup, open directions, add it to Google Calendar or ICS, and verify the customer, vehicle, date, time, and address.' },
     { id: 'marketing', name: 'Marketing / Lead Sources', group: 'Growth', status: MARKETING_WEBHOOK_SECRET && MARKETING_PROVIDER !== 'manual' ? 'Testing - signed event needed' : 'Ready - manual adapter', owner: 'Manager', envKeys: 'WOA_MARKETING_PROVIDER, WOA_MARKETING_WEBHOOK_SECRET', endpoint: '/api/integrations/marketing/status, /api/integrations/marketing/sync, /api/webhooks/marketing', liveTest: 'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.' },
-    { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: 'Architecture ready', owner: 'Owner', envKeys: 'BILLING_PROVIDER_KEY', endpoint: 'Future /api/billing/subscriptions', liveTest: 'Create company account, staff, fleet, separate provider credentials, subscription status.' }
+    { id: 'multi-company-billing', name: 'Multi-company Billing', group: 'Scale', status: BILLING_PROVIDER !== 'manual' && BILLING_WEBHOOK_SECRET ? 'Testing - signed event needed' : 'Ready - manual ledger', owner: 'Owner', envKeys: 'WOA_BILLING_PROVIDER, WOA_BILLING_WEBHOOK_SECRET', endpoint: '/api/billing/summary, /api/billing/subscriptions, /api/billing/invoices/record, /api/webhooks/billing', liveTest: 'Create one company subscription, verify usage limits and duplicate invoice protection, then accept one signed provider event without exposing provider references to managers.' }
   ];
 }
 function apiProviderTruthOverrides(data = {}) {
@@ -8734,6 +8790,13 @@ function apiProviderTruthOverrides(data = {}) {
   const marketingProviderLive = marketingProviderReady && marketingEvents.some(row => row.authorization === 'HMAC-SHA256');
   const marketingReviewCount = marketingLeads.filter(row => /review|conflict/i.test(String(row.status || '') + ' ' + String(row.matchStatus || ''))).length;
   const marketingConvertedCount = marketingLeads.filter(row => /converted/i.test(String(row.status || '')) || row.customerId).length;
+  const companySubscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+  const companyBillingInvoices = Array.isArray(data.billingInvoices) ? data.billingInvoices : [];
+  const companyBillingEvents = Array.isArray(data.billingEvents) ? data.billingEvents : [];
+  const billingProviderReady = !!(BILLING_WEBHOOK_SECRET && BILLING_PROVIDER !== 'manual');
+  const billingProviderLive = billingProviderReady && companyBillingEvents.some(row => row.authorization === 'HMAC-SHA256');
+  const activeCompanySubscriptions = companySubscriptions.filter(row => /active|trial/i.test(String(row.status || ''))).length;
+  const pastDueCompanyInvoices = companyBillingInvoices.filter(row => /past.?due|open/i.test(String(row.status || ''))).length;
   const accountingEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
   const quickBooksReady = !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET);
   const pickupAppointments = Array.isArray(data.pickupAppointments) ? data.pickupAppointments : [];
@@ -8824,6 +8887,15 @@ function apiProviderTruthOverrides(data = {}) {
       liveTest: 'Import one exact lead, prove duplicate protection, link its application/customer/vehicle conversion, then accept one signed provider event.',
       lastTestAt: newestEvidenceAt(marketingEvents.map(row => row.receivedAt || row.occurredAt).concat(marketingLeads.map(row => row.updatedAt || row.createdAt))),
       lastTestResult: marketingLeads.length + ' lead(s) feed the existing Marketing board; ' + marketingConvertedCount + ' converted and ' + marketingReviewCount + ' need review. Duplicate protection, organization scope, and exact application/customer/vehicle linking are live.' + (marketingProviderLive ? ' A signed provider event was accepted.' : ' External campaign attribution remains unverified until one signed provider event is accepted.')
+    },
+    'multi-company-billing': {
+      name: 'Multi-company Billing',
+      status: billingProviderLive ? 'Connected' : (billingProviderReady ? 'Testing - signed event needed' : 'Ready - manual ledger'),
+      envKeys: 'WOA_BILLING_PROVIDER, WOA_BILLING_WEBHOOK_SECRET',
+      endpoint: '/api/billing/summary, /api/billing/subscriptions, /api/billing/invoices/record, /api/webhooks/billing',
+      liveTest: 'Create one company subscription, verify company-scoped usage and duplicate invoice protection, then accept one signed provider event without exposing provider references to managers.',
+      lastTestAt: newestEvidenceAt(companyBillingEvents.map(row => row.receivedAt || row.occurredAt).concat(companySubscriptions.map(row => row.updatedAt || row.createdAt)).concat(companyBillingInvoices.map(row => row.updatedAt || row.createdAt))),
+      lastTestResult: companySubscriptions.length + ' company subscription record(s) and ' + companyBillingInvoices.length + ' invoice record(s) are tracked; ' + activeCompanySubscriptions + ' subscription(s) are active/trialing and ' + pastDueCompanyInvoices + ' invoice(s) remain open or past due. One-subscription-per-company, usage limits, role privacy, and invoice idempotency are live.' + (billingProviderLive ? ' A signed billing provider event was accepted.' : ' External money movement remains unverified until a provider is selected and one signed event is accepted.')
     },
     accounting: {
       name: 'Accounting / QuickBooks',
@@ -9387,7 +9459,7 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   const latest = await readData();
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
@@ -10393,6 +10465,82 @@ function recurringDateKey(row) {
   const match = raw.match(/\d{4}-\d{2}-\d{2}/);
   return match ? match[0] : '';
 }
+function validCalendarDateKey(value) {
+  const match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
+  return date.toISOString().slice(0, 10) === match[0] ? match[0] : '';
+}
+function calendarDayName(value) {
+  const key = validCalendarDateKey(value);
+  if (!key) return '';
+  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][new Date(key + 'T12:00:00Z').getUTCDay()];
+}
+function addCalendarMonthsToDateKey(value, months, preferredDay) {
+  const key = validCalendarDateKey(value);
+  if (!key) return '';
+  const source = new Date(key + 'T12:00:00Z');
+  const targetMonth = source.getUTCMonth() + Number(months || 0);
+  const targetYear = source.getUTCFullYear() + Math.floor(targetMonth / 12);
+  const normalizedMonth = ((targetMonth % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(targetYear, normalizedMonth + 1, 0, 12)).getUTCDate();
+  const day = Math.max(1, Math.min(lastDay, Number(preferredDay || source.getUTCDate())));
+  return new Date(Date.UTC(targetYear, normalizedMonth, day, 12)).toISOString().slice(0, 10);
+}
+function nextRecurringOccurrence(row, value) {
+  const key = validCalendarDateKey(value);
+  if (!key) return '';
+  const frequency = String(row && row.frequency || 'Weekly').trim().toLowerCase();
+  if (frequency === 'daily' || frequency.includes('every day')) return addDaysToDateKey(key, 1);
+  if (frequency.includes('bi-week') || frequency.includes('biweek') || frequency.includes('every 2 week')) return addDaysToDateKey(key, 14);
+  if (frequency.includes('semi-month') || frequency.includes('twice') && frequency.includes('month')) return addDaysToDateKey(key, 15);
+  if (frequency.includes('month')) return addCalendarMonthsToDateKey(key, 1, Number(row && (row.monthlyDay || row.dayOfMonth)) || Number(key.slice(8, 10)));
+  return addDaysToDateKey(key, 7);
+}
+function nextFutureRecurringDate(row, afterDateKey, startDateKey = recurringDateKey(row)) {
+  const after = validCalendarDateKey(afterDateKey);
+  let next = validCalendarDateKey(startDateKey);
+  if (!after || !next) return '';
+  let guard = 0;
+  while (next <= after && guard < 800) {
+    const advanced = nextRecurringOccurrence(row, next);
+    if (!advanced || advanced <= next) return '';
+    next = advanced;
+    guard += 1;
+  }
+  return next > after ? next : '';
+}
+function paymentEventDateKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return validCalendarDateKey(raw);
+  if (/today/i.test(raw)) return localDateKey();
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : localDateKey(parsed);
+}
+function successfulRecurringPaymentEvidence(data, row, dueKey, throughDateKey) {
+  const due = validCalendarDateKey(dueKey);
+  const through = validCalendarDateKey(throughDateKey);
+  if (!due || !through) return null;
+  const candidates = [];
+  const paidStatus = value => {
+    const status = String(value || '').trim().toLowerCase();
+    return !!status && !/(fail|declin|void|refund|dispute|not found|rejected)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
+  };
+  const add = (status, at, source, id) => {
+    if (!paidStatus(status)) return;
+    const dateKey = paymentEventDateKey(at);
+    if (dateKey && dateKey >= due && dateKey <= through) candidates.push({ dateKey, source, id: id || '' });
+  };
+  add(row && row.lastPaymentResult, row && row.lastPaymentAt, 'recurring payment result', row && row.lastCloverChargeId);
+  add(row && row.lastAutoChargeResult, row && (row.lastAutoChargeAt || row.lastPaymentAt), 'autopay result', row && row.lastCloverChargeId);
+  (data && data.payments || []).forEach(payment => {
+    if (!payment || String(payment.recurringPaymentId || '') !== String(row && row.id || '')) return;
+    add(payment.status, payment.createdAt || payment.date, payment.source || payment.method || 'linked payment', payment.cloverPaymentId || payment.id);
+  });
+  candidates.sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+  return candidates[0] || null;
+}
 function chargeTimeMinutes(row) {
   const raw = String(row && (row.chargeTime || row.paymentTime || row.autopayTime) || '18:00').trim();
   const match = raw.match(/^(\d{1,2}):(\d{2})/);
@@ -10422,8 +10570,9 @@ function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
   if (Number(row && (row.retryCount || row.failedAttempts) || 0) >= 2) return false;
   if (status !== 'active' && !status.includes('1x failed')) return false;
   if (!isWheelsonAutoManagedAutopay(row)) return false;
-  if (recurringDateKey(row) !== dateKey) return false;
-  if (businessMinutesNow() < chargeTimeMinutes(row)) return false;
+  const dueKey = recurringDateKey(row);
+  if (!dueKey || dueKey > dateKey) return false;
+  if (dueKey === dateKey && businessMinutesNow() < chargeTimeMinutes(row)) return false;
   if (!retryDelayPassed(row)) return false;
   return String(row.lastAutoChargeDate || '') !== dateKey;
 }
@@ -10611,6 +10760,10 @@ async function chargeSavedRecurringCard(data, payload, req) {
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
   const ref = chargeReference();
+  const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const idempotencyKey = String(payload.idempotencyKey || (payload.automatic && scheduledDueKey
+    ? ['woa-auto', recurring.id || payload.recurringPaymentId, scheduledDueKey, cents(amount)].join('-')
+    : ['woa-manual', recurring.id || payload.recurringPaymentId, cents(amount), Date.now()].join('-'))).slice(0, 255);
   const chargeBody = {
     amount: cents(amount),
     currency: 'USD',
@@ -10623,14 +10776,23 @@ async function chargeSavedRecurringCard(data, payload, req) {
     receipt_email: recurring.email || undefined
   };
   if (cardSource && source === cardSource) {
-    chargeBody.stored_credentials = { sequence: 'SUBSEQUENT', is_scheduled: false, initiator: 'MERCHANT' };
+    chargeBody.stored_credentials = { sequence: 'SUBSEQUENT', is_scheduled: payload.automatic === true, initiator: 'MERCHANT' };
   }
   const charge = await cloverPostCharge({
-    idempotencyKey: 'woa-' + (payload.recurringPaymentId || recurring.id) + '-' + cents(amount) + '-' + Date.now(),
+    idempotencyKey,
     charge: chargeBody
   }, req);
   const status = String(charge.status || charge.result || '').toLowerCase();
   const paid = status === 'paid' || status === 'succeeded' || status === 'success' || charge.paid === true || charge.captured === true;
+  const paymentAt = new Date();
+  const paymentAtIso = paymentAt.toISOString();
+  const paymentDateKey = localDateKey(paymentAt);
+  const priorNextRun = String(recurring.nextRun || '').trim();
+  const shouldAdvancePastDue = paid && scheduledDueKey && scheduledDueKey <= paymentDateKey;
+  const requestedNextRun = String(payload.nextRun || '').trim();
+  const resolvedNextRun = String(paid
+    ? (requestedNextRun || (shouldAdvancePastDue ? nextFutureRecurringDate(recurring, paymentDateKey, scheduledDueKey) : priorNextRun) || priorNextRun)
+    : priorNextRun).trim();
   const identity = recurringPaymentIdentity(data, recurring, payload);
   const payment = {
     id: 'clover-manual-charge-' + (charge.id || Date.now()),
@@ -10638,7 +10800,8 @@ async function chargeSavedRecurringCard(data, payload, req) {
     cloverChargeId: charge.id || charge.charge || '',
     externalReferenceId: ref,
     externalCustomerReference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
-    date: new Date().toLocaleString('en-US'),
+    date: paymentAt.toLocaleString('en-US'),
+    createdAt: paymentAtIso,
     customer: recurring.customer,
     phone: recurring.phone || '',
     email: recurring.email || '',
@@ -10655,6 +10818,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
     tone: paid ? 'good' : 'warn',
     source: 'Clover saved-card charge',
     notes: String(payload.note || '').trim(),
+    scheduledDueDate: scheduledDueKey,
     recurringPaymentId: recurring.id || '',
     cloverCustomerId: recurring.cloverCustomerId || '',
     cloverSubscriptionId: recurring.cloverSubscriptionId || ''
@@ -10678,29 +10842,29 @@ async function chargeSavedRecurringCard(data, payload, req) {
     cloverPaymentId: payment.cloverPaymentId,
     recurringPaymentId: payment.recurringPaymentId
   });
-  updateRecurringChargeState(data, recurring.id, {
+  const chargeStatePatch = {
     status: paid ? 'Active' : 'Payment submitted',
     tone: paid ? 'good' : 'warn',
     retryCount: paid ? 0 : (recurring.retryCount || recurring.failedAttempts || 0),
     failedAttempts: paid ? 0 : (recurring.failedAttempts || recurring.retryCount || 0),
-    nextRun: String(payload.nextRun || recurring.nextRun || '').trim(),
-    lastPaymentAt: new Date().toISOString(),
+    nextRun: resolvedNextRun,
+    lastPaymentAt: paymentAtIso,
     lastCloverChargeId: payment.cloverChargeId,
-    lastManualChargeAt: new Date().toISOString(),
     lastPaymentResult: payment.status,
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts
-  });
+  };
+  if (!payload.automatic) chargeStatePatch.lastManualChargeAt = paymentAtIso;
+  if (paid && resolvedNextRun && resolvedNextRun !== priorNextRun) {
+    chargeStatePatch.paymentDay = /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.paymentDay;
+    chargeStatePatch.chargeDay = chargeStatePatch.paymentDay;
+    chargeStatePatch.lastScheduleAdvancedAt = paymentAtIso;
+    chargeStatePatch.lastScheduleAdvancedFrom = scheduledDueKey || priorNextRun;
+    chargeStatePatch.lastScheduleAdvanceSource = payload.automatic ? 'WheelsonAuto autopay' : 'Manual catch-up charge';
+  }
+  updateRecurringChargeState(data, recurring.id, chargeStatePatch);
   await writeData(data);
   return { charge, payment, recurring };
-}
-function nextDateAfterCharge(dateKey, frequency) {
-  const d = new Date(dateKey + 'T12:00:00');
-  const f = String(frequency || '').toLowerCase();
-  if (f.includes('bi')) d.setDate(d.getDate() + 14);
-  else if (f.includes('month')) d.setMonth(d.getMonth() + 1);
-  else d.setDate(d.getDate() + 7);
-  return localDateKey(d);
 }
 async function runWheelsonAutoAutopay(options = {}) {
   if (woaAutopayStatus.inFlight) return { ok: true, skipped: true, reason: 'already running', status: woaAutopayStatus };
@@ -10709,20 +10873,53 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, failed: 0, notFound: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, skipped: 0, errors: [] };
   try {
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+    for (const row of data.recurringPayments) {
+      const dueKey = recurringDateKey(row);
+      const status = String(row && row.status || '').toLowerCase();
+      if (!dueKey || dueKey > dateKey || (status !== 'active' && !status.includes('1x failed')) || !isWheelsonAutoManagedAutopay(row)) continue;
+      const evidence = successfulRecurringPaymentEvidence(data, row, dueKey, dateKey);
+      if (!evidence) continue;
+      const nextRun = nextFutureRecurringDate(row, dateKey, dueKey);
+      if (!nextRun || nextRun === dueKey) continue;
+      const stamp = new Date().toISOString();
+      updateRecurringChargeState(data, row.id, {
+        nextRun,
+        adminNextRun: nextRun,
+        paymentDay: /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.paymentDay,
+        chargeDay: /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.chargeDay,
+        status: 'Active',
+        tone: 'good',
+        retryCount: 0,
+        failedAttempts: 0,
+        lastScheduleReconciledAt: stamp,
+        lastScheduleReconciledFrom: dueKey,
+        lastScheduleReconcileSource: evidence.source,
+        lastScheduleReconcilePaymentId: evidence.id,
+        lastScheduleReconcilePaymentDate: evidence.dateKey
+      });
+      result.reconciled += 1;
+    }
     const due = data.recurringPayments.filter(row => isDueForWheelsonAutoAutopay(row, dateKey));
     for (const row of due) {
+      const scheduledDueDate = recurringDateKey(row);
       try {
-        const nextRun = nextDateAfterCharge(dateKey, row.frequency);
-        await chargeSavedRecurringCard(data, {
+        const nextRun = nextFutureRecurringDate(row, dateKey, scheduledDueDate);
+        if (!nextRun) throw new Error('WheelsonAuto could not calculate the next ' + (row.frequency || 'recurring') + ' date. The card was not charged.');
+        const charged = await chargeSavedRecurringCard(data, {
           recurringPaymentId: row.id,
           amount: row.amount,
           nextRun,
-          note: 'WheelsonAuto autopay charged for due date ' + dateKey
+          scheduledDueDate,
+          automatic: true,
+          note: 'WheelsonAuto autopay charged for due date ' + scheduledDueDate
         }, null);
+        if (!charged || !charged.payment || String(charged.payment.status || '').toLowerCase() !== 'paid') {
+          throw new Error('Clover returned ' + String(charged && charged.payment && charged.payment.status || 'an unconfirmed result') + '. The next charge date was not advanced.');
+        }
         row.lastAutoChargeDate = dateKey;
         row.lastAutoChargeAt = new Date().toISOString();
         row.nextRun = nextRun;
@@ -10736,7 +10933,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         if (isPaymentNotFoundError(err)) {
           const payment = savePaymentNotFoundResult(data, row, {
             amount: row.amount,
-            note: 'WheelsonAuto autopay could not confirm payment for due date ' + dateKey
+            note: 'WheelsonAuto autopay could not confirm payment for due date ' + scheduledDueDate
           }, err, { dateKey, source: 'WheelsonAuto autopay payment not found' });
           row.status = payment.status;
           row.tone = 'warn';
@@ -10752,7 +10949,7 @@ async function runWheelsonAutoAutopay(options = {}) {
               'WheelsonAuto could not confirm an autopay payment.',
               'Customer: ' + (row.customer || 'Unknown customer'),
               'Amount: $' + Number(row.amount || 0).toLocaleString(),
-              'Due date: ' + dateKey,
+              'Due date: ' + scheduledDueDate,
               'Vehicle: ' + (row.vehicle || row.vin || 'Not linked'),
               'Status: ' + payment.status,
               'Error: ' + String(err && err.message || err)
@@ -10773,7 +10970,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeAttemptAt = new Date().toISOString();
         saveFailedChargeResult(data, row, {
           amount: row.amount,
-          note: 'WheelsonAuto autopay failed for due date ' + dateKey
+          note: 'WheelsonAuto autopay failed for due date ' + scheduledDueDate
         }, err, { dateKey, attempts, source: 'WheelsonAuto autopay failed charge' });
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
         await queueOwnerEmailNotification(data, 'payment_failed', {
@@ -10783,7 +10980,7 @@ async function runWheelsonAutoAutopay(options = {}) {
             'WheelsonAuto autopay failed.',
             'Customer: ' + (row.customer || 'Unknown customer'),
             'Amount: $' + Number(row.amount || 0).toLocaleString(),
-            'Due date: ' + dateKey,
+            'Due date: ' + scheduledDueDate,
             'Attempt: ' + attempts + ' of 2',
             'Vehicle: ' + (row.vehicle || row.vin || 'Not linked'),
             'Status: ' + row.status,
@@ -10794,7 +10991,7 @@ async function runWheelsonAutoAutopay(options = {}) {
         result.errors.push((row.customer || row.id) + ': ' + row.lastAutoChargeError);
       }
     }
-    result.skipped = data.recurringPayments.length - due.length;
+    result.skipped = Math.max(0, data.recurringPayments.length - due.length - result.reconciled);
     data.integrations = data.integrations || {};
     data.integrations.wheelsonAutoAutopay = {
       enabled: true,
@@ -11901,6 +12098,54 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, authorization: signed ? 'HMAC-SHA256' : 'Shared secret', ...summary, leadIds: results.map(result => result.record && result.record.id).filter(Boolean) });
+    }
+    if (url.pathname === '/api/webhooks/billing' && req.method === 'POST') {
+      if (!BILLING_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Billing webhook secret is not configured.' });
+      const rawBody = await readBody(req, 512 * 1024);
+      const signed = verifyBillingWebhook(rawBody, req.headers);
+      const authorized = signed || secureWebhookValueMatch(url.searchParams.get('secret'), BILLING_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-woa-webhook-secret'], BILLING_WEBHOOK_SECRET)
+        || secureWebhookValueMatch(req.headers['x-billing-webhook-secret'], BILLING_WEBHOOK_SECRET);
+      if (!authorized) return json(res, 401, { ok: false, error: 'Unauthorized billing webhook.' });
+      let payload;
+      try { payload = rawBody ? JSON.parse(rawBody) : {}; } catch { return json(res, 400, { ok: false, error: 'Billing webhook body must be valid JSON.' }); }
+      const events = Array.isArray(payload.events) ? payload.events : [payload];
+      if (!events.length || events.length > 500) return json(res, 400, { ok: false, error: 'Billing webhook must include between 1 and 500 events.' });
+      const data = await readData();
+      const results = [];
+      for (const event of events) {
+        const organizationId = String(event && (event.organizationId || event.companyId) || MAIN_ORG_ID);
+        try {
+          const result = billingEngine.applyBillingEvent(data, event || {}, {
+            name: String(event && event.provider || BILLING_PROVIDER || 'Billing provider'),
+            role: 'System',
+            organizationId
+          }, { provider: String(event && event.provider || BILLING_PROVIDER || 'billing') });
+          if (result.event && !result.duplicate) result.event.authorization = signed ? 'HMAC-SHA256' : 'Shared secret';
+          if (result.subscription) applySubscriptionToOrganization(data, result.subscription);
+          results.push(result);
+        } catch (error) {
+          results.push({ error: String(error && error.message || error), duplicate: false, event: null, subscription: null, invoice: null });
+        }
+      }
+      const summary = {
+        received: results.filter(result => result.event && !result.duplicate).length,
+        subscriptions: results.filter(result => result.subscription && !result.duplicate).length,
+        invoices: results.filter(result => result.invoice && !result.duplicate).length,
+        duplicates: results.filter(result => result.duplicate).length,
+        rejected: results.filter(result => result.error).length
+      };
+      const auditOrganizationId = String(events[0] && (events[0].organizationId || events[0].companyId) || MAIN_ORG_ID);
+      appendAuditLog(data, { name: BILLING_PROVIDER || 'Billing provider', role: 'System', organizationId: auditOrganizationId }, 'Billing provider update', [summary.received + ' received', summary.subscriptions + ' subscription update(s)', summary.invoices + ' invoice update(s)', summary.duplicates + ' duplicate', summary.rejected + ' rejected', signed ? 'HMAC signed' : 'Shared secret']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, summary.rejected && !summary.received && !summary.duplicates ? 400 : 200, {
+        ok: !(summary.rejected && !summary.received && !summary.duplicates),
+        authorization: signed ? 'HMAC-SHA256' : 'Shared secret',
+        ...summary,
+        errors: results.filter(result => result.error).map(result => result.error).slice(0, 20),
+        eventIds: results.map(result => result.event && result.event.id).filter(Boolean)
+      });
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
@@ -14364,6 +14609,94 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, created, skipped, loginUrl: PUBLIC_BASE_URL + '/customer/login' });
     }
+    if (url.pathname === '/api/billing/summary' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view company billing summaries.' });
+      const data = await readData();
+      const requestedOrganizationId = isOwnerUser(user)
+        ? String(url.searchParams.get('organizationId') || userOrganizationId(user))
+        : userOrganizationId(user);
+      let summary;
+      try {
+        summary = billingEngine.subscriptionSummary(data, requestedOrganizationId, {
+          provider: BILLING_PROVIDER,
+          providerConfigured: BILLING_PROVIDER !== 'manual' && !!BILLING_WEBHOOK_SECRET,
+          includeProviderReferences: isOwnerUser(user)
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
+      }
+      return json(res, 200, { ok: true, summary });
+    }
+    if (url.pathname === '/api/billing/subscriptions' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage company subscriptions.' });
+      const data = await readData();
+      ensureBaseOrganization(data);
+      const summaries = (data.organizations || []).map(organization => billingEngine.subscriptionSummary(data, organization.id, {
+        provider: BILLING_PROVIDER,
+        providerConfigured: BILLING_PROVIDER !== 'manual' && !!BILLING_WEBHOOK_SECRET,
+        includeProviderReferences: true
+      }));
+      return json(res, 200, {
+        ok: true,
+        provider: BILLING_PROVIDER,
+        providerConfigured: BILLING_PROVIDER !== 'manual' && !!BILLING_WEBHOOK_SECRET,
+        signedWebhookReady: !!BILLING_WEBHOOK_SECRET,
+        summaries,
+        events: (data.billingEvents || []).slice(0, 100).map(scrubPrivateOperationalFields)
+      });
+    }
+    if (url.pathname === '/api/billing/subscriptions' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage company subscriptions.' });
+      const payload = await readJsonBody(req, 256 * 1024);
+      const data = await readData();
+      ensureBaseOrganization(data);
+      let result;
+      try {
+        result = billingEngine.upsertSubscription(data, payload, user, { provider: String(payload.provider || BILLING_PROVIDER || 'manual'), source: 'Owner billing control' });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
+      }
+      applySubscriptionToOrganization(data, result.subscription);
+      appendAuditLog(data, user, result.created ? 'Company subscription created' : 'Company subscription updated', [result.organization.name, result.subscription.plan, result.subscription.status, moneyText(result.subscription.amount), result.subscription.interval, result.subscription.provider]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, result.created ? 201 : 200, {
+        ok: true,
+        created: result.created,
+        summary: billingEngine.subscriptionSummary(data, result.subscription.organizationId, {
+          provider: BILLING_PROVIDER,
+          providerConfigured: BILLING_PROVIDER !== 'manual' && !!BILLING_WEBHOOK_SECRET,
+          includeProviderReferences: true
+        })
+      });
+    }
+    if (url.pathname === '/api/billing/invoices/record' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can record company invoices.' });
+      const payload = await readJsonBody(req, 256 * 1024);
+      const data = await readData();
+      ensureBaseOrganization(data);
+      let result;
+      try {
+        result = billingEngine.recordInvoice(data, payload, user, { provider: String(payload.provider || BILLING_PROVIDER || 'manual'), source: 'Owner billing control' });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
+      }
+      const organization = (data.organizations || []).find(row => row.id === result.invoice.organizationId) || {};
+      appendAuditLog(data, user, result.created ? 'Company invoice recorded' : 'Company invoice updated', [organization.name || result.invoice.organizationId, moneyText(result.invoice.amount), result.invoice.status, result.invoice.periodStart || 'No period start', result.invoice.providerInvoiceId]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, result.created ? 201 : 200, {
+        ok: true,
+        created: result.created,
+        invoice: result.invoice,
+        summary: billingEngine.subscriptionSummary(data, result.invoice.organizationId, {
+          provider: BILLING_PROVIDER,
+          providerConfigured: BILLING_PROVIDER !== 'manual' && !!BILLING_WEBHOOK_SECRET,
+          includeProviderReferences: true
+        })
+      });
+    }
     if (url.pathname === '/api/organizations' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage company accounts.' });
       const payload = await readJsonBody(req);
@@ -14417,20 +14750,34 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       const recurring = findRecurringRow(data, id);
+      if (!recurring) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       const nextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
       const frequency = String(payload.frequency || (recurring && recurring.frequency) || 'Weekly').trim();
       const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
       const status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
-      const paymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
+      const requestedPaymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
+      const paymentDay = /week/i.test(frequency) && validCalendarDateKey(nextRun) ? calendarDayName(nextRun) : requestedPaymentDay;
       const chargeTime = String(payload.chargeTime || payload.paymentTime || (recurring && (recurring.chargeTime || recurring.paymentTime)) || '18:00').trim();
-      const monthlyDay = payload.monthlyDay === undefined || payload.monthlyDay === '' ? undefined : Number(payload.monthlyDay);
+      const monthlyDay = payload.monthlyDay === undefined || payload.monthlyDay === ''
+        ? (recurring && recurring.monthlyDay === undefined ? undefined : Number(recurring && recurring.monthlyDay))
+        : Number(payload.monthlyDay);
       const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
       const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
       if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a WheelsonAuto due date.' });
       if (!frequency) return json(res, 400, { ok: false, error: 'Choose how often this customer should be charged.' });
       if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) return json(res, 400, { ok: false, error: 'Enter a valid autopay amount.' });
       if (monthlyDay !== undefined && (!Number.isFinite(monthlyDay) || monthlyDay < 1 || monthlyDay > 31)) return json(res, 400, { ok: false, error: 'Choose a valid monthly day.' });
-      const enableWheelsonAutoCharge = hasWheelsonAutoSavedCard(recurring);
+      const amountChanged = amount !== undefined && Number(recurring.amount || 0) !== amount;
+      const scheduleChanged = String(recurring.nextRun || '') !== nextRun
+        || String(recurring.frequency || 'Weekly') !== frequency
+        || String(recurring.paymentDay || recurring.chargeDay || '') !== paymentDay
+        || String(recurring.chargeTime || recurring.paymentTime || '18:00') !== chargeTime
+        || (monthlyDay !== undefined && Number(recurring.monthlyDay || 0) !== monthlyDay);
+      const explicitlyEnabled = Object.prototype.hasOwnProperty.call(payload, 'autoChargeEnabled');
+      let enableWheelsonAutoCharge = explicitlyEnabled
+        ? payload.autoChargeEnabled === true || String(payload.autoChargeEnabled).toLowerCase() === 'true'
+        : (Object.prototype.hasOwnProperty.call(recurring, 'autoChargeEnabled') ? !!recurring.autoChargeEnabled : hasWheelsonAutoSavedCard(recurring));
+      if (/removed|history|ended|stopped/i.test(status)) enableWheelsonAutoCharge = false;
       const patch = {
         nextRun,
         adminNextRun: nextRun,
@@ -14441,19 +14788,21 @@ const server = http.createServer(async (req, res) => {
         chargeDay: paymentDay,
         chargeTime,
         retryRule,
-        adminScheduleChangedAt: new Date().toISOString(),
         autoChargeEnabled: enableWheelsonAutoCharge,
         autopayManagedBy: managedBy || (enableWheelsonAutoCharge ? 'WheelsonAuto' : (recurring && recurring.autopayManagedBy || '')),
         notes: String(payload.note || recurring && recurring.notes || '').trim()
       };
+      const updatedAt = new Date().toISOString();
+      if (scheduleChanged) patch.adminScheduleChangedAt = updatedAt;
+      if (amountChanged) patch.amountChangedAt = updatedAt;
       if (amount !== undefined) patch.amount = amount;
       if (monthlyDay !== undefined) patch.monthlyDay = monthlyDay;
       const found = patchRecurringAdminState(data, id, patch);
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       enrichLinkedProfiles(data);
-      appendAuditLog(data, user, 'Autopay schedule updated', [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
+      appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
-      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge });
+      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = await readJsonBody(req);
@@ -14604,6 +14953,7 @@ module.exports = {
   publicMessagingStatus,
   hydrateIncomingEmail,
   verifyResendWebhook,
+  verifyBillingWebhook,
   verifyTwilioWebhook,
   verifyTelnyxWebhook,
   parseIncomingEmail,
@@ -14655,6 +15005,12 @@ module.exports = {
   hostedCheckoutWebhookDetails,
   applyHostedCheckoutWebhook,
   recordHostedCheckoutPayment,
+  validCalendarDateKey,
+  calendarDayName,
+  nextRecurringOccurrence,
+  nextFutureRecurringDate,
+  successfulRecurringPaymentEvidence,
+  isDueForWheelsonAutoAutopay,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,
   activeHostedCheckoutHref,

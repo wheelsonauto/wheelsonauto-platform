@@ -1,6 +1,6 @@
 window.__woaBootReady=false;
 if(window.history&&'scrollRestoration' in window.history)window.history.scrollRestoration='manual';
-var fallbackData={vehicles:[],onlineVehicles:[],applications:[],customers:[],contracts:[],payments:[],maintenance:[],claims:[],messages:[],messageTemplates:[],staffAccounts:[],customerAccounts:[],organizations:[],recurringPayments:[],tasks:[],documents:[],onboardingSessions:[],pickupAppointments:[],refundRequests:[],verificationCases:[],ledgerEntries:[],calendarEvents:[],dailyCloseouts:[],websiteLeads:[],apiProviders:[],business:{name:'WheelsonAuto',website:'wheelsonauto.com'},integrations:{clover:{connected:false,environment:'sandbox'},shopify:{connected:false,store:'wheelsonauto.com',embedPath:'/apply'},messaging:{provider:'not_configured',voiceMode:'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.'}}};
+var fallbackData={vehicles:[],onlineVehicles:[],applications:[],customers:[],contracts:[],payments:[],maintenance:[],claims:[],messages:[],messageTemplates:[],staffAccounts:[],customerAccounts:[],organizations:[],subscriptions:[],billingInvoices:[],billingEvents:[],recurringPayments:[],tasks:[],documents:[],onboardingSessions:[],pickupAppointments:[],refundRequests:[],verificationCases:[],ledgerEntries:[],calendarEvents:[],dailyCloseouts:[],websiteLeads:[],apiProviders:[],business:{name:'WheelsonAuto',website:'wheelsonauto.com'},integrations:{clover:{connected:false,environment:'sandbox'},shopify:{connected:false,store:'wheelsonauto.com',embedPath:'/apply'},messaging:{provider:'not_configured',voiceMode:'Keep calls on T-Mobile; hosted SMS/mirrored inbox connects here.'},billing:{provider:'manual',configured:false,status:'Ready - manual subscription ledger'}}};
 var isPublic=!!window.__PUBLIC_MODE__;var currentUser=window.__CURRENT_USER__||{name:'Owner admin',role:'Owner',homeView:'Dashboard',access:'Full platform access'};var db=normalize(window.__SERVER_DATA__||fallbackData);var nav=navForRole();var view=isPublic?'Apply':(currentUser.homeView||nav[0]||'Dashboard');var tab='Board';var dashboardTab='Dues';var activeMessageThreadKey=localStorage.getItem('woa-active-message-thread')||'';var pendingThreadReplyDraft=null;var stages=['New','Docs needed','Approved','Contract'];var root=document.getElementById('root');var LIVE_REFRESH_MS=5000;var API_AUTO_SYNC_MS=60000;var syncInFlight=false;var lastApiAutoSync=Number(localStorage.getItem('woa-last-api-auto-sync')||0);var lastDataFingerprint=JSON.stringify(db);
 
 function normalize(d){d=Object.assign({},fallbackData,d||{});d.integrations=Object.assign({},fallbackData.integrations,d.integrations||{});d.integrations.clover=Object.assign({},fallbackData.integrations.clover,d.integrations.clover||{});d.integrations.shopify=Object.assign({},fallbackData.integrations.shopify,d.integrations.shopify||{});d.integrations.messaging=Object.assign({},fallbackData.integrations.messaging,d.integrations.messaging||{});d.vehicles=(d.vehicles||[]).map(function(v,i){var p=(v.name||'').split(' ');v.id=v.id||'veh-'+i;v.year=v.year||p[0]||'';v.make=v.make||p[1]||'';v.model=v.model||p.slice(2).join(' ')||'';v.price=v.price||((v.rate||229)*110);v.mileage=v.mileage||v.odometer||0;v.stock=v.stock||v.plate||('STK-'+(i+1));v.status=v.status==='Available'?'Ready':(v.status||'Ready');return v});d.applications=(d.applications||[]).map(function(a,i){var st=a.stage||a.status||'New';if(st==='Needs review')st='New';if(st==='Docs requested')st='Docs needed';a.id=a.id||'app-'+i;a.name=a.name||a.customer||'Applicant';a.stage=st;a.status=st;a.down=Number(a.down==null?0:a.down);a.income=Number(a.income)||0;a.score=a.score||estimate(a.income,a.down);a.submittedAt=a.submittedAt||a.date||'Today';return a});return d}
@@ -1004,6 +1004,96 @@ document.addEventListener('click',async function(e){
     await refreshData(true);view='Dispatch';tab='';Dispatch();closeModal();notify('Created '+made+' readiness task'+(made===1?'':'s')+(failed?' / '+failed+' failed':''))
   }
 },true);
+
+// Company billing stays inside the existing Companies readiness workspace.
+var __woaBillingApiProviderDefaultsBase=apiProviderDefaults;
+apiProviderDefaults=function(){
+  return __woaBillingApiProviderDefaultsBase().map(function(provider){
+    if(provider.id!=='multi-company-billing')return provider;
+    return Object.assign({},provider,{
+      status:'Ready - manual ledger',
+      envKeys:'WOA_BILLING_PROVIDER, WOA_BILLING_WEBHOOK_SECRET',
+      endpoint:'/api/billing/summary, /api/billing/subscriptions, /api/billing/invoices/record, /api/webhooks/billing',
+      liveTest:'Create one company subscription, verify usage limits and duplicate invoice protection, then accept one signed provider event without exposing provider references to managers.',
+      notes:'One subscription per company, usage limits, invoice history, and role privacy are live. External money movement still requires a selected provider and signed live test.'
+    })
+  })
+};
+
+var __woaCompanyExternalReadyBillingBase=companyExternalReady;
+companyExternalReady=function(org){
+  return __woaCompanyExternalReadyBillingBase(org)&&/active subscription billing/i.test(String(org&&org.billingStatus||''))
+};
+
+function companyBillingSubscription(organizationId){
+  return (db.subscriptions||[]).find(function(row){return String(row.organizationId||'org-wheelsonauto')===String(organizationId||'org-wheelsonauto')})||null
+}
+function companyBillingInvoices(organizationId){
+  return (db.billingInvoices||[]).filter(function(row){return String(row.organizationId||'org-wheelsonauto')===String(organizationId||'org-wheelsonauto')}).sort(function(a,b){return String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||''))})
+}
+function companyBillingRows(organizationId,rows){
+  return (rows||[]).filter(function(row){return String(row.organizationId||'org-wheelsonauto')===String(organizationId||'org-wheelsonauto')})
+}
+function companyBillingActive(row){return !/disabled|removed|inactive|history|closed|canceled/i.test(String(row&&row.status||row&&row.stage||'Active'))}
+function companyBillingUsage(organizationId){
+  var staff=companyBillingRows(organizationId,db.staffAccounts).filter(companyBillingActive).length;
+  var fleet=companyBillingRows(organizationId,db.vehicles).filter(function(row){return !/removed|sold|scrapped/i.test(String(row.status||''))}).length;
+  var customers={};
+  companyBillingRows(organizationId,db.customers).filter(companyBillingActive).forEach(function(row){var key=normName(row.id||row.name||row.customer);if(key)customers[key]=1});
+  companyBillingRows(organizationId,db.contracts).filter(companyBillingActive).forEach(function(row){var key=normName(row.customer||row.name||row.id);if(key)customers[key]=1});
+  return{staff:staff,fleet:fleet,customers:Object.keys(customers).length}
+}
+function companyBillingLimitText(used,limit){limit=Number(limit||0);return esc(used)+' / '+(limit?esc(limit):'Unlimited')}
+function companyBillingTone(status){status=String(status||'').toLowerCase();if(/active|paid|trial/.test(status))return'good';if(/past|cancel|failed/.test(status))return'bad';return'warn'}
+function companyBillingRow(org){
+  var subscription=companyBillingSubscription(org.id),usage=companyBillingUsage(org.id),limits=subscription&&subscription.limits||{},invoices=companyBillingInvoices(org.id),invoice=invoices[0],status=subscription&&subscription.status||(org.id==='org-wheelsonauto'?'Internal':'Setup needed'),plan=subscription&&subscription.plan||org.plan||'Internal';
+  var actions=isOwner()?'<div class="actions"><button class="btn gold" data-action="manage-company-subscription" data-id="'+esc(org.id)+'">Manage</button><button class="btn" data-action="record-company-invoice" data-id="'+esc(org.id)+'">Invoice</button></div>':'';
+  return '<div class="company-billing-row"><div class="company-billing-identity"><strong>'+esc(org.name||'Company')+'</strong><small>'+esc(plan)+' | '+esc(subscription&&subscription.interval||'Monthly')+(subscription&&Number(subscription.amount)>0?' | '+money(subscription.amount):'')+'</small></div><div class="company-billing-status">'+badge(status,companyBillingTone(status))+'<small>'+esc(subscription&&subscription.provider||'manual')+'</small></div><div class="company-billing-usage"><span><b>'+companyBillingLimitText(usage.staff,limits.staff)+'</b> staff</span><span><b>'+companyBillingLimitText(usage.fleet,limits.fleet)+'</b> fleet</span><span><b>'+companyBillingLimitText(usage.customers,limits.customers)+'</b> customers</span></div><div class="company-billing-invoice"><strong>'+(invoice?money(invoice.amount):'No invoice')+'</strong><small>'+esc(invoice?(invoice.status+' | '+(invoice.periodEnd||invoice.dueAt||invoice.updatedAt||'No date')):'Manual ledger ready')+'</small></div>'+actions+'</div>'
+}
+function companyBillingConsole(){
+  var accounts=orgs(),subscriptions=db.subscriptions||[],invoices=db.billingInvoices||[],provider=(db.integrations&&db.integrations.billing)||{},active=subscriptions.filter(function(row){return /active|trial/i.test(String(row.status||''))}).length,pastDue=invoices.filter(function(row){return /past.?due|open/i.test(String(row.status||''))}).length;
+  return '<div class="company-billing-console"><div class="section-head"><div><h3>Subscription billing</h3><p>One company, one plan, one usage summary, and a deduplicated invoice trail.</p></div>'+badge(provider.configured?'Provider testing':'Manual ledger',provider.configured?'blue':'warn')+'</div><div class="company-billing-metrics"><span><b>'+subscriptions.length+'</b> configured</span><span><b>'+active+'</b> active / trial</span><span><b>'+pastDue+'</b> open / past due</span><span><b>'+esc(provider.provider||'manual')+'</b> provider</span></div><div class="company-billing-list">'+accounts.map(companyBillingRow).join('')+'</div><div class="notice mini">The internal subscription and invoice ledger works now. No outside payment is collected until a billing provider is selected, its signed webhook is configured, and a controlled live test passes.</div></div>'
+}
+function hydrateCompanyBillingConsole(){
+  var panel=document.querySelector('.view-companies .company-readiness-panel'),grid=panel&&panel.querySelector('.company-readiness-grid'),footer=panel&&panel.querySelector('.company-readiness-footer');if(!panel||!grid||!footer)return;
+  var old=panel.querySelector('.company-billing-console');if(old)old.remove();
+  footer.insertAdjacentHTML('beforebegin',companyBillingConsole());
+  Array.prototype.forEach.call(grid.querySelectorAll('.company-readiness-item'),function(item){var label=item.querySelector('span');if(!label||String(label.textContent||'').trim()!=='Billing / SaaS')return;var provider=(db.integrations&&db.integrations.billing)||{},active=(db.subscriptions||[]).filter(function(row){return /active|trial/i.test(String(row.status||''))}).length;item.className='company-readiness-item '+(provider.configured?'good':'warn');var strong=item.querySelector('strong'),small=item.querySelector('small');if(strong)strong.textContent=active?active+' active / trial':'Manual ledger ready';if(small)small.textContent=provider.configured?'Signed provider setup is ready for a controlled event test.':'Subscription truth, usage limits, and invoices are live; external billing provider is not connected.'})
+}
+function billingOption(current,value,label){return '<option value="'+esc(value)+'" '+(String(current||'').toLowerCase()===String(value).toLowerCase()?'selected':'')+'>'+esc(label||value)+'</option>'}
+function openCompanySubscription(organizationId){
+  var org=companyById(organizationId),subscription=companyBillingSubscription(organizationId)||{},limits=subscription.limits||{},status=subscription.status||(org&&org.id==='org-wheelsonauto'?'Active':'Draft'),plan=subscription.plan||org&&org.plan||'Internal';if(!org)return;
+  openModal('Subscription: '+org.name,'<div class="notice">This controls WheelsonAuto subscription truth only. Saving does not collect outside money unless a billing provider is connected and tested.</div><div class="form"><div class="field"><label>Plan</label><select id="billingPlan">'+billingOption(plan,'Internal')+billingOption(plan,'Starter')+billingOption(plan,'Growth')+billingOption(plan,'Enterprise')+'</select></div><div class="field"><label>Status</label><select id="billingStatus">'+billingOption(status,'Draft')+billingOption(status,'Trialing')+billingOption(status,'Active')+billingOption(status,'Past due')+billingOption(status,'Paused')+billingOption(status,'Canceled')+'</select></div><div class="field"><label>Subscription amount</label><input id="billingAmount" type="number" min="0" step="0.01" value="'+esc(subscription.amount||0)+'"></div><div class="field"><label>Billing interval</label><select id="billingInterval">'+billingOption(subscription.interval||'Monthly','Monthly')+billingOption(subscription.interval||'Monthly','Annual')+'</select></div><div class="field"><label>Period start</label><input id="billingPeriodStart" type="date" value="'+esc(subscription.currentPeriodStart||'')+'"></div><div class="field"><label>Period end</label><input id="billingPeriodEnd" type="date" value="'+esc(subscription.currentPeriodEnd||'')+'"></div><div class="field"><label>Trial ends</label><input id="billingTrialEnds" type="date" value="'+esc(subscription.trialEndsAt||'')+'"></div><div class="field"><label>Provider name</label><input id="billingProvider" value="'+esc(subscription.provider||'manual')+'" placeholder="manual, stripe, or provider name"></div><div class="field"><label>Staff limit</label><input id="billingStaffLimit" type="number" min="0" value="'+esc(limits.staff||0)+'"><small>0 means unlimited.</small></div><div class="field"><label>Fleet limit</label><input id="billingFleetLimit" type="number" min="0" value="'+esc(limits.fleet||0)+'"><small>0 means unlimited.</small></div><div class="field"><label>Customer limit</label><input id="billingCustomerLimit" type="number" min="0" value="'+esc(limits.customers||0)+'"><small>0 means unlimited.</small></div><div class="field"><label>Provider customer ID</label><input id="billingProviderCustomerId" value="'+esc(subscription.providerCustomerId||'')+'"></div><div class="field span2"><label>Provider subscription ID</label><input id="billingProviderSubscriptionId" value="'+esc(subscription.providerSubscriptionId||'')+'"></div><div class="field span2"><label>Owner notes</label><textarea id="billingNotes">'+esc(subscription.notes||'')+'</textarea></div></div><div class="actions"><button class="btn gold" data-action="save-company-subscription" data-id="'+esc(org.id)+'">Save subscription</button></div>')
+}
+function openCompanyInvoice(organizationId){
+  var org=companyById(organizationId);if(!org)return;
+  openModal('Record invoice: '+org.name,'<div class="notice">Use the same provider invoice/reference ID when updating an invoice. WheelsonAuto will update that row instead of creating a duplicate.</div><div class="form"><div class="field"><label>Amount</label><input id="billingInvoiceAmount" type="number" min="0" step="0.01"></div><div class="field"><label>Status</label><select id="billingInvoiceStatus">'+billingOption('Open','Draft')+billingOption('Open','Open')+billingOption('Open','Paid')+billingOption('Open','Past due')+billingOption('Open','Void')+billingOption('Open','Refunded')+'</select></div><div class="field"><label>Period start</label><input id="billingInvoiceStart" type="date"></div><div class="field"><label>Period end</label><input id="billingInvoiceEnd" type="date"></div><div class="field"><label>Due date</label><input id="billingInvoiceDue" type="date"></div><div class="field"><label>Paid date</label><input id="billingInvoicePaid" type="date"></div><div class="field span2"><label>Provider invoice / reference ID</label><input id="billingInvoiceReference" placeholder="Required for reliable duplicate protection"></div><div class="field"><label>Payment method</label><input id="billingInvoiceMethod" placeholder="Card, ACH, manual..."></div><div class="field"><label>Provider</label><input id="billingInvoiceProvider" value="manual"></div><div class="field span2"><label>Owner notes</label><textarea id="billingInvoiceNotes"></textarea></div></div><div class="actions"><button class="btn gold" data-action="save-company-invoice" data-id="'+esc(org.id)+'">Record invoice</button></div>')
+}
+
+var __woaOrganizationsBillingBase=Organizations;
+Organizations=function(){__woaOrganizationsBillingBase();if(tab==='Readiness')hydrateCompanyBillingConsole()};
+
+var __woaBillingActionAllowedBase=actionAllowed;
+actionAllowed=function(action){if(['manage-company-subscription','save-company-subscription','record-company-invoice','save-company-invoice'].indexOf(action)>=0&&!isOwner())return false;return __woaBillingActionAllowedBase(action)};
+
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action]');if(!button)return;var actionName=button.dataset.action||'';
+  if(['manage-company-subscription','save-company-subscription','record-company-invoice','save-company-invoice'].indexOf(actionName)<0)return;
+  event.preventDefault();event.stopImmediatePropagation();if(!isOwner()){notify('Only the owner admin can manage company billing');return}
+  if(actionName==='manage-company-subscription'){openCompanySubscription(button.dataset.id);return}
+  if(actionName==='record-company-invoice'){openCompanyInvoice(button.dataset.id);return}
+  if(button.disabled)return;button.disabled=true;button.classList.add('is-loading');var original=button.textContent;
+  try{
+    if(actionName==='save-company-subscription'){
+      var saved=await post('/api/billing/subscriptions',{organizationId:button.dataset.id,plan:val('billingPlan'),status:val('billingStatus'),amount:Number(val('billingAmount')||0),interval:val('billingInterval'),currentPeriodStart:val('billingPeriodStart'),currentPeriodEnd:val('billingPeriodEnd'),trialEndsAt:val('billingTrialEnds'),provider:val('billingProvider')||'manual',staffLimit:Number(val('billingStaffLimit')||0),fleetLimit:Number(val('billingFleetLimit')||0),customerLimit:Number(val('billingCustomerLimit')||0),providerCustomerId:val('billingProviderCustomerId'),providerSubscriptionId:val('billingProviderSubscriptionId'),notes:val('billingNotes')});
+      if(!saved.ok){notify(saved.error||'Subscription did not save');return}await refreshData(true);closeModal();Organizations();notify(saved.created?'Company subscription created':'Company subscription updated');return
+    }
+    if(actionName==='save-company-invoice'){
+      var invoice=await post('/api/billing/invoices/record',{organizationId:button.dataset.id,amount:Number(val('billingInvoiceAmount')||0),status:val('billingInvoiceStatus'),periodStart:val('billingInvoiceStart'),periodEnd:val('billingInvoiceEnd'),dueAt:val('billingInvoiceDue'),paidAt:val('billingInvoicePaid'),providerInvoiceId:val('billingInvoiceReference'),paymentMethod:val('billingInvoiceMethod'),provider:val('billingInvoiceProvider')||'manual',notes:val('billingInvoiceNotes')});
+      if(!invoice.ok){notify(invoice.error||'Invoice did not save');return}await refreshData(true);closeModal();Organizations();notify(invoice.created?'Company invoice recorded':'Company invoice updated');return
+    }
+  }finally{button.disabled=false;button.classList.remove('is-loading');if(document.body.contains(button))button.textContent=original}
+},true);
 function ifleetNextCommandItems(){
   var launch=(typeof ifleetLaunchProofItems==='function'?ifleetLaunchProofItems():[]).map(function(i,idx){return{source:'Launch proof',title:i.title,tone:i.tone,count:i.count,detail:i.proof,fix:i.manual,view:i.view,tab:i.tab,index:idx}});
   var audit=(typeof starSystemAuditItems==='function'?starSystemAuditItems():[]).map(function(i){return{source:i.source||'Star audit',title:i.title,tone:i.tone,count:i.count,detail:i.detail,fix:i.fix,view:i.view,tab:i.tab}});
@@ -1749,6 +1839,40 @@ apiProviders=function(){
   var merged=base.map(function(provider){return Object.assign({},provider,byId[provider.id]||{})});
   runtime.forEach(function(provider){if(!merged.some(function(saved){return saved.id===provider.id}))merged.push(Object.assign({view:'Settings',notes:'Runtime provider readiness from the live server.'},provider))});
   return merged
+};
+var __woaDateKeyFromCalendarBase=dateKeyFrom;
+dateKeyFrom=function(value){
+  var raw=String(value||'').trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return raw;
+  if(/^\d{4}-\d{2}-\d{2}T/.test(raw)){
+    var timestamp=new Date(raw);
+    if(!isNaN(timestamp.getTime()))return keyFromDateObj(timestamp)
+  }
+  return __woaDateKeyFromCalendarBase(value)
+};
+var __woaShortDateCalendarBase=shortDate;
+shortDate=function(value){
+  var raw=String(value||'').trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)){
+    var calendarDate=new Date(raw+'T12:00:00');
+    if(!isNaN(calendarDate.getTime()))return calendarDate.toLocaleString([],{month:'short',day:'numeric'})
+  }
+  return __woaShortDateCalendarBase(value)
+};
+var __woaAutopayCalendarModalBase=openModal;
+openModal=function(title,html){
+  var modalTitle=String(title||''),content=String(html||'');
+  if(modalTitle.indexOf('Edit autopay: ')===0){
+    var customerName=modalTitle.slice('Edit autopay: '.length),row=findRecurringByCustomer(customerName)||{},due=dateKeyFrom(row.nextRun);
+    if(due){
+      var calendarDate=new Date(due+'T12:00:00'),calendarDay=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][calendarDate.getDay()],storedDay=String(row.paymentDay||row.chargeDay||'');
+      if(calendarDay&&storedDay&&calendarDay!==storedDay)content=content.split('Next '+esc(row.nextRun||'Not set')+' - '+esc(storedDay)).join('Next '+esc(row.nextRun||'Not set')+' - '+esc(calendarDay))
+    }
+    if(due&&due<todayKey())content+='<div class="notice bad autopay-overdue-warning"><strong>Schedule overdue</strong><br>The saved next charge date has passed. WheelsonAuto will first reconcile any successful linked payment, then advance to the next future '+esc(row.frequency||'recurring')+' date without charging twice.</div>'
+  }
+  var result=__woaAutopayCalendarModalBase(title,content);
+  if(modalTitle.indexOf('Edit autopay: ')===0)syncAutopaySchedule('date');
+  return result
 };
 window.__woaBootReady=true;
 if(!renderQueued)queueRender();
@@ -3290,3 +3414,13 @@ document.addEventListener('click',async function(event){
     }
   }finally{button.disabled=false;button.classList.remove('is-loading');if(document.body.contains(button))button.textContent=original}
 },true);
+
+var __woaOrganizationsBillingFinalBase=Organizations;
+Organizations=function(){
+  __woaOrganizationsBillingFinalBase();
+  if(tab!=='Readiness')return;
+  if(root&&typeof root.innerHTML==='string'&&root.innerHTML.indexOf('company-billing-console')<0){
+    root.innerHTML=root.innerHTML.replace('<div class="company-readiness-footer">',companyBillingConsole()+'<div class="company-readiness-footer">')
+  }
+  hydrateCompanyBillingConsole()
+};
