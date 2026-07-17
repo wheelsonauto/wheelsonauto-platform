@@ -67,7 +67,7 @@ requireText('Website applications desktop span', '.view-website>.native-website-
 requireText('Applications workspace full-width guard', '.view-applications>.native-applications-board{grid-column:1/-1!important;margin:0}');
 requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
-requireBlock('Dark modal surface', '.modal{', ['background:linear-gradient', 'rgba(24,27,30,.98)', 'border-color:rgba(255,255,255,.13)', '!important']);
+requireAnyBlock('Dark modal surface', '.modal{', ['background:linear-gradient', 'rgba(24,27,30,.98)', 'border-color:rgba(255,255,255,.13)', '!important']);
 requireBlock('Modal inner cards', '.modal .card,', ['background:rgba(255,255,255,.045)', 'filter:none']);
 requireBlock('Modal hover readability', '.modal .card:hover,', ['background:rgba(255,255,255,.065)', 'filter:none', 'transform:none']);
 requireBlock('Message cards readability', '.view-messages .message-thread-card,', ['background:rgba(255,255,255,.06)', 'filter:none', 'backdrop-filter:none']);

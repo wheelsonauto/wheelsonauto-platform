@@ -264,7 +264,7 @@ function assertCountAtLeast(label, output, text, minimum) {
 function assertCompactBoard(label, output, markers = []) {
   assertHealthy(label, output, markers);
   assertCountAtLeast(label, output, 'card section', 1);
-  assert(output.includes('local-search') || output.includes('dashboard-mobile-tabs') || output.includes('message-status-strip'), label + ' should include local search, dashboard tabs, or a compact status strip.');
+  assert(output.includes('local-search') || output.includes('dashboard-mobile-tabs') || output.includes('message-status-strip') || output.includes('business-overview-grid'), label + ' should include local search, focused tabs, a compact status strip, or the Business overview.');
   assert(!/style="[^"]*(?:background:\s*(?:#fff|white)|filter:\s*blur)/i.test(output), label + ' should not render inline white backgrounds or blur filters.');
 }
 
@@ -404,11 +404,12 @@ async function ownerInteractionSmoke() {
   assertHealthy('Owner clicked Operations Background', html(context), ['Insurance', 'Background checks', 'last four']);
 
   context.view = 'Dashboard';
-  context.dashboardTab = 'Dues';
   context.render();
-  await dispatchClick(context, { dashboardTab: 'Transactions' });
-  assert(context.dashboardTab === 'Transactions', 'Dashboard sub-tab click should switch dashboardTab.');
-  assertHealthy('Owner clicked dashboard transactions sub-tab', html(context), ['Transactions']);
+  assertHealthy('Owner Business overview', html(context), ['Business overview', 'Money today', 'Payment attention']);
+  assert(!html(context).includes('dashboard-mobile-tabs'), 'Business must not repeat Dashboard work-list tabs.');
+  await dispatchClick(context, { view: 'Payments', tab: 'Today' });
+  assert(context.view === 'Payments' && context.tab === 'Today', 'Business payment tile should open Payments Today.');
+  assertHealthy('Owner opened Payments from Business', html(context), ['Today action list']);
 
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
   assertHealthy('Owner compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
@@ -549,8 +550,8 @@ function ownerSmoke() {
   const dedupedCloverWorkspace = renderView(context, 'Claims & Issues', 'Clover');
   assert(countOf(dedupedCloverWorkspace, 'smoke-clover-provider-duplicate') === 1, 'Clover reconciliation UI must render a provider payment id only once after duplicate sync rows merge.');
   const ownerDashboard = renderView(context, 'Dashboard', 'Board');
-  assertCompactBoard('Owner dashboard', ownerDashboard, ['Dashboard', 'Customer intake', 'Today&rsquo;s dues & contact', 'Service due', 'Transactions', 'quickbar']);
-  assertNo('Owner dashboard', ownerDashboard, ['Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
+  assertCompactBoard('Owner dashboard', ownerDashboard, ['Business', 'Business overview', 'Customer intake', 'Money today', 'Ready fleet', 'quickbar']);
+  assertNo('Owner dashboard', ownerDashboard, ['Today&rsquo;s dues & contact', 'Today action list', 'Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payments & customers', 'customer-pay-list']],

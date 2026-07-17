@@ -6540,10 +6540,11 @@ body.fast-tab-switch .admin-shell .section{
 .admin-shell{
   --staff-canvas:#0d0f10;
   --staff-sidebar:#08090a;
-  --staff-panel:#181b1e;
-  --staff-panel-raised:#202326;
+  --staff-panel:#191c1f;
+  --staff-panel-raised:#22262a;
   --staff-input:#111315;
-  --staff-line:rgba(255,255,255,.105);
+  --staff-line:rgba(211,218,224,.15);
+  --staff-silver-line:rgba(225,231,236,.22);
   --staff-gold-line:rgba(213,177,95,.34);
   --staff-accent:#d5b15f;
   --staff-accent-bright:#f0d993;
@@ -6553,14 +6554,14 @@ body.fast-tab-switch .admin-shell .section{
   color:var(--staff-text);
   color-scheme:dark;
 }
-body:has(.admin-shell){background:var(--staff-canvas)}
+body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,239,.012) 0 1px,transparent 1px 14px),var(--staff-canvas)}
 .admin-shell>.sidebar{
   background:linear-gradient(180deg,rgba(255,255,255,.025),rgba(255,255,255,0)),var(--staff-sidebar)!important;
   border-right-color:rgba(255,255,255,.09)!important;
   box-shadow:12px 0 36px rgba(0,0,0,.28)!important;
 }
 .admin-shell>.main{
-  background:linear-gradient(145deg,#0d0f10 0%,#191c1f 50%,#111315 100%)!important;
+  background:repeating-linear-gradient(118deg,rgba(230,235,239,.013) 0 1px,transparent 1px 14px),linear-gradient(145deg,#0d0f10 0%,#191c1f 50%,#111315 100%)!important;
   color:var(--staff-text)!important;
 }
 .admin-shell .topbar{
@@ -6580,26 +6581,26 @@ body:has(.admin-shell){background:var(--staff-canvas)}
 }
 .admin-shell :is(.card,.item,.lead-card,.column,.mechanic-card,.company-card,.api-phase,.public-vehicle-card),
 .admin-shell :is(.native-inventory-board,.native-website-apps,.native-applications-board){
-  background:linear-gradient(155deg,rgba(255,255,255,.048),rgba(255,255,255,.012)),rgba(24,27,30,.94)!important;
+  background:linear-gradient(145deg,rgba(226,232,237,.12),rgba(184,193,201,.038) 54%,rgba(213,177,95,.018)),rgba(23,26,29,.96)!important;
   border-color:var(--staff-line)!important;
   color:var(--staff-text)!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 14px 32px rgba(0,0,0,.19)!important;
+  box-shadow:inset 0 1px 0 rgba(235,240,244,.09),inset 0 -1px 0 rgba(213,177,95,.045),0 14px 32px rgba(0,0,0,.19)!important;
 }
 .admin-shell .card.section{
-  background:linear-gradient(155deg,rgba(213,177,95,.035),rgba(255,255,255,.018) 42%,rgba(255,255,255,.008)),rgba(24,27,30,.95)!important;
-  border-color:rgba(213,177,95,.22)!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.075),0 15px 34px rgba(0,0,0,.20)!important;
+  background:linear-gradient(145deg,rgba(232,237,241,.13),rgba(185,194,201,.04) 58%,rgba(213,177,95,.025)),rgba(23,26,29,.97)!important;
+  border-color:rgba(211,218,224,.17)!important;
+  box-shadow:inset 0 1px 0 rgba(238,242,245,.10),inset -1px 0 0 rgba(213,177,95,.11),0 15px 34px rgba(0,0,0,.20)!important;
 }
 .admin-shell :is(.account-card,.file-summary>div,.health-card,.access-lane,.match-lane,.application-lane,.claim-lane,.message-lane,.timeline-item,.access-next-item,.claim-next-item,.match-next-item,.ops-item,.due-row,.mini-row,.payment-next-item,.service-next-item,.fleet-next-item,.accounting-next-item,.customer-pay-card,.today-focus-main,.today-metric,.payment-lane,.service-lane,.fleet-lane,.workflow-step,.readiness-card,.accounting-lane,.api-lane,.executive-card,.native-online-summary span,.native-file-grid>div,.native-application-car,.native-review-file,.local-result-card){
-  background:linear-gradient(155deg,rgba(255,255,255,.055),rgba(255,255,255,.014)),var(--staff-panel-raised)!important;
+  background:linear-gradient(145deg,rgba(225,232,237,.125),rgba(184,193,201,.04) 58%,rgba(213,177,95,.018)),var(--staff-panel-raised)!important;
   border-color:var(--staff-line)!important;
   color:var(--staff-text)!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.055),0 9px 22px rgba(0,0,0,.15)!important;
+  box-shadow:inset 0 1px 0 rgba(235,240,244,.09),inset 0 -1px 0 rgba(213,177,95,.04),0 9px 22px rgba(0,0,0,.15)!important;
 }
 .admin-shell :is(.card,.item,.lead-card,.mechanic-card,.company-card,.due-row,.mini-row,.customer-pay-card,.native-online-card,.native-application-card,.native-review-file,.local-result-card):hover{
-  background:linear-gradient(155deg,rgba(255,255,255,.075),rgba(213,177,95,.025)),var(--staff-panel-raised)!important;
-  border-color:var(--staff-gold-line)!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.075),0 12px 28px rgba(0,0,0,.22)!important;
+  background:linear-gradient(145deg,rgba(235,240,244,.13),rgba(191,200,207,.045) 55%,rgba(213,177,95,.065)),var(--staff-panel-raised)!important;
+  border-color:rgba(213,177,95,.27)!important;
+  box-shadow:inset 0 1px 0 rgba(242,245,247,.13),inset -1px 0 0 rgba(213,177,95,.17),0 12px 28px rgba(0,0,0,.22)!important;
   filter:none!important;
   transform:none!important;
 }
@@ -6759,7 +6760,7 @@ body:has(.admin-shell){background:var(--staff-canvas)}
   border-color:rgba(213,177,95,.32)!important;
 }
 @media(max-width:760px){
-  .admin-shell>.main{background:linear-gradient(155deg,#0d0f10 0%,#191c1f 52%,#111315 100%)!important}
+  .admin-shell>.main{background:repeating-linear-gradient(118deg,rgba(230,235,239,.013) 0 1px,transparent 1px 14px),linear-gradient(155deg,#0d0f10 0%,#191c1f 52%,#111315 100%)!important}
   .admin-shell .topbar{background:var(--staff-panel)!important}
   .admin-shell :is(.today-focus-main,.today-metric,.due-row,.mini-row,.customer-pay-card){box-shadow:inset 0 1px 0 rgba(255,255,255,.05)!important}
 }
@@ -7021,10 +7022,10 @@ body:has(.admin-shell){background:var(--staff-canvas)}
   min-width:178px;
   max-width:min(260px,calc(100vw - 28px));
   padding:7px;
-  border:1px solid rgba(213,177,95,.30);
+  border:1px solid rgba(220,226,231,.22);
   border-radius:8px;
-  background:linear-gradient(155deg,rgba(255,255,255,.07),rgba(255,255,255,.02)),#15181a;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 18px 42px rgba(0,0,0,.34);
+  background:linear-gradient(145deg,rgba(231,236,240,.10),rgba(187,196,203,.025) 58%,rgba(213,177,95,.035)),#15181a;
+  box-shadow:inset 0 1px 0 rgba(239,243,246,.11),inset -1px 0 0 rgba(213,177,95,.12),0 18px 42px rgba(0,0,0,.34);
 }
 .action-menu>summary:focus-visible{outline:2px solid rgba(240,217,147,.68);outline-offset:2px}
 .action-menu-panel .btn{width:100%;min-width:0;justify-content:flex-start;white-space:normal;text-align:left}
@@ -7074,6 +7075,19 @@ body:has(.admin-shell){background:var(--staff-canvas)}
 .modal .customer-file-actions .btn:not(.primary):not(.gold):not(.danger):hover{border-color:rgba(213,177,95,.22)!important;background:rgba(213,177,95,.07)!important;color:#f0d993!important;box-shadow:none!important}
 .payment-action-bar .action-menu-panel{top:calc(100% + 7px);bottom:auto}
 .payment-action-bar>.actions{display:flex;align-items:center;justify-content:flex-end;gap:7px}
+.modal-close-mobile{display:none}
+.modal-body>.file-summary+.grid.two{display:none!important}
+.payment-action-bar{position:relative!important;top:auto!important;padding:0 0 8px!important;margin-bottom:8px!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;backdrop-filter:none!important}
+.payment-action-bar>div:first-child{display:none!important}
+.business-overview-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.business-overview-card{display:grid;gap:5px;min-width:0;min-height:112px;padding:12px;text-align:left;border:1px solid var(--staff-line);border-radius:8px;background:linear-gradient(145deg,rgba(229,235,239,.125),rgba(184,193,201,.04) 58%,rgba(213,177,95,.018)),var(--staff-panel-raised);color:var(--staff-text);box-shadow:inset 0 1px 0 rgba(239,243,246,.11),0 9px 22px rgba(0,0,0,.16)}
+.business-overview-card:hover{border-color:rgba(213,177,95,.27);background:linear-gradient(145deg,rgba(236,240,243,.14),rgba(190,199,206,.045) 55%,rgba(213,177,95,.065)),var(--staff-panel-raised);transform:none;filter:none}
+.business-overview-card span{color:var(--staff-muted);font-size:10px;font-weight:900;text-transform:uppercase}
+.business-overview-card strong{font-size:22px;line-height:1.05;overflow-wrap:anywhere}
+.business-overview-card small{color:var(--staff-muted);font-size:10px;line-height:1.35}
+.business-overview-card.good{box-shadow:inset 0 2px 0 rgba(95,207,139,.7),0 9px 22px rgba(0,0,0,.16)}
+.business-overview-card.warn{box-shadow:inset 0 2px 0 rgba(213,177,95,.8),0 9px 22px rgba(0,0,0,.16)}
+.business-overview-card.blue{box-shadow:inset 0 2px 0 rgba(106,172,238,.7),0 9px 22px rgba(0,0,0,.16)}
 
 @media(max-width:760px){
   /* Mobile staff navigation already carries the product identity. */
@@ -7087,4 +7101,26 @@ body:has(.admin-shell){background:var(--staff-canvas)}
   .action-menu-panel{position:static;grid-template-columns:repeat(2,minmax(0,1fr));width:100%;max-width:none;margin-top:6px}
   .action-menu-panel .btn{justify-content:center;text-align:center}
   .payment-action-bar .action-menu-panel{position:absolute;top:calc(100% + 7px);right:0;width:min(230px,calc(100vw - 30px));grid-template-columns:1fr}
+
+  /* Phone flow: list -> focused detail -> Back. Secondary card actions live in the detail view. */
+  .customer-pay-card>.actions>.action-menu{display:none!important}
+  .modal-backdrop{align-items:stretch!important;padding:0!important;background:#0d0f10!important;backdrop-filter:none!important}
+  .modal{width:100%!important;max-width:none!important;height:100dvh!important;max-height:100dvh!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+  .modal-head{min-height:54px;padding:calc(7px + env(safe-area-inset-top)) 11px 7px!important;justify-content:flex-start!important;gap:9px!important}
+  .modal-head .modal-close{order:-1;width:auto!important;min-height:34px!important;padding:6px 8px!important;border-color:transparent!important;background:transparent!important;box-shadow:none!important;color:#f0d993!important}
+  .modal-head .modal-close::before{content:"<";font-size:18px;line-height:1}
+  .modal-close-desktop{display:none}
+  .modal-close-mobile{display:inline}
+  .modal-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal-body{padding:12px 12px calc(22px + env(safe-area-inset-bottom))!important}
+  .modal .file-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .modal .file-summary>div{min-height:84px;padding:9px!important}
+  .modal .file-summary>div:last-child{grid-column:1/-1;min-height:70px}
+  .modal .file-summary strong{font-size:16px!important}
+  .business-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .business-overview-card{min-height:92px;padding:9px}
+  .business-overview-card strong{font-size:18px}
+  .admin-shell :is(.view-payments,.view-reports,.view-claims-issues)>.stats{display:none!important}
+  .payment-action-bar>.actions{display:flex!important;justify-content:space-between!important;gap:7px!important;width:100%!important}
+  .payment-action-bar>.actions>.btn{width:auto!important;min-width:126px!important}
 }
