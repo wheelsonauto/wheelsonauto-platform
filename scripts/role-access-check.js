@@ -167,6 +167,18 @@ assertIncludes('Mechanic command board', mechanicCommandBoard, ['Mechanic shop q
 assertIncludes('Mechanic command items', mechanicCommandItems, ['Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
 assertExcludes('Mechanic command items', strings(mechanicCommandItems), ['Messages', 'Reports', 'Payments', 'charge-saved-card', 'send-pay-link', 'compose-message', 'Text']);
 if (!/STAFF_PIN_LOGIN_ENABLED/.test(server) || !/if \(!STAFF_PIN_LOGIN_ENABLED\) return null;/.test(server)) fail('Staff PIN login should be disabled unless explicitly enabled.');
+if (!/authPolicy = require\('\.\/auth-policy'\)/.test(server) || !/WOA_OWNER_PIN_FALLBACK_ENABLED/.test(server)) {
+  fail('Owner authentication policy must be loaded and explicitly configurable.');
+}
+const ownerLoginMatches = finalFunctionSlice(server, 'ownerLoginMatches');
+const staffLoginPage = finalFunctionSlice(server, 'loginPage');
+const productionInfrastructurePreflight = finalFunctionSlice(server, 'productionInfrastructurePreflight');
+if (!/ownerPinLoginAllowed\(\)/.test(ownerLoginMatches) || !/ownerPinLoginAllowed\(\)/.test(staffLoginPage)) {
+  fail('Owner PIN fallback must be policy-gated in both sign-in behavior and the login UI.');
+}
+if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
+  fail('The production Stripe launch gate must require password-backed owner access with owner PIN fallback disabled.');
+}
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
 if (!/Customer password help requested/.test(server) || !/Staff password help requested/.test(server)) {
   fail('Password help requests should be owner audit logged.');

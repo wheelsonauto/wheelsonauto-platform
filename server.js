@@ -13,6 +13,7 @@ const passTimeAdapter = require('./passtime-adapter');
 const stateRepository = require('./state-repository');
 const secureDocumentStore = require('./secure-document-store');
 const stripeMigration = require('./stripe-migration');
+const authPolicy = require('./auth-policy');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -28,6 +29,7 @@ const LOGIN_PASSWORD = process.env.WOA_ADMIN_PASSWORD || process.env.WOA_OWNER_P
 const LOGIN_PASSWORD_HASH = process.env.WOA_ADMIN_PASSWORD_HASH || process.env.WOA_OWNER_PASSWORD_HASH || '';
 const LOGIN_PASSWORD_SALT = process.env.WOA_ADMIN_PASSWORD_SALT || process.env.WOA_OWNER_PASSWORD_SALT || '';
 const STAFF_PIN_LOGIN_ENABLED = process.env.WOA_STAFF_PIN_LOGIN_ENABLED === '1';
+const WOA_OWNER_PIN_FALLBACK_ENABLED = process.env.WOA_OWNER_PIN_FALLBACK_ENABLED !== '0';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 const SESSION_SIGNING_SECRET = process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_SIGNING_SECRET_CONFIGURED = !!(process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET);
@@ -7006,15 +7008,32 @@ function verifyPasswordRecord(password, record = {}) {
   if (record.passwordHash && !record.passwordSalt) return secureCompare(String(password), record.passwordHash);
   return false;
 }
+function ownerPinLoginAllowed() {
+  return authPolicy.ownerPinFallbackAllowed({
+    productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
+    ownerPinFallbackEnabled: WOA_OWNER_PIN_FALLBACK_ENABLED
+  });
+}
+function ownerAuthenticationReadiness(data) {
+  return authPolicy.ownerAuthenticationReadiness({
+    environment: {
+      loginPassword: LOGIN_PASSWORD,
+      loginPasswordHash: LOGIN_PASSWORD_HASH
+    },
+    state: data || {},
+    productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
+    ownerPinFallbackEnabled: WOA_OWNER_PIN_FALLBACK_ENABLED
+  });
+}
 function ownerLoginMatches(username, password, pin) {
-  if (LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return true;
+  if (ownerPinLoginAllowed() && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return true;
   if (!password) return false;
   const wantedUser = normalizeLogin(LOGIN_USERNAME || 'admin');
   const enteredUser = normalizeLogin(username || '');
   if (wantedUser && enteredUser && enteredUser !== wantedUser) return false;
   if (LOGIN_PASSWORD && secureCompare(password, LOGIN_PASSWORD)) return true;
   if (LOGIN_PASSWORD_HASH && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return true;
-  return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
+  return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed() && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
 }
 function storedOwnerLoginMatches(data, username, password) {
   const security = data && data.security || {};
@@ -7032,7 +7051,14 @@ function passwordMatchesCurrentUser(data, user, password) {
   return !!(staff && verifyPasswordRecord(password, staff));
 }
 function loginPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label><button>Sign in</button><div class="login-pin">Use username/password for staff accounts. Owner PIN still works as a backup so you do not get locked out.</div><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
+  const pinFallback = ownerPinLoginAllowed() && !!LOGIN_PIN;
+  const pinFields = pinFallback
+    ? '<div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label>'
+    : '';
+  const accessHelp = pinFallback
+    ? 'Use username/password for staff accounts. Owner PIN remains a temporary recovery fallback.'
+    : 'Use your username and password. Staff password changes stay owner-approved.';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label>' + pinFields + '<button>Sign in</button><div class="login-pin">' + accessHelp + '</div><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
 }
 function staffForgotPage(message = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Staff Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Staff help</div><h1>Reset staff access</h1><p>Send the owner a secure request. Password changes stay owner-approved.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, staff passwords are reset by the owner after account verification.</div><a class="btn" href="/login" style="margin-top:10px;text-align:center">Back to staff login</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
@@ -8444,6 +8470,7 @@ async function productionInfrastructurePreflight(data = null) {
   const stripeWebhook = stripeLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
   const operationalAlerts = operationalAlertEvidence(state);
+  const ownerAuthentication = ownerAuthenticationReadiness(state);
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
   if (!database.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
@@ -8456,6 +8483,8 @@ async function productionInfrastructurePreflight(data = null) {
   if (!stripeWebhook.live) missing.push('Stripe signed live webhook event');
   if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
+  if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
+  if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   if (IDENTITY_PROVIDER === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');
   return {
@@ -8464,12 +8493,13 @@ async function productionInfrastructurePreflight(data = null) {
     documentStorageValidation,
     stripeWebhook,
     operationalAlerts,
+    ownerAuthentication,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, signed live Stripe webhooks, verified failure alerts, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, signed live Stripe webhooks, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
