@@ -410,6 +410,16 @@ async function main() {
       json: { title: 'Cross-origin request must not save' }
     });
     assert(crossOriginOwnerWrite.status === 403 && /cross-origin/i.test(crossOriginOwnerWrite.json && crossOriginOwnerWrite.json.error || ''), 'Cookie-authenticated writes from another origin must be rejected before route handling.');
+    const spoofedForwardedOriginWrite = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      headers: {
+        origin: 'https://malicious.example',
+        'x-forwarded-host': 'malicious.example',
+        'x-forwarded-proto': 'https'
+      },
+      json: { title: 'Forwarded-host spoof must not save' }
+    });
+    assert(spoofedForwardedOriginWrite.status === 403 && /cross-origin/i.test(spoofedForwardedOriginWrite.json && spoofedForwardedOriginWrite.json.error || ''), 'Forwarded host/protocol headers must not bypass the canonical-origin CSRF guard.');
     const ownerSessionParts = ownerCookie.split('=')[1].split('.');
     const ownerSessionPayload = JSON.parse(Buffer.from(ownerSessionParts[2], 'base64url').toString('utf8'));
     assert(Number(ownerSessionPayload.exp) > Math.floor(Date.now() / 1000) && Number(ownerSessionPayload.exp) - Number(ownerSessionPayload.iat) <= 24 * 60 * 60, 'Staff session must carry a bounded signed expiration.');

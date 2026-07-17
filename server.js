@@ -5886,11 +5886,9 @@ function requestOrigin(req) {
   try { return new URL(raw).origin; } catch { return 'invalid'; }
 }
 function requestTargetOrigin(req) {
-  const forwardedProtocol = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
-  const protocol = forwardedProtocol || (PUBLIC_BASE_URL.startsWith('https://') ? 'https' : 'http');
-  const host = forwardedHost || String(req.headers.host || '').trim();
-  if (host) return protocol + '://' + host;
+  // CSRF decisions must use the configured canonical public URL. Forwarded
+  // host/protocol headers are transport metadata and must never decide which
+  // browser origin is allowed to spend a signed session cookie.
   try { return new URL(PUBLIC_BASE_URL).origin; } catch { return ''; }
 }
 function crossOriginSessionWrite(req) {
