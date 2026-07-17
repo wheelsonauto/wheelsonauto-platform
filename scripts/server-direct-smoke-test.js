@@ -189,6 +189,7 @@ async function main() {
     resolveOwnerSmsBridge,
     ownerSmsMirrorBody,
     configureTwilioSmsWebhook,
+    syncTwilioInboundMessages,
     apiProviderLaunchGuidance,
     apiProviderRows,
     apiProviderReviewRows,
@@ -230,6 +231,22 @@ async function main() {
   };
 
   try {
+    let monitoredTwilioSyncError = null;
+    try {
+      await syncTwilioInboundMessages({
+        provider: 'twilio',
+        accountSid: 'direct-twilio-account',
+        authToken: 'direct-twilio-token',
+        phoneNumber: '8568391385',
+        persist: false,
+        source: 'direct failure-path test',
+        fetchImpl: async () => { throw new Error('Direct Twilio polling failure'); }
+      });
+    } catch (error) {
+      monitoredTwilioSyncError = error;
+    }
+    assert(monitoredTwilioSyncError && monitoredTwilioSyncError.woaOperationalFailureRecorded === true, 'A failed scheduled-style Twilio sync must be persisted through the operational error monitor before it is rethrown.');
+
     assert(calendarDayName('2026-07-10') === 'Friday', 'Calendar-only autopay dates must not shift to Thursday through UTC parsing.');
     assert(nextRecurringOccurrence({ frequency: 'Daily' }, '2026-07-10') === '2026-07-11', 'Daily autopay should advance by one day.');
     assert(nextRecurringOccurrence({ frequency: 'Weekly' }, '2026-07-10') === '2026-07-17', 'Weekly autopay should advance by seven days.');

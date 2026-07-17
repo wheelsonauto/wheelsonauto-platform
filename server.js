@@ -1891,6 +1891,10 @@ async function autoConfigureTwilioSmsWebhook() {
     appendAuditLog(data, systemUser, 'Automatic Twilio inbox connection failed', [error]);
     await protectConcurrentLocalWrites(data);
     await writeData(data);
+    await recordOperationalFailure('twilio-inbound-setup', err, {
+      route: 'Twilio inbound SMS webhook setup',
+      source: 'automatic'
+    });
     throw err;
   }
 }
@@ -2198,6 +2202,10 @@ async function autoConfigureTelnyxMessagingProfile() {
     appendAuditLog(data, systemUser, 'Automatic Telnyx inbox connection failed', [error]);
     await protectConcurrentLocalWrites(data);
     await writeData(data);
+    await recordOperationalFailure('telnyx-inbound-setup', err, {
+      route: 'Telnyx inbound SMS profile setup',
+      source: 'automatic'
+    });
     throw err;
   }
 }
@@ -2307,6 +2315,10 @@ async function syncTwilioInboundMessages(options = {}) {
     twilioInboundPollStatus.lastError = error;
     twilioInboundPollStatus.lastResult = null;
     if (options.persist !== false && Date.now() - twilioInboundPollStatus.lastPersistedAt >= 60 * 1000) await persistTwilioPollingStatus(null, error);
+    await recordOperationalFailure('twilio-inbound-sync', err, {
+      route: 'Twilio inbound SMS secure sync',
+      source: String(options.source || 'automatic')
+    });
     throw err;
   } finally {
     twilioInboundPollStatus.inFlight = false;
@@ -2583,10 +2595,20 @@ async function recordOperationalFailure(source, error, context = {}, options = {
     recurringPaymentId: String(context.recurringPaymentId || '').slice(0, 160),
     eventId: String(context.eventId || '').slice(0, 160)
   };
+  let persisted = false;
   try {
     await STATE_REPOSITORY.recordJobError(safeSource, message, safeContext, options.severity || 'error');
+    persisted = true;
   } catch (recordError) {
     console.error('WheelsonAuto error monitor could not persist:', recordError && recordError.message || recordError);
+  }
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    try {
+      Object.defineProperty(error, persisted ? 'woaOperationalFailureRecorded' : 'woaOperationalFailureRecordFailed', {
+        value: true,
+        configurable: true
+      });
+    } catch {}
   }
   if (!WOA_ERROR_ALERTS_ENABLED || options.alert === false) return;
   const key = safeSource + '|' + message.slice(0, 160);
@@ -10965,6 +10987,13 @@ async function runAutoSync(options = {}) {
     data.integrations.autoSync.lastResult = result;
     await protectConcurrentLocalWrites(data);
     await writeData(data);
+    if (result.errors.length) {
+      await recordOperationalFailure('clover-auto-sync', new Error(result.errors[0]), {
+        route: 'WheelsonAuto automatic Clover sync',
+        source: String(options.source || 'automatic')
+      });
+      result.operationalFailureRecorded = true;
+    }
     return { ok: result.errors.length === 0, skipped: false, ...result, status: autoSyncStatus };
   } catch (err) {
     autoSyncStatus.lastFinishedAt = new Date().toISOString();
@@ -10989,7 +11018,7 @@ async function runAutoSync(options = {}) {
       route: 'WheelsonAuto automatic Clover sync',
       source: String(options.source || 'automatic')
     });
-    return { ok: false, skipped: false, error: autoSyncStatus.lastError, status: autoSyncStatus };
+    return { ok: false, skipped: false, error: autoSyncStatus.lastError, operationalFailureRecorded: true, status: autoSyncStatus };
   } finally {
     autoSyncStatus.inFlight = false;
   }
@@ -13984,6 +14013,14 @@ async function syncTelnyxDeliveryStatuses(options = {}) {
     }
     telnyxDeliveryPollStatus.lastError = '';
     telnyxDeliveryPollStatus.lastResult = result;
+    if (result.errors.length) {
+      const deliveryError = String(result.errors[0] && result.errors[0].error || 'Telnyx delivery status sync failed.');
+      await recordOperationalFailure('telnyx-delivery-sync', new Error(deliveryError), {
+        route: 'Telnyx message delivery status sync',
+        source: String(options.source || 'automatic')
+      });
+      result.operationalFailureRecorded = true;
+    }
     return result;
   } catch (err) {
     telnyxDeliveryPollStatus.lastError = String(err && err.message || err);

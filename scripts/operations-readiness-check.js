@@ -70,6 +70,11 @@ const ifleetFunctionCoverageItems = finalFunctionSlice(app, 'ifleetFunctionCover
 const ifleetFunctionCoverageBoard = finalFunctionSlice(app, 'ifleetFunctionCoverageBoard');
 const ifleetLaunchProofItems = finalFunctionSlice(app, 'ifleetLaunchProofItems');
 const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard');
+const autoSync = finalFunctionSlice(server, 'runAutoSync');
+const twilioInboxSetup = finalFunctionSlice(server, 'autoConfigureTwilioSmsWebhook');
+const telnyxInboxSetup = finalFunctionSlice(server, 'autoConfigureTelnyxMessagingProfile');
+const twilioInboundSync = finalFunctionSlice(server, 'syncTwilioInboundMessages');
+const telnyxDeliverySync = finalFunctionSlice(server, 'syncTelnyxDeliveryStatuses');
 
 [
   maintenance,
@@ -93,7 +98,12 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
   ifleetFunctionCoverageItems,
   ifleetFunctionCoverageBoard,
   ifleetLaunchProofItems,
-  ifleetLaunchProofBoard
+  ifleetLaunchProofBoard,
+  autoSync,
+  twilioInboxSetup,
+  telnyxInboxSetup,
+  twilioInboundSync,
+  telnyxDeliverySync
 ].forEach((source, index) => {
   if (!source) fail('Missing operations function #' + index);
 });
@@ -124,6 +134,14 @@ const ifleetLaunchProofBoard = finalFunctionSlice(app, 'ifleetLaunchProofBoard')
 ].forEach(text => requireText('Maintenance/service surface', maintenance + staffServiceCard + vehicleIdentityLine + app, text));
 
 ['repairDuplicateOpenMaintenance', 'Archived exact duplicate service row'].forEach(text => requireText('Maintenance duplicate preservation', server, text));
+
+[
+  ['Clover sync errors', autoSync, 'recordOperationalFailure'],
+  ['Twilio inbound setup errors', twilioInboxSetup, 'recordOperationalFailure'],
+  ['Telnyx inbound setup errors', telnyxInboxSetup, 'recordOperationalFailure'],
+  ['Twilio inbound sync errors', twilioInboundSync, 'recordOperationalFailure'],
+  ['Telnyx delivery sync errors', telnyxDeliverySync, 'recordOperationalFailure']
+].forEach(([label, source, text]) => requireText(label, source, text));
 
 [
   'isMonthlyMaintenance',
