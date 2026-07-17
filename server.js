@@ -6948,6 +6948,22 @@ function preserveStaffLoginSecrets(current, incoming) {
 }
 function preserveServerOnlyIntegrationProofs(current, incoming) {
   const next = { ...(incoming || {}) };
+  const priorMessages = Array.isArray(current && current.messages) ? current.messages : [];
+  const priorMessagesById = new Map(priorMessages.filter(row => row && row.id).map(row => [String(row.id), row]));
+  const priorMessagesByExternalId = new Map(priorMessages.filter(row => row && row.externalId).map(row => [String(row.externalId), row]));
+  if (Array.isArray(next.messages)) {
+    next.messages = next.messages.map(row => {
+      if (!row || typeof row !== 'object') return row;
+      const clean = { ...row };
+      const prior = priorMessagesById.get(String(clean.id || '')) || priorMessagesByExternalId.get(String(clean.externalId || ''));
+      if (prior && Object.prototype.hasOwnProperty.call(prior, 'providerConfigurationFingerprint')) {
+        clean.providerConfigurationFingerprint = prior.providerConfigurationFingerprint;
+      } else {
+        delete clean.providerConfigurationFingerprint;
+      }
+      return clean;
+    });
+  }
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
@@ -6990,6 +7006,13 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
 }
 function redactStaffSecrets(data) {
   const safe = JSON.parse(JSON.stringify(compactLargeNotesForClient(data || {})));
+  if (Array.isArray(safe.messages)) {
+    safe.messages = safe.messages.map(record => {
+      const clean = { ...(record || {}) };
+      delete clean.providerConfigurationFingerprint;
+      return clean;
+    });
+  }
   safe.staffAccounts = (safe.staffAccounts || []).map(staff => {
     delete staff.passwordHash;
     delete staff.passwordSalt;
@@ -19171,6 +19194,7 @@ module.exports = {
   server,
   repairDataIds,
   stateForUserRead,
+  stateForUserWrite,
   repairVehicleSheetLinkConflicts,
   rowClaimsVehicle,
   enrichLinkedProfiles,

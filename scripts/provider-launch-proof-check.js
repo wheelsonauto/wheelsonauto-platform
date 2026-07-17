@@ -13,7 +13,7 @@ process.env.WOA_EMAIL_PROVIDER = 'resend';
 process.env.WOA_EMAIL_FROM = 'WheelsonAuto <notifications@wheelsonauto.com>';
 process.env.RESEND_API_KEY = 're_provider_launch_proof';
 process.env.RESEND_WEBHOOK_SECRET = 'whsec_provider_launch_proof';
-process.env.OPENAI_API_KEY = 'sk-provider-launch-proof';
+process.env.OPENAI_API_KEY = 'test-openai-provider-launch-proof';
 process.env.WOA_AI_MODEL = 'gpt-5.4-nano';
 process.env.WOA_AI_MAX_REQUESTS_PER_DAY = '50';
 process.env.WOA_AI_MAX_REQUESTS_PER_MONTH = '500';
@@ -24,7 +24,9 @@ const {
   starAiLaunchConfigurationFingerprint,
   telnyxLiveLaunchEvidence,
   resendLiveLaunchEvidence,
-  starAiLiveLaunchEvidence
+  starAiLiveLaunchEvidence,
+  stateForUserRead,
+  stateForUserWrite
 } = require('../server');
 
 function clone(value) {
@@ -130,5 +132,26 @@ assert.strictEqual(star.monthlyLimit, 500);
 const staleStar = clone(data);
 staleStar.integrations.messaging.lastAiHealthConfigurationFingerprint = 'stale-proof';
 assert.strictEqual(starAiLiveLaunchEvidence(staleStar).live, false, 'An OpenAI health proof from another configuration must not unlock the launch gate.');
+
+const ownerRead = stateForUserRead(data, { role: 'Owner', organizationId: 'org-wheelsonauto' });
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.messages.find(record => record.id === 'resend-inbound-proof'), 'providerConfigurationFingerprint'), false, 'Provider proof fingerprints must never be returned to the browser state.');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.messaging, 'lastAiHealthConfigurationFingerprint'), false, 'Integration proof fingerprints must never be returned to the browser state.');
+
+const forgedState = clone(data);
+forgedState.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint = 'forged-proof';
+forgedState.messages.push({
+  id: 'forged-provider-proof',
+  externalId: 'forged-provider-proof',
+  provider: 'resend',
+  providerConfigurationFingerprint: emailLaunchConfigurationFingerprint(data),
+  channel: 'Email',
+  direction: 'Inbound',
+  source: 'Email webhook',
+  status: 'Received',
+  createdAt: new Date().toISOString()
+});
+const ownerWrite = stateForUserWrite(data, forgedState, { role: 'Owner', organizationId: 'org-wheelsonauto' });
+assert.strictEqual(ownerWrite.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint, data.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint, 'Browser writes must preserve existing provider evidence instead of replacing it.');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerWrite.messages.find(record => record.id === 'forged-provider-proof'), 'providerConfigurationFingerprint'), false, 'Browser writes must not create a new provider proof fingerprint.');
 
 console.log('Provider launch proof check passed: Telnyx, Resend, and Star require fresh evidence tied to the current secured configuration.');
