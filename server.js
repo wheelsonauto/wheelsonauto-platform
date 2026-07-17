@@ -4978,11 +4978,11 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     const currentCustomer = String(vehicle.currentCustomer || '').trim();
     const customer = currentCustomer && list.some(item => sameAssignmentCustomer(item.customer, currentCustomer)) ? currentCustomer : list[0].customer;
     if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
-    if (String(vehicle.currentCustomer || '') !== customer) {
+    const needsRentedStatus = /^(?:ready|available|in lot|fleet ready)?$/i.test(String(vehicle.status || '').trim());
+    if (String(vehicle.currentCustomer || '') !== customer || needsRentedStatus) {
       vehicle.previousCustomer = vehicle.currentCustomer || vehicle.previousCustomer || '';
       vehicle.currentCustomer = customer;
-      if (!/(ready|prep|in lot|available)/i.test(String(vehicle.status || ''))) vehicle.status = vehicle.status || 'Rented';
-      else vehicle.status = 'Rented';
+      if (needsRentedStatus) vehicle.status = 'Rented';
       vehicle.customerSyncedAt = new Date().toISOString();
       vehicleAssignmentsSynced += 1;
     }
@@ -5003,6 +5003,82 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     });
   });
   return { vehicleAssignmentsSynced, linkedRowsSynced, serviceRowsSynced, assignmentConflicts: conflicts };
+}
+function fleetPublicListingState(vehicle = {}) {
+  const customer = String(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '').trim();
+  const status = String(vehicle.status || '').trim().toLowerCase();
+  if (/pending application|pending pickup|held/.test(status)) return { state: 'unavailable', availability: 'Held', customer };
+  if (customer || /rented|active contract|assigned/.test(status)) return { state: 'unavailable', availability: 'Rented', customer };
+  if (/sold|removed|retired|archived|unavailable/.test(status)) return { state: 'unavailable', availability: 'Unavailable', customer: '' };
+  if (/^(?:ready|available|in lot|fleet ready)$/.test(status)) return { state: 'available', availability: 'Available', customer: '' };
+  return null;
+}
+function findLinkedFleetVehicle(data = {}, onlineVehicle = {}) {
+  const vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
+  const linkedId = String(onlineVehicle.platformVehicleId || '').trim();
+  if (linkedId) return vehicles.find(vehicle => String(vehicle.id || '') === linkedId) || null;
+  const onlineVin = normKey(onlineVehicle.vin);
+  const onlinePlate = normKey(onlineVehicle.plate || onlineVehicle.licensePlate || onlineVehicle.tag || onlineVehicle.tempTag);
+  if (!onlineVin && !onlinePlate) return null;
+  const matches = vehicles.filter(vehicle => {
+    const vehicleOrg = String(vehicle.organizationId || '').trim();
+    const onlineOrg = String(onlineVehicle.organizationId || '').trim();
+    if (vehicleOrg && onlineOrg && vehicleOrg !== onlineOrg) return false;
+    if (onlineVin && normKey(vehicle.vin) === onlineVin) return true;
+    return !!(onlinePlate && [vehicle.plate, vehicle.licensePlate, vehicle.stock, vehicle.tempTag].map(normKey).includes(onlinePlate));
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+function syncOnlineInventoryFromFleetAssignments(data = {}) {
+  data.onlineVehicles = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
+  const now = new Date().toISOString();
+  let linked = 0, unavailable = 0, restored = 0;
+  data.onlineVehicles.forEach(onlineVehicle => {
+    const vehicle = findLinkedFleetVehicle(data, onlineVehicle);
+    if (!vehicle) return;
+    let changed = false;
+    if (String(onlineVehicle.platformVehicleId || '') !== String(vehicle.id || '')) {
+      onlineVehicle.platformVehicleId = vehicle.id || '';
+      changed = true;
+      linked += 1;
+    }
+    const listing = fleetPublicListingState(vehicle);
+    if (!listing) {
+      if (changed) onlineVehicle.updatedAt = now;
+      return;
+    }
+    if (listing.state === 'unavailable') {
+      if (onlineVehicle.fleetAvailabilityManaged !== true) {
+        onlineVehicle.fleetPreviousPublished = onlineVehicle.holdPreviousPublished === undefined ? !!onlineVehicle.published : !!onlineVehicle.holdPreviousPublished;
+        onlineVehicle.fleetPreviousAvailability = onlineVehicle.holdPreviousAvailability || onlineVehicle.availability || 'Available';
+        onlineVehicle.fleetAvailabilityManaged = true;
+        changed = true;
+      }
+      if (onlineVehicle.published !== false) { onlineVehicle.published = false; changed = true; }
+      if (String(onlineVehicle.availability || '') !== listing.availability) { onlineVehicle.availability = listing.availability; changed = true; }
+      if (String(onlineVehicle.fleetCustomer || '') !== listing.customer) { onlineVehicle.fleetCustomer = listing.customer; changed = true; }
+      if (changed) {
+        onlineVehicle.fleetAvailabilitySyncedAt = now;
+        onlineVehicle.updatedAt = now;
+        unavailable += 1;
+      }
+      return;
+    }
+    if (onlineVehicle.fleetAvailabilityManaged === true) {
+      onlineVehicle.published = onlineVehicle.fleetPreviousPublished === true;
+      onlineVehicle.availability = onlineVehicle.fleetPreviousAvailability || listing.availability;
+      onlineVehicle.fleetAvailabilityManaged = false;
+      onlineVehicle.fleetPreviousPublished = '';
+      onlineVehicle.fleetPreviousAvailability = '';
+      onlineVehicle.fleetCustomer = '';
+      onlineVehicle.fleetAvailabilitySyncedAt = now;
+      onlineVehicle.updatedAt = now;
+      restored += 1;
+    } else if (changed) {
+      onlineVehicle.updatedAt = now;
+    }
+  });
+  return { onlineInventoryLinked: linked, onlineInventoryUnavailable: unavailable, onlineInventoryRestored: restored };
 }
 function assignmentConflictRows(data = {}) {
   return (Array.isArray(data.vehicles) ? data.vehicles : []).filter(vehicle => {
@@ -5575,6 +5651,7 @@ function enrichLinkedProfiles(data) {
     }
   });
   const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data);
+  const onlineInventorySync = syncOnlineInventoryFromFleetAssignments(data);
   const profiles = [];
   data.customers.forEach(row => profiles.push(rowProfile(row)));
   data.contracts.forEach(row => profiles.push(rowProfile(row)));
@@ -5635,13 +5712,14 @@ function enrichLinkedProfiles(data) {
     const match = bestMatch(row);
     if (match) contractFilled += fillBlank(row, match, ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
   });
-  if (recurringFilled || customerFilled || contractFilled || assignmentSync.vehicleAssignmentsSynced || assignmentSync.linkedRowsSynced || assignmentSync.serviceRowsSynced || assignmentSync.assignmentConflicts || !data.integrations.profileEnrichment) {
+  if (recurringFilled || customerFilled || contractFilled || assignmentSync.vehicleAssignmentsSynced || assignmentSync.linkedRowsSynced || assignmentSync.serviceRowsSynced || assignmentSync.assignmentConflicts || onlineInventorySync.onlineInventoryLinked || onlineInventorySync.onlineInventoryUnavailable || onlineInventorySync.onlineInventoryRestored || !data.integrations.profileEnrichment) {
     data.integrations.profileEnrichment = {
       updatedAt: new Date().toISOString(),
       recurringFieldsFilled: recurringFilled,
       customerFieldsFilled: customerFilled,
       contractFieldsFilled: contractFilled,
-      ...assignmentSync
+      ...assignmentSync,
+      ...onlineInventorySync
     };
   }
   return data.integrations.profileEnrichment;
@@ -8052,6 +8130,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
+  if (publicMode) enrichLinkedProfiles(data);
   const serverDataVersion = await dataVersion();
   const clientData = publicMode ? {
     vehicles: [],
@@ -10981,6 +11060,7 @@ function assignAutopayVehicle(data, autopay) {
     contract.status = String(autopay.status || '').toLowerCase() === 'active' ? 'Active' : (contract.status || 'Pending pickup');
     contract.updatedAt = new Date().toISOString();
   }
+  syncOnlineInventoryFromFleetAssignments(data);
 }
 function cleanApiProviderPayload(payload) {
   const now = new Date().toISOString();
@@ -13544,20 +13624,24 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/staff/login' && req.method === 'GET') return send(res, 302, '', 'text/plain', { Location: '/login' });
     if (req.method === 'GET' && (url.pathname === '/site-preview' || url.pathname === '/' && nativePublicRoot(req))) {
       const data = await readData();
+      enrichLinkedProfiles(data);
       return send(res, 200, nativeSite.homeHtml(data, 'https://www.wheelsonauto.com', nativeRenderOptions(req, url.pathname === '/site-preview')), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/inventory' && req.method === 'GET') {
       const data = await readData();
+      enrichLinkedProfiles(data);
       return send(res, 200, nativeSite.inventoryHtml(data, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname.startsWith('/vehicles/') && req.method === 'GET') {
       const data = await readData();
+      enrichLinkedProfiles(data);
       const vehicle = onboarding.findPublicVehicle(data, decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || ''));
       if (!vehicle || !nativeSite.publishedVehicles(data).some(row => row.id === vehicle.id)) return send(res, 404, paymentResultHtml('Vehicle not available', 'This vehicle is not currently published. Browse the current WheelsonAuto inventory for available cars.'));
       return send(res, 200, nativeSite.vehicleHtml(data, vehicle, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname.startsWith('/apply/') && req.method === 'GET') {
       const data = await readData();
+      enrichLinkedProfiles(data);
       const vehicle = onboarding.findPublicVehicle(data, decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || ''));
       if (!vehicle || !nativeSite.publishedVehicles(data).some(row => row.id === vehicle.id)) return send(res, 404, paymentResultHtml('Vehicle not available', 'This vehicle is not accepting online applications right now.'));
       return send(res, 200, nativeSite.applicationHtml(data, vehicle, 'https://www.wheelsonauto.com', nativeRenderOptions(req)), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
@@ -13596,6 +13680,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/sitemap.xml' && req.method === 'GET') {
       const data = await readData();
+      enrichLinkedProfiles(data);
       const paths = ['/', '/inventory', '/privacy', '/terms', '/cancellation'].concat(nativeSite.publishedVehicles(data).map(vehicle => '/vehicles/' + nativeSite.publicVehicleSlug(vehicle)));
       const xml = '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + paths.map(item => '<url><loc>https://www.wheelsonauto.com' + escapeHtml(item) + '</loc></url>').join('') + '</urlset>';
       return send(res, 200, xml, 'application/xml; charset=utf-8');
@@ -13704,6 +13789,7 @@ const server = http.createServer(async (req, res) => {
       if (!applicationRate.allowed) return json(res, 429, { ok: false, error: 'Too many application attempts from this connection. Wait before trying again.' }, { 'Retry-After': String(applicationRate.retryAfterSeconds) });
       const payload = await readJsonBody(req, 256 * 1024);
       const data = await readData();
+      enrichLinkedProfiles(data);
       onboarding.ensureCollections(data);
       const selectedVehicle = onboarding.findPublicVehicle(data, onboarding.text(payload.onlineVehicleId, 120));
       if (!selectedVehicle || !nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
@@ -17506,6 +17592,7 @@ const server = http.createServer(async (req, res) => {
         const activeAutopay = String(autopay.status || '').toLowerCase() === 'active';
         data.contracts.unshift({ id: 'con-autopay-' + Date.now(), customer: autopay.customer, phone: autopay.phone, email: autopay.email, vehicle: autopay.vehicle, vehicleId: autopay.vehicleId, vin: autopay.vin, licensePlate: autopay.licensePlate, plate: autopay.plate || autopay.licensePlate, tempTag: autopay.tempTag, tracker: autopay.tracker, weekly: autopay.amount, balance: 0, status: activeAutopay ? 'Active' : 'Pending pickup', autopay: autopay.status || 'Setup needed', paymentProvider: 'Clover', notes: 'Customer file created from WheelsonAuto autopay setup.', source: 'WheelsonAuto autopay', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       }
+      enrichLinkedProfiles(data);
       appendAuditLog(data, user, existingAutopay ? 'Autopay reactivated' : 'Autopay created', [autopay.customer || 'Unknown customer', moneyText(autopay.amount || 0), autopay.frequency || 'Schedule', autopay.nextRun || 'No next date', autopay.vehicle || autopay.vin || 'No vehicle linked']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
