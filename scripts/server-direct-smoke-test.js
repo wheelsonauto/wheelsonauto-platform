@@ -198,6 +198,7 @@ async function main() {
     mergeRecurringCustomerDetail,
     membersFromRecurringSubscriptions,
     mapCloverPayment,
+    stripeLiveWebhookEvidence,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
@@ -1258,6 +1259,11 @@ async function main() {
     const stripeRefundWebhookState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(Number((stripeRefundWebhookState.json.payments || []).find(row => row.id === 'stripe-payment-direct-refund').refundedAmount) === 42.25, 'A successful Stripe refund webhook must not double-count an already-completed refund.');
     assert(stripeRefundWebhookState.json.integrations && stripeRefundWebhookState.json.integrations.stripe && stripeRefundWebhookState.json.integrations.stripe.lastWebhookLivemode === true, 'A signed live Stripe webhook must leave durable live-evidence state for launch preflight.');
+    assert(!Object.prototype.hasOwnProperty.call(stripeRefundWebhookState.json.integrations.stripe, 'lastWebhookConfigurationFingerprint'), 'Stripe webhook configuration proof must stay server-only.');
+    const stripeWebhookPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
+    assert(stripeWebhookPreflight.status === 200 && stripeWebhookPreflight.json.stripeWebhook && stripeWebhookPreflight.json.stripeWebhook.live === true && stripeWebhookPreflight.json.stripeWebhook.configurationMatched === true, 'A signed live Stripe webhook must match the active Stripe configuration before it satisfies launch evidence.');
+    const staleStripeWebhookEvidence = stripeLiveWebhookEvidence({ integrations: { stripe: { lastWebhookAt: new Date().toISOString(), lastWebhookLivemode: true, lastWebhookConfigurationFingerprint: 'old-render-configuration' } } });
+    assert(!staleStripeWebhookEvidence.live && !staleStripeWebhookEvidence.configurationMatched && /older or unknown Stripe configuration/i.test(staleStripeWebhookEvidence.error), 'Old Stripe webhook evidence must fail closed when the active Render configuration changes.');
 
     const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });
     assert(managerDisputeAction.status === 403, 'Manager must not change Clover dispute response status.');

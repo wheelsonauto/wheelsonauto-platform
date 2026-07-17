@@ -6446,7 +6446,7 @@ function restoreCompactedClientNotes(current = {}, incoming = {}) {
 }
 function stateForUserWrite(current, incoming, user) {
   if (isOwnerUser(user)) {
-    const next = restoreCompactedClientNotes(current, preserveStaffLoginSecrets(current, incoming));
+    const next = restoreCompactedClientNotes(current, preserveServerOnlyIntegrationProofs(current, preserveStaffLoginSecrets(current, incoming)));
     ['subscriptions', 'billingInvoices', 'billingEvents'].forEach(key => {
       next[key] = Array.isArray(current[key]) ? current[key] : [];
     });
@@ -6597,6 +6597,17 @@ function preserveStaffLoginSecrets(current, incoming) {
   }
   return next;
 }
+function preserveServerOnlyIntegrationProofs(current, incoming) {
+  const next = { ...(incoming || {}) };
+  const priorStripe = current && current.integrations && current.integrations.stripe || {};
+  if (!priorStripe.lastWebhookConfigurationFingerprint) return next;
+  next.integrations = { ...((incoming && incoming.integrations) || {}) };
+  next.integrations.stripe = {
+    ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}),
+    lastWebhookConfigurationFingerprint: priorStripe.lastWebhookConfigurationFingerprint
+  };
+  return next;
+}
 function redactStaffSecrets(data) {
   const safe = JSON.parse(JSON.stringify(compactLargeNotesForClient(data || {})));
   safe.staffAccounts = (safe.staffAccounts || []).map(staff => {
@@ -6609,6 +6620,7 @@ function redactStaffSecrets(data) {
     delete safe.security.ownerLogin.passwordHash;
     delete safe.security.ownerLogin.passwordSalt;
   }
+  if (safe.integrations && safe.integrations.stripe) delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
   return safe;
 }
 function scrubOrganizationProviderProfile(organization) {
@@ -8128,14 +8140,36 @@ function checkoutStatus() {
         : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.')
   };
 }
+function stripeWebhookConfigurationFingerprint() {
+  const material = [
+    STRIPE_KEY_MODE,
+    STRIPE_SECRET_KEY,
+    STRIPE_PUBLISHABLE_KEY,
+    STRIPE_WEBHOOK_SECRET,
+    STRIPE_API_BASE,
+    PUBLIC_BASE_URL,
+    IDENTITY_PROVIDER,
+    WOA_ONBOARDING_PAYMENT_PROVIDER
+  ].join('\u0000');
+  // A server-secret HMAC lets us compare configuration evidence without exposing key material to clients.
+  return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(material).digest('hex');
+}
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
+  const expectedFingerprint = stripeWebhookConfigurationFingerprint();
+  const recordedFingerprint = String(stripeState.lastWebhookConfigurationFingerprint || '');
+  const configurationMatched = !!(recordedFingerprint && secureWebhookValueMatch(recordedFingerprint, expectedFingerprint));
+  const hasLiveEvent = stripeState.lastWebhookLivemode === true;
+  const mismatchMessage = hasLiveEvent && !configurationMatched
+    ? 'The recorded signed Stripe webhook belongs to an older or unknown Stripe configuration. Send one new signed live test after the current Render settings are deployed.'
+    : '';
   return {
     receivedAt: String(stripeState.lastWebhookAt || ''),
     type: String(stripeState.lastWebhookType || ''),
     eventId: String(stripeState.lastWebhookEventId || ''),
-    live: stripeState.lastWebhookLivemode === true,
-    error: String(stripeState.lastWebhookError || '')
+    live: hasLiveEvent && configurationMatched,
+    configurationMatched,
+    error: mismatchMessage || String(stripeState.lastWebhookError || '')
   };
 }
 async function productionInfrastructurePreflight(data = null) {
@@ -13105,6 +13139,7 @@ async function recordStripeWebhookEvent(event = {}) {
   stripeState.lastWebhookType = type;
   stripeState.lastWebhookEventId = event.id || '';
   stripeState.lastWebhookLivemode = event.livemode === true;
+  stripeState.lastWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
   stripeState.lastWebhookError = '';
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
@@ -17770,6 +17805,7 @@ module.exports = {
   hostedCheckoutWebhookDetails,
   applyHostedCheckoutWebhook,
   recordHostedCheckoutPayment,
+  stripeLiveWebhookEvidence,
   validCalendarDateKey,
   calendarDayName,
   nextRecurringOccurrence,

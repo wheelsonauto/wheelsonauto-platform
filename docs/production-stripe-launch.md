@@ -143,6 +143,10 @@ must be signed and reach the live platform before it is treated as connected.
 The launch preflight records the most recent Stripe event and refuses to call
 the platform live-ready until it has received a signed event with Stripe's
 `livemode: true` flag. A copied secret or dashboard-only test is not enough.
+That proof is bound to the active Stripe key, publishable key, webhook secret,
+API base URL, public URL, identity mode, and onboarding payment provider using
+a server-only fingerprint. Changing any of those Render settings intentionally
+requires one fresh signed live event before the preflight is green again.
 
 Run one complete controlled test record:
 
