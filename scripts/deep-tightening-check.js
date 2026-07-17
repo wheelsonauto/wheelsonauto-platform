@@ -62,6 +62,7 @@ function assetVersionCheck() {
   ['payment workflow', ['scripts/payment-workflow-check.js']],
   ['customer/fleet workflow', ['scripts/customer-fleet-workflow-check.js']],
   ['frontend render smoke', ['scripts/frontend-render-smoke-test.js']],
+  ['client state performance budget', ['scripts/client-state-budget-check.js']],
   ['data consistency', ['scripts/data-consistency-check.js']],
   ['workflow integrity', ['scripts/workflow-integrity-check.js']],
   ['server direct smoke', ['scripts/server-direct-smoke-test.js']]
