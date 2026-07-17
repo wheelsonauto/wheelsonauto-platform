@@ -39,6 +39,31 @@ function assertChecksum(value, expectedChecksum, label = 'PostgreSQL state') {
   throw error;
 }
 
+function recoverySnapshotEvidence(snapshot, current = {}) {
+  const hasSnapshot = !!(snapshot && Object.prototype.hasOwnProperty.call(snapshot, 'state'));
+  const currentVersion = Number(current.version || 0);
+  const currentChecksum = String(current.checksum || '').trim();
+  const snapshotVersion = hasSnapshot ? Number(snapshot.version || 0) : 0;
+  const snapshotChecksum = hasSnapshot ? String(snapshot.checksum || '').trim() : '';
+  const integrity = hasSnapshot
+    ? checksumEvidence(snapshot.state, snapshotChecksum)
+    : { expected: '', actual: '', matches: false };
+  const versionMatchesCurrent = hasSnapshot && snapshotVersion === currentVersion;
+  const checksumMatchesCurrent = hasSnapshot && !!currentChecksum && snapshotChecksum === currentChecksum;
+  const ready = integrity.matches && versionMatchesCurrent && checksumMatchesCurrent;
+  const status = !hasSnapshot ? 'missing' : !integrity.matches ? 'failed' : ready ? 'verified' : 'stale';
+  return {
+    snapshotCount: Math.max(0, Number(current.snapshotCount || 0)),
+    latestSnapshotId: hasSnapshot ? Number(snapshot.id || 0) : 0,
+    latestSnapshotVersion: snapshotVersion,
+    latestSnapshotAt: hasSnapshot ? snapshot.createdAt || snapshot.created_at || '' : '',
+    snapshotIntegrity: status,
+    snapshotChecksumMatchesCurrent: checksumMatchesCurrent,
+    snapshotVersionMatchesCurrent: versionMatchesCurrent,
+    snapshotRecoveryReady: ready
+  };
+}
+
 function normalizeOrganizationId(value) {
   return String(value || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
 }
@@ -686,7 +711,19 @@ class PostgresStateRepository {
   async health() {
     try {
       await this.ensureSchema();
-      const result = await this.pool.query('SELECT state, version, checksum, updated_at FROM woa_state WHERE organization_id = $1', [this.organizationId]);
+      const result = await this.pool.query(`SELECT state.state, state.version, state.checksum, state.updated_at,
+        snapshot.id AS snapshot_id, snapshot.version AS snapshot_version, snapshot.checksum AS snapshot_checksum,
+        snapshot.state AS snapshot_state, snapshot.created_at AS snapshot_created_at,
+        (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count
+        FROM woa_state AS state
+        LEFT JOIN LATERAL (
+          SELECT id, version, checksum, state, created_at
+          FROM woa_state_snapshots
+          WHERE organization_id = $1
+          ORDER BY version DESC
+          LIMIT 1
+        ) AS snapshot ON true
+        WHERE state.organization_id = $1`, [this.organizationId]);
       if (!result.rowCount) {
         return {
           backend: 'postgres',
@@ -695,6 +732,14 @@ class PostgresStateRepository {
           productionReady: false,
           stateImported: false,
           integrity: 'missing',
+          snapshotCount: 0,
+          latestSnapshotId: 0,
+          latestSnapshotVersion: 0,
+          latestSnapshotAt: '',
+          snapshotIntegrity: 'missing',
+          snapshotChecksumMatchesCurrent: false,
+          snapshotVersionMatchesCurrent: false,
+          snapshotRecoveryReady: false,
           version: 0,
           updatedAt: '',
           error: 'PostgreSQL is reachable but WheelsonAuto state has not been imported.'
@@ -702,6 +747,18 @@ class PostgresStateRepository {
       }
       const row = result.rows[0];
       const integrity = checksumEvidence(row.state, row.checksum);
+      const snapshot = row.snapshot_id === null || row.snapshot_id === undefined ? null : {
+        id: row.snapshot_id,
+        version: row.snapshot_version,
+        checksum: row.snapshot_checksum,
+        state: row.snapshot_state,
+        createdAt: row.snapshot_created_at
+      };
+      const recovery = recoverySnapshotEvidence(snapshot, {
+        version: row.version,
+        checksum: row.checksum,
+        snapshotCount: row.snapshot_count
+      });
       return {
         backend: 'postgres',
         connected: true,
@@ -709,9 +766,18 @@ class PostgresStateRepository {
         productionReady: integrity.matches,
         stateImported: true,
         integrity: integrity.matches ? 'verified' : 'failed',
+        ...recovery,
         version: Number(row.version || 0),
         updatedAt: row.updated_at,
-        error: integrity.matches ? '' : 'PostgreSQL state checksum verification failed.'
+        error: !integrity.matches
+          ? 'PostgreSQL state checksum verification failed.'
+          : recovery.snapshotRecoveryReady
+            ? ''
+            : recovery.snapshotIntegrity === 'missing'
+              ? 'PostgreSQL state is healthy but no current transactional recovery snapshot exists.'
+              : recovery.snapshotIntegrity === 'failed'
+                ? 'The latest PostgreSQL recovery snapshot checksum verification failed.'
+                : 'The latest PostgreSQL recovery snapshot does not match the current state.'
       };
     } catch (error) {
       return { backend: 'postgres', connected: false, transactional: true, productionReady: false, error: String(error && error.message || error) };
@@ -737,6 +803,7 @@ module.exports = {
   checksum,
   checksumEvidence,
   assertChecksum,
+  recoverySnapshotEvidence,
   identityEntries,
   identityConflicts,
   privateDocumentRows,

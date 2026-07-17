@@ -76,7 +76,11 @@ async function main() {
     assert.strictEqual(health.productionReady, true, 'A reachable PostgreSQL state repository must report production-ready.');
     assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
     assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');
-    console.log('PostgreSQL runtime recovery check passed: write, snapshot, restore, audit, checksum, Star quota, and cleanup verified.');
+    assert.strictEqual(health.snapshotIntegrity, 'verified', 'The latest PostgreSQL recovery snapshot must verify its own checksum.');
+    assert.strictEqual(health.snapshotVersionMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state version.');
+    assert.strictEqual(health.snapshotChecksumMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state checksum.');
+    assert.strictEqual(health.snapshotRecoveryReady, true, 'A production-ready PostgreSQL repository must expose a verified current recovery snapshot.');
+    console.log('PostgreSQL runtime recovery check passed: write, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await repository.close();
