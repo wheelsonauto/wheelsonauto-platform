@@ -1271,6 +1271,8 @@ async function main() {
     assert(managerStorageValidation.status === 403, 'Manager must not validate the private production document-storage provider.');
     const managerOperationalAlertValidation = await request(server, 'POST', '/api/system/infrastructure/operational-alerts/validate', { cookie: managerCookie, json: {} });
     assert(managerOperationalAlertValidation.status === 403, 'Manager must not validate operational failure alerts.');
+    const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
+    assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
     const operationalAlertFetch = global.fetch;
     const operationalAlertCalls = [];
     global.fetch = async (url, options = {}) => {

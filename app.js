@@ -3088,7 +3088,7 @@ var __woaSystemHealthStorageBase=systemHealthPanel;
 systemHealthPanel=function(){
   var html=__woaSystemHealthStorageBase();
   if(roleName()!=='owner')return html;
-  return html.replace('<button class="btn gold" data-action="check-system-readiness">Check readiness</button>','<div class="actions"><button class="btn gold" data-action="check-system-readiness">Check readiness</button><button class="btn" data-action="validate-document-storage">Validate private storage</button><button class="btn" data-action="validate-operational-alerts">Test failure alerts</button></div>');
+  return html.replace('<button class="btn gold" data-action="check-system-readiness">Check readiness</button>','<div class="actions"><button class="btn gold" data-action="check-system-readiness">Check readiness</button><button class="btn" data-action="open-live-launch-preflight">Live launch preflight</button><button class="btn" data-action="validate-document-storage">Validate private storage</button><button class="btn" data-action="validate-operational-alerts">Test failure alerts</button></div>');
 };
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="validate-document-storage"]');
@@ -3117,6 +3117,57 @@ document.addEventListener('click',async function(event){
   button.classList.remove('is-loading');
   if(result&&result.ok){await refreshData(true);notify(result.message||'Operational failure alerts passed');return}
   notify(result&&result.error||'Operational failure alert test failed');
+},true);
+
+function liveLaunchGateRow(label,ready,detail){
+  return [esc(label),badge(ready?'Verified':'Blocked',ready?'good':'warn'),esc(detail|| (ready?'Current proof is present.':'Current proof is missing or stale.'))]
+}
+function liveLaunchGateDetail(item,ready,fallback){
+  if(ready)return item&&item.message||item&&item.summary||fallback||'Current proof is present.';
+  return item&&item.error||item&&item.message||fallback||'Current proof is missing or stale.'
+}
+function liveLaunchPreflightModal(preflight){
+  preflight=preflight||{};
+  var database=preflight.database||{},storage=preflight.documentStorage||{},storageValidation=preflight.documentStorageValidation||{},stripeWebhook=preflight.stripeWebhook||{},identityWebhook=preflight.stripeIdentityWebhook||{},alerts=preflight.operationalAlerts||{},telnyx=preflight.telnyxMessaging||{},resend=preflight.resendEmail||{},star=preflight.starAi||{},owner=preflight.ownerAuthentication||{};
+  var databaseReady=!!database.productionReady,storageReady=!!storage.productionReady&&!!storageValidation.live,stripeReady=!!stripeWebhook.live,identityReady=!!identityWebhook.live,alertsReady=!!alerts.live,telnyxReady=!!telnyx.live,resendReady=!!resend.live,starReady=!!star.live,ownerReady=!!owner.passwordLoginConfigured&&!!owner.passwordLoginStrong&&!owner.pinFallbackAllowed;
+  var rows=[
+    liveLaunchGateRow('PostgreSQL recovery',databaseReady,liveLaunchGateDetail(database,databaseReady,'Transactional database, import proof, and recovery snapshot are required.')),
+    liveLaunchGateRow('Private document storage',storageReady,liveLaunchGateDetail(storageValidation,storageReady,'Encrypted S3-compatible storage needs a current write/read/delete proof.')),
+    liveLaunchGateRow('Stripe payments',stripeReady,liveLaunchGateDetail(stripeWebhook,stripeReady,'A signed live Stripe payment webhook must be recorded.')),
+    liveLaunchGateRow('Stripe Identity',identityReady,liveLaunchGateDetail(identityWebhook,identityReady,'A signed live Stripe Identity verification is required.')),
+    liveLaunchGateRow('Telnyx SMS',telnyxReady,liveLaunchGateDetail(telnyx,telnyxReady,'10DLC approval plus fresh signed delivery and inbound reply proof are required.')),
+    liveLaunchGateRow('Resend email',resendReady,liveLaunchGateDetail(resend,resendReady,'A verified wheelsonauto.com sender plus fresh outbound and signed inbound proof are required.')),
+    liveLaunchGateRow('Star AI',starReady,liveLaunchGateDetail(star,starReady,'A fresh OpenAI Responses API health proof with active spend limits is required.')),
+    liveLaunchGateRow('Failure alerts',alertsReady,liveLaunchGateDetail(alerts,alertsReady,'A current owner alert delivery test is required.')),
+    liveLaunchGateRow('Owner access',ownerReady,liveLaunchGateDetail(owner,ownerReady,'Password-only owner access with a stable signed session secret is required.'))
+  ];
+  var conflicts=Array.isArray(preflight.identityConflicts)?preflight.identityConflicts:[],jobErrors=Array.isArray(preflight.openJobErrors)?preflight.openJobErrors:[],missing=Array.isArray(preflight.missing)?preflight.missing:[],ready=preflight.ok===true;
+  var summary='<div class="grid stats"><div class="stat '+(ready?'good':'warn')+'"><span>Controlled Stripe launch</span><strong>'+esc(ready?'Clear':'Blocked')+'</strong><small>'+esc(ready?'All required live evidence is current.':'Keep Clover live until every gate is verified.')+'</small></div>'+stat('Blocked gates',missing.length,'Current launch requirements')+stat('Identity conflicts',conflicts.length,'Customer / vehicle items')+stat('Open job errors',jobErrors.length,'Failed jobs or webhooks')+'</div>';
+  var missingHtml=missing.length?'<ul class="list compact-list">'+missing.map(function(item){return '<li>'+esc(item)+'</li>'}).join('')+'</ul>':'<div class="notice good">All server-side launch safeguards report current evidence.</div>';
+  var issues=[];
+  if(conflicts.length)issues.push('Resolve '+conflicts.length+' identity conflict'+(conflicts.length===1?'':'s')+' before cutover.');
+  if(jobErrors.length)issues.push('Review '+jobErrors.length+' open job error'+(jobErrors.length===1?'':'s')+' before cutover.');
+  return summary+'<section class="section" style="padding:0;margin-top:12px"><h2>Launch evidence</h2>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check only reads server-held evidence. It does not send a charge, change a customer, or turn on a provider.</div>'
+}
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="open-live-launch-preflight"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can view live launch readiness');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  try{
+    var response=await fetch('/api/system/infrastructure/preflight',{headers:{Accept:'application/json'},cache:'no-store'}),result=await response.json().catch(function(){return{}});
+    if(!response.ok||result.ok===false&&result.error){notify(result.error||'Live launch preflight failed');return}
+    openModal('Controlled Stripe launch preflight',liveLaunchPreflightModal(result));
+  }catch(error){
+    notify('Live launch preflight could not reach the server');
+  }finally{
+    button.disabled=false;
+    button.classList.remove('is-loading');
+  }
 },true);
 
 function customerFileLargeNoteContext(){

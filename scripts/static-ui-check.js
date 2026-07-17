@@ -213,6 +213,16 @@ if (/staticFile[\s\S]{0,900}ifleet-prototype\.html/.test(server)) {
   fail('The obsolete iFleet prototype must not be publicly served as a static application surface.');
 }
 assertIncludes('Stale staff Apply state recovery', app, ["if(view==='Apply')view=isPublic?'Apply':'Website'"]);
+assertIncludes('Owner live launch preflight surface', app, [
+  'open-live-launch-preflight',
+  '/api/system/infrastructure/preflight',
+  'Controlled Stripe launch preflight',
+  'PostgreSQL recovery',
+  'Telnyx SMS',
+  'Resend email',
+  'Star AI',
+  'Open job errors'
+]);
 
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
   const value = match[1];
