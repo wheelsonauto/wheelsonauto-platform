@@ -214,6 +214,11 @@ That proof is bound to the active Stripe key, publishable key, webhook secret,
 API base URL, public URL, identity mode, and onboarding payment provider using
 a server-only fingerprint. Changing any of those Render settings intentionally
 requires one fresh signed live event before the preflight is green again.
+The production guard also requires `WOA_ONBOARDING_PAYMENT_PROVIDER=stripe`,
+`WOA_IDENTITY_PROVIDER=stripe`, and one signed
+`identity.verification_session.verified` event matched to a WheelsonAuto
+onboarding file. A generic payment, refund, or unrelated Stripe event cannot
+stand in for the license-and-selfie test.
 
 Run one complete controlled test record:
 
@@ -312,9 +317,10 @@ WOA_PRODUCTION_HARDENING_REQUIRED=1
 ```
 
 On a future restart the service will refuse to start if transactional
-PostgreSQL, encrypted private storage, Stripe live/webhook settings, a stable
-session secret, or HTTPS public URL are missing. This is deliberate: it keeps a
-partial configuration from quietly processing live money or private documents.
+PostgreSQL, encrypted private storage, Stripe live/webhook settings, Stripe
+onboarding and Identity, verified operational alerts, a stable session secret,
+or HTTPS public URL are missing. This is deliberate: it keeps a partial
+configuration from quietly processing live money or private documents.
 
 Before each deployment rehearsal, run the guard test as well:
 

@@ -6751,7 +6751,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
-  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError'];
+  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const preserveStripe = stripeProofFields.some(field => Object.prototype.hasOwnProperty.call(priorStripe, field));
@@ -6791,7 +6791,10 @@ function redactStaffSecrets(data) {
     delete safe.security.ownerLogin.passwordHash;
     delete safe.security.ownerLogin.passwordSalt;
   }
-  if (safe.integrations && safe.integrations.stripe) delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
+  if (safe.integrations && safe.integrations.stripe) {
+    delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
+    delete safe.integrations.stripe.lastIdentityWebhookConfigurationFingerprint;
+  }
   if (safe.integrations && safe.integrations.documentStorage) delete safe.integrations.documentStorage.lastValidationConfigurationFingerprint;
   if (safe.integrations && safe.integrations.notifications) delete safe.integrations.notifications.lastOperationalAlertConfigurationFingerprint;
   return safe;
@@ -8371,6 +8374,30 @@ function stripeLiveWebhookEvidence(data = {}) {
     error: mismatchMessage || String(stripeState.lastWebhookError || '')
   };
 }
+function stripeIdentityLiveWebhookEvidence(data = {}) {
+  const stripeState = data && data.integrations && data.integrations.stripe || {};
+  const expectedFingerprint = stripeWebhookConfigurationFingerprint();
+  const recordedFingerprint = String(stripeState.lastIdentityWebhookConfigurationFingerprint || '');
+  const configurationMatched = !!(recordedFingerprint && secureWebhookValueMatch(recordedFingerprint, expectedFingerprint));
+  const type = String(stripeState.lastIdentityWebhookType || '');
+  const eventId = String(stripeState.lastIdentityWebhookEventId || '');
+  const verifiedEvent = type === 'identity.verification_session.verified';
+  const hasLiveEvent = stripeState.lastIdentityWebhookLivemode === true;
+  const live = IDENTITY_PROVIDER === 'stripe' && STRIPE_KEY_MODE === 'live' && verifiedEvent && !!eventId && hasLiveEvent && configurationMatched;
+  let error = '';
+  if (IDENTITY_PROVIDER !== 'stripe') error = 'Set WOA_IDENTITY_PROVIDER=stripe before the controlled Stripe launch.';
+  else if (STRIPE_KEY_MODE !== 'live') error = 'Stripe Identity requires the active live Stripe secret key.';
+  else if (!verifiedEvent || !eventId || !hasLiveEvent) error = 'Complete one WheelsonAuto onboarding license and selfie verification so a signed live Stripe Identity result is recorded.';
+  else if (!configurationMatched) error = 'The recorded signed Stripe Identity result belongs to an older or unknown Stripe configuration. Complete one new verification after the current Render settings are deployed.';
+  return {
+    receivedAt: String(stripeState.lastIdentityWebhookAt || ''),
+    type,
+    eventId,
+    live,
+    configurationMatched,
+    error
+  };
+}
 function documentStorageConfigurationFingerprint() {
   const storage = PRIVATE_DOCUMENT_STORE;
   const material = [
@@ -8469,6 +8496,7 @@ async function productionInfrastructurePreflight(data = null) {
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
   const state = data || await readData();
   const stripeWebhook = stripeLiveWebhookEvidence(state);
+  const stripeIdentityWebhook = stripeIdentityLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
   const operationalAlerts = operationalAlertEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
@@ -8482,18 +8510,24 @@ async function productionInfrastructurePreflight(data = null) {
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
   if (!stripeWebhook.live) missing.push('Stripe signed live webhook event');
+  if (WOA_ONBOARDING_PAYMENT_PROVIDER !== 'stripe') missing.push('Stripe onboarding payment provider');
+  if (IDENTITY_PROVIDER !== 'stripe') missing.push('Stripe Identity provider');
+  else {
+    if (!STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');
+    if (!stripeIdentityWebhook.live) missing.push('signed live Stripe Identity verification');
+  }
   if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
-  if (IDENTITY_PROVIDER === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');
   return {
     database,
     documentStorage,
     documentStorageValidation,
     stripeWebhook,
+    stripeIdentityWebhook,
     operationalAlerts,
     ownerAuthentication,
     missing,
@@ -8501,7 +8535,7 @@ async function productionInfrastructurePreflight(data = null) {
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, signed live Stripe webhooks, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -14057,6 +14091,7 @@ async function recordStripeWebhookEvent(event = {}) {
   let paymentRequestId = '';
   let disputeClaimId = '';
   let identitySessionId = '';
+  let signedIdentityVerified = false;
   let refundRequestId = '';
   let stripePaymentIntentResult = null;
   if (type === 'checkout.session.completed') {
@@ -14089,6 +14124,7 @@ async function recordStripeWebhookEvent(event = {}) {
       applyStripeIdentitySession(data, session, application, object, event.id || '');
       identitySessionId = session.id;
       if (type === 'identity.verification_session.verified') {
+        signedIdentityVerified = true;
         await queueOwnerEmailNotification(data, 'identity_verified', {
           customer: application && application.name || 'Onboarding customer',
           subject: 'Identity verified - insurance review needed',
@@ -14116,6 +14152,14 @@ async function recordStripeWebhookEvent(event = {}) {
   stripeState.lastWebhookLivemode = event.livemode === true;
   stripeState.lastWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
   stripeState.lastWebhookError = '';
+  if (signedIdentityVerified) {
+    stripeState.lastIdentityWebhookAt = stripeState.lastWebhookAt;
+    stripeState.lastIdentityWebhookType = type;
+    stripeState.lastIdentityWebhookEventId = event.id || '';
+    stripeState.lastIdentityWebhookLivemode = event.livemode === true;
+    stripeState.lastIdentityWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
+    stripeState.lastIdentityWebhookError = '';
+  }
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
   await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
@@ -18938,6 +18982,8 @@ module.exports = {
   applyHostedCheckoutWebhook,
   recordHostedCheckoutPayment,
   stripeLiveWebhookEvidence,
+  stripeIdentityLiveWebhookEvidence,
+  stripeWebhookConfigurationFingerprint,
   documentStorageConfigurationFingerprint,
   privateDocumentStorageEvidence,
   operationalAlertConfigurationFingerprint,

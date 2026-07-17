@@ -316,6 +316,9 @@ async function main() {
     const identityRaw = JSON.stringify(identityEvent);
     const identityWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: identityRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, identityRaw) } });
     assert(identityWebhook.status === 200 && identityWebhook.json.identitySessionId === onboardingId, 'Only the signed Stripe Identity result may unlock staff review.');
+    const identityEvidenceState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    const identityEvidence = identityEvidenceState.integrations && identityEvidenceState.integrations.stripe || {};
+    assert(identityEvidence.lastIdentityWebhookEventId === identityEvent.id && identityEvidence.lastIdentityWebhookLivemode === false, 'A signed Stripe Identity result must retain server-only identity-proof evidence while test-mode events remain distinctly non-live.');
     const documentsApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'documents', decision: 'approve', identityConfirmed: true, notes: 'Stripe verified live license/selfie; full coverage insurance manually reviewed.' } });
     assert(documentsApproved.status === 200, 'Admin must be able to approve verified identity and manually reviewed insurance.');
 

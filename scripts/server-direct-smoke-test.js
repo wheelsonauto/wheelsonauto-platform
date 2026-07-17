@@ -157,7 +157,7 @@ async function main() {
   process.env.CLOVER_MERCHANT_ID = 'direct-clover-merchant';
   process.env.CLOVER_ECOMMERCE_PUBLIC_KEY = 'direct-clover-public-key';
   process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'direct-clover-private-key';
-  process.env.STRIPE_SECRET_KEY = 'sk_test_direct_refund';
+  process.env.STRIPE_SECRET_KEY = 'sk_live_direct_smoke';
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec-direct-stripe-refund';
   process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
   process.env.WOA_VERIFICATION_WEBHOOK_SECRET = 'direct-verification-secret';
@@ -207,6 +207,8 @@ async function main() {
     membersFromRecurringSubscriptions,
     mapCloverPayment,
     stripeLiveWebhookEvidence,
+    stripeIdentityLiveWebhookEvidence,
+    stripeWebhookConfigurationFingerprint,
     documentStorageConfigurationFingerprint,
     privateDocumentStorageEvidence,
     operationalAlertConfigurationFingerprint,
@@ -1443,6 +1445,8 @@ async function main() {
     assert(stripeWebhookPreflight.status === 200 && stripeWebhookPreflight.json.stripeWebhook && stripeWebhookPreflight.json.stripeWebhook.live === true && stripeWebhookPreflight.json.stripeWebhook.configurationMatched === true, 'A signed live Stripe webhook must match the active Stripe configuration before it satisfies launch evidence.');
     const staleStripeWebhookEvidence = stripeLiveWebhookEvidence({ integrations: { stripe: { lastWebhookAt: new Date().toISOString(), lastWebhookLivemode: true, lastWebhookConfigurationFingerprint: 'old-render-configuration' } } });
     assert(!staleStripeWebhookEvidence.live && !staleStripeWebhookEvidence.configurationMatched && /older or unknown Stripe configuration/i.test(staleStripeWebhookEvidence.error), 'Old Stripe webhook evidence must fail closed when the active Render configuration changes.');
+    const signedIdentityEvidence = stripeIdentityLiveWebhookEvidence({ integrations: { stripe: { lastIdentityWebhookAt: new Date().toISOString(), lastIdentityWebhookType: 'identity.verification_session.verified', lastIdentityWebhookEventId: 'evt_direct_identity_verified', lastIdentityWebhookLivemode: true, lastIdentityWebhookConfigurationFingerprint: stripeWebhookConfigurationFingerprint() } } });
+    assert(!signedIdentityEvidence.live && /WOA_IDENTITY_PROVIDER=stripe/i.test(signedIdentityEvidence.error), 'A live Stripe key and generic webhook must not satisfy Identity proof while the identity provider remains disabled.');
     const proofTamperState = JSON.parse(JSON.stringify(stripeRefundWebhookState.json));
     proofTamperState.integrations = proofTamperState.integrations || {};
     proofTamperState.integrations.stripe = { ...(proofTamperState.integrations.stripe || {}), lastWebhookAt: '2099-01-01T00:00:00.000Z', lastWebhookLivemode: false, lastWebhookError: 'Browser override attempt' };
