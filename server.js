@@ -88,7 +88,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-autopay-guard-78">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260716-customer-truth-79">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -245,11 +245,14 @@ function activeSheetRecord(row) {
 }
 function rowClaimsVehicle(row, vehicle) {
   if (!row || !vehicle) return false;
-  if (row.vehicleId && vehicle.id && row.vehicleId === vehicle.id) return true;
-  if (row.vin && vehicle.vin && normKey(row.vin) === normKey(vehicle.vin)) return true;
+  const comparableStrongIdentity = [];
+  if (row.vehicleId && vehicle.id) comparableStrongIdentity.push(row.vehicleId === vehicle.id);
+  if (row.vin && vehicle.vin) comparableStrongIdentity.push(normKey(row.vin) === normKey(vehicle.vin));
   const rowPlate = row.licensePlate || row.plate || row.tag;
   const vehiclePlate = vehicle.plate || vehicle.stock;
-  if (rowPlate && vehiclePlate && normKey(rowPlate) === normKey(vehiclePlate)) return true;
+  if (rowPlate && vehiclePlate) comparableStrongIdentity.push(normKey(rowPlate) === normKey(vehiclePlate));
+  if (comparableStrongIdentity.some(Boolean)) return true;
+  if (comparableStrongIdentity.length) return false;
   return !!(row.vehicle && normKey(row.vehicle) === normKey(vehicleNameFromParts(vehicle)));
 }
 function clearWrongVehicleClaims(data, vehicle, customerName, reason) {
@@ -276,7 +279,7 @@ function clearWrongVehicleClaims(data, vehicle, customerName, reason) {
       row.tempTag = '';
       row.tracker = '';
       row.vehicleLinkStatus = 'Needs vehicle match';
-      row.notes = [row.notes, reason].filter(Boolean).join('\n');
+      row.notes = appendUniqueNote(row.notes, reason);
       row.updatedAt = new Date().toISOString();
       cleared += 1;
     });
@@ -297,7 +300,7 @@ function clearWrongVehicleClaims(data, vehicle, customerName, reason) {
     row.tempTag = '';
     row.tracker = '';
     row.vehicleLinkStatus = 'Needs vehicle match';
-    row.notes = [row.notes, reason].filter(Boolean).join('\n');
+    row.notes = appendUniqueNote(row.notes, reason);
     row.updatedAt = new Date().toISOString();
     cleared += 1;
   });
@@ -376,7 +379,7 @@ function repairVehicleSheetLinkConflicts(data) {
           other.tone = 'bad';
           other.duplicateOf = exactContract.id;
           other.removedAt = other.removedAt || new Date().toISOString();
-          other.notes = [other.notes, 'Removed duplicate vehicle-sheet customer file after automatic link repair.'].filter(Boolean).join('\n');
+          other.notes = appendUniqueNote(other.notes, 'Removed duplicate vehicle-sheet customer file after automatic link repair.');
           repaired += 1;
         }
       });
@@ -540,9 +543,9 @@ function repairDataIds(data) {
   repairDuplicateRecordIds(data, 'contracts');
   repairDuplicateOpenMaintenance(data);
   repairWeakCustomerVehicleLabels(data);
-  repairRepeatedNoteLines(data);
   ensureBaseOrganization(data);
   repairVehicleSheetLinkConflicts(data);
+  repairRepeatedNoteLines(data);
   resolveClaimCustomerLinks(data);
   reconcilePaidPaymentRequests(data);
   return data;
@@ -7814,7 +7817,9 @@ function cloverPaymentDescriptionName(payment) {
 }
 function mapCloverPayment(payment) {
   const amount = Number(payment.amount || 0) / 100;
-  const created = payment.createdTime ? new Date(payment.createdTime).toLocaleDateString('en-US') : new Date().toLocaleDateString('en-US');
+  const createdAt = payment.createdTime ? new Date(payment.createdTime) : new Date();
+  const validCreatedAt = Number.isNaN(createdAt.getTime()) ? new Date() : createdAt;
+  const created = businessLocaleDateString(validCreatedAt);
   const customerSource = cloverPaymentCustomerSource(payment);
   const externalCustomerReference = cloverExternalCustomerReference(payment);
   const externalReferenceId = cloverExternalReference(payment);
@@ -7828,6 +7833,7 @@ function mapCloverPayment(payment) {
     externalCustomerReference,
     employee: payment.employee && payment.employee.name ? payment.employee.name : '',
     date: created,
+    createdAt: validCreatedAt.toISOString(),
     customer: customer || 'Unmatched Clover payment',
     method: payment.tender && payment.tender.label ? payment.tender.label : 'Clover',
     amount,
@@ -9885,19 +9891,57 @@ function frequencyFromRecurringPlan(plan) {
 }
 function activeSubscriptionCount(subscriptions) {
   return (subscriptions || []).filter(item => {
+    if (item && item.active === false) return false;
+    if (item && item.deletedTime) return false;
     const status = String(item.status || item.state || '').toLowerCase();
     return !status || !['canceled', 'cancelled', 'deleted', 'inactive', 'expired', 'failed', 'paused', 'suspended', 'void', 'disabled'].includes(status);
   }).length;
 }
+function recurringCustomerObject(subscription = {}) {
+  const candidates = [
+    subscription.customer,
+    subscription.customerInfo,
+    subscription.customerDetails,
+    subscription.customer_details,
+    subscription.cardholder,
+    subscription.cardHolder,
+    subscription.billingDetails,
+    subscription.billing_details
+  ];
+  return candidates.find(value => value && typeof value === 'object' && !Array.isArray(value)) || {};
+}
+function recurringCustomerId(subscription = {}) {
+  const customer = recurringCustomerObject(subscription);
+  const candidates = [
+    subscription.cloverCustomerId,
+    subscription.customerUuid,
+    subscription.customerUUID,
+    subscription.customerId,
+    customer.id,
+    customer.uuid,
+    customer.customerUuid,
+    customer.customerId
+  ];
+  for (const value of candidates) {
+    const id = cleanPaymentSource(value);
+    if (id) return id;
+  }
+  return '';
+}
 function nameFromRecurringSubscription(subscription) {
-  const customer = subscription.customer || subscription.customerInfo || subscription.cardholder || subscription.cardHolder || {};
-  const first = customer.firstName || subscription.firstName || '';
-  const last = customer.lastName || subscription.lastName || '';
-  return String(customer.name || subscription.customerName || subscription.name || ((first + ' ' + last).trim()) || '').trim();
+  subscription = subscription || {};
+  const customer = recurringCustomerObject(subscription);
+  const shipping = customer.shipping && typeof customer.shipping === 'object' ? customer.shipping : {};
+  const first = customer.firstName || customer.first_name || subscription.firstName || subscription.first_name || '';
+  const last = customer.lastName || customer.last_name || subscription.lastName || subscription.last_name || '';
+  return String(customer.name || customer.fullName || customer.full_name || shipping.name || subscription.customerName || subscription.fullName || ((first + ' ' + last).trim()) || '').trim();
 }
 function contactFromRecurringSubscription(subscription, key) {
-  const customer = subscription.customer || subscription.customerInfo || {};
-  const value = customer[key] || subscription[key] || '';
+  subscription = subscription || {};
+  const customer = recurringCustomerObject(subscription);
+  const shipping = customer.shipping && typeof customer.shipping === 'object' ? customer.shipping : {};
+  const directKeys = key === 'phone' ? ['phone', 'phoneNumber', 'mobile'] : ['email', 'emailAddress'];
+  const value = directKeys.map(field => customer[field] || subscription[field] || shipping[field]).find(Boolean) || '';
   if (value) return String(value);
   const plural = key === 'phone' ? 'phoneNumbers' : 'emailAddresses';
   const first = firstElement(customer[plural] || subscription[plural]);
@@ -9915,33 +9959,28 @@ function isCloverEcommerceToken(value) {
   return /^clv_/i.test(String(value || '').trim());
 }
 function recurringCustomerSource(row) {
-  const customer = row && (row.customer || row.customerInfo) || {};
-  const candidates = [
-    row && row.cloverCustomerId,
-    row && row.customerId,
-    customer && customer.id
-  ];
-  for (const value of candidates) {
-    const source = cleanPaymentSource(value);
-    if (source) return source;
-  }
-  return '';
+  return recurringCustomerId(row || {});
 }
 function firstCardFromRecurring(row) {
-  const customer = row && (row.customer || row.customerInfo) || {};
+  const customer = recurringCustomerObject(row || {});
   const collections = [
     row && row.cards,
     row && row.card,
+    row && row.sources,
+    row && row.paymentSources,
     row && row.paymentCards,
     row && row.paymentMethods,
     customer && customer.cards,
+    customer && customer.sources,
+    customer && customer.paymentSources,
     customer && customer.paymentCards,
     customer && customer.paymentMethods
   ];
   for (const collection of collections) {
     if (!collection) continue;
     const cards = Array.isArray(collection) ? collection : collectionElements(collection);
-    const card = cards.find(item => item && (item.id || item.token || item.source || item.paymentSource));
+    const card = cards.find(item => typeof item === 'string' ? cleanPaymentSource(item) : item && (item.id || item.token || item.source || item.paymentSource));
+    if (typeof card === 'string') return { id: card };
     if (card) return card;
     if (collection.id || collection.token || collection.source || collection.paymentSource) return collection;
   }
@@ -9994,12 +10033,119 @@ function recurringCardLast4(row) {
   const card = firstCardFromRecurring(row);
   return String(row && row.cardLast4 || row && row.last4 || card.last4 || '').trim();
 }
+function recurringSubscriptionId(row = {}) {
+  return String(row.cloverSubscriptionId || row.subscriptionId || row.id || row.uuid || '').trim();
+}
+function recurringNameMissing(row = {}) {
+  const name = nameFromRecurringSubscription(row);
+  return !name || /^clover recurring customer$/i.test(name) || normKey(name) === normKey(recurringSubscriptionId(row));
+}
+function mergeRecurringSubscriptionDetail(base = {}, detail = {}) {
+  const raw = detail && typeof detail === 'object' && !Array.isArray(detail)
+    ? (detail.subscription && typeof detail.subscription === 'object' ? detail.subscription : (detail.data && typeof detail.data === 'object' && !Array.isArray(detail.data) ? detail.data : detail))
+    : {};
+  const baseCustomer = recurringCustomerObject(base);
+  const detailCustomer = recurringCustomerObject(raw);
+  return {
+    ...base,
+    ...raw,
+    customer: { ...baseCustomer, ...detailCustomer },
+    customerInfo: { ...baseCustomer, ...detailCustomer },
+    customerUuid: raw.customerUuid || raw.customerUUID || base.customerUuid || base.customerUUID || '',
+    customerId: raw.customerId || base.customerId || ''
+  };
+}
+function mergeRecurringCustomerDetail(subscription = {}, customer = {}) {
+  const existing = recurringCustomerObject(subscription);
+  const mergedCustomer = { ...existing, ...(customer && typeof customer === 'object' ? customer : {}) };
+  const name = nameFromRecurringSubscription({ ...subscription, customer: mergedCustomer });
+  return {
+    ...subscription,
+    customer: mergedCustomer,
+    customerInfo: mergedCustomer,
+    customerName: name || subscription.customerName || '',
+    phone: contactFromRecurringSubscription({ ...subscription, customer: mergedCustomer }, 'phone') || subscription.phone || '',
+    email: contactFromRecurringSubscription({ ...subscription, customer: mergedCustomer }, 'email') || subscription.email || '',
+    cloverCustomerId: recurringCustomerId(subscription) || cleanPaymentSource(customer && customer.id)
+  };
+}
+async function cloverGetEcommerceCustomer(customerId) {
+  const { response, text, body } = await cloverEcommerceFetch('/v1/customers/' + encodeURIComponent(customerId), {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'WheelsonAuto/1.0',
+      'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
+    }
+  });
+  if (!response.ok) throw new Error('Clover Ecommerce customer ' + response.status + ': ' + cloverErrorMessage(body, text));
+  return body;
+}
+async function hydrateRecurringSubscriptionRows(data, subscriptions, context = {}) {
+  const rows = Array.isArray(subscriptions) ? subscriptions : [];
+  const clover = data && data.integrations && data.integrations.clover || {};
+  const savedRows = Array.isArray(clover.recurringPlanMembers) ? clover.recurringPlanMembers : [];
+  context.savedBySubscription = context.savedBySubscription || new Map(savedRows.map(row => [recurringSubscriptionId(row), row]).filter(entry => entry[0]));
+  context.customerPromises = context.customerPromises || new Map();
+  context.stats = context.stats || { detailHydrated: 0, customerHydrated: 0, unresolved: 0, lookupErrors: [] };
+  let cursor = 0;
+  const output = new Array(rows.length);
+  const workers = Array.from({ length: Math.min(4, Math.max(1, rows.length)) }, async () => {
+    while (cursor < rows.length) {
+      const index = cursor;
+      cursor += 1;
+      const source = rows[index] || {};
+      const subscriptionId = recurringSubscriptionId(source);
+      const saved = context.savedBySubscription.get(subscriptionId) || {};
+      let row = {
+        ...source,
+        customerName: nameFromRecurringSubscription(source) || saved.customer || saved.customerName || '',
+        phone: contactFromRecurringSubscription(source, 'phone') || saved.phone || '',
+        email: contactFromRecurringSubscription(source, 'email') || saved.email || '',
+        cloverCustomerId: recurringCustomerId(source) || saved.cloverCustomerId || '',
+        cloverPaymentSource: recurringPaymentSource(source) || saved.cloverPaymentSource || '',
+        cardLabel: recurringCardLabel(source) || saved.cardLabel || '',
+        cardLast4: recurringCardLast4(source) || saved.cardLast4 || ''
+      };
+      const lookupErrors = [];
+      if (recurringNameMissing(row) && subscriptionId) {
+        try {
+          row = mergeRecurringSubscriptionDetail(row, await cloverGetRecurring('/recurring/v1/subscriptions/' + encodeURIComponent(subscriptionId)));
+          context.stats.detailHydrated += 1;
+        } catch (err) {
+          lookupErrors.push(String(err && err.message || err));
+        }
+      }
+      const customerId = recurringCustomerId(row);
+      if (recurringNameMissing(row) && customerId) {
+        try {
+          if (!context.customerPromises.has(customerId)) context.customerPromises.set(customerId, cloverGetEcommerceCustomer(customerId));
+          row = mergeRecurringCustomerDetail(row, await context.customerPromises.get(customerId));
+          context.stats.customerHydrated += 1;
+        } catch (err) {
+          lookupErrors.push(String(err && err.message || err));
+        }
+      }
+      const unresolved = recurringNameMissing(row);
+      if (unresolved) context.stats.unresolved += 1;
+      if (lookupErrors.length) context.stats.lookupErrors.push(...lookupErrors.map(error => ({ subscriptionId, customerId, error })));
+      output[index] = {
+        ...row,
+        identityStatus: unresolved ? 'Needs Clover customer identity' : 'Resolved',
+        identityLookupAt: new Date().toISOString(),
+        identityLookupError: lookupErrors.join(' | ')
+      };
+    }
+  });
+  await Promise.all(workers);
+  return output;
+}
 function membersFromRecurringSubscriptions(plan, subscriptions) {
   const subtotal = amountFromRecurringValue(plan.amount ?? plan.unitAmount ?? plan.price ?? plan.recurringAmount ?? plan.planAmount ?? plan.total);
   const frequency = frequencyFromRecurringPlan(plan);
   const planName = String(plan.name || plan.planName || plan.description || plan.id || '').trim();
   return (subscriptions || []).filter(item => activeSubscriptionCount([item]) > 0).map((item, index) => {
-    const customer = item.customer || item.customerInfo || {};
+    const amount = amountFromRecurringValue(item.amount ?? item.unitAmount ?? item.price ?? item.recurringAmount ?? item.total) || subtotal;
     return {
       id: 'clover-recurring-member-' + (item.id || item.uuid || item.subscriptionId || (plan.id + '-' + index)),
       source: 'Clover recurring API',
@@ -10008,16 +10154,20 @@ function membersFromRecurringSubscriptions(plan, subscriptions) {
       email: contactFromRecurringSubscription(item, 'email'),
       vehicle: String(item.vehicle || item.description || ''),
       plan: planName,
-      amount: subtotal,
+      amount,
       frequency,
       status: String(item.status || item.state || 'Active'),
       nextRun: String(item.nextRun || item.nextRunDate || item.nextBillingDate || item.nextPaymentDate || ''),
       lastRun: String(item.lastRun || item.lastRunDate || item.lastPaymentDate || plan.lastRun || plan.lastRunDate || ''),
       cloverSubscriptionId: String(item.id || item.uuid || item.subscriptionId || ''),
-      cloverCustomerId: String(customer.id || item.customerId || item.cloverCustomerId || ''),
+      cloverCustomerId: recurringCustomerId(item),
       cloverPaymentSource: recurringPaymentSource(item),
       cardLabel: recurringCardLabel(item),
-      cardLast4: recurringCardLast4(item)
+      cardLast4: recurringCardLast4(item),
+      collectionMethod: String(item.collectionMethod || ''),
+      identityStatus: String(item.identityStatus || (recurringNameMissing(item) ? 'Needs Clover customer identity' : 'Resolved')),
+      identityLookupAt: String(item.identityLookupAt || ''),
+      identityLookupError: String(item.identityLookupError || '')
     };
   });
 }
@@ -10042,7 +10192,7 @@ function cleanRecurringRosterImport(rows) {
       nextRun: String(row.nextRun || row.nextRunDate || row.nextPaymentDate || '').trim(),
       lastRun: String(row.lastRun || row.lastRunDate || row.lastPaymentDate || '').trim(),
       cloverSubscriptionId: String(row.cloverSubscriptionId || row.subscriptionId || row.id || '').trim(),
-      cloverCustomerId: String(row.cloverCustomerId || row.customerId || '').trim(),
+      cloverCustomerId: recurringCustomerId(row),
       cloverPaymentSource: recurringPaymentSource(row),
       cardLabel: recurringCardLabel(row),
       cardLast4: recurringCardLast4(row)
@@ -10062,19 +10212,29 @@ function mergeRecurringRoster(existing, imported) {
 }
 function enrichRecurringRoster(existing, imported) {
   const keyFor = row => String(row.cloverSubscriptionId || row.id || ((row.customer || '').toLowerCase() + '|' + (row.phone || '') + '|' + (row.plan || row.amount || ''))).trim();
-  const importedByKey = new Map();
-  (Array.isArray(imported) ? imported : []).forEach(row => importedByKey.set(keyFor(row), row));
-  return (Array.isArray(existing) ? existing : []).map(row => {
-    const incoming = importedByKey.get(keyFor(row)) || {};
-    return {
-      ...row,
-      cloverPaymentSource: row.cloverPaymentSource || incoming.cloverPaymentSource || '',
-      cardLabel: row.cardLabel || incoming.cardLabel || '',
-      cardLast4: row.cardLast4 || incoming.cardLast4 || '',
-      cloverCustomerId: row.cloverCustomerId || incoming.cloverCustomerId || '',
-      cloverSubscriptionId: row.cloverSubscriptionId || incoming.cloverSubscriptionId || ''
-    };
+  const byKey = new Map();
+  (Array.isArray(existing) ? existing : []).forEach(row => byKey.set(keyFor(row), row));
+  (Array.isArray(imported) ? imported : []).forEach(incoming => {
+    const key = keyFor(incoming);
+    const old = byKey.get(key);
+    if (!old) {
+      byKey.set(key, incoming);
+      return;
+    }
+    const merged = { ...old, ...incoming, id: old.id || incoming.id };
+    ['customer', 'phone', 'email', 'vehicle', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId', 'cloverPaymentSource', 'cardLabel', 'cardLast4', 'nextRun', 'chargeTime', 'paymentDay'].forEach(field => {
+      if (weakValue(field === 'customer' ? 'customer' : (field === 'vehicle' ? 'vehicle' : field), incoming[field]) && !weakValue(field === 'customer' ? 'customer' : (field === 'vehicle' ? 'vehicle' : field), old[field])) merged[field] = old[field];
+    });
+    ['adminNextRun', 'adminFrequency', 'autoChargeEnabled', 'autopayManagedBy', 'adminScheduleChangedAt'].forEach(field => {
+      if (old[field] !== undefined && old[field] !== null && String(old[field]).trim() !== '') merged[field] = old[field];
+    });
+    if (old.identityStatus === 'Resolved' && incoming.identityStatus !== 'Resolved') {
+      merged.identityStatus = old.identityStatus;
+      merged.identityLookupError = incoming.identityLookupError || old.identityLookupError || '';
+    }
+    byKey.set(key, merged);
   });
+  return Array.from(byKey.values());
 }
 function countFromRecurringPlan(plan) {
   const keys = [
@@ -10107,7 +10267,7 @@ function cleanRecurringPlanFromApi(plan, subscriptions, index) {
   const subscriptionCustomers = activeSubscriptionCount(subscriptions);
   const planCustomers = countFromRecurringPlan(plan);
   const customers = Math.max(subscriptionCustomers, planCustomers);
-  const status = String(plan.status || plan.state || 'Active');
+  const status = plan.active === false ? 'Inactive' : String(plan.status || plan.state || 'Active');
   return {
     id: String(plan.id || plan.uuid || ('clover-api-plan-' + index)),
     plan: String(plan.name || plan.planName || plan.description || plan.id || ('Clover plan ' + (index + 1))).trim(),
@@ -10144,6 +10304,7 @@ async function syncCloverRecurringPlans(data) {
   if (!rawPlans.length) throw new Error(data.integrations.clover.lastRecurringPlanSyncError || 'Clover recurring API returned no plan rows.');
   const importedPlans = [];
   const importedMembers = [];
+  const hydrationContext = {};
   for (let index = 0; index < rawPlans.length; index += 1) {
     const plan = rawPlans[index];
     const planId = plan.id || plan.uuid;
@@ -10162,6 +10323,7 @@ async function syncCloverRecurringPlans(data) {
         }
       }
     }
+    subscriptions = await hydrateRecurringSubscriptionRows(data, subscriptions, hydrationContext);
     importedMembers.push(...membersFromRecurringSubscriptions(plan, subscriptions));
     importedPlans.push(cleanRecurringPlanFromApi(plan, subscriptions, index));
   }
@@ -10175,6 +10337,13 @@ async function syncCloverRecurringPlans(data) {
     amount: Number(plan.subtotal || plan.amount || 0),
     frequency: plan.frequency || ''
   }));
+  data.integrations.clover.lastRecurringIdentitySync = {
+    checkedAt: new Date().toISOString(),
+    detailHydrated: Number(hydrationContext.stats && hydrationContext.stats.detailHydrated || 0),
+    customerHydrated: Number(hydrationContext.stats && hydrationContext.stats.customerHydrated || 0),
+    unresolved: Number(hydrationContext.stats && hydrationContext.stats.unresolved || 0),
+    lookupErrors: (hydrationContext.stats && hydrationContext.stats.lookupErrors || []).slice(0, 25)
+  };
   const savedSummary = data.integrations.clover.recurringPlanSummary || {};
   const savedActive = Number(savedSummary.activeCustomers || 0);
   const apiActive = Number(summary.activeCustomers || 0);
@@ -10193,7 +10362,7 @@ async function syncCloverRecurringPlans(data) {
   data.integrations.clover.lastRecurringPlanSyncSource = 'Clover recurring API';
   data.integrations.clover.lastRecurringPlanSyncPaths = attempted;
   data.integrations.clover.lastRecurringMemberSyncWarning = keepSavedMembers ? ('Clover returned ' + importedNamedMembers.length + ' named recurring customers, less than saved roster ' + savedNamedMembers.length + '. Keeping saved recurring roster.') : '';
-  return { recurringPlans: plans.length, summary: data.integrations.clover.recurringPlanSummary };
+  return { recurringPlans: plans.length, summary: data.integrations.clover.recurringPlanSummary, identity: data.integrations.clover.lastRecurringIdentitySync };
 }
 function cents(amount) { return Math.max(0, Math.round(Number(amount || 0) * 100)); }
 function splitName(name) {
@@ -10451,6 +10620,12 @@ function updateRecurringChargeState(data, id, patch) {
   const member = ((((data.integrations || {}).clover || {}).recurringPlanMembers || [])).find(row => row.id === id || row.cloverSubscriptionId === id);
   if (member) Object.assign(member, patch);
 }
+function businessLocaleDateString(date = new Date()) {
+  return date.toLocaleDateString('en-US', { timeZone: WOA_TIME_ZONE });
+}
+function businessLocaleString(date = new Date()) {
+  return date.toLocaleString('en-US', { timeZone: WOA_TIME_ZONE });
+}
 function localDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: WOA_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
   const year = (parts.find(part => part.type === 'year') || {}).value || date.getFullYear();
@@ -10628,7 +10803,7 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
   const identity = recurringPaymentIdentity(data, row, payload);
   const payment = {
     id: 'payment-not-found-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
-    date: new Date().toLocaleString('en-US'),
+    date: businessLocaleString(),
     customer: row.customer || payload.customer || 'Unknown customer',
     method: options.method || 'Clover saved card',
     amount,
@@ -10681,7 +10856,7 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
   const identity = recurringPaymentIdentity(data, row, payload);
   const payment = {
     id: 'payment-failed-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8),
-    date: new Date().toLocaleString('en-US'),
+    date: businessLocaleString(),
     customer: row.customer || payload.customer || 'Unknown customer',
     method: options.method || 'Clover saved card',
     amount,
@@ -10800,7 +10975,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
     cloverChargeId: charge.id || charge.charge || '',
     externalReferenceId: ref,
     externalCustomerReference: String(recurring.cloverCustomerId || recurring.customer || '').slice(0, 64),
-    date: paymentAt.toLocaleString('en-US'),
+    date: businessLocaleString(paymentAt),
     createdAt: paymentAtIso,
     customer: recurring.customer,
     phone: recurring.phone || '',
@@ -14948,6 +15123,7 @@ module.exports = {
   server,
   repairDataIds,
   repairVehicleSheetLinkConflicts,
+  rowClaimsVehicle,
   enrichLinkedProfiles,
   nearEndpointNameMatch,
   publicMessagingStatus,
@@ -15011,6 +15187,11 @@ module.exports = {
   nextFutureRecurringDate,
   successfulRecurringPaymentEvidence,
   isDueForWheelsonAutoAutopay,
+  recurringCustomerId,
+  mergeRecurringSubscriptionDetail,
+  mergeRecurringCustomerDetail,
+  membersFromRecurringSubscriptions,
+  mapCloverPayment,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,
   activeHostedCheckoutHref,

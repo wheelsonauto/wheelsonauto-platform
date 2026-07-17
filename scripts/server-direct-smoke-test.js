@@ -184,11 +184,17 @@ async function main() {
     apiProviderRows,
     apiProviderReviewRows,
     repairDataIds,
+    rowClaimsVehicle,
     enrichLinkedProfiles,
     nearEndpointNameMatch,
     calendarDayName,
     nextRecurringOccurrence,
     nextFutureRecurringDate,
+    recurringCustomerId,
+    mergeRecurringSubscriptionDetail,
+    mergeRecurringCustomerDetail,
+    membersFromRecurringSubscriptions,
+    mapCloverPayment,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
@@ -199,6 +205,22 @@ async function main() {
     assert(nextRecurringOccurrence({ frequency: 'Weekly' }, '2026-07-10') === '2026-07-17', 'Weekly autopay should advance by seven days.');
     assert(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-10') === '2026-07-24', 'Bi-weekly autopay should advance by fourteen days.');
     assert(nextFutureRecurringDate({ frequency: 'Weekly', nextRun: '2026-07-10' }, '2026-07-16') === '2026-07-17', 'An overdue Friday schedule should advance to the next future Friday instead of drifting to the runner day.');
+    const cailahVehicle = { id: 'veh-sheet-058', name: '2018 Ford Fiesta Silver', vin: '3FADP4AJ8JM111119', plate: 'G90WGR' };
+    const natashaVehicle = { id: 'veh-sheet-059', name: '2018 Ford Fiesta Silver', vin: '3FADP4AJ2JM106014', plate: 'A17WWM' };
+    const cailahFile = { customer: 'Cailah Breanne Taylor', vehicle: '2018 Ford Fiesta Silver', vehicleId: cailahVehicle.id, vin: cailahVehicle.vin, plate: cailahVehicle.plate };
+    assert(rowClaimsVehicle(cailahFile, cailahVehicle), 'A customer file must keep claiming the car whose vehicle ID, VIN, and tag match.');
+    assert(!rowClaimsVehicle(cailahFile, natashaVehicle), 'Two same-year/model cars with different vehicle IDs, VINs, and tags must never clear each other customer files.');
+    assert(rowClaimsVehicle({ customer: 'Legacy Customer', vehicle: '2018 Ford Fiesta Silver' }, cailahVehicle), 'A legacy row with no strong identity may still use an exact vehicle label as a fallback.');
+    const cloverSubscription = mergeRecurringSubscriptionDetail({ id: 'SUB-CAILAH', active: true, amount: 21000 }, { id: 'SUB-CAILAH', customerUuid: 'ECOM-CUSTOMER-CAILAH', collectionMethod: 'CHARGE_AUTOMATICALLY', active: true });
+    const hydratedCailah = mergeRecurringCustomerDetail(cloverSubscription, { id: 'ECOM-CUSTOMER-CAILAH', firstName: 'Cailah', lastName: 'Taylor', email: 'cailah@example.com', sources: { data: [{ id: 'clv_cailah_saved_source', brand: 'VISA', last4: '4242' }] } });
+    const hydratedMembers = membersFromRecurringSubscriptions({ id: 'PLAN-WEEKLY-210', name: 'Weekly 210', amount: 21000, interval: 'WEEK' }, [hydratedCailah]);
+    assert(recurringCustomerId(hydratedCailah) === 'ECOM-CUSTOMER-CAILAH', 'Recurring customerUuid must be retained as the Ecommerce card-on-file customer ID.');
+    assert(hydratedMembers.length === 1 && hydratedMembers[0].customer === 'Cailah Taylor' && hydratedMembers[0].email === 'cailah@example.com' && hydratedMembers[0].amount === 210, 'An ID-only Clover subscription must become a named recurring member after Ecommerce customer hydration.');
+    assert(hydratedMembers[0].cloverPaymentSource === 'clv_cailah_saved_source' && hydratedMembers[0].cardLast4 === '4242', 'Hydrated Clover recurring members must retain the chargeable saved-card token and safe last-four display.');
+    assert(membersFromRecurringSubscriptions({ id: 'PLAN-INACTIVE', amount: 21000 }, [{ id: 'SUB-INACTIVE', customerUuid: 'ECOM-INACTIVE', active: false }]).length === 0, 'Inactive Clover subscriptions must not appear as active customers.');
+    const newYorkEveningPayment = mapCloverPayment({ id: 'PAY-NY-EVENING', amount: 27900, createdTime: Date.UTC(2026, 6, 17, 1, 15), result: 'SUCCESS' });
+    assert(newYorkEveningPayment.date === '7/16/2026', 'A Clover charge after 8 PM New York time must stay on the local business date instead of moving to the next UTC day.');
+    assert(newYorkEveningPayment.createdAt === '2026-07-17T01:15:00.000Z', 'Clover payment sync must retain the precise timestamp for schedule reconciliation.');
 
     const sharedContactAccountData = {
       customerAccounts: [{

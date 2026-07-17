@@ -306,6 +306,11 @@ async function actionModalSmoke(context) {
   const maintenance = context.db.maintenance.find(row => row.id);
   const claim = context.db.claims.find(row => row.id);
   const contract = context.db.contracts.find(row => row.id);
+  const chargeModalFixture = context.db.recurringPayments.find(row => row.id && String(row.status || '').toLowerCase() === 'active')
+    || context.db.recurringPayments.find(row => row.id);
+  if (chargeModalFixture && !/^clv_/i.test(String(chargeModalFixture.cloverPaymentSource || ''))) {
+    chargeModalFixture.cloverPaymentSource = 'clv_frontend_smoke_saved_source';
+  }
   const recurring = context.recurringRoster().find(row => row.id && String(row.status || '').toLowerCase() === 'active')
     || context.recurringRoster().find(row => row.id);
   const setupRecurring = context.recurringRoster().find(row => context.isCardSetupRow(row));
