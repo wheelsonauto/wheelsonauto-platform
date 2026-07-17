@@ -8234,6 +8234,9 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
     route('POST', '/api/integrations/clover/payments/match', 'Owner-confirmed Clover payment customer match'),
+    route('POST', '/api/integrations/payments/refunds/prepare', 'Owner-approved Clover or Stripe refund preparation'),
+    route('POST', '/api/integrations/payments/refunds/execute', 'Idempotent owner-confirmed Clover or Stripe refund'),
+    route('POST', '/api/integrations/payments/refunds/complete-manual', 'Confirm provider dashboard/manual refund reference'),
     route('POST', '/api/integrations/clover/refunds/prepare', 'Owner-approved refund preparation'),
     route('POST', '/api/integrations/clover/refunds/execute', 'Idempotent Clover Ecommerce full refund'),
     route('POST', '/api/integrations/clover/refunds/complete-manual', 'Confirm Clover POS/manual refund reference'),
@@ -8491,13 +8494,59 @@ async function cloverPostFullRefund(chargeId, idempotencyKey) {
   if (status && !/succeed|paid|complete|refund/.test(status)) throw new Error('Clover returned refund status "' + status + '". Review it in Clover before marking the customer refunded.');
   return body;
 }
+function normalizedRefundProvider(value) {
+  return normalizedPaymentProvider(value) === 'stripe' ? 'stripe' : 'clover';
+}
+function refundProviderForPayment(payment = {}) {
+  const evidence = String([
+    payment.paymentProvider,
+    payment.provider,
+    payment.source,
+    payment.method,
+    payment.stripePaymentIntentId,
+    payment.stripeChargeId
+  ].filter(Boolean).join(' ')).toLowerCase();
+  return payment.stripePaymentIntentId || payment.stripeChargeId || /\bstripe\b/.test(evidence) ? 'stripe' : 'clover';
+}
+function refundRequestCompleted(status) {
+  return /succeed|complete|refunded|manual complete/i.test(String(status || ''));
+}
+function appendRefundHistory(request, entry) {
+  request.history = Array.isArray(request.history) ? request.history : [];
+  request.history.push(entry);
+}
+function applyRefundPaymentCompletion(data, request, details = {}) {
+  const payment = (data.payments || []).find(row => row.id === request.sourcePaymentId);
+  if (!payment) {
+    request.paymentApplicationStatus = 'Source payment missing';
+    return { payment: null, applied: false };
+  }
+  const providerRefundId = String(details.providerRefundId || request.providerRefundId || request.id || '').trim();
+  const appliedRequestIds = Array.isArray(payment.refundRequestIds) ? payment.refundRequestIds.map(String) : [];
+  const alreadyApplied = !!request.paymentAppliedAt || appliedRequestIds.includes(String(request.id)) || String(payment.lastRefundRequestId || '') === String(request.id) || (!!providerRefundId && String(payment.lastRefundId || '') === providerRefundId);
+  const now = details.at || new Date().toISOString();
+  if (!alreadyApplied) {
+    const remaining = Math.max(0, Number(payment.amount || 0) - Number(payment.refundedAmount || 0));
+    const appliedAmount = Math.min(remaining, Math.max(0, Number(request.amount || 0)));
+    payment.refundedAmount = Math.round((Number(payment.refundedAmount || 0) + appliedAmount) * 100) / 100;
+    payment.refundStatus = payment.refundedAmount >= Number(payment.amount || 0) ? 'Refunded' : 'Partially refunded';
+    payment.refundRequestIds = [String(request.id), ...appliedRequestIds.filter(id => id !== String(request.id))].slice(0, 100);
+    payment.lastRefundRequestId = request.id;
+    payment.lastRefundId = providerRefundId || request.id;
+    payment.lastRefundAt = now;
+  }
+  request.paymentAppliedAt = request.paymentAppliedAt || now;
+  request.paymentAppliedProviderRefundId = request.paymentAppliedProviderRefundId || providerRefundId;
+  request.paymentApplicationStatus = 'Applied to source payment';
+  return { payment, applied: !alreadyApplied };
+}
 function refundPaymentRecord(data, payload = {}) {
-  const ids = [payload.paymentId, payload.cloverPaymentId, payload.cloverChargeId, payload.sourcePaymentId]
+  const ids = [payload.paymentId, payload.cloverPaymentId, payload.cloverChargeId, payload.stripePaymentIntentId, payload.stripeChargeId, payload.sourcePaymentId]
     .map(value => String(value || '').trim())
     .filter(Boolean);
   if (!ids.length) return null;
   return (data.payments || []).find(payment => {
-    const paymentIds = [payment.id, payment.cloverPaymentId, payment.cloverChargeId, payment.providerPaymentId, payment.externalReferenceId]
+    const paymentIds = [payment.id, payment.cloverPaymentId, payment.cloverChargeId, payment.stripePaymentIntentId, payment.stripeChargeId, payment.providerPaymentId, payment.providerChargeId, payment.externalReferenceId]
       .map(value => String(value || '').trim())
       .filter(Boolean);
     return ids.some(id => paymentIds.includes(id));
@@ -8505,27 +8554,43 @@ function refundPaymentRecord(data, payload = {}) {
 }
 function preparedRefundRequest(data, payload = {}, user = {}) {
   const payment = refundPaymentRecord(data, payload);
-  if (!payment) throw new Error('Choose a saved WheelsonAuto/Clover payment before preparing a refund.');
+  if (!payment) throw new Error('Choose a saved WheelsonAuto payment before preparing a refund.');
   const paidAmount = Number(payment.amount || 0);
   if (!paidAmount || paidAmount <= 0) throw new Error('The selected payment has no refundable amount.');
-  const completed = (data.refundRequests || []).filter(row => row.sourcePaymentId === payment.id && /succeed|complete|refunded|manual complete/i.test(String(row.status || '')));
+  const completed = (data.refundRequests || []).filter(row => row.sourcePaymentId === payment.id && refundRequestCompleted(row.status));
   const alreadyRefunded = completed.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const remaining = Math.max(0, Math.round((paidAmount - alreadyRefunded) * 100) / 100);
   const amount = Math.round(Number(payload.amount || remaining) * 100) / 100;
   if (!amount || amount <= 0 || amount > remaining) throw new Error('Refund amount must be between $0.01 and the remaining ' + moneyText(remaining) + '.');
-  const chargeId = String(payment.cloverChargeId || payment.providerChargeId || (/Clover saved-card charge/i.test(String(payment.source || payment.method || '')) ? payment.cloverPaymentId : '') || '');
+  const paymentProvider = refundProviderForPayment(payment);
+  const cloverChargeId = paymentProvider === 'clover'
+    ? String(payment.cloverChargeId || payment.providerChargeId || (/Clover saved-card charge/i.test(String(payment.source || payment.method || '')) ? payment.cloverPaymentId : '') || '')
+    : '';
+  const stripePaymentIntentId = paymentProvider === 'stripe'
+    ? String(payment.stripePaymentIntentId || payment.providerPaymentId || '')
+    : '';
+  const stripeChargeId = paymentProvider === 'stripe'
+    ? String(payment.stripeChargeId || payment.providerChargeId || '')
+    : '';
   const fullRefund = Math.abs(amount - remaining) < 0.01;
+  const executionReady = paymentProvider === 'stripe'
+    ? !!(stripePaymentIntentId || stripeChargeId)
+    : !!(cloverChargeId && fullRefund);
+  const status = executionReady ? 'Ready for owner execution' : (paymentProvider === 'stripe' ? 'Stripe source ID required' : 'Clover POS action required');
   const now = new Date().toISOString();
-  const idempotencyKey = integrationEngine.stableId('woa-refund', [payment.id, amount, payload.reason || '', completed.length]);
-  const existing = (data.refundRequests || []).find(row => row.idempotencyKey === idempotencyKey && !/failed|cancelled/i.test(String(row.status || '')));
+  const idempotencyKey = integrationEngine.stableId('woa-refund', [paymentProvider, payment.id, amount, payload.reason || '', completed.length]);
+  const existing = (data.refundRequests || []).find(row => row.idempotencyKey === idempotencyKey && !/cancelled/i.test(String(row.status || '')));
   if (existing) return { request: existing, payment, created: false };
   const request = {
     id: integrationEngine.stableId('refund', [idempotencyKey]),
     idempotencyKey,
     organizationId: rowOrganizationId(payment),
     sourcePaymentId: payment.id,
+    paymentProvider,
     cloverPaymentId: payment.cloverPaymentId || '',
-    cloverChargeId: chargeId,
+    cloverChargeId,
+    stripePaymentIntentId,
+    stripeChargeId,
     customer: payment.customer || payload.customer || '',
     vehicle: payment.vehicle || '',
     vehicleId: payment.vehicleId || '',
@@ -8537,12 +8602,12 @@ function preparedRefundRequest(data, payload = {}, user = {}) {
     fullRefund,
     reason: String(payload.reason || '').trim(),
     notes: String(payload.notes || '').trim(),
-    status: chargeId && fullRefund ? 'Ready for owner execution' : 'Clover POS action required',
-    provider: 'Clover',
-    providerPath: chargeId ? '/v1/refunds' : 'Clover POS / Dashboard',
+    status,
+    provider: paymentProviderLabel(paymentProvider),
+    providerPath: paymentProvider === 'stripe' ? '/v1/refunds' : (cloverChargeId ? '/v1/refunds' : 'Clover POS / Dashboard'),
     createdAt: now,
     createdBy: String(user.name || user.username || user.role || 'Owner'),
-    history: [{ at: now, action: 'Refund prepared', status: chargeId && fullRefund ? 'Ready for owner execution' : 'Clover POS action required', by: String(user.name || user.role || 'Owner') }]
+    history: [{ at: now, action: 'Refund prepared', status, by: String(user.name || user.role || 'Owner') }]
   };
   data.refundRequests = Array.isArray(data.refundRequests) ? data.refundRequests : [];
   data.refundRequests.unshift(request);
@@ -8550,35 +8615,82 @@ function preparedRefundRequest(data, payload = {}, user = {}) {
 }
 async function executePreparedRefund(data, request, user = {}) {
   if (!request) throw new Error('Refund request was not found.');
-  if (/succeed|complete|refunded|manual complete/i.test(String(request.status || ''))) return request;
-  if (!request.fullRefund) throw new Error('Clover Ecommerce partial refunds are not executed automatically here. Complete this prepared request in Clover, then mark it complete with the provider refund ID.');
-  if (!request.cloverChargeId) throw new Error('This payment needs a Clover POS/Dashboard refund because no Ecommerce charge ID is linked.');
+  if (refundRequestCompleted(request.status)) return request;
+  const provider = normalizedRefundProvider(request.paymentProvider || request.provider);
   const now = new Date().toISOString();
+  const completedBy = String(user.name || user.username || user.role || 'Owner');
   try {
+    if (provider === 'stripe') {
+      const paymentIntentId = String(request.stripePaymentIntentId || '').trim();
+      const chargeId = String(request.stripeChargeId || '').trim();
+      if (!paymentIntentId && !chargeId) throw new Error('This Stripe payment has no payment-intent or charge ID. Refresh the payment record before attempting a refund.');
+      const result = await stripe.createRefund({
+        ...(paymentIntentId ? { payment_intent: paymentIntentId } : { charge: chargeId }),
+        amount: cents(request.amount),
+        metadata: {
+          woa_refund_request_id: request.id,
+          woa_source_payment_id: request.sourcePaymentId,
+          woa_organization_id: request.organizationId || ''
+        }
+      }, request.idempotencyKey);
+      request.providerRefundId = String(result.id || '');
+      request.providerStatus = String(result.status || 'pending');
+      request.lastAttemptAt = now;
+      if (/succeed|paid|complete|refund/i.test(request.providerStatus)) {
+        request.status = 'Refunded';
+        request.completedAt = now;
+        request.completedBy = completedBy;
+        applyRefundPaymentCompletion(data, request, { providerRefundId: request.providerRefundId, at: now });
+        appendRefundHistory(request, { at: now, action: 'Stripe refund executed', status: request.status, by: completedBy, providerRefundId: request.providerRefundId });
+        return request;
+      }
+      if (/fail|cancel/i.test(request.providerStatus)) {
+        request.status = 'Refund failed';
+        request.lastError = String(result.failure_reason || result.status || 'Stripe declined the refund.');
+        appendRefundHistory(request, { at: now, action: 'Stripe refund failed', status: request.status, by: completedBy, providerRefundId: request.providerRefundId, error: request.lastError });
+        throw new Error(request.lastError);
+      }
+      request.status = 'Refund pending';
+      appendRefundHistory(request, { at: now, action: 'Stripe refund pending', status: request.status, by: completedBy, providerRefundId: request.providerRefundId });
+      return request;
+    }
+    if (!request.fullRefund) throw new Error('Clover Ecommerce partial refunds are not executed automatically here. Complete this prepared request in Clover, then mark it complete with the provider refund ID.');
+    if (!request.cloverChargeId) throw new Error('This payment needs a Clover POS/Dashboard refund because no Ecommerce charge ID is linked.');
     const result = await cloverPostFullRefund(request.cloverChargeId, request.idempotencyKey);
     request.providerRefundId = String(result.id || result.refund || result.refundId || '');
     request.providerStatus = String(result.status || result.result || 'succeeded');
     request.status = 'Refunded';
     request.completedAt = now;
-    request.completedBy = String(user.name || user.username || user.role || 'Owner');
-    request.history = Array.isArray(request.history) ? request.history : [];
-    request.history.push({ at: now, action: 'Clover refund executed', status: request.status, by: request.completedBy, providerRefundId: request.providerRefundId });
-    const payment = (data.payments || []).find(row => row.id === request.sourcePaymentId);
-    if (payment) {
-      payment.refundedAmount = Math.round((Number(payment.refundedAmount || 0) + Number(request.amount || 0)) * 100) / 100;
-      payment.refundStatus = payment.refundedAmount >= Number(payment.amount || 0) ? 'Refunded' : 'Partially refunded';
-      payment.lastRefundId = request.providerRefundId || request.id;
-      payment.lastRefundAt = now;
-    }
+    request.completedBy = completedBy;
+    applyRefundPaymentCompletion(data, request, { providerRefundId: request.providerRefundId, at: now });
+    appendRefundHistory(request, { at: now, action: 'Clover refund executed', status: request.status, by: completedBy, providerRefundId: request.providerRefundId });
     return request;
   } catch (err) {
-    request.status = 'Refund failed';
-    request.lastError = String(err && err.message || err);
-    request.lastAttemptAt = now;
-    request.history = Array.isArray(request.history) ? request.history : [];
-    request.history.push({ at: now, action: 'Clover refund failed', status: request.status, by: String(user.name || user.role || 'Owner'), error: request.lastError });
+    if (!refundRequestCompleted(request.status) && !/pending/i.test(String(request.status || ''))) {
+      request.status = 'Refund failed';
+      request.lastError = String(err && err.message || err);
+      request.lastAttemptAt = now;
+      appendRefundHistory(request, { at: now, action: paymentProviderLabel(provider) + ' refund failed', status: request.status, by: completedBy, error: request.lastError });
+    }
     throw err;
   }
+}
+function completePreparedRefundManually(data, request, payload = {}, user = {}) {
+  if (!request) throw new Error('Refund request was not found.');
+  if (refundRequestCompleted(request.status)) return request;
+  const providerRefundId = String(payload.providerRefundId || '').trim();
+  const provider = normalizedRefundProvider(request.paymentProvider || request.provider);
+  if (!providerRefundId) throw new Error('Enter the ' + paymentProviderLabel(provider) + ' refund ID or dashboard reference.');
+  const now = new Date().toISOString();
+  request.providerRefundId = providerRefundId;
+  request.providerStatus = 'manually confirmed';
+  request.status = 'Manual complete';
+  request.completedAt = now;
+  request.completedBy = String(user.name || user.username || 'Owner');
+  request.notes = [request.notes, String(payload.notes || '').trim()].filter(Boolean).join(' | ');
+  applyRefundPaymentCompletion(data, request, { providerRefundId, at: now });
+  appendRefundHistory(request, { at: now, action: 'Manual ' + paymentProviderLabel(provider) + ' refund confirmed', status: request.status, by: request.completedBy, providerRefundId });
+  return request;
 }
 async function cloverPostCardCustomer(payload) {
   cloverChargeReady();
@@ -12813,6 +12925,56 @@ async function stripeDisputeClaim(data, dispute = {}) {
   claim.evidenceReadiness = claim.evidencePacket.missing.length ? 'Needs evidence' : 'Ready for owner review';
   return claim;
 }
+function stripeRefundRequestForEvent(data, object = {}) {
+  const metadata = object.metadata || {};
+  const metadataRequestId = String(metadata.woa_refund_request_id || metadata.wheelsonauto_refund_request_id || '').trim();
+  const requests = (data.refundRequests || []).filter(row => normalizedRefundProvider(row.paymentProvider || row.provider) === 'stripe');
+  if (metadataRequestId) return requests.find(row => String(row.id || '') === metadataRequestId) || null;
+  const providerRefundId = String(object.id || '').trim();
+  const paymentIntentId = stripeObjectId(object.payment_intent);
+  const chargeId = stripeObjectId(object.charge);
+  const matches = requests.filter(row => {
+    if (providerRefundId && String(row.providerRefundId || '') === providerRefundId) return true;
+    if (paymentIntentId && String(row.stripePaymentIntentId || '') === paymentIntentId) return true;
+    if (chargeId && String(row.stripeChargeId || '') === chargeId) return true;
+    return false;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+function recordStripeRefundWebhookEvent(data, event = {}, object = {}) {
+  const type = String(event.type || '');
+  if (!/^refund\.(created|updated|failed)$/.test(type) && type !== 'charge.refunded') return '';
+  const request = stripeRefundRequestForEvent(data, object);
+  if (!request) return '';
+  const eventId = String(event.id || '').trim();
+  request.stripeWebhookEventIds = Array.isArray(request.stripeWebhookEventIds) ? request.stripeWebhookEventIds : [];
+  if (eventId && request.stripeWebhookEventIds.includes(eventId)) return request.id;
+  const now = new Date().toISOString();
+  const providerStatus = String(object.status || (type === 'charge.refunded' ? 'succeeded' : 'pending')).toLowerCase();
+  const providerRefundId = type === 'charge.refunded'
+    ? String(request.providerRefundId || '').trim()
+    : String(object.id || request.providerRefundId || '').trim();
+  request.providerRefundId = providerRefundId || request.providerRefundId || '';
+  request.providerStatus = providerStatus;
+  request.lastWebhookAt = now;
+  if (/succeed|paid|complete|refund/.test(providerStatus)) {
+    request.status = 'Refunded';
+    request.completedAt = request.completedAt || now;
+    request.completedBy = request.completedBy || 'Stripe webhook';
+    request.lastError = '';
+    applyRefundPaymentCompletion(data, request, { providerRefundId: request.providerRefundId, at: now });
+    appendRefundHistory(request, { at: now, action: 'Stripe refund webhook confirmed', status: request.status, by: 'Stripe webhook', providerRefundId: request.providerRefundId, eventId });
+  } else if (/fail|cancel/.test(providerStatus) || type === 'refund.failed') {
+    request.status = 'Refund failed';
+    request.lastError = String(object.failure_reason || object.failure_balance_transaction || providerStatus || 'Stripe refund failed.');
+    appendRefundHistory(request, { at: now, action: 'Stripe refund webhook failed', status: request.status, by: 'Stripe webhook', providerRefundId: request.providerRefundId, eventId, error: request.lastError });
+  } else {
+    request.status = 'Refund pending';
+    appendRefundHistory(request, { at: now, action: 'Stripe refund webhook pending', status: request.status, by: 'Stripe webhook', providerRefundId: request.providerRefundId, eventId });
+  }
+  if (eventId) request.stripeWebhookEventIds = [eventId, ...request.stripeWebhookEventIds].slice(0, 100);
+  return request.id;
+}
 async function recordStripeWebhookEvent(event = {}) {
   const durableClaim = await STATE_REPOSITORY.claimWebhookEvent('stripe', event.id || '', { type: event.type || '', created: event.created || 0 });
   if (!durableClaim.accepted) return { ok: true, received: false, duplicate: true, eventId: event.id || '' };
@@ -12832,6 +12994,7 @@ async function recordStripeWebhookEvent(event = {}) {
   let paymentRequestId = '';
   let disputeClaimId = '';
   let identitySessionId = '';
+  let refundRequestId = '';
   if (type === 'checkout.session.completed') {
     const metadata = object.metadata || {};
     if (object.mode === 'setup' || metadata.flow === 'card_setup') {
@@ -12877,6 +13040,9 @@ async function recordStripeWebhookEvent(event = {}) {
       body: ['Stripe dispute received.', 'Customer: ' + (claim.customer || 'Unmatched'), 'Amount: ' + moneyText(claim.amount || 0), 'Reason: ' + (claim.reason || 'Not provided'), 'Deadline: ' + (claim.deadline || 'Not provided'), 'Payment: ' + (claim.stripePaymentIntentId || claim.stripeChargeId || 'Not matched'), 'Evidence: ' + (claim.evidenceReadiness || 'Needs review')].join('\n')
     });
   }
+  if (/^refund\.(created|updated|failed)$/.test(type) || type === 'charge.refunded') {
+    refundRequestId = recordStripeRefundWebhookEvent(data, event, object);
+  }
   stripeState.webhookEventIds = event.id ? [event.id, ...stripeState.webhookEventIds].slice(0, 500) : stripeState.webhookEventIds;
   stripeState.lastWebhookAt = new Date().toISOString();
   stripeState.lastWebhookType = type;
@@ -12884,7 +13050,7 @@ async function recordStripeWebhookEvent(event = {}) {
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
   await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
-  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId };
+  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId, refundRequestId };
   } catch (error) {
     await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error).catch(() => {});
     await recordOperationalFailure('stripe-webhook', error, { eventId: event.id || '', route: '/api/webhooks/stripe' });
@@ -15223,63 +15389,53 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, matched: linkedPayments.length, payment: linkedPayments[0], profile });
     }
-    if (url.pathname === '/api/integrations/clover/refunds/prepare' && req.method === 'POST') {
+    if ((url.pathname === '/api/integrations/clover/refunds/prepare' || url.pathname === '/api/integrations/payments/refunds/prepare') && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can prepare refunds.' });
       const payload = await readJsonBody(req, 128 * 1024);
       const data = await readData();
       const prepared = preparedRefundRequest(data, payload, user);
-      if (prepared.created) appendAuditLog(data, user, 'Clover refund prepared', [prepared.request.customer || 'Unknown customer', moneyText(prepared.request.amount), prepared.request.status, prepared.request.sourcePaymentId]);
+      if (prepared.created) appendAuditLog(data, user, paymentProviderLabel(prepared.request.paymentProvider || prepared.request.provider) + ' refund prepared', [prepared.request.customer || 'Unknown customer', moneyText(prepared.request.amount), prepared.request.status, prepared.request.sourcePaymentId]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, prepared.created ? 201 : 200, { ok: true, created: prepared.created, refund: prepared.request });
     }
-    if (url.pathname === '/api/integrations/clover/refunds/execute' && req.method === 'POST') {
+    if ((url.pathname === '/api/integrations/clover/refunds/execute' || url.pathname === '/api/integrations/payments/refunds/execute') && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can execute refunds.' });
       const payload = await readJsonBody(req, 128 * 1024);
-      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required immediately before sending a live refund to Clover.' });
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required immediately before sending a live refund to the payment provider.' });
       const data = await readData();
       const request = (data.refundRequests || []).find(row => row.id === payload.refundId);
       if (!request) return json(res, 404, { ok: false, error: 'Refund request was not found.' });
+      const providerLabel = paymentProviderLabel(request.paymentProvider || request.provider);
       try {
         await executePreparedRefund(data, request, user);
-        appendAuditLog(data, user, 'Clover refund executed', [request.customer || 'Unknown customer', moneyText(request.amount), request.providerRefundId || request.id]);
+        appendAuditLog(data, user, providerLabel + ' refund executed', [request.customer || 'Unknown customer', moneyText(request.amount), request.providerRefundId || request.id, request.status]);
         data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
         return json(res, 200, { ok: true, refund: request });
       } catch (err) {
-        appendAuditLog(data, user, 'Clover refund failed', [request.customer || 'Unknown customer', moneyText(request.amount), String(err && err.message || err)]);
+        appendAuditLog(data, user, providerLabel + ' refund failed', [request.customer || 'Unknown customer', moneyText(request.amount), String(err && err.message || err)]);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
         return json(res, 400, { ok: false, error: String(err && err.message || err), refund: request });
       }
     }
-    if (url.pathname === '/api/integrations/clover/refunds/complete-manual' && req.method === 'POST') {
+    if ((url.pathname === '/api/integrations/clover/refunds/complete-manual' || url.pathname === '/api/integrations/payments/refunds/complete-manual') && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can close a manually completed refund.' });
       const payload = await readJsonBody(req, 128 * 1024);
-      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that Clover shows the refund as completed before closing this record.' });
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that the payment provider shows the refund as completed before closing this record.' });
       const data = await readData();
       const request = (data.refundRequests || []).find(row => row.id === payload.refundId);
       if (!request) return json(res, 404, { ok: false, error: 'Refund request was not found.' });
-      const providerRefundId = String(payload.providerRefundId || '').trim();
-      if (!providerRefundId) return json(res, 400, { ok: false, error: 'Enter the Clover refund ID or dashboard reference.' });
-      const now = new Date().toISOString();
-      request.providerRefundId = providerRefundId;
-      request.status = 'Manual complete';
-      request.completedAt = now;
-      request.completedBy = String(user.name || user.username || 'Owner');
-      request.notes = [request.notes, String(payload.notes || '').trim()].filter(Boolean).join(' | ');
-      request.history = Array.isArray(request.history) ? request.history : [];
-      request.history.push({ at: now, action: 'Manual Clover refund confirmed', status: request.status, by: request.completedBy, providerRefundId });
-      const payment = (data.payments || []).find(row => row.id === request.sourcePaymentId);
-      if (payment && payment.lastRefundId !== providerRefundId) {
-        payment.refundedAmount = Math.round((Number(payment.refundedAmount || 0) + Number(request.amount || 0)) * 100) / 100;
-        payment.refundStatus = payment.refundedAmount >= Number(payment.amount || 0) ? 'Refunded' : 'Partially refunded';
-        payment.lastRefundId = providerRefundId;
-        payment.lastRefundAt = now;
+      const providerLabel = paymentProviderLabel(request.paymentProvider || request.provider);
+      try {
+        completePreparedRefundManually(data, request, payload, user);
+      } catch (err) {
+        return json(res, 400, { ok: false, error: String(err && err.message || err), refund: request });
       }
       data.ledgerEntries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
-      appendAuditLog(data, user, 'Manual Clover refund confirmed', [request.customer || 'Unknown customer', moneyText(request.amount), providerRefundId]);
+      appendAuditLog(data, user, 'Manual ' + providerLabel + ' refund confirmed', [request.customer || 'Unknown customer', moneyText(request.amount), request.providerRefundId || request.id]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, refund: request });

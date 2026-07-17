@@ -33,7 +33,9 @@ function stripeError(body, status) {
 function stripeClient(options = {}) {
   const secretKey = String(options.secretKey || '').trim();
   const apiBase = String(options.apiBase || 'https://api.stripe.com/v1').replace(/\/+$/, '');
-  const requestFetch = options.fetch || global.fetch;
+  // Resolve the default at request time so tests and operational failover
+  // wrappers can replace the platform fetch implementation safely.
+  const requestFetch = options.fetch || ((...args) => global.fetch(...args));
 
   function ready() {
     if (!secretKey) {
@@ -73,6 +75,8 @@ function stripeClient(options = {}) {
     createPaymentIntent: (payload, idempotencyKey) => request('POST', '/payment_intents', payload, { idempotencyKey }),
     retrievePaymentIntent: id => request('GET', '/payment_intents/' + encodeURIComponent(id), { expand: ['customer', 'payment_method', 'latest_charge'] }),
     retrieveCharge: id => request('GET', '/charges/' + encodeURIComponent(id), { expand: ['customer', 'payment_intent'] }),
+    createRefund: (payload, idempotencyKey) => request('POST', '/refunds', payload, { idempotencyKey }),
+    retrieveRefund: id => request('GET', '/refunds/' + encodeURIComponent(id)),
     createIdentityVerificationSession: (payload, idempotencyKey) => request('POST', '/identity/verification_sessions', payload, { idempotencyKey }),
     retrieveIdentityVerificationSession: id => request('GET', '/identity/verification_sessions/' + encodeURIComponent(id)),
     submitDisputeEvidence: (id, payload, idempotencyKey) => request('POST', '/disputes/' + encodeURIComponent(id), payload, { idempotencyKey })

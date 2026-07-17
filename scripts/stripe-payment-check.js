@@ -38,6 +38,10 @@ async function run() {
   assert.strictEqual(captured.options.headers.Authorization, 'Bearer sk_test_private', 'Stripe secret key must only be sent in the Authorization header.');
   assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-test-key', 'Money actions must use an idempotency key.');
   assert(captured.options.body.includes('amount=22900'), 'Stripe charge amount must be encoded in cents.');
+  await client.createRefund({ payment_intent: 'pi_test', amount: 1200, metadata: { woa_refund_request_id: 'refund-1' } }, 'woa-refund-key');
+  assert(captured.url.endsWith('/refunds'), 'Stripe refunds must use the provider refund endpoint.');
+  assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-refund-key', 'Stripe refunds must use an idempotency key.');
+  assert(new URLSearchParams(captured.options.body).get('payment_intent') === 'pi_test' && new URLSearchParams(captured.options.body).get('amount') === '1200', 'Stripe refund payment source and amount must be encoded correctly.');
   await client.createIdentityVerificationSession({ type: 'document', options: { document: { allowed_types: ['driving_license'], require_live_capture: true, require_matching_selfie: true } } }, 'woa-identity-test');
   assert(captured.url.endsWith('/identity/verification_sessions'), 'Stripe Identity sessions must use the provider-hosted verification endpoint.');
   assert(new URLSearchParams(captured.options.body).get('options[document][require_matching_selfie]') === 'true', 'Stripe Identity sessions must require a matching selfie.');
@@ -52,6 +56,11 @@ async function run() {
     'stripePaymentMethodId',
     'chargeStripeSavedCard',
     'stripeDisputeEvidencePacket',
+    'createRefund',
+    "'/api/integrations/payments/refunds/execute'",
+    'refund\\.(created|updated|failed)',
+    'woa_refund_request_id',
+    'applyRefundPaymentCompletion',
     'identity.verification_session.verified',
     'STRIPE_IDENTITY_RUNTIME_READY',
     'Owner must review reason-specific evidence',

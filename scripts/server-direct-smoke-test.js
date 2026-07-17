@@ -157,6 +157,8 @@ async function main() {
   process.env.CLOVER_MERCHANT_ID = 'direct-clover-merchant';
   process.env.CLOVER_ECOMMERCE_PUBLIC_KEY = 'direct-clover-public-key';
   process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'direct-clover-private-key';
+  process.env.STRIPE_SECRET_KEY = 'sk_test_direct_refund';
+  process.env.STRIPE_WEBHOOK_SECRET = 'whsec-direct-stripe-refund';
   process.env.MESSAGING_WEBHOOK_SECRET = 'direct-message-secret';
   process.env.WOA_VERIFICATION_WEBHOOK_SECRET = 'direct-verification-secret';
   process.env.WOA_TRACKER_PROVIDER = 'direct-tracker-adapter';
@@ -478,6 +480,7 @@ async function main() {
     });
     duplicateState.payments.unshift(
       { id: 'clover-payment-direct-dispute', cloverPaymentId: 'pay-direct-dispute', customer: 'Direct Dispute Customer', date: 'Today', method: 'Clover', amount: 199, status: 'Paid', source: 'Clover', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-dispute-customer@example.com' },
+      { id: 'stripe-payment-direct-refund', paymentProvider: 'stripe', providerPaymentId: 'pi_direct_refund', stripePaymentIntentId: 'pi_direct_refund', stripeChargeId: 'ch_direct_refund', customer: 'Direct Stripe Refund Customer', date: 'Today', method: 'Stripe saved card', amount: 123.45, status: 'Paid', source: 'Stripe saved-card charge', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-stripe-refund@example.com' },
       { id: 'clover-payment-direct-unmatched-a', cloverPaymentId: 'pay-direct-unmatched-duplicate', customer: 'Unmatched Clover payment', date: 'Today', method: 'Clover', amount: 7788.88, status: 'Paid', source: 'Clover' },
       { id: 'clover-payment-direct-unmatched-b', cloverPaymentId: 'pay-direct-unmatched-duplicate', customer: 'Customer match needed', date: 'Today', method: 'Clover', amount: 7788.88, status: 'Paid', source: 'Clover' },
       { id: 'pay-signal-alpha-983', cloverPaymentId: 'charge-signal-alpha-983', customer: 'Signal Match Person', date: 'Today', method: 'Clover', amount: 144, status: 'Paid', source: 'Clover', vehicleId: 'veh-signal-text-car', vehicle: '2024 Signal Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tracker: 'TRK-SIG', phone: '3135550201', email: 'signal-match@example.com' },
@@ -1188,6 +1191,49 @@ async function main() {
     assert(repeatManualRefund.status === 200, 'Repeating the same manual refund confirmation should remain safe.');
     const refundState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(Number((refundState.json.payments || []).find(row => row.id === 'clover-payment-direct-dispute').refundedAmount) === 50, 'Idempotent manual refund confirmation must not double-count the refunded amount.');
+
+    const managerStripeRefundPrepare = await request(server, 'POST', '/api/integrations/payments/refunds/prepare', { cookie: managerCookie, json: { paymentId: 'stripe-payment-direct-refund', amount: 42.25, reason: 'Direct Stripe role test' } });
+    assert(managerStripeRefundPrepare.status === 403, 'Manager must not prepare a Stripe refund.');
+    const preparedStripeRefund = await request(server, 'POST', '/api/integrations/payments/refunds/prepare', { cookie: ownerCookie, json: { paymentId: 'stripe-payment-direct-refund', amount: 42.25, reason: 'Direct Stripe partial refund test' } });
+    assert(preparedStripeRefund.status === 201 && preparedStripeRefund.json.refund.status === 'Ready for owner execution', 'A linked Stripe payment should prepare a partial refund for owner execution.');
+    assert(preparedStripeRefund.json.refund.provider === 'Stripe' && preparedStripeRefund.json.refund.stripePaymentIntentId === 'pi_direct_refund', 'Prepared Stripe refunds must retain provider and payment-intent identity.');
+    const unconfirmedStripeRefund = await request(server, 'POST', '/api/integrations/payments/refunds/execute', { cookie: ownerCookie, json: { refundId: preparedStripeRefund.json.refund.id } });
+    assert(unconfirmedStripeRefund.status === 409, 'Live Stripe refund execution must require immediate owner confirmation.');
+    const stripeRefundFetch = global.fetch;
+    const stripeRefundCalls = [];
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('/v1/refunds')) {
+        stripeRefundCalls.push({ url: String(url), options });
+        return { ok: true, status: 200, async text() { return JSON.stringify({ id: 're_direct_refund_001', status: 'succeeded', payment_intent: 'pi_direct_refund', charge: 'ch_direct_refund' }); } };
+      }
+      return stripeRefundFetch(url, options);
+    };
+    let executedStripeRefund;
+    try {
+      executedStripeRefund = await request(server, 'POST', '/api/integrations/payments/refunds/execute', { cookie: ownerCookie, json: { refundId: preparedStripeRefund.json.refund.id, confirmed: true } });
+    } finally {
+      global.fetch = stripeRefundFetch;
+    }
+    assert(executedStripeRefund.status === 200 && executedStripeRefund.json.refund.status === 'Refunded' && executedStripeRefund.json.refund.providerRefundId === 're_direct_refund_001', 'Owner-confirmed Stripe refund should complete through the provider adapter.');
+    assert(stripeRefundCalls.length === 1 && stripeRefundCalls[0].options.headers['Idempotency-Key'] === preparedStripeRefund.json.refund.idempotencyKey, 'Stripe refunds must send exactly one idempotent provider request.');
+    const stripeRefundBody = new URLSearchParams(String(stripeRefundCalls[0].options.body || ''));
+    assert(stripeRefundBody.get('payment_intent') === 'pi_direct_refund' && stripeRefundBody.get('amount') === '4225', 'Stripe refund must use the saved payment intent and cents amount.');
+    assert(stripeRefundBody.get('metadata[woa_refund_request_id]') === preparedStripeRefund.json.refund.id && !String(stripeRefundCalls[0].options.body || '').includes('Direct Stripe Refund Customer'), 'Stripe refund metadata must link the request without sending customer PII.');
+    const stripeRefundState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(Number((stripeRefundState.json.payments || []).find(row => row.id === 'stripe-payment-direct-refund').refundedAmount) === 42.25, 'A completed Stripe refund must update the source payment exactly once.');
+    const repeatStripeRefund = await request(server, 'POST', '/api/integrations/payments/refunds/execute', { cookie: ownerCookie, json: { refundId: preparedStripeRefund.json.refund.id, confirmed: true } });
+    assert(repeatStripeRefund.status === 200, 'Repeated Stripe refund execution should remain idempotent after provider success.');
+    const repeatStripeRefundState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(Number((repeatStripeRefundState.json.payments || []).find(row => row.id === 'stripe-payment-direct-refund').refundedAmount) === 42.25, 'Repeated Stripe refund execution must not double-count the payment refund.');
+    const stripeRefundWebhookBody = JSON.stringify({ id: 'evt_direct_stripe_refund_001', type: 'refund.updated', created: Math.floor(Date.now() / 1000), data: { object: { id: 're_direct_refund_001', status: 'succeeded', payment_intent: 'pi_direct_refund', charge: 'ch_direct_refund', metadata: { woa_refund_request_id: preparedStripeRefund.json.refund.id } } } });
+    const stripeRefundWebhookTimestamp = String(Math.floor(Date.now() / 1000));
+    const stripeRefundWebhookSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeRefundWebhookTimestamp + '.' + stripeRefundWebhookBody).digest('hex');
+    const stripeRefundWebhook = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeRefundWebhookTimestamp + ',v1=' + stripeRefundWebhookSignature }, raw: stripeRefundWebhookBody });
+    assert(stripeRefundWebhook.status === 200 && stripeRefundWebhook.json.refundRequestId === preparedStripeRefund.json.refund.id, 'A signed Stripe refund webhook must reconcile to its saved refund request.');
+    const duplicateStripeRefundWebhook = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeRefundWebhookTimestamp + ',v1=' + stripeRefundWebhookSignature }, raw: stripeRefundWebhookBody });
+    assert(duplicateStripeRefundWebhook.status === 200 && duplicateStripeRefundWebhook.json.duplicate, 'Duplicate Stripe refund webhooks must be acknowledged without applying a refund twice.');
+    const stripeRefundWebhookState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(Number((stripeRefundWebhookState.json.payments || []).find(row => row.id === 'stripe-payment-direct-refund').refundedAmount) === 42.25, 'A successful Stripe refund webhook must not double-count an already-completed refund.');
 
     const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });
     assert(managerDisputeAction.status === 403, 'Manager must not change Clover dispute response status.');
