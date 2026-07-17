@@ -1,6 +1,8 @@
 'use strict';
 
+const fsNative = require('node:fs');
 const fs = require('node:fs/promises');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const secureDocumentStore = require('../secure-document-store');
 
@@ -24,10 +26,39 @@ function legacyPath(item) {
   return String(item.kind === 'signature' ? item.row.signatureImagePath || item.row.storagePath : item.row.storagePath || '').trim();
 }
 
+function rowIdentity(item) {
+  return String(item.kind || 'document') + ':' + String(item.row && item.row.id || '');
+}
+
+function sha256(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function backupPathFor(dataFile) {
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '');
+  return dataFile + '.private-document-pre-migration-' + stamp + '-' + process.pid + '.bak';
+}
+
+async function resolveLegacyFile(dataDir, legacyRoot, sourcePath) {
+  const absolute = path.resolve(dataDir, sourcePath);
+  if (!inside(legacyRoot, absolute)) throw new Error('Refusing to migrate a document outside onboarding-uploads: ' + sourcePath);
+  const realRoot = await fs.realpath(legacyRoot);
+  const realSource = await fs.realpath(absolute);
+  if (!inside(realRoot, realSource)) throw new Error('Refusing to migrate a document through a path outside onboarding-uploads: ' + sourcePath);
+  return realSource;
+}
+
 async function main() {
   if (process.env.WOA_PRIVATE_DOCUMENT_MIGRATION_CONFIRM !== '1') {
     throw new Error('Refusing to migrate live private files without WOA_PRIVATE_DOCUMENT_MIGRATION_CONFIRM=1. Existing files are never deleted by default.');
   }
+  if (process.env.WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM !== '1') {
+    throw new Error('Refusing to migrate private files without WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM=1. Run this only while production writes are paused so live customer records cannot change during the migration.');
+  }
+  const sourceBytes = await fs.readFile(dataFile);
+  const sourceChecksum = sha256(sourceBytes);
+  const state = JSON.parse(sourceBytes.toString('utf8'));
+  const legacyRoot = path.resolve(dataDir, 'onboarding-uploads');
   const store = secureDocumentStore.createSecureDocumentStore({
     provider: process.env.WOA_DOCUMENT_STORAGE_PROVIDER || 'local',
     localRoot,
@@ -42,12 +73,8 @@ async function main() {
     pathStyle: process.env.WOA_OBJECT_STORAGE_PATH_STYLE === '1'
   });
   if (!store.status().configured) throw new Error(store.status().message);
-  const state = JSON.parse(await fs.readFile(dataFile, 'utf8'));
-  const legacyRoot = path.resolve(dataDir, 'onboarding-uploads');
-  const migratedFiles = [];
-  let migrated = 0;
+  const candidates = [];
   let skipped = 0;
-
   for (const item of privateRows(state)) {
     const record = item.row;
     if (store.isEncryptedDocument(record)) {
@@ -59,48 +86,108 @@ async function main() {
       skipped += 1;
       continue;
     }
-    const absolute = path.resolve(dataDir, sourcePath);
-    if (!inside(legacyRoot, absolute)) throw new Error('Refusing to migrate a document outside onboarding-uploads: ' + sourcePath);
-    const bytes = await fs.readFile(absolute);
-    const stored = await store.save({
-      id: record.id,
-      bytes,
-      contentType: record.contentType || (item.kind === 'signature' ? 'image/png' : 'application/octet-stream'),
-      originalName: record.originalName || (item.kind === 'signature' ? 'signature.png' : path.basename(absolute)),
-      organizationId: record.organizationId || 'org-wheelsonauto'
+    candidates.push({
+      item,
+      record,
+      absolute: await resolveLegacyFile(dataDir, legacyRoot, sourcePath)
     });
-    Object.assign(record, {
-      storagePath: stored.storagePath || '',
-      storageKey: stored.storageKey,
-      storageProvider: stored.storageProvider,
-      storageSecurity: 'encrypted',
-      contentType: stored.contentType,
-      originalName: stored.originalName,
-      size: stored.size,
-      sha256: stored.sha256,
-      encryption: stored.encryption,
-      migratedFromLegacyAt: new Date().toISOString(),
-      legacyFileRetained: true
-    });
-    if (item.kind === 'signature') record.signatureImagePath = '';
-    migratedFiles.push(absolute);
-    migrated += 1;
+  }
+  if (!candidates.length) {
+    console.log(JSON.stringify({
+      ok: true,
+      migrated: 0,
+      skipped,
+      changed: false,
+      message: 'No legacy private documents need migration. data.json was not changed.'
+    }, null, 2));
+    return;
   }
 
-  const temporary = dataFile + '.private-document-migration-' + process.pid + '.tmp';
-  await fs.writeFile(temporary, JSON.stringify(state, null, 2), 'utf8');
-  await fs.rename(temporary, dataFile);
-  if (process.env.WOA_PRIVATE_DOCUMENT_LEGACY_DELETE === '1') {
-    for (const file of migratedFiles) await fs.rm(file, { force: true });
+  const backupPath = backupPathFor(dataFile);
+  await fs.copyFile(dataFile, backupPath, fsNative.constants.COPYFILE_EXCL);
+  const backupBytes = await fs.readFile(backupPath);
+  if (sha256(backupBytes) !== sourceChecksum) {
+    throw new Error('Private-document migration backup does not match the protected source data. data.json was not changed.');
   }
-  console.log(JSON.stringify({
-    ok: true,
-    migrated,
-    skipped,
-    legacyFilesRetained: process.env.WOA_PRIVATE_DOCUMENT_LEGACY_DELETE !== '1',
-    storage: store.status(),
-    message: 'Encrypted document migration completed. Verify staff downloads before enabling WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'
-  }, null, 2));
+
+  const migratedFiles = [];
+  const storedKeys = [];
+  let migrated = 0;
+  let stateCommitted = false;
+  let stateVerified = false;
+  try {
+    for (const candidate of candidates) {
+      const { item, record, absolute } = candidate;
+      const bytes = await fs.readFile(absolute);
+      const originalChecksum = sha256(bytes);
+      const stored = await store.save({
+        id: record.id,
+        bytes,
+        contentType: record.contentType || (item.kind === 'signature' ? 'image/png' : 'application/octet-stream'),
+        originalName: record.originalName || (item.kind === 'signature' ? 'signature.png' : path.basename(absolute)),
+        organizationId: record.organizationId || 'org-wheelsonauto'
+      });
+      storedKeys.push(stored.storageKey);
+      const recovered = await store.read(stored);
+      if (!recovered.equals(bytes) || stored.sha256 !== originalChecksum || sha256(recovered) !== originalChecksum) {
+        throw new Error('Encrypted private-document read-back verification failed for ' + path.basename(absolute) + '. data.json was not changed.');
+      }
+      Object.assign(record, {
+        storagePath: stored.storagePath || '',
+        storageKey: stored.storageKey,
+        storageProvider: stored.storageProvider,
+        storageSecurity: 'encrypted',
+        contentType: stored.contentType,
+        originalName: stored.originalName,
+        size: stored.size,
+        sha256: stored.sha256,
+        encryption: stored.encryption,
+        migratedFromLegacyAt: new Date().toISOString(),
+        legacyFileRetained: true
+      });
+      if (item.kind === 'signature') record.signatureImagePath = '';
+      migratedFiles.push(absolute);
+      migrated += 1;
+    }
+
+    const currentBytes = await fs.readFile(dataFile);
+    if (sha256(currentBytes) !== sourceChecksum) {
+      throw new Error('Live customer data changed while private documents were being migrated. data.json was not changed; retry during a maintenance window.');
+    }
+    const temporary = dataFile + '.private-document-migration-' + process.pid + '.tmp';
+    await fs.writeFile(temporary, JSON.stringify(state, null, 2), 'utf8');
+    await fs.rename(temporary, dataFile);
+    stateCommitted = true;
+    const committed = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+    const candidateIdentities = new Set(candidates.map(candidate => rowIdentity(candidate.item)));
+    const verifiedRows = privateRows(committed).filter(entry => candidateIdentities.has(rowIdentity(entry)));
+    if (verifiedRows.length !== candidates.length || verifiedRows.some(entry => !store.isEncryptedDocument(entry.row))) {
+      throw new Error('Encrypted private-document metadata verification failed after the atomic state update. The protected backup will be restored before retrying.');
+    }
+    stateVerified = true;
+    if (process.env.WOA_PRIVATE_DOCUMENT_LEGACY_DELETE === '1') {
+      for (const file of migratedFiles) await fs.rm(file, { force: true });
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      migrated,
+      skipped,
+      backupPath,
+      sourceChecksum,
+      legacyFilesRetained: process.env.WOA_PRIVATE_DOCUMENT_LEGACY_DELETE !== '1',
+      storage: store.status(),
+      message: 'Encrypted document migration completed with backup and read-back proof. Verify staff downloads before enabling WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'
+    }, null, 2));
+  } catch (error) {
+    if (stateCommitted && !stateVerified) {
+      await fs.copyFile(backupPath, dataFile);
+      stateCommitted = false;
+    }
+    if (!stateCommitted) {
+      await Promise.all(storedKeys.map(storageKey => store.deleteObject(storageKey).catch(() => {})));
+    }
+    throw error;
+  }
 }
 
 main().catch(error => {
