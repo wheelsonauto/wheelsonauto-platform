@@ -77,6 +77,9 @@ async function main() {
     assert.match(output, /Stripe onboarding payment provider/i, 'The startup guard must reject a live Stripe launch that still creates new onboarding payments through Clover.');
     assert.match(output, /Stripe Identity provider/i, 'The startup guard must reject a live Stripe launch that falls back to manual identity verification.');
     assert.match(output, /verified operational error alert delivery/i, 'The startup guard must require a verified owner alert route for failed jobs, webhooks, and autopay runs.');
+    assert.match(output, /Telnyx signed SMS delivery and inbound reply proof/i, 'The startup guard must require fresh Telnyx delivery and signed inbound evidence.');
+    assert.match(output, /Resend wheelsonauto\.com two-way email proof/i, 'The startup guard must require a verified WheelsonAuto sender and signed two-way Resend proof.');
+    assert.match(output, /OpenAI Star Responses API health proof with active safety limits/i, 'The startup guard must require a fresh Star provider proof with configured request caps.');
     assert(!/WheelsonAuto platform running/i.test(output), 'The HTTP listener must never start when required safeguards are incomplete.');
 
     const identityRuntimeResult = spawnSync(process.execPath, ['server.js'], {
@@ -92,7 +95,7 @@ async function main() {
     assert.match(identityRuntimeOutput, /signed live Stripe Identity verification/i, 'The startup guard must require a signed verified Stripe Identity event from a WheelsonAuto onboarding record.');
     assert(!/WheelsonAuto platform running/i.test(identityRuntimeOutput), 'The HTTP listener must never start while Stripe Identity proof is incomplete.');
 
-    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, encrypted private storage, Stripe onboarding and Identity proof, signed live payment safeguards, and failure-alert delivery are ready.');
+    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, encrypted private storage, Stripe onboarding and Identity proof, Telnyx, Resend, Star, signed live payment safeguards, and failure-alert delivery are ready.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

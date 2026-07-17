@@ -278,6 +278,12 @@ require owner approval.
 The request caps are a platform safety rail, not a dollar-denominated billing
 ceiling because model/token pricing can change. Set the separate monthly budget
 and usage alerts in the OpenAI project before enabling live model replies.
+Before the hardened Stripe launch, use the owner-only **Star provider health
+test** once after the current Render settings are deployed. The successful
+Responses API result is bound to the active key, model, endpoint, limits, and
+Star settings and expires after 30 days by default. Changing any of those
+settings requires a fresh health test; a dashboard key alone does not clear the
+launch gate.
 
 ### Telnyx
 
@@ -292,7 +298,11 @@ WOA_MESSAGING_WEBHOOK_SECRET=<shared secret when used>
 
 Do not turn on automatic customer messaging until 10DLC approval, number
 assignment, inbound signing, and one carrier-delivered outbound test are all
-confirmed.
+confirmed. For the hardened Stripe launch, send a fresh test text and reply to
+it from a phone after the current Render settings are deployed. The platform
+requires both the carrier delivery receipt and the signed inbound reply to
+match the active Telnyx configuration, and refreshes that proof after 30 days
+by default.
 
 ### Resend
 
@@ -306,7 +316,9 @@ RESEND_WEBHOOK_SECRET=<webhook signing secret>
 
 Verify the `wheelsonauto.com` sending domain, complete an outbound receipt
 test, and then verify an inbound reply webhook before relying on email as a
-two-way inbox.
+two-way inbox. The hardened Stripe launch requires those fresh outbound and
+inbound records to match the active Resend configuration. A test sent from an
+old sender, key, or webhook secret cannot clear the launch gate.
 
 ## 7. Enable the Launch Guard Last
 
@@ -318,14 +330,16 @@ WOA_PRODUCTION_HARDENING_REQUIRED=1
 
 On a future restart the service will refuse to start if transactional
 PostgreSQL, encrypted private storage, Stripe live/webhook settings, Stripe
-onboarding and Identity, verified operational alerts, a stable session secret,
-or HTTPS public URL are missing. This is deliberate: it keeps a partial
+onboarding and Identity, verified Telnyx SMS delivery/reply, verified Resend
+two-way email, a fresh OpenAI Star health proof, verified operational alerts,
+a stable session secret, or HTTPS public URL are missing. This is deliberate: it keeps a partial
 configuration from quietly processing live money or private documents.
 
 Before each deployment rehearsal, run the guard test as well:
 
 ```sh
 pnpm run production-startup-gate-check
+pnpm run provider-launch-proof-check
 ```
 
 It launches a clean temporary process with hardened mode on but no provider

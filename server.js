@@ -148,6 +148,9 @@ const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.e
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_MESSAGING_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_EMAIL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_EMAIL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_AI_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_AI_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
 const WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
@@ -1095,6 +1098,184 @@ function openAiProviderReadiness(data = {}) {
     aiUsage: usage
   };
 }
+function providerEvidenceFreshness(value, maxAgeMs) {
+  const checkedAt = String(value || '');
+  const checkedAtMs = Date.parse(checkedAt);
+  const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
+  return {
+    checkedAt,
+    fresh: Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= maxAgeMs,
+    maxAgeHours: Math.round(maxAgeMs / (60 * 60 * 1000))
+  };
+}
+function launchConfigurationFingerprint(parts = []) {
+  return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(parts.map(value => String(value || '')).join('\u0000')).digest('hex');
+}
+function messagingLaunchConfigurationFingerprint(data = {}) {
+  const settings = messageSettings(data);
+  return launchConfigurationFingerprint([
+    MESSAGING_PROVIDER,
+    MESSAGING_FROM_NUMBER,
+    TELNYX_API_KEY,
+    TELNYX_PUBLIC_KEY,
+    TELNYX_MESSAGING_PROFILE_ID,
+    MESSAGING_WEBHOOK_SECRET,
+    PUBLIC_BASE_URL,
+    settings.enabled ? '1' : '0'
+  ]);
+}
+function emailLaunchConfigurationFingerprint(data = {}) {
+  const settings = messageSettings(data);
+  return launchConfigurationFingerprint([
+    WOA_EMAIL_PROVIDER,
+    WOA_EMAIL_FROM,
+    WOA_EMAIL_REPLY_TO,
+    RESEND_API_KEY,
+    RESEND_WEBHOOK_SECRET,
+    PUBLIC_BASE_URL,
+    settings.emailEnabled ? '1' : '0'
+  ]);
+}
+function starAiLaunchConfigurationFingerprint(data = {}) {
+  const settings = messageSettings(data);
+  return launchConfigurationFingerprint([
+    OPENAI_BASE_URL,
+    OPENAI_API_KEY,
+    WOA_AI_MODEL,
+    WOA_AI_REASONING_EFFORT,
+    WOA_AI_TIMEOUT_MS,
+    WOA_AI_MAX_REQUESTS_PER_DAY,
+    WOA_AI_MAX_REQUESTS_PER_MONTH,
+    settings.aiEnabled ? '1' : '0',
+    settings.aiAutoSend ? '1' : '0',
+    settings.aiDrafts ? '1' : '0'
+  ]);
+}
+function evidenceFingerprintMatches(recorded, expected) {
+  return !!(recorded && expected && secureWebhookValueMatch(String(recorded), String(expected)));
+}
+function emailAddressFromSender(value) {
+  const raw = String(value || '').trim();
+  const bracketed = raw.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/);
+  if (bracketed) return bracketed[1].toLowerCase();
+  const plain = raw.match(/[^\s<>]+@[^\s<>]+/);
+  return plain ? plain[0].toLowerCase() : raw.toLowerCase();
+}
+function usesVerifiedWheelsonAutoSendingDomain(value) {
+  const email = emailAddressFromSender(value);
+  const at = email.lastIndexOf('@');
+  return at > 0 && email.slice(at + 1) === 'wheelsonauto.com';
+}
+function telnyxLiveLaunchEvidence(data = {}) {
+  const saved = (((data.integrations || {}).messaging) || {});
+  const settings = messageSettings(data);
+  const carrier = telnyxCarrierReadiness(data, 'telnyx');
+  const expectedFingerprint = messagingLaunchConfigurationFingerprint(data);
+  const delivery = providerEvidenceFreshness(saved.lastTelnyxDeliveryEvidenceAt, WOA_MESSAGING_VALIDATION_MAX_AGE_MS);
+  const inbound = providerEvidenceFreshness(saved.lastTelnyxInboundEvidenceAt, WOA_MESSAGING_VALIDATION_MAX_AGE_MS);
+  const deliveryConfigurationMatched = evidenceFingerprintMatches(saved.lastTelnyxDeliveryConfigurationFingerprint, expectedFingerprint);
+  const inboundConfigurationMatched = evidenceFingerprintMatches(saved.lastTelnyxInboundConfigurationFingerprint, expectedFingerprint);
+  const configured = !!(
+    MESSAGING_PROVIDER === 'telnyx' &&
+    settings.enabled &&
+    MESSAGING_FROM_NUMBER &&
+    TELNYX_API_KEY &&
+    TELNYX_PUBLIC_KEY &&
+    (saved.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID) &&
+    saved.smsWebhookConnected === true
+  );
+  const deliveryVerified = !!(carrier.carrierDeliveryVerified && delivery.fresh && deliveryConfigurationMatched);
+  const inboundVerified = !!(inbound.fresh && inboundConfigurationMatched);
+  const live = !!(configured && carrier.carrierRegistrationVerified && deliveryVerified && inboundVerified);
+  let error = '';
+  if (MESSAGING_PROVIDER !== 'telnyx') error = 'Set WOA_MESSAGING_PROVIDER=telnyx before the Stripe launch.';
+  else if (!settings.enabled) error = 'Turn on WheelsonAuto messaging before the Stripe launch.';
+  else if (!MESSAGING_FROM_NUMBER || !TELNYX_API_KEY || !TELNYX_PUBLIC_KEY) error = 'Configure the Telnyx number, API key, and signed webhook public key in Render.';
+  else if (!(saved.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID) || saved.smsWebhookConnected !== true) error = 'Connect the Telnyx messaging profile and signed inbound webhook from Messages setup.';
+  else if (!carrier.carrierRegistrationVerified) error = 'Finish Telnyx 10DLC approval and assign the number to an active campaign.';
+  else if (!deliveryVerified) error = deliveryConfigurationMatched && delivery.fresh ? 'Send a Telnyx test text and wait for a delivered carrier receipt.' : 'Run a fresh Telnyx delivery test after the current Render messaging configuration is deployed.';
+  else if (!inboundVerified) error = inboundConfigurationMatched && inbound.fresh ? 'Reply to the Telnyx test text so WheelsonAuto records a signed inbound proof.' : 'Send a fresh signed inbound Telnyx reply after the current Render messaging configuration is deployed.';
+  return {
+    configured,
+    carrierRegistrationVerified: carrier.carrierRegistrationVerified,
+    carrierDeliveryVerified: carrier.carrierDeliveryVerified,
+    deliveryVerified,
+    inboundVerified,
+    deliveryConfigurationMatched,
+    inboundConfigurationMatched,
+    delivery,
+    inbound,
+    live,
+    error
+  };
+}
+function resendLiveLaunchEvidence(data = {}) {
+  const settings = messageSettings(data);
+  const configured = !!(
+    WOA_EMAIL_PROVIDER === 'resend' &&
+    settings.emailEnabled &&
+    WOA_EMAIL_ENABLED &&
+    RESEND_API_KEY &&
+    RESEND_WEBHOOK_SECRET &&
+    WOA_EMAIL_FROM &&
+    usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM)
+  );
+  const readiness = emailChannelReadiness(data, configured, 'resend');
+  const expectedFingerprint = emailLaunchConfigurationFingerprint(data);
+  const records = (data.messages || []).filter(record => String(record && record.channel || '').toLowerCase() === 'email' && String(record && record.provider || '').toLowerCase() === 'resend');
+  const recordTime = record => String(record && (record.receivedAt || record.sentAt || record.createdAt || record.date) || '');
+  const recordFresh = record => providerEvidenceFreshness(recordTime(record), WOA_EMAIL_VALIDATION_MAX_AGE_MS);
+  const isInbound = record => /inbound|received/.test(String(record && (record.direction || record.status) || '').toLowerCase()) || String(record && record.source || '') === 'Email webhook';
+  const successfulOutbound = record => !isInbound(record) && !!String(record && record.externalId || '').trim() && /sent|delivered|accepted|queued/.test(String(record && record.status || '').toLowerCase()) && !/failed|error|draft|needed/.test(String(record && record.status || '').toLowerCase());
+  const signedInbound = record => isInbound(record) && String(record && record.source || '') === 'Email webhook' && !!String(record && record.externalId || '').trim();
+  const matchingOutbound = records.find(record => successfulOutbound(record) && evidenceFingerprintMatches(record.providerConfigurationFingerprint, expectedFingerprint) && recordFresh(record).fresh) || null;
+  const matchingInbound = records.find(record => signedInbound(record) && evidenceFingerprintMatches(record.providerConfigurationFingerprint, expectedFingerprint) && recordFresh(record).fresh) || null;
+  const live = !!(configured && readiness.emailOutboundVerified && readiness.emailInboundVerified && matchingOutbound && matchingInbound);
+  let error = '';
+  if (WOA_EMAIL_PROVIDER !== 'resend') error = 'Set WOA_EMAIL_PROVIDER=resend before the Stripe launch.';
+  else if (!settings.emailEnabled || !WOA_EMAIL_ENABLED) error = 'Turn on email messaging in WheelsonAuto and Render before the Stripe launch.';
+  else if (!RESEND_API_KEY || !RESEND_WEBHOOK_SECRET) error = 'Configure the Resend API key and signed inbound webhook secret in Render.';
+  else if (!usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM)) error = 'Use a Resend-verified sender at wheelsonauto.com before the Stripe launch.';
+  else if (!readiness.emailOutboundVerified || !matchingOutbound) error = 'Send a fresh Resend email accepted by the provider after the current Render email configuration is deployed.';
+  else if (!readiness.emailInboundVerified || !matchingInbound) error = 'Send a reply into the signed Resend inbound webhook after the current Render email configuration is deployed.';
+  return {
+    configured,
+    senderDomainVerified: usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM),
+    outboundVerified: !!(readiness.emailOutboundVerified && matchingOutbound),
+    inboundVerified: !!(readiness.emailInboundVerified && matchingInbound),
+    outbound: matchingOutbound ? providerEvidenceFreshness(recordTime(matchingOutbound), WOA_EMAIL_VALIDATION_MAX_AGE_MS) : providerEvidenceFreshness('', WOA_EMAIL_VALIDATION_MAX_AGE_MS),
+    inbound: matchingInbound ? providerEvidenceFreshness(recordTime(matchingInbound), WOA_EMAIL_VALIDATION_MAX_AGE_MS) : providerEvidenceFreshness('', WOA_EMAIL_VALIDATION_MAX_AGE_MS),
+    live,
+    error
+  };
+}
+function starAiLiveLaunchEvidence(data = {}) {
+  const saved = (((data.integrations || {}).messaging) || {});
+  const settings = messageSettings(data);
+  const readiness = openAiProviderReadiness(data);
+  const health = providerEvidenceFreshness(saved.lastAiHealthAt, WOA_AI_VALIDATION_MAX_AGE_MS);
+  const configurationMatched = evidenceFingerprintMatches(saved.lastAiHealthConfigurationFingerprint, starAiLaunchConfigurationFingerprint(data));
+  const healthVerified = String(saved.lastAiProvider || '').toLowerCase() === 'openai' && /openai answered through the responses api/i.test(String(saved.lastAiHealthStatus || ''));
+  const configured = !!(settings.aiEnabled && WOA_STAR_AI_ENABLED && readiness.aiProviderConfigured);
+  const live = !!(configured && readiness.aiProviderOperational && healthVerified && configurationMatched && health.fresh);
+  let error = '';
+  if (!configured) error = 'Configure and turn on OpenAI-backed Star before the Stripe launch.';
+  else if (readiness.aiProviderCreditRequired) error = 'Add usable OpenAI API credit before the Stripe launch.';
+  else if (readiness.aiProviderCredentialIssue) error = 'Fix the OpenAI API credential before the Stripe launch.';
+  else if (readiness.aiProviderBudgetLimited) error = 'Raise or reset the configured Star request cap before the Stripe launch.';
+  else if (!healthVerified || !configurationMatched || !health.fresh) error = 'Run a fresh owner Star Responses API health test after the current Render AI configuration is deployed.';
+  return {
+    configured,
+    operational: readiness.aiProviderOperational,
+    healthVerified,
+    configurationMatched,
+    health,
+    dailyLimit: readiness.aiUsage.dailyLimit,
+    monthlyLimit: readiness.aiUsage.monthlyLimit,
+    live,
+    error
+  };
+}
 function publicMessagingStatus(data = {}) {
   const settings = messageSettings(data);
   const saved = (((data.integrations || {}).messaging) || {});
@@ -1110,6 +1291,9 @@ function publicMessagingStatus(data = {}) {
   );
   const carrier = telnyxCarrierReadiness(data, provider);
   const aiReadiness = openAiProviderReadiness(data);
+  const telnyxLaunch = telnyxLiveLaunchEvidence(data);
+  const resendLaunch = resendLiveLaunchEvidence(data);
+  const starLaunch = starAiLiveLaunchEvidence(data);
   const smsDeliveryLive = !!(configured && (provider !== 'telnyx' || carrier.carrierDeliveryVerified));
   return {
     provider,
@@ -1139,6 +1323,8 @@ function publicMessagingStatus(data = {}) {
     deliveryErrors: Number(saved.deliveryErrors || 0),
     deliveryLastError: saved.deliveryLastError || '',
     ...carrier,
+    telnyxLaunchReady: telnyxLaunch.live,
+    telnyxLaunchIssue: telnyxLaunch.error,
     emailWebhookUrl: PUBLIC_BASE_URL + '/api/webhooks/email',
     webhookSecretConfigured: !!(MESSAGING_WEBHOOK_SECRET || (provider === 'telnyx' && TELNYX_PUBLIC_KEY)),
     telnyxSignatureReady: provider === 'telnyx' && !!TELNYX_PUBLIC_KEY,
@@ -1156,6 +1342,8 @@ function publicMessagingStatus(data = {}) {
     aiLastProviderError: saved.lastAiProviderError || '',
     aiLastHealthAt: saved.lastAiHealthAt || '',
     aiLastHealthStatus: saved.lastAiHealthStatus || '',
+    aiLaunchReady: starLaunch.live,
+    aiLaunchIssue: starLaunch.error,
     ...aiReadiness,
     aiTimeoutMs: WOA_AI_TIMEOUT_MS,
     aiName: 'Star AI',
@@ -1166,6 +1354,8 @@ function publicMessagingStatus(data = {}) {
     emailProvider,
     emailConfigured,
     ...emailReadiness,
+    emailLaunchReady: resendLaunch.live,
+    emailLaunchIssue: resendLaunch.error,
     emailFrom: emailConfigured ? 'stored in Render' : '',
     emailReplyTo: WOA_EMAIL_REPLY_TO ? maskEmail(WOA_EMAIL_REPLY_TO) : '',
     emailOwnerCopy: WOA_EMAIL_OWNER_NOTIFY ? maskEmail(WOA_EMAIL_OWNER_NOTIFY) : '',
@@ -2568,6 +2758,7 @@ async function queueEmailNotification(data, payload = {}) {
     tone: result.sent ? 'good' : 'warn',
     body,
     provider: result.provider || WOA_EMAIL_PROVIDER || 'not_configured',
+    providerConfigurationFingerprint: result.sent && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
     source: 'WheelsonAuto email notification',
     event
   };
@@ -4800,6 +4991,7 @@ async function approveAiMessage(data, payload = {}) {
     tone: result.sent ? 'good' : 'warn',
     body: draft.body,
     provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+    providerConfigurationFingerprint: result.sent && channel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
     source: result.sent ? ('Star AI + ' + channel + ' provider') : 'Star AI draft',
     aiApprovedAt: new Date().toISOString(),
     aiDraftId: draft.id,
@@ -6759,13 +6951,16 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
+  const priorMessaging = current && current.integrations && current.integrations.messaging || {};
   const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
+  const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError'];
   const preserveStripe = stripeProofFields.some(field => Object.prototype.hasOwnProperty.call(priorStripe, field));
   const preserveDocumentStorage = documentStorageProofFields.some(field => Object.prototype.hasOwnProperty.call(priorDocumentStorage, field));
   const preserveOperationalAlerts = operationalAlertProofFields.some(field => Object.prototype.hasOwnProperty.call(priorNotifications, field));
-  if (!preserveStripe && !preserveDocumentStorage && !preserveOperationalAlerts) return next;
+  const preserveMessaging = messagingProofFields.some(field => Object.prototype.hasOwnProperty.call(priorMessaging, field));
+  if (!preserveStripe && !preserveDocumentStorage && !preserveOperationalAlerts && !preserveMessaging) return next;
   next.integrations = { ...((incoming && incoming.integrations) || {}) };
   if (preserveStripe) {
     next.integrations.stripe = { ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}) };
@@ -6783,6 +6978,12 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
     next.integrations.notifications = { ...((incoming && incoming.integrations && incoming.integrations.notifications) || {}) };
     operationalAlertProofFields.forEach(field => {
       if (Object.prototype.hasOwnProperty.call(priorNotifications, field)) next.integrations.notifications[field] = priorNotifications[field];
+    });
+  }
+  if (preserveMessaging) {
+    next.integrations.messaging = { ...((incoming && incoming.integrations && incoming.integrations.messaging) || {}) };
+    messagingProofFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(priorMessaging, field)) next.integrations.messaging[field] = priorMessaging[field];
     });
   }
   return next;
@@ -6805,6 +7006,11 @@ function redactStaffSecrets(data) {
   }
   if (safe.integrations && safe.integrations.documentStorage) delete safe.integrations.documentStorage.lastValidationConfigurationFingerprint;
   if (safe.integrations && safe.integrations.notifications) delete safe.integrations.notifications.lastOperationalAlertConfigurationFingerprint;
+  if (safe.integrations && safe.integrations.messaging) {
+    delete safe.integrations.messaging.lastTelnyxDeliveryConfigurationFingerprint;
+    delete safe.integrations.messaging.lastTelnyxInboundConfigurationFingerprint;
+    delete safe.integrations.messaging.lastAiHealthConfigurationFingerprint;
+  }
   return safe;
 }
 function scrubOrganizationProviderProfile(organization) {
@@ -8507,6 +8713,9 @@ async function productionInfrastructurePreflight(data = null) {
   const stripeIdentityWebhook = stripeIdentityLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
   const operationalAlerts = operationalAlertEvidence(state);
+  const telnyxMessaging = telnyxLiveLaunchEvidence(state);
+  const resendEmail = resendLiveLaunchEvidence(state);
+  const starAi = starAiLiveLaunchEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
@@ -8525,6 +8734,9 @@ async function productionInfrastructurePreflight(data = null) {
     if (!stripeIdentityWebhook.live) missing.push('signed live Stripe Identity verification');
   }
   if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
+  if (!telnyxMessaging.live) missing.push('Telnyx signed SMS delivery and inbound reply proof');
+  if (!resendEmail.live) missing.push('Resend wheelsonauto.com two-way email proof');
+  if (!starAi.live) missing.push('OpenAI Star Responses API health proof with active safety limits');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
@@ -8537,13 +8749,16 @@ async function productionInfrastructurePreflight(data = null) {
     stripeWebhook,
     stripeIdentityWebhook,
     operationalAlerts,
+    telnyxMessaging,
+    resendEmail,
+    starAi,
     ownerAuthentication,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -10032,6 +10247,7 @@ async function sendTollReceipt(data, claim, channel, user) {
     tone: result.sent ? 'good' : 'warn',
     body,
     provider: result.provider || '',
+    providerConfigurationFingerprint: result.sent && selectedChannel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
     source: 'WheelsonAuto toll receipt',
     claimId: claim.id,
     receiptUrl: claim.receiptUrl || claim.proofUrl || '',
@@ -14270,11 +14486,22 @@ async function persistTelnyxDeliveryUpdates(sourceData, result = {}) {
     latest.integrations = latest.integrations || {};
     latest.integrations.messaging = latest.integrations.messaging || {};
     const previous = latest.integrations.messaging;
+    const sourceMessaging = sourceData && sourceData.integrations && sourceData.integrations.messaging || {};
+    const proofFields = [
+      'lastTelnyxDeliveryEvidenceAt',
+      'lastTelnyxDeliveryConfigurationFingerprint',
+      'lastTelnyxInboundEvidenceAt',
+      'lastTelnyxInboundConfigurationFingerprint'
+    ];
+    const proofChanged = proofFields.some(field => Object.prototype.hasOwnProperty.call(sourceMessaging, field) && sourceMessaging[field] !== previous[field]);
     const nextError = Array.isArray(result.errors) && result.errors.length ? String(result.errors[0].error || '') : '';
     const lastChecked = Date.parse(previous.deliveryLastCheckedAt || '') || 0;
     const diagnosticsDue = Date.now() - lastChecked >= 5 * 60 * 1000;
     const diagnosticsChanged = nextError !== String(previous.deliveryLastError || '') || updated > 0;
-    if (!diagnosticsDue && !diagnosticsChanged) return { updated, wrote: false };
+    if (!diagnosticsDue && !diagnosticsChanged && !proofChanged) return { updated, wrote: false };
+    proofFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(sourceMessaging, field)) latest.integrations.messaging[field] = sourceMessaging[field];
+    });
     Object.assign(latest.integrations.messaging, {
       deliveryLastCheckedAt: new Date().toISOString(),
       deliveryLastUpdatedAt: updated ? new Date().toISOString() : (latest.integrations.messaging.deliveryLastUpdatedAt || ''),
@@ -14370,6 +14597,10 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
       lastDeliveryStatus: delivery.providerStatus || '',
       lastError: ''
     };
+    if (delivery.matched && delivery.providerStatus === 'delivered') {
+      data.integrations.messaging.lastTelnyxDeliveryEvidenceAt = new Date().toISOString();
+      data.integrations.messaging.lastTelnyxDeliveryConfigurationFingerprint = messagingLaunchConfigurationFingerprint(data);
+    }
     if (delivery.matched) {
       const persistence = await persistTelnyxDeliveryUpdates(data, { checked: 1, updated: 1, errors: [] });
       delivery.persisted = persistence.updated;
@@ -14464,6 +14695,10 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
     lastScamAt: scam.suspicious ? new Date().toISOString() : (data.integrations.messaging && data.integrations.messaging.lastScamAt || ''),
     lastError: ownerMirror && ownerMirror.error || ''
   };
+  if (provider === 'telnyx') {
+    data.integrations.messaging.lastTelnyxInboundEvidenceAt = new Date().toISOString();
+    data.integrations.messaging.lastTelnyxInboundConfigurationFingerprint = messagingLaunchConfigurationFingerprint(data);
+  }
   await protectConcurrentLocalWrites(data);
   await writeData(data);
   return {
@@ -15177,6 +15412,7 @@ const server = http.createServer(async (req, res) => {
           body: inbound.body,
           attachments: inbound.attachments || [],
           provider: inbound.provider,
+          providerConfigurationFingerprint: inbound.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
           source: 'Email webhook',
           contactSource: contact.source || ''
         };
@@ -17754,6 +17990,7 @@ const server = http.createServer(async (req, res) => {
           tone: result.sent ? 'good' : 'warn',
           body,
           provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+          providerConfigurationFingerprint: result.sent && channel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
           source: result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
           ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER,
           customerId: messageFields.customerId,
@@ -17893,6 +18130,7 @@ const server = http.createServer(async (req, res) => {
         ...publicMessagingStatus(data),
         lastAiHealthAt: health.checkedAt,
         lastAiHealthStatus: health.status,
+        lastAiHealthConfigurationFingerprint: starAiLaunchConfigurationFingerprint(data),
         lastAiProviderAt: health.checkedAt,
         lastAiProvider: health.provider,
         lastAiProviderError: health.providerError || ''
@@ -17952,6 +18190,9 @@ const server = http.createServer(async (req, res) => {
           'Current PostgreSQL snapshot checksum/version verification plus a controlled test-database restore record',
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
+          'Telnyx 10DLC approval plus fresh signed SMS delivery and inbound reply proof',
+          'Resend with a verified wheelsonauto.com sender plus fresh outbound and signed inbound email proof',
+          'OpenAI-backed Star with request caps and a fresh owner Responses API health proof',
           'WOA_ERROR_ALERTS_ENABLED=1 plus a verified owner error-alert email test',
           'WOA_SESSION_SECRET, WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1, and production hardening flag',
           'Controlled backup restore and Stripe migration test record'
@@ -18952,6 +19193,12 @@ module.exports = {
   telnyxCarrierReadiness,
   emailChannelReadiness,
   openAiProviderReadiness,
+  messagingLaunchConfigurationFingerprint,
+  emailLaunchConfigurationFingerprint,
+  starAiLaunchConfigurationFingerprint,
+  telnyxLiveLaunchEvidence,
+  resendLiveLaunchEvidence,
+  starAiLiveLaunchEvidence,
   configureTwilioSmsWebhook,
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,
