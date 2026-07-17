@@ -3256,22 +3256,24 @@ function verificationCaseTypeMatches(rowType,type){
 function verificationEvidenceKinds(type){return type==='insurance'?['insurance']:(type==='background'?['background check','background']:(type==='driver_record'?['driver record','mvr']:['driver license','identity']))}
 
 function verificationEvidenceDocs(type){
-  var seen={};
-  return verificationEvidenceKinds(type).reduce(function(rows,kind){
-    verificationDocs(kind).forEach(function(doc){var id=doc.id||[doc.customer,doc.type,doc.expires,doc.reference].join('|');if(!seen[id]){seen[id]=true;rows.push(doc)}});return rows
-  },[])
+  var seen={},kinds=verificationEvidenceKinds(type);
+  return(db.documents||[]).filter(function(doc){var label=String(doc.type||doc.kind||'').toLowerCase();return kinds.some(function(kind){return label.indexOf(kind)>=0})}).filter(function(doc){var id=doc.id||[doc.customer,doc.type,doc.expires,doc.reference].join('|');if(seen[id])return false;seen[id]=true;return true})
 }
 
-function verificationNewCaseClear(customer,type){
-  return(db.verificationCases||[]).some(function(row){var status=integratedVerificationStatus(row);return normName(row.customer)===normName(customer)&&verificationCaseTypeMatches(row.type,type)&&/verified|approved|clear|active|expiring/i.test(status)})
+function verificationNewCaseClear(customer,type,cases){
+  return(cases||db.verificationCases||[]).some(function(row){var status=integratedVerificationStatus(row);return normName(row.customer)===normName(customer)&&verificationCaseTypeMatches(row.type,type)&&/verified|approved|clear|active|expiring/i.test(status)})
 }
 
-function verificationDocumentClearForType(customer,type){
-  return verificationEvidenceKinds(type).some(function(kind){return!!verificationDocClearedForCustomer(customer,kind)})
+function verificationDocumentClearForType(customer,type,docs){
+  var key=normName(customer);
+  return(docs||verificationEvidenceDocs(type)).some(function(doc){return normName(doc.customer)===key&&!documentNeedsVerification(doc)&&verificationStatusTone(doc)!=='bad'})
 }
 
-function verificationMissingRows(type){
-  return activeCustomerFiles().filter(function(row){return!verificationNewCaseClear(row.customer,type)&&!verificationDocumentClearForType(row.customer,type)})
+function verificationMissingRows(type,prepared){
+  prepared=prepared||{};var cases=prepared.cases||db.verificationCases||[],docs=prepared.docs||verificationEvidenceDocs(type),active=Array.isArray(prepared.active)?prepared.active:activeCustomerFiles(),cleared={};
+  cases.forEach(function(row){if(verificationCaseTypeMatches(row.type,type)&&/verified|approved|clear|active|expiring/i.test(integratedVerificationStatus(row)))cleared[normName(row.customer)]=true});
+  docs.forEach(function(doc){if(!documentNeedsVerification(doc)&&verificationStatusTone(doc)!=='bad')cleared[normName(doc.customer)]=true});
+  return active.filter(function(row){return!cleared[normName(row.customer)]})
 }
 
 function integratedVerificationCaseRow(row){
@@ -3294,7 +3296,7 @@ function integratedMissingVerificationRow(row,type){
 
 function IntegratedInsurance(){
   integrationScheduleCache('verification','/api/verification/status',view);
-  var operationsMode=view==='Operations',selected=operationsMode?({'Verification':'Review','Verify review':'Review','Verify insurance':'Insurance','Verify identity':'Identity','Verify background':'Background'}[tab]||'Review'):(['Review','Insurance','Identity','Background'].indexOf(tab)>=0?tab:'Review'),providerPayload=integrationUiCache.verification&&integrationUiCache.verification.ok?integrationUiCache.verification:null,cases=providerPayload?providerPayload.cases:(db.verificationCases||[]),insuranceCases=cases.filter(function(row){return row.type==='insurance'}),identityCases=cases.filter(function(row){return row.type==='identity'||row.type==='driver_license'}),driverRecordCases=cases.filter(function(row){return row.type==='driver_record'}),backgroundCases=cases.filter(function(row){return row.type==='background'}),insuranceDocs=verificationEvidenceDocs('insurance').filter(function(row){return!row.system}),identityDocs=verificationEvidenceDocs('driver_license').filter(function(row){return!row.system}),driverRecordDocs=verificationEvidenceDocs('driver_record').filter(function(row){return!row.system}),backgroundDocs=verificationEvidenceDocs('background').filter(function(row){return!row.system}),missingInsurance=verificationMissingRows('insurance'),missingIdentity=verificationMissingRows('driver_license'),missingDriverRecord=verificationMissingRows('driver_record'),missingBackground=verificationMissingRows('background'),reviewCases=cases.filter(function(row){return!/verified|closed/i.test(integratedVerificationStatus(row))}),expiringCases=cases.filter(function(row){return/expiring|expired/i.test(integratedVerificationStatus(row))}),allDocs=insuranceDocs.concat(identityDocs,driverRecordDocs,backgroundDocs),expiringDocs=allDocs.filter(function(row){var raw=row.expiresAt||row.expires||row.due,ms=raw?Date.parse(String(raw).slice(0,10)+'T12:00:00'):NaN;return Number.isFinite(ms)&&ms<=Date.now()+30*24*60*60*1000}),items=[];
+  var operationsMode=view==='Operations',selected=operationsMode?({'Verification':'Review','Verify review':'Review','Verify insurance':'Insurance','Verify identity':'Identity','Verify background':'Background'}[tab]||'Review'):(['Review','Insurance','Identity','Background'].indexOf(tab)>=0?tab:'Review'),providerPayload=integrationUiCache.verification&&integrationUiCache.verification.ok?integrationUiCache.verification:null,cases=providerPayload?providerPayload.cases:(db.verificationCases||[]),activeFiles=activeCustomerFiles(),insuranceCases=cases.filter(function(row){return row.type==='insurance'}),identityCases=cases.filter(function(row){return row.type==='identity'||row.type==='driver_license'}),driverRecordCases=cases.filter(function(row){return row.type==='driver_record'}),backgroundCases=cases.filter(function(row){return row.type==='background'}),insuranceDocs=verificationEvidenceDocs('insurance').filter(function(row){return!row.system}),identityDocs=verificationEvidenceDocs('driver_license').filter(function(row){return!row.system}),driverRecordDocs=verificationEvidenceDocs('driver_record').filter(function(row){return!row.system}),backgroundDocs=verificationEvidenceDocs('background').filter(function(row){return!row.system}),missingInsurance=verificationMissingRows('insurance',{cases:cases,docs:insuranceDocs,active:activeFiles}),missingIdentity=verificationMissingRows('driver_license',{cases:cases,docs:identityDocs,active:activeFiles}),missingDriverRecord=verificationMissingRows('driver_record',{cases:cases,docs:driverRecordDocs,active:activeFiles}),missingBackground=verificationMissingRows('background',{cases:cases,docs:backgroundDocs,active:activeFiles}),reviewCases=cases.filter(function(row){return!/verified|closed/i.test(integratedVerificationStatus(row))}),expiringCases=cases.filter(function(row){return/expiring|expired/i.test(integratedVerificationStatus(row))}),allDocs=insuranceDocs.concat(identityDocs,driverRecordDocs,backgroundDocs),expiringDocs=allDocs.filter(function(row){var raw=row.expiresAt||row.expires||row.due,ms=raw?Date.parse(String(raw).slice(0,10)+'T12:00:00'):NaN;return Number.isFinite(ms)&&ms<=Date.now()+30*24*60*60*1000}),items=[];
   if(selected==='Review')items=reviewCases.map(integratedVerificationCaseRow).concat(expiringDocs.map(integratedVerificationDocumentRow));
   if(selected==='Insurance')items=missingInsurance.map(function(row){return integratedMissingVerificationRow(row,'insurance')}).concat(insuranceCases.map(integratedVerificationCaseRow)).concat(insuranceDocs.map(integratedVerificationDocumentRow));
   if(selected==='Identity')items=missingDriverRecord.map(function(row){return integratedMissingVerificationRow(row,'driver_record')}).concat(driverRecordCases.map(integratedVerificationCaseRow)).concat(missingIdentity.map(function(row){return integratedMissingVerificationRow(row,'driver_license')})).concat(identityCases.map(integratedVerificationCaseRow)).concat(driverRecordDocs.map(integratedVerificationDocumentRow),identityDocs.map(integratedVerificationDocumentRow));
