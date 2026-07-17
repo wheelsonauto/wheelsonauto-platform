@@ -7350,6 +7350,32 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .admin-shell .view-messages>.message-focused-tabs .message-tabs-compose::before{content:"+";font-size:20px;line-height:1;font-weight:700}
 }
 
+@media(max-width:760px){
+  .admin-shell .view-messages>.message-focused-tabs{overflow:hidden!important}
+  .admin-shell .view-messages>.message-focused-tabs button:not(.message-tabs-compose){
+    flex:1 1 0!important;
+    width:auto!important;
+    min-width:0!important;
+    padding:6px 3px!important;
+    overflow:hidden;
+    font-size:10px!important;
+    text-overflow:ellipsis;
+  }
+  .admin-shell .view-messages>.message-focused-tabs button span{
+    min-width:15px;
+    margin-left:1px;
+    padding:1px 3px;
+    font-size:9px;
+  }
+  .admin-shell .view-messages>.message-focused-tabs .message-tabs-compose{
+    position:static!important;
+    flex:0 0 32px!important;
+    width:32px!important;
+    min-width:32px!important;
+    box-shadow:none!important;
+  }
+}
+
 /* Palette balance: charcoal owns the canvas, gold marks intent, status colors stay compact. */
 .admin-shell>.main>.workspace-count-tabs,
 .admin-shell .workspace-count-tabs{
