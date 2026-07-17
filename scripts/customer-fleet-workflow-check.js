@@ -87,6 +87,8 @@ const removeRecurringRoute = server.slice(server.indexOf("if (url.pathname === '
   'transferVehicleToCustomer',
   'releaseCustomerVehicleOnly',
   'updateRecurringState',
+  'guardCustomerFileVehicleSave',
+  'did not match one fleet car',
   'db.payments',
   'db.messages',
   "tab=removed?'History':'Active'",

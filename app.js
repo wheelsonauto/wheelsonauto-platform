@@ -3068,6 +3068,22 @@ Operations=function(){
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
 
+// The file-save handler can transfer a car. Never let a typed vehicle search
+// silently clear that link when it does not resolve to one exact fleet car.
+window.addEventListener('click',function guardCustomerFileVehicleSave(event){
+  var button=event.target.closest('button[data-action="save-contract-file"]');
+  if(!button||String(val('fileStatus')||'').toLowerCase()==='removed')return;
+  var search=String(val('fileVehicleSearch')||'').trim();
+  var selected=findVehicle(val('fileVehicleId'));
+  if(!search||selected)return;
+  var resolved=resolveCustomerFileVehicle();
+  if(resolved.vehicle)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  notify(resolved.ambiguous?'Multiple cars match that search. Choose the exact VIN, tag, tracker, or vehicle from the list before saving.':'That vehicle search did not match one fleet car. Choose the exact vehicle from the list or clear the search before saving.');
+},true);
+
 var __woaSystemHealthStorageBase=systemHealthPanel;
 systemHealthPanel=function(){
   var html=__woaSystemHealthStorageBase();
