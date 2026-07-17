@@ -1306,6 +1306,15 @@ async function main() {
     assert(stripeWebhookPreflight.status === 200 && stripeWebhookPreflight.json.stripeWebhook && stripeWebhookPreflight.json.stripeWebhook.live === true && stripeWebhookPreflight.json.stripeWebhook.configurationMatched === true, 'A signed live Stripe webhook must match the active Stripe configuration before it satisfies launch evidence.');
     const staleStripeWebhookEvidence = stripeLiveWebhookEvidence({ integrations: { stripe: { lastWebhookAt: new Date().toISOString(), lastWebhookLivemode: true, lastWebhookConfigurationFingerprint: 'old-render-configuration' } } });
     assert(!staleStripeWebhookEvidence.live && !staleStripeWebhookEvidence.configurationMatched && /older or unknown Stripe configuration/i.test(staleStripeWebhookEvidence.error), 'Old Stripe webhook evidence must fail closed when the active Render configuration changes.');
+    const proofTamperState = JSON.parse(JSON.stringify(stripeRefundWebhookState.json));
+    proofTamperState.integrations = proofTamperState.integrations || {};
+    proofTamperState.integrations.stripe = { ...(proofTamperState.integrations.stripe || {}), lastWebhookAt: '2099-01-01T00:00:00.000Z', lastWebhookLivemode: false, lastWebhookError: 'Browser override attempt' };
+    proofTamperState.integrations.documentStorage = { ...(proofTamperState.integrations.documentStorage || {}), lastValidationAt: '2099-01-01T00:00:00.000Z', lastValidationSuccess: false, lastValidationError: 'Browser override attempt' };
+    const proofTamperWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: proofTamperState });
+    assert(proofTamperWrite.status === 200 && proofTamperWrite.json.ok, 'A normal owner state save should succeed without gaining control over provider proof fields.');
+    const proofTamperPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
+    assert(proofTamperPreflight.status === 200 && proofTamperPreflight.json.stripeWebhook.live === true && proofTamperPreflight.json.stripeWebhook.configurationMatched === true, 'A browser state write must not be able to alter signed Stripe webhook evidence.');
+    assert(proofTamperPreflight.json.documentStorageValidation && proofTamperPreflight.json.documentStorageValidation.verified === true && proofTamperPreflight.json.documentStorageValidation.configurationMatched === true && proofTamperPreflight.json.documentStorageValidation.fresh === true, 'A browser state write must not be able to alter private-storage validation evidence.');
 
     const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });
     assert(managerDisputeAction.status === 403, 'Manager must not change Clover dispute response status.');

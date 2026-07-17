@@ -6622,21 +6622,23 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const next = { ...(incoming || {}) };
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
-  const preserveStripe = !!priorStripe.lastWebhookConfigurationFingerprint;
-  const preserveDocumentStorage = !!priorDocumentStorage.lastValidationConfigurationFingerprint;
+  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError'];
+  const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
+  const preserveStripe = stripeProofFields.some(field => Object.prototype.hasOwnProperty.call(priorStripe, field));
+  const preserveDocumentStorage = documentStorageProofFields.some(field => Object.prototype.hasOwnProperty.call(priorDocumentStorage, field));
   if (!preserveStripe && !preserveDocumentStorage) return next;
   next.integrations = { ...((incoming && incoming.integrations) || {}) };
   if (preserveStripe) {
-    next.integrations.stripe = {
-      ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}),
-      lastWebhookConfigurationFingerprint: priorStripe.lastWebhookConfigurationFingerprint
-    };
+    next.integrations.stripe = { ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}) };
+    stripeProofFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(priorStripe, field)) next.integrations.stripe[field] = priorStripe[field];
+    });
   }
   if (preserveDocumentStorage) {
-    next.integrations.documentStorage = {
-      ...((incoming && incoming.integrations && incoming.integrations.documentStorage) || {}),
-      lastValidationConfigurationFingerprint: priorDocumentStorage.lastValidationConfigurationFingerprint
-    };
+    next.integrations.documentStorage = { ...((incoming && incoming.integrations && incoming.integrations.documentStorage) || {}) };
+    documentStorageProofFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(priorDocumentStorage, field)) next.integrations.documentStorage[field] = priorDocumentStorage[field];
+    });
   }
   return next;
 }
