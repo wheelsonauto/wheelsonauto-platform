@@ -197,6 +197,7 @@ class JsonStateRepository {
     // cannot loop through model requests, while PostgreSQL provides the durable
     // cross-request/cross-instance quota used in production.
     this.aiUsageReservations = new Map();
+    this.webhookEventClaims = new Map();
   }
 
   isTransactional() {
@@ -250,13 +251,33 @@ class JsonStateRepository {
     };
   }
 
-  async claimWebhookEvent(provider, eventId) {
-    return { accepted: true, duplicate: false, eventId: String(eventId || '') };
+  async claimWebhookEvent(provider, eventId, payload = {}) {
+    const normalizedEventId = String(eventId || '').trim();
+    if (!normalizedEventId) return { accepted: true, duplicate: false, eventId: '' };
+    const key = String(provider || '') + '|' + normalizedEventId;
+    const existing = this.webhookEventClaims.get(key);
+    if (existing && existing.status === 'processed') return { accepted: false, duplicate: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
+    if (existing && existing.status === 'processing') return { accepted: false, duplicate: true, inProgress: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
+    const attempts = Number(existing && existing.attempts || 0) + 1;
+    this.webhookEventClaims.set(key, { status: 'processing', attempts, payload: clone(payload || {}) });
+    return { accepted: true, duplicate: false, eventId: normalizedEventId, attempts };
   }
 
-  async completeWebhookEvent() {}
+  async completeWebhookEvent(provider, eventId) {
+    const normalizedEventId = String(eventId || '').trim();
+    if (!normalizedEventId) return;
+    const key = String(provider || '') + '|' + normalizedEventId;
+    const existing = this.webhookEventClaims.get(key) || {};
+    this.webhookEventClaims.set(key, { ...existing, status: 'processed', attempts: Number(existing.attempts || 1) });
+  }
 
-  async failWebhookEvent() {}
+  async failWebhookEvent(provider, eventId, error) {
+    const normalizedEventId = String(eventId || '').trim();
+    if (!normalizedEventId) return;
+    const key = String(provider || '') + '|' + normalizedEventId;
+    const existing = this.webhookEventClaims.get(key) || {};
+    this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), lastError: String(error && error.message || error || '').slice(0, 3000) });
+  }
 
   async recordJobError() {}
 
@@ -346,6 +367,7 @@ class PostgresStateRepository {
     this.seed = typeof options.seed === 'function' ? options.seed : async () => ({});
     this.repair = typeof options.repair === 'function' ? options.repair : value => value;
     this.snapshotLimit = Math.max(10, Math.min(1000, Number(options.snapshotLimit || 180)));
+    this.webhookProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.webhookProcessingLeaseMs || 10 * 60 * 1000)));
     this.pool = pgPool(options);
     this.schemaReady = null;
   }
@@ -406,10 +428,12 @@ class PostgresStateRepository {
           payload JSONB NOT NULL DEFAULT '{}'::jsonb,
           attempts INTEGER NOT NULL DEFAULT 0,
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           processed_at TIMESTAMPTZ,
           last_error TEXT NOT NULL DEFAULT '',
           PRIMARY KEY (provider, event_id)
         )`);
+        await client.query('ALTER TABLE woa_webhook_events ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now()');
         await client.query('CREATE INDEX IF NOT EXISTS woa_webhook_events_org_status_idx ON woa_webhook_events (organization_id, status, received_at DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_idempotency_keys (
           organization_id TEXT NOT NULL,
@@ -595,22 +619,32 @@ class PostgresStateRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const existing = await client.query('SELECT status, attempts FROM woa_webhook_events WHERE provider = $1 AND event_id = $2 FOR UPDATE', [provider, eventId]);
+      const existing = await client.query('SELECT status, attempts, processing_started_at FROM woa_webhook_events WHERE provider = $1 AND event_id = $2 FOR UPDATE', [provider, eventId]);
       if (existing.rowCount) {
         const row = existing.rows[0];
         if (row.status === 'processed') {
           await client.query('COMMIT');
-          return { accepted: false, duplicate: true, eventId };
+          return { accepted: false, duplicate: true, eventId, attempts: Number(row.attempts || 1) };
+        }
+        const processingStartedAt = new Date(row.processing_started_at || 0).getTime();
+        const activelyProcessing = row.status === 'processing'
+          && Number.isFinite(processingStartedAt)
+          && Date.now() - processingStartedAt < this.webhookProcessingLeaseMs;
+        if (activelyProcessing) {
+          await client.query('COMMIT');
+          return { accepted: false, duplicate: true, inProgress: true, eventId, attempts: Number(row.attempts || 1) };
         }
         await client.query(`UPDATE woa_webhook_events
-          SET status = 'processing', attempts = attempts + 1, payload = $3::jsonb, last_error = ''
+          SET status = 'processing', attempts = attempts + 1, payload = $3::jsonb, last_error = '', processing_started_at = now()
           WHERE provider = $1 AND event_id = $2`, [provider, eventId, JSON.stringify(payload || {})]);
+        await client.query('COMMIT');
+        return { accepted: true, duplicate: false, reclaimed: row.status === 'processing', eventId, attempts: Number(row.attempts || 0) + 1 };
       } else {
-        await client.query(`INSERT INTO woa_webhook_events (provider, event_id, organization_id, status, payload, attempts)
-          VALUES ($1, $2, $3, 'processing', $4::jsonb, 1)`, [provider, eventId, this.organizationId, JSON.stringify(payload || {})]);
+        await client.query(`INSERT INTO woa_webhook_events (provider, event_id, organization_id, status, payload, attempts, processing_started_at)
+          VALUES ($1, $2, $3, 'processing', $4::jsonb, 1, now())`, [provider, eventId, this.organizationId, JSON.stringify(payload || {})]);
       }
       await client.query('COMMIT');
-      return { accepted: true, duplicate: false, eventId };
+      return { accepted: true, duplicate: false, eventId, attempts: 1 };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;

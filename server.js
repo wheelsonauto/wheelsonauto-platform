@@ -14040,7 +14040,7 @@ function recordStripeRefundWebhookEvent(data, event = {}, object = {}) {
 }
 async function recordStripeWebhookEvent(event = {}) {
   const durableClaim = await STATE_REPOSITORY.claimWebhookEvent('stripe', event.id || '', { type: event.type || '', created: event.created || 0 });
-  if (!durableClaim.accepted) return { ok: true, received: false, duplicate: true, eventId: event.id || '' };
+  if (!durableClaim.accepted) return { ok: !durableClaim.inProgress, received: false, duplicate: true, retry: !!durableClaim.inProgress, inProgress: !!durableClaim.inProgress, eventId: event.id || '' };
   try {
   const data = await readData();
   data.integrations = data.integrations || {};
@@ -15191,7 +15191,8 @@ const server = http.createServer(async (req, res) => {
       let event;
       try { event = JSON.parse(rawBody || '{}'); } catch { return json(res, 400, { ok: false, error: 'Stripe webhook body must be valid JSON.' }); }
       try {
-        return json(res, 200, await recordStripeWebhookEvent(event));
+        const result = await recordStripeWebhookEvent(event);
+        return json(res, result.retry ? 503 : 200, result);
       } catch (err) {
         console.error('Stripe webhook processing failed:', err && err.message || err);
         return json(res, 500, { ok: false, error: 'Stripe webhook processing failed.' });

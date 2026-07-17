@@ -181,6 +181,10 @@ advisory lock. A second app process will skip the same run instead of starting
 a competing charge pass; the lock is released automatically if its database
 session ends unexpectedly.
 
+Stripe webhook events are also claimed durably. A duplicate received while the
+first copy is still processing gets a retry response instead of being processed
+twice; an expired processing lease can be reclaimed after a crash.
+
 ## 4. Configure Stripe Without Switching Everyone
 
 Store live keys only in Render:

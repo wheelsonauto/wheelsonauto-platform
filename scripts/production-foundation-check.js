@@ -19,6 +19,14 @@ async function main() {
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(jsonAutopayLock.acquired, true, 'The JSON development fallback should retain the in-process autopay lock contract.');
     await jsonAutopayLock.release();
+    const firstJsonWebhookClaim = await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' });
+    assert.strictEqual(firstJsonWebhookClaim.accepted, true, 'The first development webhook event should be claimable.');
+    const activeJsonWebhookDuplicate = await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' });
+    assert.strictEqual(activeJsonWebhookDuplicate.inProgress, true, 'An in-progress development webhook duplicate should not execute twice.');
+    await repository.failWebhookEvent('stripe', 'evt-foundation-1', new Error('retry test'));
+    assert.strictEqual((await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' })).accepted, true, 'A failed development webhook event should be retryable.');
+    await repository.completeWebhookEvent('stripe', 'evt-foundation-1');
+    assert.strictEqual((await repository.claimWebhookEvent('stripe', 'evt-foundation-1')).accepted, false, 'A completed development webhook event must remain deduplicated.');
     await assert.rejects(() => repository.recordMigrationProof({}), /cannot record a PostgreSQL import proof/i, 'The JSON development fallback must never pretend it recorded production migration evidence.');
     assert.strictEqual(stateRepository.checksum({ b: 2, a: { z: 3, y: 4 } }), stateRepository.checksum({ a: { y: 4, z: 3 }, b: 2 }), 'State checksums must be stable when a JSONB database changes object key order.');
     const intactState = { records: [{ id: 'checksum-foundation-1', status: 'intact' }] };
