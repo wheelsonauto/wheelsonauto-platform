@@ -5069,15 +5069,23 @@ function findLinkedFleetVehicle(data = {}, onlineVehicle = {}) {
   if (linkedId) return vehicles.find(vehicle => String(vehicle.id || '') === linkedId) || null;
   const onlineVin = normKey(onlineVehicle.vin);
   const onlinePlate = normKey(onlineVehicle.plate || onlineVehicle.licensePlate || onlineVehicle.tag || onlineVehicle.tempTag);
-  if (!onlineVin && !onlinePlate) return null;
-  const matches = vehicles.filter(vehicle => {
+  const sameOrganization = vehicle => {
     const vehicleOrg = String(vehicle.organizationId || '').trim();
     const onlineOrg = String(onlineVehicle.organizationId || '').trim();
-    if (vehicleOrg && onlineOrg && vehicleOrg !== onlineOrg) return false;
+    return !vehicleOrg || !onlineOrg || vehicleOrg === onlineOrg;
+  };
+  const matches = vehicles.filter(vehicle => {
+    if (!sameOrganization(vehicle)) return false;
     if (onlineVin && normKey(vehicle.vin) === onlineVin) return true;
     return !!(onlinePlate && [vehicle.plate, vehicle.licensePlate, vehicle.stock, vehicle.tempTag].map(normKey).includes(onlinePlate));
   });
-  return matches.length === 1 ? matches[0] : null;
+  if (matches.length === 1) return matches[0];
+  // Older Shopify/native listings sometimes have only a precise display title.
+  // Never use that weaker signal when a VIN/tag is present or when it is ambiguous.
+  const onlineTitle = normKey([onlineVehicle.year, onlineVehicle.make, onlineVehicle.model].filter(Boolean).join(' ') || onlineVehicle.title || onlineVehicle.name || onlineVehicle.vehicle);
+  if (onlineVin || onlinePlate || !onlineTitle) return null;
+  const titleMatches = vehicles.filter(vehicle => sameOrganization(vehicle) && normKey(vehicleNameFromParts(vehicle)) === onlineTitle);
+  return titleMatches.length === 1 ? titleMatches[0] : null;
 }
 function syncOnlineInventoryFromFleetAssignments(data = {}) {
   data.onlineVehicles = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
