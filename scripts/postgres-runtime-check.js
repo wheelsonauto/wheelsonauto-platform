@@ -71,6 +71,35 @@ async function main() {
     assert.strictEqual(reclaimedWebhookClaim.reclaimed, true, 'Expired PostgreSQL webhook recovery should be recorded as a reclaimed claim.');
     await competingRepository.completeWebhookEvent('stripe', staleWebhookEventId);
 
+    const idempotencyScope = 'stripe_recurring_charge';
+    const idempotencyKey = 'period:rec-postgres-runtime:2026-07-24';
+    const idempotencyRequest = { recurringPaymentId: 'rec-postgres-runtime', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };
+    const firstIdempotencyClaim = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
+    assert.strictEqual(firstIdempotencyClaim.accepted, true, 'The first PostgreSQL Stripe billing-period claim must be accepted.');
+    const activeIdempotencyDuplicate = await competingRepository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
+    assert.strictEqual(activeIdempotencyDuplicate.inProgress, true, 'A competing PostgreSQL worker must not charge the same billing period while the first worker is active.');
+    await assert.rejects(
+      () => competingRepository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 }),
+      error => error && error.code === 'woa_idempotency_request_mismatch',
+      'A PostgreSQL Stripe billing-period claim must reject a changed amount while the original request is protected.'
+    );
+    await repository.failIdempotencyKey(idempotencyScope, idempotencyKey, new Error('controlled decline'));
+    const retriedIdempotencyClaim = await competingRepository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
+    assert.strictEqual(retriedIdempotencyClaim.accepted, true, 'A terminal PostgreSQL Stripe decline must permit a corrected retry.');
+    assert.strictEqual(retriedIdempotencyClaim.retried, true, 'A corrected PostgreSQL Stripe retry must be marked as a retry.');
+    await competingRepository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_postgres_runtime_idempotency_1', status: 'succeeded' });
+    const completedIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
+    assert.strictEqual(completedIdempotencyDuplicate.completed, true, 'A completed PostgreSQL Stripe billing-period claim must remain deduplicated after a process handoff.');
+    assert.strictEqual(completedIdempotencyDuplicate.response.paymentIntentId, 'pi_postgres_runtime_idempotency_1', 'A completed PostgreSQL Stripe billing-period claim must keep its reconciliation response.');
+
+    const staleIdempotencyKey = 'period:rec-postgres-runtime-stale:2026-07-31';
+    assert.strictEqual((await repository.claimIdempotencyKey(idempotencyScope, staleIdempotencyKey, idempotencyRequest)).accepted, true, 'A PostgreSQL Stripe claim should be accepted before stale-lease recovery is tested.');
+    await repository.pool.query("UPDATE woa_idempotency_keys SET processing_started_at = now() - interval '15 minutes' WHERE organization_id = $1 AND scope = $2 AND key = $3", [organizationId, idempotencyScope, staleIdempotencyKey]);
+    const reclaimedIdempotencyClaim = await competingRepository.claimIdempotencyKey(idempotencyScope, staleIdempotencyKey, idempotencyRequest);
+    assert.strictEqual(reclaimedIdempotencyClaim.accepted, true, 'An expired PostgreSQL Stripe claim must be safely recoverable after a worker crash.');
+    assert.strictEqual(reclaimedIdempotencyClaim.reclaimed, true, 'Expired PostgreSQL Stripe claim recovery must be labeled as reclaimed.');
+    await competingRepository.failIdempotencyKey(idempotencyScope, staleIdempotencyKey, new Error('stale recovery cleanup'));
+
     const firstState = {
       vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1' }],
       customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com' }],
@@ -130,7 +159,7 @@ async function main() {
     assert.strictEqual(health.snapshotRecoveryReady, true, 'A production-ready PostgreSQL repository must expose a verified current recovery snapshot.');
     assert.strictEqual(health.migrationProofIntegrity, 'verified', 'The PostgreSQL import proof must retain the source-to-target checksum/count evidence.');
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
-    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, write, import proof, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
+    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, write, import proof, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await competingRepository.close();

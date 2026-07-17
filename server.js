@@ -13208,6 +13208,43 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
   });
   return payment;
 }
+function stripeRecurringChargeClaimKey(recurring, payload = {}, attempt = {}, scheduledDueKey = '') {
+  const recurringId = String(recurring && (recurring.id || recurring.cloverSubscriptionId) || payload.recurringPaymentId || 'recurring').trim();
+  if (payload.automatic !== true && payload.allowAdditionalManualCharge === true) {
+    return ['extra', recurringId, String(attempt.idempotencyKey || 'attempt')].join(':');
+  }
+  return ['period', recurringId, scheduledDueKey || String(attempt.idempotencyKey || 'unscheduled')].join(':');
+}
+function stripeRecurringChargeClaimRequest(recurring, payload = {}, attempt = {}, scheduledDueKey = '', amount = 0) {
+  return {
+    provider: 'stripe',
+    recurringPaymentId: String(recurring && (recurring.id || recurring.cloverSubscriptionId) || payload.recurringPaymentId || ''),
+    scheduledDueDate: String(scheduledDueKey || ''),
+    billingPeriodKey: String(attempt.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueKey)),
+    amountCents: cents(amount),
+    automatic: payload.automatic === true,
+    additionalManualCharge: payload.allowAdditionalManualCharge === true
+  };
+}
+function stripeIdempotencyPayment(data, idempotencyKey) {
+  return (data && Array.isArray(data.payments) ? data.payments : []).find(payment => {
+    return String(payment && payment.stripeIdempotencyKey || '') === String(idempotencyKey || '') && stripeMigration.paymentIsPaid(payment && payment.status);
+  }) || null;
+}
+async function failStripeRecurringChargeClaim(scope, key, error) {
+  try {
+    await STATE_REPOSITORY.failIdempotencyKey(scope, key, error);
+  } catch (claimError) {
+    await recordOperationalFailure('stripe-idempotency-release', claimError, { route: 'Stripe saved-card charge', recurringPaymentId: String(key || '').slice(0, 160) });
+  }
+}
+async function completeStripeRecurringChargeClaim(scope, key, response = {}) {
+  try {
+    await STATE_REPOSITORY.completeIdempotencyKey(scope, key, response);
+  } catch (claimError) {
+    await recordOperationalFailure('stripe-idempotency-complete', claimError, { route: 'Stripe saved-card charge', recurringPaymentId: String(key || '').slice(0, 160) });
+  }
+}
 async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
@@ -13225,7 +13262,39 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     await writeData(data);
   }
   const idempotencyKey = attempt.idempotencyKey;
+  // Resolve local vehicle/customer evidence before taking the durable money-action claim.
+  // A data conflict must not hold a billing period hostage until the stale-claim lease expires.
   const identity = recurringPaymentIdentity(data, recurring, payload);
+  const idempotencyScope = 'stripe_recurring_charge';
+  const idempotencyClaimKey = stripeRecurringChargeClaimKey(recurring, payload, attempt, scheduledDueKey);
+  const durableClaim = await STATE_REPOSITORY.claimIdempotencyKey(
+    idempotencyScope,
+    idempotencyClaimKey,
+    stripeRecurringChargeClaimRequest(recurring, payload, attempt, scheduledDueKey, amount)
+  );
+  if (!durableClaim.accepted) {
+    const latest = await readData().catch(() => data);
+    const recorded = stripeIdempotencyPayment(latest, idempotencyKey) || stripeIdempotencyPayment(data, idempotencyKey);
+    if (durableClaim.completed && recorded) {
+      const currentRecurring = findRecurringRow(latest, recurring.id || recurring.cloverSubscriptionId) || recurring;
+      return {
+        charge: {
+          id: recorded.stripePaymentIntentId || '',
+          latest_charge: recorded.stripeChargeId || '',
+          status: 'succeeded',
+          customer: recorded.customer || recurring.customer || ''
+        },
+        payment: recorded,
+        recurring: currentRecurring,
+        duplicate: true
+      };
+    }
+    throw stripeConfirmationPendingError({
+      providerError: durableClaim.completed
+        ? 'WheelsonAuto already completed this protected Stripe charge and is waiting for its saved payment record to refresh.'
+        : 'Another WheelsonAuto worker is already processing this protected Stripe billing period.'
+    }, attempt);
+  }
   let intent;
   try {
     intent = await stripe.createPaymentIntent({
@@ -13274,6 +13343,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         authenticationRequiredAt: new Date().toISOString(),
         providerError: String(error && (error.providerError || error.message) || '').slice(0, 500)
       });
+      await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error);
       throw stripeAuthenticationRequiredError(error, protectedAttempt, error && error.paymentIntent);
     }
     updateStripeChargeAttempt(data, recurring, attempt, {
@@ -13282,6 +13352,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
       paymentIntentId: stripeObjectId(error && error.paymentIntent),
       providerError: String(error && error.message || error).slice(0, 500)
     });
+    await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error);
     throw error;
   }
   const paid = String(intent.status || '').toLowerCase() === 'succeeded';
@@ -13314,6 +13385,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         authenticationRequiredAt: new Date().toISOString(),
         providerError: String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe requires customer authentication.')
       });
+      await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, intent);
       throw stripeAuthenticationRequiredError(intent, protectedAttempt, intent);
     }
     updateStripeChargeAttempt(data, recurring, attempt, {
@@ -13325,6 +13397,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     const error = new Error('Stripe returned ' + String(intent.status || 'an unconfirmed payment result') + '. The next charge date was not advanced.');
     error.code = 'stripe_' + String(intent.status || 'unconfirmed');
     error.paymentIntent = intent;
+    await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error);
     throw error;
   }
   const paymentAt = new Date(Number(intent.created || 0) * 1000 || Date.now());
@@ -13405,6 +13478,13 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
   });
   updateRecurringChargeState(data, recurring.id, patch);
   await writeData(data);
+  await completeStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, {
+    paymentIntentId: intent.id || '',
+    chargeId,
+    recurringPaymentId: recurring.id || '',
+    billingPeriodKey,
+    status: 'succeeded'
+  });
   return { charge: intent, payment, recurring };
 }
 async function chargeSavedRecurringCard(data, payload, req) {

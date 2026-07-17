@@ -29,6 +29,26 @@ async function main() {
     assert.strictEqual((await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' })).accepted, true, 'A failed development webhook event should be retryable.');
     await repository.completeWebhookEvent('stripe', 'evt-foundation-1');
     assert.strictEqual((await repository.claimWebhookEvent('stripe', 'evt-foundation-1')).accepted, false, 'A completed development webhook event must remain deduplicated.');
+    const idempotencyScope = 'stripe_recurring_charge';
+    const idempotencyKey = 'period:rec-foundation-1:2026-07-24';
+    const idempotencyRequest = { recurringPaymentId: 'rec-foundation-1', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };
+    const firstJsonIdempotencyClaim = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
+    assert.strictEqual(firstJsonIdempotencyClaim.accepted, true, 'The first local Stripe billing-period claim must be accepted.');
+    const activeJsonIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
+    assert.strictEqual(activeJsonIdempotencyDuplicate.inProgress, true, 'A concurrent local Stripe billing-period claim must remain protected while the first request is processing.');
+    await assert.rejects(
+      () => repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 }),
+      error => error && error.code === 'woa_idempotency_request_mismatch',
+      'A protected Stripe billing period must reject a changed amount until the first request reaches a terminal state.'
+    );
+    await repository.failIdempotencyKey(idempotencyScope, idempotencyKey, new Error('controlled decline'));
+    const retryJsonIdempotencyClaim = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
+    assert.strictEqual(retryJsonIdempotencyClaim.accepted, true, 'A terminal local Stripe decline must allow a deliberate corrected retry.');
+    assert.strictEqual(retryJsonIdempotencyClaim.retried, true, 'A corrected local Stripe retry must be labeled as a retry.');
+    await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_foundation_idempotency_1', status: 'succeeded' });
+    const completedJsonIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
+    assert.strictEqual(completedJsonIdempotencyDuplicate.completed, true, 'A completed local Stripe billing-period claim must be permanently deduplicated.');
+    assert.strictEqual(completedJsonIdempotencyDuplicate.response.paymentIntentId, 'pi_foundation_idempotency_1', 'A completed local Stripe billing-period claim must retain its reconciliation result.');
     await assert.rejects(() => repository.recordMigrationProof({}), /cannot record a PostgreSQL import proof/i, 'The JSON development fallback must never pretend it recorded production migration evidence.');
     assert.strictEqual(stateRepository.checksum({ b: 2, a: { z: 3, y: 4 } }), stateRepository.checksum({ a: { y: 4, z: 3 }, b: 2 }), 'State checksums must be stable when a JSONB database changes object key order.');
     const intactState = { records: [{ id: 'checksum-foundation-1', status: 'intact' }] };
@@ -131,7 +151,7 @@ async function main() {
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
 
-    console.log('Production foundation check passed: atomic state fallback, migration-proof guard, checksum fail-closed behavior, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
+    console.log('Production foundation check passed: atomic state fallback, durable money-action idempotency, migration-proof guard, checksum fail-closed behavior, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

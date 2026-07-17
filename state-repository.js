@@ -21,6 +21,31 @@ function checksum(value) {
   return crypto.createHash('sha256').update(stableJson(value || {}), 'utf8').digest('hex');
 }
 
+function idempotencyRequestHash(request = {}) {
+  return checksum(request && typeof request === 'object' ? request : { value: request });
+}
+
+function idempotencyScopeKey(scope, key) {
+  const normalizedScope = String(scope || '').trim().slice(0, 120);
+  const normalizedKey = String(key || '').trim().slice(0, 255);
+  if (!normalizedScope || !normalizedKey) {
+    const error = new Error('A durable idempotency scope and key are required before a money action can run.');
+    error.code = 'woa_idempotency_key_required';
+    error.statusCode = 400;
+    throw error;
+  }
+  return { scope: normalizedScope, key: normalizedKey };
+}
+
+function idempotencyRequestMismatchError(scope, key) {
+  const error = new Error('This billing action is already protected by a different request. Do not change the amount, customer, or card while the original charge is pending or completed.');
+  error.code = 'woa_idempotency_request_mismatch';
+  error.statusCode = 409;
+  error.scope = String(scope || '');
+  error.key = String(key || '');
+  return error;
+}
+
 function checksumEvidence(value, expectedChecksum) {
   const expected = String(expectedChecksum || '').trim();
   const actual = checksum(value);
@@ -198,6 +223,9 @@ class JsonStateRepository {
     // cross-request/cross-instance quota used in production.
     this.aiUsageReservations = new Map();
     this.webhookEventClaims = new Map();
+    this.idempotencyClaims = new Map();
+    this.idempotencyProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.idempotencyProcessingLeaseMs || 10 * 60 * 1000)));
+    this.idempotencyClaimLimit = Math.max(100, Math.min(5000, Number(options.idempotencyClaimLimit || 1000)));
     this.jobErrorFile = options.jobErrorFile || (this.dataFile ? this.dataFile + '.job-errors.json' : '');
     this.jobErrorLimit = Math.max(10, Math.min(250, Number(options.jobErrorLimit || 80)));
     this.jobErrorWrite = Promise.resolve();
@@ -280,6 +308,85 @@ class JsonStateRepository {
     const key = String(provider || '') + '|' + normalizedEventId;
     const existing = this.webhookEventClaims.get(key) || {};
     this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), lastError: String(error && error.message || error || '').slice(0, 3000) });
+  }
+
+  pruneIdempotencyClaims() {
+    if (this.idempotencyClaims.size <= this.idempotencyClaimLimit) return;
+    const removable = [...this.idempotencyClaims.entries()]
+      .filter(([, claim]) => claim.status === 'completed' || claim.status === 'failed')
+      .sort(([, left], [, right]) => String(left.updatedAt || left.createdAt || '').localeCompare(String(right.updatedAt || right.createdAt || '')));
+    while (this.idempotencyClaims.size > this.idempotencyClaimLimit && removable.length) {
+      this.idempotencyClaims.delete(removable.shift()[0]);
+    }
+  }
+
+  async claimIdempotencyKey(scope, key, request = {}, options = {}) {
+    const identity = idempotencyScopeKey(scope, key);
+    const requestHash = String(options.requestHash || idempotencyRequestHash(request));
+    const mapKey = [this.organizationId, identity.scope, identity.key].join('|');
+    const now = new Date().toISOString();
+    const existing = this.idempotencyClaims.get(mapKey);
+    if (existing) {
+      if (existing.requestHash && requestHash && existing.requestHash !== requestHash && existing.status !== 'failed') {
+        throw idempotencyRequestMismatchError(identity.scope, identity.key);
+      }
+      if (existing.status === 'completed') {
+        return { accepted: false, duplicate: true, completed: true, scope: identity.scope, key: identity.key, attempts: Number(existing.attempts || 1), response: clone(existing.response || {}) };
+      }
+      const startedAt = Date.parse(existing.processingStartedAt || existing.updatedAt || existing.createdAt || 0);
+      const active = existing.status === 'claimed' && Number.isFinite(startedAt) && Date.now() - startedAt < this.idempotencyProcessingLeaseMs;
+      if (active) {
+        return { accepted: false, duplicate: true, inProgress: true, scope: identity.scope, key: identity.key, attempts: Number(existing.attempts || 1) };
+      }
+      const next = {
+        ...existing,
+        status: 'claimed',
+        requestHash,
+        attempts: Number(existing.attempts || 0) + 1,
+        processingStartedAt: now,
+        updatedAt: now,
+        lastError: '',
+        response: null
+      };
+      this.idempotencyClaims.set(mapKey, next);
+      return { accepted: true, duplicate: false, reclaimed: existing.status === 'claimed', retried: existing.status === 'failed', scope: identity.scope, key: identity.key, attempts: next.attempts };
+    }
+    this.idempotencyClaims.set(mapKey, {
+      status: 'claimed',
+      requestHash,
+      attempts: 1,
+      response: null,
+      lastError: '',
+      createdAt: now,
+      updatedAt: now,
+      processingStartedAt: now
+    });
+    this.pruneIdempotencyClaims();
+    return { accepted: true, duplicate: false, scope: identity.scope, key: identity.key, attempts: 1 };
+  }
+
+  async completeIdempotencyKey(scope, key, response = {}) {
+    const identity = idempotencyScopeKey(scope, key);
+    const mapKey = [this.organizationId, identity.scope, identity.key].join('|');
+    const existing = this.idempotencyClaims.get(mapKey);
+    if (!existing) throw new Error('The durable idempotency claim was not found while completing the money action.');
+    const now = new Date().toISOString();
+    this.idempotencyClaims.set(mapKey, { ...existing, status: 'completed', response: clone(response || {}), completedAt: now, updatedAt: now, lastError: '' });
+    this.pruneIdempotencyClaims();
+  }
+
+  async failIdempotencyKey(scope, key, error) {
+    const identity = idempotencyScopeKey(scope, key);
+    const mapKey = [this.organizationId, identity.scope, identity.key].join('|');
+    const existing = this.idempotencyClaims.get(mapKey);
+    if (!existing) return;
+    this.idempotencyClaims.set(mapKey, {
+      ...existing,
+      status: 'failed',
+      lastError: String(error && error.message || error || '').slice(0, 3000),
+      updatedAt: new Date().toISOString()
+    });
+    this.pruneIdempotencyClaims();
   }
 
   async readJobErrors() {
@@ -414,6 +521,7 @@ class PostgresStateRepository {
     this.repair = typeof options.repair === 'function' ? options.repair : value => value;
     this.snapshotLimit = Math.max(10, Math.min(1000, Number(options.snapshotLimit || 180)));
     this.webhookProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.webhookProcessingLeaseMs || 10 * 60 * 1000)));
+    this.idempotencyProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.idempotencyProcessingLeaseMs || 10 * 60 * 1000)));
     this.pool = pgPool(options);
     this.schemaReady = null;
   }
@@ -488,10 +596,19 @@ class PostgresStateRepository {
           request_hash TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'claimed',
           response JSONB,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          last_error TEXT NOT NULL DEFAULT '',
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           completed_at TIMESTAMPTZ,
           PRIMARY KEY (organization_id, scope, key)
         )`);
+        await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now()');
+        await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT \'\'');
+        await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_idempotency_keys_claim_idx ON woa_idempotency_keys (organization_id, status, processing_started_at DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_identity_index (
           organization_id TEXT NOT NULL,
           kind TEXT NOT NULL,
@@ -711,6 +828,70 @@ class PostgresStateRepository {
     await this.ensureSchema();
     await this.pool.query(`UPDATE woa_webhook_events
       SET status = 'failed', last_error = $3 WHERE provider = $1 AND event_id = $2`, [provider, eventId, String(error && error.message || error || '').slice(0, 3000)]);
+  }
+
+  async claimIdempotencyKey(scope, key, request = {}, options = {}) {
+    const identity = idempotencyScopeKey(scope, key);
+    const requestHash = String(options.requestHash || idempotencyRequestHash(request));
+    await this.ensureSchema();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const existing = await client.query(`SELECT request_hash, status, response, attempts, processing_started_at
+        FROM woa_idempotency_keys
+        WHERE organization_id = $1 AND scope = $2 AND key = $3
+        FOR UPDATE`, [this.organizationId, identity.scope, identity.key]);
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        const status = String(row.status || 'claimed');
+        const existingHash = String(row.request_hash || '');
+        if (existingHash && requestHash && existingHash !== requestHash && status !== 'failed') throw idempotencyRequestMismatchError(identity.scope, identity.key);
+        if (status === 'completed') {
+          await client.query('COMMIT');
+          return { accepted: false, duplicate: true, completed: true, scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 1), response: clone(row.response || {}) };
+        }
+        const startedAt = new Date(row.processing_started_at || 0).getTime();
+        const active = status === 'claimed' && Number.isFinite(startedAt) && Date.now() - startedAt < this.idempotencyProcessingLeaseMs;
+        if (active) {
+          await client.query('COMMIT');
+          return { accepted: false, duplicate: true, inProgress: true, scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 1) };
+        }
+        await client.query(`UPDATE woa_idempotency_keys
+          SET request_hash = $4, status = 'claimed', response = NULL, attempts = attempts + 1,
+            processing_started_at = now(), last_error = '', updated_at = now(), completed_at = NULL
+          WHERE organization_id = $1 AND scope = $2 AND key = $3`, [this.organizationId, identity.scope, identity.key, requestHash]);
+        await client.query('COMMIT');
+        return { accepted: true, duplicate: false, reclaimed: status === 'claimed', retried: status === 'failed', scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 0) + 1 };
+      }
+      await client.query(`INSERT INTO woa_idempotency_keys (
+        organization_id, scope, key, request_hash, status, attempts, processing_started_at, updated_at
+      ) VALUES ($1, $2, $3, $4, 'claimed', 1, now(), now())`, [this.organizationId, identity.scope, identity.key, requestHash]);
+      await client.query('COMMIT');
+      return { accepted: true, duplicate: false, scope: identity.scope, key: identity.key, attempts: 1 };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async completeIdempotencyKey(scope, key, response = {}) {
+    const identity = idempotencyScopeKey(scope, key);
+    await this.ensureSchema();
+    const result = await this.pool.query(`UPDATE woa_idempotency_keys
+      SET status = 'completed', response = $4::jsonb, completed_at = now(), updated_at = now(), last_error = ''
+      WHERE organization_id = $1 AND scope = $2 AND key = $3
+      RETURNING attempts`, [this.organizationId, identity.scope, identity.key, JSON.stringify(response || {})]);
+    if (!result.rowCount) throw new Error('The durable idempotency claim was not found while completing the money action.');
+  }
+
+  async failIdempotencyKey(scope, key, error) {
+    const identity = idempotencyScopeKey(scope, key);
+    await this.ensureSchema();
+    await this.pool.query(`UPDATE woa_idempotency_keys
+      SET status = 'failed', last_error = $4, updated_at = now()
+      WHERE organization_id = $1 AND scope = $2 AND key = $3`, [this.organizationId, identity.scope, identity.key, String(error && error.message || error || '').slice(0, 3000)]);
   }
 
   async recordJobError(source, error, context = {}, severity = 'error') {
@@ -1112,6 +1293,7 @@ module.exports = {
   clone,
   stableJson,
   checksum,
+  idempotencyRequestHash,
   checksumEvidence,
   assertChecksum,
   recoverySnapshotEvidence,

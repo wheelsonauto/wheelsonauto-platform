@@ -94,7 +94,12 @@ async function run() {
     'stripeCardAuthenticationSetupNeeded',
     'payment_intent.requires_action',
     'stripeAutopayChargeSequence',
-    'saveStripeAuthenticationRequiredResult'
+    'saveStripeAuthenticationRequiredResult',
+    'claimIdempotencyKey',
+    'stripe_recurring_charge',
+    'stripeRecurringChargeClaimKey',
+    'completeStripeRecurringChargeClaim',
+    'failStripeRecurringChargeClaim'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   assert(app.includes('id="rPaymentProvider"'), 'Admin recurring setup must expose a Clover/Stripe provider choice.');
   assert(app.includes("r.stripeCustomerId&&r.stripePaymentMethodId"), 'Admin charge readiness must recognize only complete Stripe saved-card records.');
