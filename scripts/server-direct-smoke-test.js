@@ -169,6 +169,11 @@ async function main() {
   process.env.WOA_BILLING_WEBHOOK_SECRET = 'direct-billing-secret';
   process.env.RESEND_API_KEY = 'direct-resend-key';
   process.env.RESEND_WEBHOOK_SECRET = 'whsec_' + Buffer.from('direct-resend-webhook-key').toString('base64');
+  process.env.WOA_EMAIL_PROVIDER = 'resend';
+  process.env.WOA_EMAIL_FROM = 'alerts@wheelsonauto.example';
+  process.env.WOA_EMAIL_OWNER_NOTIFY = 'owner-alerts@example.com';
+  process.env.WOA_ERROR_ALERTS_ENABLED = '1';
+  process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = String(30 * 24 * 60 * 60 * 1000);
   process.env.WOA_DOCUMENT_STORAGE_PROVIDER = 'local';
   process.env.WOA_DOCUMENT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
   delete require.cache[require.resolve('../server.js')];
@@ -203,9 +208,26 @@ async function main() {
     stripeLiveWebhookEvidence,
     documentStorageConfigurationFingerprint,
     privateDocumentStorageEvidence,
+    operationalAlertConfigurationFingerprint,
+    operationalAlertEvidence,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
+  const providerEmailFetch = global.fetch;
+  let providerEmailSequence = 0;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('api.resend.com/emails')) {
+      providerEmailSequence += 1;
+      const id = 'direct-resend-outbound-' + providerEmailSequence;
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { id }; },
+        async text() { return JSON.stringify({ id }); }
+      };
+    }
+    return providerEmailFetch(url, options);
+  };
 
   try {
     assert(calendarDayName('2026-07-10') === 'Friday', 'Calendar-only autopay dates must not shift to Thursday through UTC parsing.');
@@ -1204,6 +1226,69 @@ async function main() {
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
     const managerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: managerCookie, json: {} });
     assert(managerStorageValidation.status === 403, 'Manager must not validate the private production document-storage provider.');
+    const managerOperationalAlertValidation = await request(server, 'POST', '/api/system/infrastructure/operational-alerts/validate', { cookie: managerCookie, json: {} });
+    assert(managerOperationalAlertValidation.status === 403, 'Manager must not validate operational failure alerts.');
+    const operationalAlertFetch = global.fetch;
+    const operationalAlertCalls = [];
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('api.resend.com/emails')) {
+        operationalAlertCalls.push({ url: String(url), options });
+        return {
+          ok: true,
+          status: 200,
+          async json() { return { id: 'direct-operational-alert-001' }; },
+          async text() { return JSON.stringify({ id: 'direct-operational-alert-001' }); }
+        };
+      }
+      return operationalAlertFetch(url, options);
+    };
+    let ownerOperationalAlertValidation;
+    try {
+      ownerOperationalAlertValidation = await request(server, 'POST', '/api/system/infrastructure/operational-alerts/validate', { cookie: ownerCookie, json: {} });
+    } finally {
+      global.fetch = operationalAlertFetch;
+    }
+    assert(ownerOperationalAlertValidation.status === 200 && ownerOperationalAlertValidation.json.ok && ownerOperationalAlertValidation.json.operationalAlerts && ownerOperationalAlertValidation.json.operationalAlerts.live === true, 'Owner operational-alert validation must prove a real provider handoff tied to the active email configuration.');
+    assert(operationalAlertCalls.length === 1 && String(operationalAlertCalls[0].options.body || '').includes('operational-alert delivery test'), 'Operational-alert validation must send the controlled owner test through the configured email provider.');
+    const operationalAlertState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(operationalAlertState.status === 200 && operationalAlertState.json.integrations && operationalAlertState.json.integrations.notifications && !Object.prototype.hasOwnProperty.call(operationalAlertState.json.integrations.notifications, 'lastOperationalAlertConfigurationFingerprint'), 'Operational alert configuration proof must stay server-only even in owner state responses.');
+    const operationalAlertFingerprint = operationalAlertConfigurationFingerprint({ integrations: { notifications: { emailRecipients: ['owner-alerts@example.com'] } } });
+    const currentOperationalAlertEvidence = operationalAlertEvidence({
+      integrations: {
+        notifications: {
+          emailRecipients: ['owner-alerts@example.com'],
+          lastOperationalAlertAt: new Date().toISOString(),
+          lastOperationalAlertSuccess: true,
+          lastOperationalAlertExternalId: 'direct-operational-alert-proof',
+          lastOperationalAlertConfigurationFingerprint: operationalAlertFingerprint
+        }
+      }
+    });
+    assert(currentOperationalAlertEvidence.live === true, 'A current provider delivery test bound to the active alert configuration must satisfy the failure-alert launch gate.');
+    const staleOperationalAlertEvidence = operationalAlertEvidence({
+      integrations: {
+        notifications: {
+          emailRecipients: ['owner-alerts@example.com'],
+          lastOperationalAlertAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
+          lastOperationalAlertSuccess: true,
+          lastOperationalAlertExternalId: 'direct-operational-alert-proof',
+          lastOperationalAlertConfigurationFingerprint: operationalAlertFingerprint
+        }
+      }
+    });
+    assert(staleOperationalAlertEvidence.live === false && staleOperationalAlertEvidence.fresh === false && /stale/i.test(staleOperationalAlertEvidence.error), 'A stale operational-alert proof must fail closed before the live Stripe launch.');
+    const changedOperationalAlertEvidence = operationalAlertEvidence({
+      integrations: {
+        notifications: {
+          emailRecipients: ['owner-alerts@example.com'],
+          lastOperationalAlertAt: new Date().toISOString(),
+          lastOperationalAlertSuccess: true,
+          lastOperationalAlertExternalId: 'direct-operational-alert-proof',
+          lastOperationalAlertConfigurationFingerprint: 'old-email-configuration'
+        }
+      }
+    });
+    assert(changedOperationalAlertEvidence.live === false && changedOperationalAlertEvidence.configurationMatched === false && /older or unknown/i.test(changedOperationalAlertEvidence.error), 'Changing email/provider/recipient configuration must require a fresh operational-alert test.');
     const ownerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: ownerCookie, json: {} });
     assert(ownerStorageValidation.status === 200 && ownerStorageValidation.json.ok && ownerStorageValidation.json.result && ownerStorageValidation.json.result.encrypted && ownerStorageValidation.json.result.objectDeleted, 'Owner private document-storage validation must prove encrypted write, read, and cleanup.');
     assert(ownerStorageValidation.json.documentStorageValidation && ownerStorageValidation.json.documentStorageValidation.verified === true && ownerStorageValidation.json.documentStorageValidation.configurationMatched === true && ownerStorageValidation.json.documentStorageValidation.fresh === true && ownerStorageValidation.json.documentStorageValidation.live === false, 'Development-local storage validation may prove I/O but must never masquerade as live private object storage.');
@@ -1331,11 +1416,13 @@ async function main() {
     proofTamperState.integrations = proofTamperState.integrations || {};
     proofTamperState.integrations.stripe = { ...(proofTamperState.integrations.stripe || {}), lastWebhookAt: '2099-01-01T00:00:00.000Z', lastWebhookLivemode: false, lastWebhookError: 'Browser override attempt' };
     proofTamperState.integrations.documentStorage = { ...(proofTamperState.integrations.documentStorage || {}), lastValidationAt: '2099-01-01T00:00:00.000Z', lastValidationSuccess: false, lastValidationError: 'Browser override attempt' };
+    proofTamperState.integrations.notifications = { ...(proofTamperState.integrations.notifications || {}), lastOperationalAlertAt: '2099-01-01T00:00:00.000Z', lastOperationalAlertSuccess: false, lastOperationalAlertError: 'Browser override attempt' };
     const proofTamperWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: proofTamperState });
     assert(proofTamperWrite.status === 200 && proofTamperWrite.json.ok, 'A normal owner state save should succeed without gaining control over provider proof fields.');
     const proofTamperPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
     assert(proofTamperPreflight.status === 200 && proofTamperPreflight.json.stripeWebhook.live === true && proofTamperPreflight.json.stripeWebhook.configurationMatched === true, 'A browser state write must not be able to alter signed Stripe webhook evidence.');
     assert(proofTamperPreflight.json.documentStorageValidation && proofTamperPreflight.json.documentStorageValidation.verified === true && proofTamperPreflight.json.documentStorageValidation.configurationMatched === true && proofTamperPreflight.json.documentStorageValidation.fresh === true, 'A browser state write must not be able to alter private-storage validation evidence.');
+    assert(proofTamperPreflight.json.operationalAlerts && proofTamperPreflight.json.operationalAlerts.live === true && proofTamperPreflight.json.operationalAlerts.configurationMatched === true, 'A browser state write must not be able to alter verified operational-alert evidence.');
 
     const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });
     assert(managerDisputeAction.status === 403, 'Manager must not change Clover dispute response status.');
@@ -2994,6 +3081,7 @@ async function main() {
 
     console.log('Direct server smoke passed: login, customer portal privacy/logout, company accounts, duplicate guards, dispute matching, state repair, public application, role filters, SMS/email messages, email notifications, autopay failure tracking, inbound email webhook, Star email approval, and staff permissions.');
   } finally {
+    global.fetch = providerEmailFetch;
     try { server.close(); } catch (_) {}
     await fs.rm(dataDir, { recursive: true, force: true });
   }

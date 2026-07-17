@@ -3072,7 +3072,7 @@ var __woaSystemHealthStorageBase=systemHealthPanel;
 systemHealthPanel=function(){
   var html=__woaSystemHealthStorageBase();
   if(roleName()!=='owner')return html;
-  return html.replace('<button class="btn gold" data-action="check-system-readiness">Check readiness</button>','<div class="actions"><button class="btn gold" data-action="check-system-readiness">Check readiness</button><button class="btn" data-action="validate-document-storage">Validate private storage</button></div>');
+  return html.replace('<button class="btn gold" data-action="check-system-readiness">Check readiness</button>','<div class="actions"><button class="btn gold" data-action="check-system-readiness">Check readiness</button><button class="btn" data-action="validate-document-storage">Validate private storage</button><button class="btn" data-action="validate-operational-alerts">Test failure alerts</button></div>');
 };
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="validate-document-storage"]');
@@ -3087,6 +3087,20 @@ document.addEventListener('click',async function(event){
   button.classList.remove('is-loading');
   if(result&&result.ok){await refreshData(true);notify(result.message||'Private storage validation passed');return}
   notify(result&&result.error||'Private storage validation failed');
+},true);
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="validate-operational-alerts"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if(roleName()!=='owner'){notify('Only the owner can test failure alerts');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  var result=await post('/api/system/infrastructure/operational-alerts/validate',{});
+  button.disabled=false;
+  button.classList.remove('is-loading');
+  if(result&&result.ok){await refreshData(true);notify(result.message||'Operational failure alerts passed');return}
+  notify(result&&result.error||'Operational failure alert test failed');
 },true);
 
 function customerFileLargeNoteContext(){

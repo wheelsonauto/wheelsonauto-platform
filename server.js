@@ -148,6 +148,7 @@ const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_R
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
+const WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const operationalErrorAlerts = new Map();
 const STATE_REPOSITORY = stateRepository.createStateRepository({
   backend: WOA_DATA_BACKEND,
@@ -858,11 +859,14 @@ function messageSettings(data = {}) {
 }
 function emailNotificationSettings(data = {}) {
   const saved = (((data.integrations || {}).notifications) || {});
-  const recipients = Array.isArray(saved.emailRecipients) ? saved.emailRecipients : String(saved.emailRecipients || saved.emailTo || '').split(',');
+  const rawRecipients = Array.isArray(saved.emailRecipients) ? saved.emailRecipients : String(saved.emailRecipients || saved.emailTo || '').split(',');
+  const recipients = rawRecipients.map(item => String(item || '').trim()).filter(Boolean);
+  if (!recipients.length && WOA_EMAIL_OWNER_NOTIFY) recipients.push(WOA_EMAIL_OWNER_NOTIFY);
+  const defaultEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message', 'system_error'];
   return {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
-    emailRecipients: recipients.map(item => String(item || '').trim()).filter(Boolean),
-    events: Array.isArray(saved.events) && saved.events.length ? saved.events : ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message'],
+    emailRecipients: Array.from(new Set(recipients.map(item => item.toLowerCase()))),
+    events: Array.isArray(saved.events) && saved.events.length ? saved.events : defaultEvents,
     lastTestAt: saved.lastTestAt || '',
     lastError: saved.lastError || ''
   };
@@ -873,6 +877,24 @@ function emailProviderConfigured(provider) {
   if (name === 'resend') return !!RESEND_API_KEY;
   if (name === 'sendgrid') return !!SENDGRID_API_KEY;
   return false;
+}
+function operationalAlertConfiguration(data = {}) {
+  const settings = emailNotificationSettings(data);
+  const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
+  const recipients = settings.emailRecipients.map(value => String(value || '').trim().toLowerCase()).filter(Boolean).sort();
+  const events = Array.from(new Set((settings.events || []).map(value => String(value || '').trim()).filter(Boolean))).sort();
+  const systemErrorEventEnabled = events.includes('system_error');
+  const emailConfigured = emailProviderConfigured(provider);
+  return {
+    provider,
+    recipients,
+    events,
+    emailConfigured,
+    alertsEnabled: WOA_ERROR_ALERTS_ENABLED,
+    emailEnabled: settings.emailEnabled,
+    systemErrorEventEnabled,
+    configured: !!(WOA_ERROR_ALERTS_ENABLED && settings.emailEnabled && emailConfigured && recipients.length && systemErrorEventEnabled)
+  };
 }
 function telnyxCarrierReadiness(data = {}, provider = '') {
   if (String(provider || '').toLowerCase() !== 'telnyx') {
@@ -6700,11 +6722,14 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const next = { ...(incoming || {}) };
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
+  const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
+  const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const preserveStripe = stripeProofFields.some(field => Object.prototype.hasOwnProperty.call(priorStripe, field));
   const preserveDocumentStorage = documentStorageProofFields.some(field => Object.prototype.hasOwnProperty.call(priorDocumentStorage, field));
-  if (!preserveStripe && !preserveDocumentStorage) return next;
+  const preserveOperationalAlerts = operationalAlertProofFields.some(field => Object.prototype.hasOwnProperty.call(priorNotifications, field));
+  if (!preserveStripe && !preserveDocumentStorage && !preserveOperationalAlerts) return next;
   next.integrations = { ...((incoming && incoming.integrations) || {}) };
   if (preserveStripe) {
     next.integrations.stripe = { ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}) };
@@ -6716,6 +6741,12 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
     next.integrations.documentStorage = { ...((incoming && incoming.integrations && incoming.integrations.documentStorage) || {}) };
     documentStorageProofFields.forEach(field => {
       if (Object.prototype.hasOwnProperty.call(priorDocumentStorage, field)) next.integrations.documentStorage[field] = priorDocumentStorage[field];
+    });
+  }
+  if (preserveOperationalAlerts) {
+    next.integrations.notifications = { ...((incoming && incoming.integrations && incoming.integrations.notifications) || {}) };
+    operationalAlertProofFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(priorNotifications, field)) next.integrations.notifications[field] = priorNotifications[field];
     });
   }
   return next;
@@ -6734,6 +6765,7 @@ function redactStaffSecrets(data) {
   }
   if (safe.integrations && safe.integrations.stripe) delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
   if (safe.integrations && safe.integrations.documentStorage) delete safe.integrations.documentStorage.lastValidationConfigurationFingerprint;
+  if (safe.integrations && safe.integrations.notifications) delete safe.integrations.notifications.lastOperationalAlertConfigurationFingerprint;
   return safe;
 }
 function scrubOrganizationProviderProfile(organization) {
@@ -8328,12 +8360,66 @@ function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STO
     error
   };
 }
+function operationalAlertConfigurationFingerprint(data = {}) {
+  const configuration = operationalAlertConfiguration(data);
+  const material = [
+    configuration.provider,
+    configuration.alertsEnabled ? '1' : '0',
+    configuration.emailEnabled ? '1' : '0',
+    configuration.systemErrorEventEnabled ? '1' : '0',
+    configuration.recipients.join(','),
+    configuration.events.join(','),
+    WOA_ERROR_ALERT_WINDOW_MS,
+    WOA_EMAIL_FROM,
+    WOA_EMAIL_REPLY_TO,
+    WOA_EMAIL_OWNER_NOTIFY,
+    RESEND_API_KEY,
+    SENDGRID_API_KEY
+  ].join('\u0000');
+  return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(material).digest('hex');
+}
+function operationalAlertEvidence(data = {}) {
+  const notificationState = data && data.integrations && data.integrations.notifications || {};
+  const configuration = operationalAlertConfiguration(data);
+  const recordedFingerprint = String(notificationState.lastOperationalAlertConfigurationFingerprint || '');
+  const configurationMatched = !!(recordedFingerprint && secureWebhookValueMatch(recordedFingerprint, operationalAlertConfigurationFingerprint(data)));
+  const checkedAt = String(notificationState.lastOperationalAlertAt || '');
+  const checkedAtMs = Date.parse(checkedAt);
+  const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
+  const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS;
+  const verified = notificationState.lastOperationalAlertSuccess === true && !!String(notificationState.lastOperationalAlertExternalId || '').trim();
+  const live = !!(configuration.configured && verified && configurationMatched && fresh);
+  let error = '';
+  if (!WOA_ERROR_ALERTS_ENABLED) error = 'Set WOA_ERROR_ALERTS_ENABLED=1 before the Stripe launch.';
+  else if (!configuration.emailEnabled) error = 'Email notifications are turned off in WheelsonAuto settings or Render.';
+  else if (!configuration.emailConfigured) error = 'Configure a live Resend or SendGrid sender before validating operational alerts.';
+  else if (!configuration.recipients.length) error = 'Add an owner alert email recipient before validating operational alerts.';
+  else if (!configuration.systemErrorEventEnabled) error = 'Enable the system_error notification event before validating operational alerts.';
+  else if (!verified) error = String(notificationState.lastOperationalAlertError || 'Run the owner-only operational alert test after the current Render settings are deployed.');
+  else if (!configurationMatched) error = 'The recorded operational alert test belongs to an older or unknown email configuration. Run a new owner test after the current Render settings are deployed.';
+  else if (!fresh) error = 'The operational alert test is stale. Run a new owner test before the controlled Stripe launch.';
+  return {
+    checkedAt,
+    provider: String(notificationState.lastOperationalAlertProvider || configuration.provider || ''),
+    configured: configuration.configured,
+    alertsEnabled: WOA_ERROR_ALERTS_ENABLED,
+    recipientConfigured: !!configuration.recipients.length,
+    systemErrorEventEnabled: configuration.systemErrorEventEnabled,
+    verified,
+    configurationMatched,
+    fresh,
+    maxAgeHours: Math.round(WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000)),
+    live,
+    error
+  };
+}
 async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
   const state = data || await readData();
   const stripeWebhook = stripeLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
+  const operationalAlerts = operationalAlertEvidence(state);
   const missing = [];
   if (!database.productionReady) missing.push('PostgreSQL transactional state');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
@@ -8342,6 +8428,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
   if (!stripeWebhook.live) missing.push('Stripe signed live webhook event');
+  if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   if (IDENTITY_PROVIDER === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');
@@ -8350,12 +8437,13 @@ async function productionInfrastructurePreflight(data = null) {
     documentStorage,
     documentStorageValidation,
     stripeWebhook,
+    operationalAlerts,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database, encrypted private storage, a signed live Stripe webhook, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database, encrypted private storage, signed live Stripe webhooks, verified failure alerts, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -17075,6 +17163,7 @@ const server = http.createServer(async (req, res) => {
           'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL',
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
+          'WOA_ERROR_ALERTS_ENABLED=1 plus a verified owner error-alert email test',
           'WOA_SESSION_SECRET, WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1, and production hardening flag',
           'Controlled backup restore and Stripe migration test record'
         ]
@@ -17120,6 +17209,67 @@ const server = http.createServer(async (req, res) => {
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
         return json(res, 502, { ok: false, error: message, documentStorageValidation: privateDocumentStorageEvidence(data) });
+      }
+    }
+    if (url.pathname === '/api/system/infrastructure/operational-alerts/validate' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can validate operational failure alerts.' });
+      const data = await readData();
+      data.integrations = data.integrations || {};
+      data.integrations.notifications = data.integrations.notifications || {};
+      const configuration = operationalAlertConfiguration(data);
+      const currentEvidence = operationalAlertEvidence(data);
+      if (!configuration.configured) {
+        return json(res, 409, { ok: false, error: currentEvidence.error || 'Operational alert delivery is not configured yet.', operationalAlerts: currentEvidence });
+      }
+      try {
+        const result = await queueEmailNotification(data, {
+          to: configuration.recipients[0],
+          event: 'system_error',
+          template: 'Operational alert validation',
+          customer: 'WheelsonAuto system',
+          subject: 'WheelsonAuto operational alert test',
+          body: [
+            'This is a controlled WheelsonAuto operational-alert delivery test.',
+            'No customer action is required.',
+            'A failed job, signed webhook, or autopay run will use this same protected owner-alert route.',
+            'Time: ' + new Date().toISOString()
+          ].join('\n')
+        });
+        const externalId = String(result && result.result && result.result.externalId || '').trim();
+        if (!result || !result.sent || !externalId) throw new Error(result && result.result && result.result.message || 'The email provider did not return a verifiable delivery ID.');
+        Object.assign(data.integrations.notifications, {
+          lastOperationalAlertAt: new Date().toISOString(),
+          lastOperationalAlertSuccess: true,
+          lastOperationalAlertProvider: result.result.provider || configuration.provider,
+          lastOperationalAlertExternalId: externalId,
+          lastOperationalAlertConfigurationFingerprint: operationalAlertConfigurationFingerprint(data),
+          lastOperationalAlertError: ''
+        });
+        appendAuditLog(data, user, 'Operational failure alerts validated', [result.result.provider || configuration.provider, 'Provider delivery ID: ' + externalId]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        const preflight = await productionInfrastructurePreflight(data);
+        return json(res, 200, {
+          ok: true,
+          operationalAlerts: preflight.operationalAlerts,
+          message: preflight.operationalAlerts.live
+            ? 'Operational error-alert delivery passed and is ready for the Stripe launch gate.'
+            : 'The provider accepted the alert test, but another active configuration requirement still needs attention.'
+        });
+      } catch (error) {
+        const message = String(error && error.message || error).slice(0, 500);
+        Object.assign(data.integrations.notifications, {
+          lastOperationalAlertAt: new Date().toISOString(),
+          lastOperationalAlertSuccess: false,
+          lastOperationalAlertProvider: configuration.provider,
+          lastOperationalAlertExternalId: '',
+          lastOperationalAlertConfigurationFingerprint: operationalAlertConfigurationFingerprint(data),
+          lastOperationalAlertError: message
+        });
+        appendAuditLog(data, user, 'Operational failure alert validation failed', [message]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 502, { ok: false, error: message, operationalAlerts: operationalAlertEvidence(data) });
       }
     }
     if (url.pathname === '/api/system/recovery/snapshots' && req.method === 'GET') {
@@ -18017,6 +18167,8 @@ module.exports = {
   stripeLiveWebhookEvidence,
   documentStorageConfigurationFingerprint,
   privateDocumentStorageEvidence,
+  operationalAlertConfigurationFingerprint,
+  operationalAlertEvidence,
   validCalendarDateKey,
   calendarDayName,
   nextRecurringOccurrence,
