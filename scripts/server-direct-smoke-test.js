@@ -16,6 +16,19 @@ function assert(condition, message) {
   if (!condition) fail(message);
 }
 
+function waitFor(promise, timeoutMs = 5000, label = 'operation') {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out waiting for ' + label + '.')), timeoutMs);
+    Promise.resolve(promise).then(value => {
+      clearTimeout(timer);
+      resolve(value);
+    }, error => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
 function nativePublicApplicationPayload(overrides = {}) {
   return {
     onlineVehicleId: 'online-direct-001',
@@ -2890,6 +2903,86 @@ async function main() {
       json: { recurringPaymentId: cleanCutoverRecurringId, scheduledDueDate: autopayTodayKey }
     });
     assert(fallbackDuplicateBlock.status === 409 && fallbackDuplicateBlock.json.duplicateBlocked, 'A synced paid provider transaction without a billing marker must still block a duplicate Stripe charge: ' + JSON.stringify(fallbackDuplicateBlock.json || fallbackDuplicateBlock.text));
+
+    const stripeConcurrentRecurringId = 'direct-stripe-concurrent-charge';
+    const stripeConcurrentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    stripeConcurrentState.json.recurringPayments.unshift({
+      id: stripeConcurrentRecurringId,
+      customer: 'Direct Stripe Concurrent Customer',
+      phone: '3135550776',
+      email: 'stripe-concurrent@example.com',
+      vehicle: '2024 Stripe Concurrent Car',
+      vehicleId: 'veh-direct-stripe-concurrent',
+      vin: 'DIRECTSTRIPECONCURRENTVIN',
+      plate: 'DIR-STRIPE-CONCURRENT',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_direct_concurrent',
+      stripePaymentMethodId: 'pm_direct_concurrent',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Stripe card saved and chargeable',
+      autopayManagedBy: 'WheelsonAuto / Stripe'
+    });
+    const stripeConcurrentSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeConcurrentState.json });
+    assert(stripeConcurrentSeed.status === 200 && stripeConcurrentSeed.json.ok, 'Stripe concurrent-charge smoke setup failed.');
+    const stripeConcurrentFetch = global.fetch;
+    let stripeConcurrentProviderCalls = 0;
+    let markStripeConcurrentProviderStarted;
+    let resolveStripeConcurrentProvider;
+    const stripeConcurrentProviderStarted = new Promise(resolve => { markStripeConcurrentProviderStarted = resolve; });
+    const stripeConcurrentProviderResponse = new Promise(resolve => { resolveStripeConcurrentProvider = resolve; });
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes('api.stripe.com/v1/payment_intents')) {
+        stripeConcurrentProviderCalls += 1;
+        markStripeConcurrentProviderStarted();
+        return stripeConcurrentProviderResponse;
+      }
+      return stripeConcurrentFetch(url, options);
+    };
+    let firstStripeConcurrentCharge;
+    try {
+      firstStripeConcurrentCharge = request(server, 'POST', '/api/integrations/payments/manual-charge', {
+        cookie: ownerCookie,
+        json: { recurringPaymentId: stripeConcurrentRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+      });
+      await waitFor(stripeConcurrentProviderStarted, 5000, 'the first Stripe provider request');
+      const secondStripeConcurrentCharge = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+        cookie: ownerCookie,
+        json: { recurringPaymentId: stripeConcurrentRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
+      });
+      assert(secondStripeConcurrentCharge.status === 202 && secondStripeConcurrentCharge.json.confirmationPending === true, 'A concurrent Stripe billing-period request must stay pending instead of sending another provider charge.');
+      assert(stripeConcurrentProviderCalls === 1, 'Two concurrent Stripe billing-period requests must produce exactly one provider charge.');
+      resolveStripeConcurrentProvider({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          id: 'pi_direct_concurrent_001',
+          status: 'succeeded',
+          amount: 22900,
+          amount_received: 22900,
+          customer: 'cus_direct_concurrent',
+          payment_method: 'pm_direct_concurrent',
+          latest_charge: 'ch_direct_concurrent_001',
+          created: Math.floor(Date.now() / 1000)
+        })
+      });
+      const firstStripeConcurrentResult = await firstStripeConcurrentCharge;
+      assert(firstStripeConcurrentResult.status === 201 && firstStripeConcurrentResult.json.payment && firstStripeConcurrentResult.json.payment.stripePaymentIntentId === 'pi_direct_concurrent_001', 'The original concurrent Stripe request must finish and save the one provider payment.');
+    } finally {
+      global.fetch = stripeConcurrentFetch;
+      if (resolveStripeConcurrentProvider) resolveStripeConcurrentProvider({ ok: false, status: 500, text: async () => JSON.stringify({ error: { message: 'Concurrent test cleanup' } }) });
+    }
+    const stripeConcurrentRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((stripeConcurrentRead.json.payments || []).filter(payment => payment.stripePaymentIntentId === 'pi_direct_concurrent_001').length === 1, 'A concurrent Stripe billing period must save exactly one payment record.');
 
     const stripeTimeoutRecurringId = 'direct-stripe-timeout-reconcile';
     const stripeTimeoutState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
