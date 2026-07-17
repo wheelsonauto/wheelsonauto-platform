@@ -21,6 +21,9 @@ artifact and must never be committed as part of a code release.
   in the normal state JSON.
 - Keep a dated, access-controlled copy of the current `data.json` before any
   intentional data migration. Do not add that file to a commit.
+- Run `pnpm run secret-hygiene-check` before a release. It rejects committed
+  production-key signatures and private key blocks without printing the secret
+  value if one is found.
 
 ## 1. Prepare a Separate Test Environment
 

@@ -48,6 +48,7 @@ function assetVersionCheck() {
 [
   ['server syntax', ['--check', 'server.js']],
   ['production startup gate', ['scripts/production-startup-gate-check.js']],
+  ['secret hygiene', ['scripts/secret-hygiene-check.js']],
   ['app syntax', ['--check', 'app.js']],
   ['card setup syntax', ['--check', 'card-setup.js']],
   ['protect live data', ['scripts/protect-live-data-check.js']],
