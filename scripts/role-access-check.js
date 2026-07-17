@@ -83,12 +83,14 @@ const crossOriginSessionWrite = finalFunctionSlice(server, 'crossOriginSessionWr
 const stateForUserRead = finalFunctionSlice(server, 'stateForUserRead');
 const stateForUserWrite = finalFunctionSlice(server, 'stateForUserWrite');
 const protectConcurrentLocalWrites = finalFunctionSlice(server, 'protectConcurrentLocalWrites');
+const mergeConcurrentState = finalFunctionSlice(server, 'mergeConcurrentState');
 const dataScopedToOrganization = finalFunctionSlice(server, 'dataScopedToOrganization');
 
 if (!navForRole || !navSections || !mobileQuickbar || !actionAllowed || !apiAllowedForUser || !managerCommandItems || !managerCommandBoard || !mechanicCommandItems || !mechanicCommandBoard) {
   fail('Could not find every role/access function.');
 }
 if (!protectConcurrentLocalWrites) fail('Could not find concurrent-write protection helper.');
+if (!mergeConcurrentState) fail('Could not find concurrent state merge helper.');
 if (!dataScopedToOrganization) fail('Could not find organization scoping helper.');
 if (!activeStaffSessionUser || !crossOriginSessionWrite) fail('Could not find staff session revocation or cross-origin write protection.');
 
@@ -190,7 +192,7 @@ if (!/if \(!owner\) safe = dataScopedToOrganization\(safe, userOrganizationId\(u
 if (!/key === 'organizations' \? String\(row && row\.id \|\| ''\) === orgId : rowOrganizationId\(row\) === orgId/.test(dataScopedToOrganization)) {
   fail('Organization scoping should filter company records by id while filtering data records by organizationId.');
 }
-if (!/preferIncoming/.test(protectConcurrentLocalWrites) || !/mergeById\(data\[key\], latest\[key\]\)/.test(protectConcurrentLocalWrites)) {
+if (!/preferIncoming/.test(protectConcurrentLocalWrites + mergeConcurrentState) || !/mergeById\(data\[key\], latest\[key\]\)/.test(mergeConcurrentState)) {
   fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
 }
 if (!/organizationId:\s*userOrganizationId\(user\)/.test(server)) {

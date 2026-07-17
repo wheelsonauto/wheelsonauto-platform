@@ -190,6 +190,7 @@ async function main() {
     calendarDayName,
     nextRecurringOccurrence,
     nextFutureRecurringDate,
+    successfulRecurringPaymentEvidence,
     recurringCustomerId,
     mergeRecurringSubscriptionDetail,
     mergeRecurringCustomerDetail,
@@ -1747,7 +1748,11 @@ async function main() {
     assert(customerSecureUpload.status === 201 && customerSecureUpload.json.ok && customerSecureUpload.json.document.portalDownloadUrl, 'Customer portal should accept a validated private JPG/PNG/PDF upload.');
     const customerSecureUploadState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const uploadedDocument = (customerSecureUploadState.json.documents || []).find(item => item.reference === 'DIRECT-SECURE-UPLOAD');
-    assert(uploadedDocument && uploadedDocument.customerAccountId === 'direct-customer-login' && uploadedDocument.contentType === 'image/png' && uploadedDocument.size > 0 && uploadedDocument.sha256 && /^onboarding-uploads\//.test(uploadedDocument.storagePath || ''), 'Secure customer upload should store only validated private-file metadata on the linked customer record.');
+    assert(uploadedDocument && uploadedDocument.customerAccountId === 'direct-customer-login' && uploadedDocument.contentType === 'image/png' && uploadedDocument.size > 0 && uploadedDocument.sha256 && uploadedDocument.privateFileAvailable === true && !uploadedDocument.storagePath && !uploadedDocument.storageKey, 'Secure customer uploads must expose availability without leaking private storage metadata through the state API.');
+    const rawUploadedDocument = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8')).documents.find(item => item.id === uploadedDocument.id);
+    const encryptedCustomerUpload = !!(rawUploadedDocument && rawUploadedDocument.storageKey && rawUploadedDocument.encryption && rawUploadedDocument.encryption.algorithm === 'AES-256-GCM');
+    const legacyCustomerUpload = !!(rawUploadedDocument && /^onboarding-uploads\//.test(rawUploadedDocument.storagePath || ''));
+    assert(rawUploadedDocument && (encryptedCustomerUpload || legacyCustomerUpload), 'Secure customer upload should retain validated private-file metadata only in server state, using encryption whenever the private store is configured.');
     const ownDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: customerCookie });
     assert(ownDocumentDownload.status === 200 && String(ownDocumentDownload.headers['Content-Type'] || ownDocumentDownload.headers['content-type']).includes('image/png'), 'Customer should be able to reopen their own uploaded document through the authenticated route.');
     const unauthenticatedDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id));
@@ -1764,7 +1769,7 @@ async function main() {
     const ownerDocumentRoundTrip = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: customerSecureUploadState.json });
     assert(ownerDocumentRoundTrip.status === 200 && ownerDocumentRoundTrip.json.ok, 'Owner state round trip should preserve the secure upload.');
     const rawDocumentRoundTrip = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8')).documents.find(item => item.id === uploadedDocument.id);
-    assert(rawDocumentRoundTrip && rawDocumentRoundTrip.storagePath && !Object.prototype.hasOwnProperty.call(rawDocumentRoundTrip, 'privateFileAvailable'), 'Derived private-file availability must not be persisted into business data during a staff save.');
+    assert(rawDocumentRoundTrip && (rawDocumentRoundTrip.storageKey || rawDocumentRoundTrip.storagePath) && !Object.prototype.hasOwnProperty.call(rawDocumentRoundTrip, 'privateFileAvailable'), 'Derived private-file availability must not be persisted into business data during a staff save.');
     const invalidSecureUpload = await request(server, 'POST', '/customer/document-update', { cookie: customerCookie, json: { type: 'Insurance proof', file: { name: 'fake.pdf', type: 'application/pdf', dataUrl: pngDataUrl().replace('image/png', 'application/pdf') } } });
     assert(invalidSecureUpload.status === 400 && /does not match/i.test(invalidSecureUpload.json.error), 'Customer upload must reject a file whose bytes do not match its declared format.');
     const portalProofReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
@@ -2475,6 +2480,135 @@ async function main() {
     assert(reconciledPaidRow && reconciledPaidRow.nextRun > autopayTodayKey && calendarDayName(reconciledPaidRow.nextRun) === calendarDayName(stalePaidDueDate) && reconciledPaidRow.lastScheduleReconciledFrom === stalePaidDueDate, 'A manually paid stale schedule should move to its next future weekday without another card charge.');
     const overdueChargedRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-success-overdue');
     assert(overdueChargedRow && overdueChargedRow.nextRun > autopayTodayKey && calendarDayName(overdueChargedRow.nextRun) === calendarDayName(overdueChargeDueDate) && overdueChargedRow.lastAutoChargeResult === 'Paid', 'A successful overdue autopay must persist the next future occurrence on the original weekday.');
+
+    const cutoverRecurringId = 'direct-stripe-cutover';
+    const cutoverState = JSON.parse(JSON.stringify(autopayRead.json));
+    cutoverState.recurringPayments.unshift({
+      id: cutoverRecurringId,
+      customer: 'Direct Stripe Cutover',
+      phone: '3135550999',
+      email: 'stripe-cutover@example.com',
+      vehicle: '2022 Honda Civic',
+      vin: 'DIRECTSTRIPECUTOVERVIN',
+      plate: 'DIRECT-STRIPE',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto / Clover',
+      paymentProvider: 'clover',
+      provider: 'Clover',
+      cloverCustomerId: 'direct-clover-cutover-customer',
+      cloverPaymentSource: 'direct-clover-cutover-source',
+      stripeCustomerId: 'cus_direct_cutover',
+      stripePaymentMethodId: 'pm_direct_cutover',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Clover card saved and chargeable'
+    });
+    const cutoverSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: cutoverState });
+    assert(cutoverSeed.status === 200 && cutoverSeed.json.ok, 'Stripe cutover smoke setup failed.');
+    const scheduledCutover = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
+    });
+    assert(scheduledCutover.status === 200 && scheduledCutover.json.scheduled && scheduledCutover.json.paymentProvider === 'clover', 'Scheduling Stripe must leave Clover as the active provider until owner confirmation.');
+    assert(scheduledCutover.json.recurring && scheduledCutover.json.recurring.stripeMigration && scheduledCutover.json.recurring.stripeMigration.state === 'cutover_scheduled', 'Scheduling must persist the protected cutover state.');
+    const duplicateCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    duplicateCutoverState.json.payments.unshift({
+      id: 'direct-cutover-existing-paid',
+      recurringPaymentId: cutoverRecurringId,
+      customer: 'Direct Stripe Cutover',
+      status: 'Paid',
+      amount: 229,
+      paymentProvider: 'clover',
+      billingPeriodKey: 'due:' + autopayTodayKey,
+      createdAt: new Date().toISOString()
+    });
+    const duplicateCutoverWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateCutoverState.json });
+    assert(duplicateCutoverWrite.status === 200 && duplicateCutoverWrite.json.ok, 'Existing billing-period payment setup failed.');
+    const duplicateActivation = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+    });
+    assert(duplicateActivation.status === 409 && /already recorded/i.test(duplicateActivation.json.error || ''), 'A paid Clover billing period must block Stripe activation.');
+    const cleanCutoverRecurringId = 'direct-stripe-cutover-clean';
+    const cleanCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    cleanCutoverState.json.recurringPayments.unshift({
+      ...cutoverState.recurringPayments.find(row => row.id === cutoverRecurringId),
+      id: cleanCutoverRecurringId,
+      customer: 'Direct Stripe Cutover Clean',
+      email: 'stripe-cutover-clean@example.com',
+      cloverCustomerId: 'direct-clover-cutover-clean-customer',
+      cloverPaymentSource: 'direct-clover-cutover-clean-source',
+      stripeCustomerId: 'cus_direct_cutover_clean',
+      stripePaymentMethodId: 'pm_direct_cutover_clean',
+      stripeMigration: undefined,
+      stripeMigrationStatus: '',
+      stripeCutoverDate: '',
+      stripeCutoverScheduledAt: '',
+      cloverStoppedConfirmedAt: '',
+      cloverStoppedConfirmedBy: '',
+      firstStripeChargeAt: '',
+      firstStripePaymentIntentId: '',
+      cloverDisabledAt: '',
+      cloverDisabledBy: '',
+      lastBillingPeriodKey: ''
+    });
+    const cleanCutoverSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: cleanCutoverState.json });
+    assert(cleanCutoverSeed.status === 200 && cleanCutoverSeed.json.ok, 'Clean Stripe cutover setup failed.');
+    const scheduledCleanCutover = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
+    });
+    assert(scheduledCleanCutover.status === 200 && scheduledCleanCutover.json.scheduled, 'A clean unpaid billing period should allow the protected Stripe cutover to be scheduled.');
+    const activatedCutover = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+    });
+    assert(activatedCutover.status === 200 && activatedCutover.json.activated && activatedCutover.json.paymentProvider === 'stripe', 'Stripe may activate only after the owner confirms Clover has stopped.');
+    assert(activatedCutover.json.recurring.stripeMigration.state === 'first_stripe_charge_pending' && activatedCutover.json.recurring.cloverPaymentSource === 'direct-clover-cutover-clean-source', 'Clover records must be retained through the protected first Stripe charge.');
+    const syncedProviderPaymentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    syncedProviderPaymentState.json.payments.unshift({
+      id: 'direct-cutover-synced-payment',
+      recurringPaymentId: cleanCutoverRecurringId,
+      customer: 'Direct Stripe Cutover Clean',
+      status: 'Paid',
+      amount: 229,
+      paymentProvider: 'clover',
+      createdAt: new Date().toISOString(),
+      source: 'Clover provider sync without period marker'
+    });
+    const syncedProviderPaymentWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: syncedProviderPaymentState.json });
+    assert(syncedProviderPaymentWrite.status === 200 && syncedProviderPaymentWrite.json.ok, 'Synced provider payment setup failed.');
+    const syncedProviderPaymentRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const syncedProviderRecurring = syncedProviderPaymentRead.json.recurringPayments.find(row => row.id === cleanCutoverRecurringId);
+    const syncedPaymentEvidence = successfulRecurringPaymentEvidence(syncedProviderPaymentRead.json, syncedProviderRecurring, autopayTodayKey, autopayTodayKey);
+    assert(syncedPaymentEvidence && syncedPaymentEvidence.id === 'direct-cutover-synced-payment', 'A provider-synced paid payment must remain linked to its recurring record for duplicate protection: ' + JSON.stringify(syncedPaymentEvidence));
+    const fallbackDuplicateBlock = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cleanCutoverRecurringId, scheduledDueDate: autopayTodayKey }
+    });
+    assert(fallbackDuplicateBlock.status === 409 && fallbackDuplicateBlock.json.duplicateBlocked, 'A synced paid provider transaction without a billing marker must still block a duplicate Stripe charge: ' + JSON.stringify(fallbackDuplicateBlock.json || fallbackDuplicateBlock.text));
+
+    const jsonRecoverySnapshots = await request(server, 'GET', '/api/system/recovery/snapshots', { cookie: ownerCookie });
+    assert(jsonRecoverySnapshots.status === 409 && /PostgreSQL/i.test(jsonRecoverySnapshots.json.error || ''), 'JSON development storage must not pretend it can perform transactional snapshot recovery.');
+    const jsonRecoveryRestore = await request(server, 'POST', '/api/system/recovery/restore', {
+      cookie: ownerCookie,
+      json: { snapshotId: 1, confirmed: true, confirmationPhrase: 'RESTORE SNAPSHOT 1' }
+    });
+    assert(jsonRecoveryRestore.status === 409 && /PostgreSQL/i.test(jsonRecoveryRestore.json.error || ''), 'JSON development storage must refuse destructive recovery requests.');
+    const managerRecoverySnapshots = await request(server, 'GET', '/api/system/recovery/snapshots', { cookie: managerCookie });
+    assert(managerRecoverySnapshots.status === 403, 'Only the owner can view or restore transactional recovery snapshots.');
+    const managerRecoveryRestore = await request(server, 'POST', '/api/system/recovery/restore', {
+      cookie: managerCookie,
+      json: { snapshotId: 1, confirmed: true, confirmationPhrase: 'RESTORE SNAPSHOT 1' }
+    });
+    assert(managerRecoveryRestore.status === 403, 'Only the owner can initiate a transactional recovery restore.');
 
     const managerMessage = await request(server, 'POST', '/api/messages/send', {
       cookie: managerCookie,

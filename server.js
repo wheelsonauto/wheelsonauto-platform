@@ -10,6 +10,9 @@ const riskProviders = require('./risk-provider-adapter');
 const billingEngine = require('./billing-engine');
 const stripeAdapter = require('./stripe-adapter');
 const passTimeAdapter = require('./passtime-adapter');
+const stateRepository = require('./state-repository');
+const secureDocumentStore = require('./secure-document-store');
+const stripeMigration = require('./stripe-migration');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -124,6 +127,8 @@ const OPENAI_BASE_URL = (process.env.WOA_OPENAI_BASE_URL || process.env.OPENAI_B
 const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-5.4-nano' : '');
 const WOA_AI_REASONING_EFFORT = ['minimal', 'low', 'medium', 'high'].includes(String(process.env.WOA_AI_REASONING_EFFORT || process.env.OPENAI_REASONING_EFFORT || '').toLowerCase()) ? String(process.env.WOA_AI_REASONING_EFFORT || process.env.OPENAI_REASONING_EFFORT).toLowerCase() : 'low';
 const WOA_AI_TIMEOUT_MS = Math.max(3000, Number(process.env.WOA_AI_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS || 15000));
+const WOA_AI_MAX_REQUESTS_PER_DAY = Math.max(1, Math.min(10000, Number(process.env.WOA_AI_MAX_REQUESTS_PER_DAY || 250)));
+const WOA_AI_MAX_REQUESTS_PER_MONTH = Math.max(WOA_AI_MAX_REQUESTS_PER_DAY, Math.min(100000, Number(process.env.WOA_AI_MAX_REQUESTS_PER_MONTH || 2500)));
 const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
 const WOA_STAR_AI_ENABLED = process.env.WOA_STAR_AI_ENABLED !== '0';
 const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND !== '0';
@@ -136,6 +141,39 @@ const WOA_EMAIL_OWNER_NOTIFY = process.env.WOA_EMAIL_OWNER_NOTIFY || process.env
 const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
 const WOA_PUBLIC_SITE_ENABLED = process.env.WOA_PUBLIC_SITE_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
+const WOA_DATA_BACKEND = String(process.env.WOA_DATA_BACKEND || 'json').trim().toLowerCase();
+const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.env.WOA_POSTGRES_SNAPSHOT_LIMIT || 180)));
+const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
+const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
+const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
+const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
+const operationalErrorAlerts = new Map();
+const STATE_REPOSITORY = stateRepository.createStateRepository({
+  backend: WOA_DATA_BACKEND,
+  dataFile: DATA_FILE,
+  seedFile: SEED_FILE,
+  repair: repairDataIds,
+  seed: async () => JSON.parse(await fs.readFile(SEED_FILE, 'utf8')),
+  organizationId: MAIN_ORG_ID,
+  databaseUrl: process.env.DATABASE_URL || '',
+  sslMode: process.env.WOA_POSTGRES_SSL_MODE || '',
+  maxConnections: process.env.WOA_POSTGRES_MAX_CONNECTIONS || 4,
+  snapshotLimit: WOA_POSTGRES_SNAPSHOT_LIMIT,
+  applicationName: 'wheelsonauto-platform'
+});
+const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
+  provider: process.env.WOA_DOCUMENT_STORAGE_PROVIDER || 'local',
+  localRoot: path.join(DATA_DIR, 'private-documents'),
+  encryptionKey: process.env.WOA_DOCUMENT_ENCRYPTION_KEY || '',
+  keyVersion: process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION || 'v1',
+  bucket: process.env.WOA_OBJECT_STORAGE_BUCKET || process.env.S3_BUCKET || '',
+  endpoint: process.env.WOA_OBJECT_STORAGE_ENDPOINT || process.env.S3_ENDPOINT || '',
+  region: process.env.WOA_OBJECT_STORAGE_REGION || process.env.S3_REGION || '',
+  accessKeyId: process.env.WOA_OBJECT_STORAGE_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID || '',
+  secretAccessKey: process.env.WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY || '',
+  sessionToken: process.env.AWS_SESSION_TOKEN || '',
+  pathStyle: process.env.WOA_OBJECT_STORAGE_PATH_STYLE === '1'
+});
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
@@ -665,34 +703,63 @@ function addVehicleImportIndexKeys(indexes, vehicle, index) {
     indexes.byTempTag.set(tempTag, existing === undefined ? index : null);
   }
 }
+const STATE_WRITE_META = Symbol('wheelsonauto.stateWriteMeta');
+const STATE_READ_META = Symbol('wheelsonauto.stateReadMeta');
+const CONCURRENT_COLLECTIONS = ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
+
+function emptyPlatformState() {
+  return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+}
+function baseRecordIds(data = {}) {
+  const result = {};
+  CONCURRENT_COLLECTIONS.concat(['customers', 'payments']).forEach(key => {
+    result[key] = new Set((Array.isArray(data[key]) ? data[key] : []).map(row => String(row && (row.id || row.paymentRequestId || row.recurringPaymentId || row.providerPaymentId || row.stripePaymentIntentId || row.cloverPaymentId) || '')).filter(Boolean));
+  });
+  return result;
+}
+function attachStateReadMeta(data, snapshot = {}) {
+  if (!data || typeof data !== 'object') return data;
+  Object.defineProperty(data, STATE_READ_META, { value: { version: snapshot.version, baseIds: baseRecordIds(data) }, configurable: true });
+  return data;
+}
+function inferredDeleteIds(data = {}) {
+  const metadata = data && data[STATE_READ_META];
+  const deletedIds = {};
+  if (!metadata || !metadata.baseIds) return deletedIds;
+  Object.keys(metadata.baseIds).forEach(key => {
+    const current = new Set((Array.isArray(data[key]) ? data[key] : []).map(row => String(row && (row.id || row.paymentRequestId || row.recurringPaymentId || row.providerPaymentId || row.stripePaymentIntentId || row.cloverPaymentId) || '')).filter(Boolean));
+    const deleted = [...metadata.baseIds[key]].filter(id => !current.has(id));
+    if (deleted.length) deletedIds[key] = deleted;
+  });
+  return deletedIds;
+}
 async function readData() {
-  try { return repairDataIds(JSON.parse(await fs.readFile(DATA_FILE, 'utf8'))); }
-  catch {
-    try {
-      await fs.mkdir(DATA_DIR, { recursive: true });
-      const seed = JSON.parse(await fs.readFile(SEED_FILE, 'utf8'));
-      await writeData(seed);
-      return repairDataIds(seed);
-    } catch {
-      return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
-    }
+  try {
+    const snapshot = await STATE_REPOSITORY.read();
+    const data = repairDataIds(snapshot && snapshot.state || emptyPlatformState());
+    return attachStateReadMeta(data, snapshot || {});
+  } catch (error) {
+    if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) throw error;
+    return attachStateReadMeta(emptyPlatformState(), { version: 'missing' });
   }
 }
 async function dataVersion() {
-  try {
-    const stat = await fs.stat(DATA_FILE, { bigint: true });
-    return stat.mtimeNs + '-' + stat.size + '-' + stat.ino;
-  } catch {
-    return 'missing';
-  }
+  return STATE_REPOSITORY.version();
 }
 let writeDataQueue = Promise.resolve();
 async function writeDataNow(data) {
   repairDataIds(data);
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  const tmpFile = DATA_FILE + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
-  await fs.writeFile(tmpFile, JSON.stringify(data, null, 2), 'utf8');
-  await fs.rename(tmpFile, DATA_FILE);
+  const meta = data && data[STATE_WRITE_META] || {};
+  const inferred = { preferIncoming: true, deletedIds: inferredDeleteIds(data) };
+  const options = meta.options || inferred;
+  if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) {
+    return STATE_REPOSITORY.write(data, {
+      reason: meta.reason || 'platform state mutation',
+      actor: meta.actor || '',
+      mergeState: latest => mergeConcurrentState(data, repairDataIds(latest || emptyPlatformState()), options)
+    });
+  }
+  return STATE_REPOSITORY.write(data, { reason: meta.reason || 'platform state mutation' });
 }
 async function writeData(data) {
   const job = writeDataQueue.then(() => writeDataNow(data));
@@ -867,6 +934,72 @@ function emailChannelReadiness(data = {}, configured = false) {
     emailLastInboundAt: latestInbound.receivedAt || latestInbound.createdAt || latestInbound.date || ''
   };
 }
+function starAiUsageSummary(data = {}) {
+  const saved = (((data.integrations || {}).messaging) || {});
+  const usage = saved.aiUsage && typeof saved.aiUsage === 'object' ? saved.aiUsage : {};
+  const dayKey = localDateKey();
+  const monthKey = dayKey.slice(0, 7);
+  const dailyRequests = usage.dayKey === dayKey ? Math.max(0, Number(usage.dailyRequests || 0)) : 0;
+  const monthlyRequests = usage.monthKey === monthKey ? Math.max(0, Number(usage.monthlyRequests || 0)) : 0;
+  const dailyRemaining = Math.max(0, WOA_AI_MAX_REQUESTS_PER_DAY - dailyRequests);
+  const monthlyRemaining = Math.max(0, WOA_AI_MAX_REQUESTS_PER_MONTH - monthlyRequests);
+  return {
+    dayKey,
+    monthKey,
+    dailyRequests,
+    monthlyRequests,
+    dailyLimit: WOA_AI_MAX_REQUESTS_PER_DAY,
+    monthlyLimit: WOA_AI_MAX_REQUESTS_PER_MONTH,
+    dailyRemaining,
+    monthlyRemaining,
+    exhausted: dailyRemaining <= 0 || monthlyRemaining <= 0,
+    lastRequestAt: usage.lastRequestAt || '',
+    lastRequestKind: usage.lastRequestKind || ''
+  };
+}
+function recordStarAiUsage(data = {}, reservation = {}, kind = 'reply') {
+  data.integrations = data.integrations || {};
+  data.integrations.messaging = data.integrations.messaging || {};
+  const dayKey = localDateKey();
+  const monthKey = dayKey.slice(0, 7);
+  data.integrations.messaging.aiUsage = {
+    dayKey,
+    monthKey,
+    dailyRequests: Math.max(0, Number(reservation.daily && reservation.daily.used || 0)),
+    monthlyRequests: Math.max(0, Number(reservation.monthly && reservation.monthly.used || 0)),
+    dailyLimit: WOA_AI_MAX_REQUESTS_PER_DAY,
+    monthlyLimit: WOA_AI_MAX_REQUESTS_PER_MONTH,
+    lastRequestAt: new Date().toISOString(),
+    lastRequestKind: String(kind || 'reply').slice(0, 80)
+  };
+}
+async function reserveStarAiModelCall(data = {}, kind = 'reply') {
+  const dayKey = localDateKey();
+  const monthKey = dayKey.slice(0, 7);
+  try {
+    const reservation = await STATE_REPOSITORY.reserveAiUsage({
+      dayKey,
+      monthKey,
+      dailyLimit: WOA_AI_MAX_REQUESTS_PER_DAY,
+      monthlyLimit: WOA_AI_MAX_REQUESTS_PER_MONTH
+    });
+    if (!reservation.allowed) {
+      const isDaily = reservation.reason === 'daily_limit';
+      const cap = isDaily ? WOA_AI_MAX_REQUESTS_PER_DAY : WOA_AI_MAX_REQUESTS_PER_MONTH;
+      return {
+        allowed: false,
+        error: 'Star reached its ' + (isDaily ? 'daily' : 'monthly') + ' model-request limit of ' + cap + '. It is using safe rules replies until the next limit window.'
+      };
+    }
+    recordStarAiUsage(data, reservation, kind);
+    return { allowed: true, reservation };
+  } catch (error) {
+    return {
+      allowed: false,
+      error: 'Star could not verify its model-request safety limit, so it used the safe rules fallback. ' + String(error && error.message || error).slice(0, 180)
+    };
+  }
+}
 function openAiProviderReadiness(data = {}) {
   const saved = (((data.integrations || {}).messaging) || {});
   const configured = !!(OPENAI_API_KEY && WOA_AI_MODEL);
@@ -878,7 +1011,9 @@ function openAiProviderReadiness(data = {}) {
   const credentialIssue = !!(configured && /invalid api key|incorrect api key|unauthorized|authentication|401/.test(errorText));
   const successfulHealth = /openai answered through the responses api/i.test(lastHealthStatus);
   const successfulUse = lastProvider === 'openai' && !lastError;
-  const operational = !!(configured && !creditRequired && !credentialIssue && (successfulHealth || successfulUse));
+  const usage = starAiUsageSummary(data);
+  const budgetLimited = !!(configured && usage.exhausted);
+  const operational = !!(configured && !creditRequired && !credentialIssue && !budgetLimited && (successfulHealth || successfulUse));
   let status = 'Rules fallback';
   let issue = '';
   if (!configured) {
@@ -890,6 +1025,11 @@ function openAiProviderReadiness(data = {}) {
   } else if (credentialIssue) {
     status = 'OpenAI key needs attention';
     issue = 'The saved OpenAI credential was rejected. Star is using the safe rules fallback.';
+  } else if (budgetLimited) {
+    status = 'OpenAI request cap reached';
+    issue = usage.dailyRemaining <= 0
+      ? 'Star reached its daily model-request limit of ' + usage.dailyLimit + ' and is using safe rules replies until tomorrow.'
+      : 'Star reached its monthly model-request limit of ' + usage.monthlyLimit + ' and is using safe rules replies until the next month.';
   } else if (operational) {
     status = 'OpenAI verified';
   } else {
@@ -901,8 +1041,10 @@ function openAiProviderReadiness(data = {}) {
     aiProviderOperational: operational,
     aiProviderCreditRequired: creditRequired,
     aiProviderCredentialIssue: credentialIssue,
+    aiProviderBudgetLimited: budgetLimited,
     aiProviderStatus: status,
-    aiProviderIssue: issue
+    aiProviderIssue: issue,
+    aiUsage: usage
   };
 }
 function publicMessagingStatus(data = {}) {
@@ -1338,38 +1480,46 @@ function verificationMonitorSummary(cases = []) {
   return summary;
 }
 async function runVerificationMonitor(options = {}) {
-  const data = await readData();
-  data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
-  const now = new Date().toISOString();
-  let changed = 0;
-  data.verificationCases.forEach(record => {
-    const previous = [record.status, record.monitorLevel, record.monitorAction, record.daysRemaining].join('|');
-    record.status = integrationEngine.verificationCaseStatus(record);
-    const monitor = riskProviders.verificationMonitorState(record);
-    record.monitorLevel = monitor.level;
-    record.monitorAction = monitor.action;
-    record.daysRemaining = monitor.daysRemaining;
-    record.lastMonitoredAt = now;
-    const next = [record.status, record.monitorLevel, record.monitorAction, record.daysRemaining].join('|');
-    if (previous !== next) {
-      changed += 1;
-      record.history = Array.isArray(record.history) ? record.history : [];
-      record.history.push({ at: now, action: 'Automatic verification monitor', status: record.status, by: 'WheelsonAuto monitor' });
+  try {
+    const data = await readData();
+    data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
+    const now = new Date().toISOString();
+    let changed = 0;
+    data.verificationCases.forEach(record => {
+      const previous = [record.status, record.monitorLevel, record.monitorAction, record.daysRemaining].join('|');
+      record.status = integrationEngine.verificationCaseStatus(record);
+      const monitor = riskProviders.verificationMonitorState(record);
+      record.monitorLevel = monitor.level;
+      record.monitorAction = monitor.action;
+      record.daysRemaining = monitor.daysRemaining;
+      record.lastMonitoredAt = now;
+      const next = [record.status, record.monitorLevel, record.monitorAction, record.daysRemaining].join('|');
+      if (previous !== next) {
+        changed += 1;
+        record.history = Array.isArray(record.history) ? record.history : [];
+        record.history.push({ at: now, action: 'Automatic verification monitor', status: record.status, by: 'WheelsonAuto monitor' });
+      }
+    });
+    data.integrations = data.integrations || {};
+    data.integrations.verification = {
+      ...(data.integrations.verification || {}),
+      lastMonitorAt: now,
+      lastMonitorSource: String(options.source || 'manual'),
+      lastMonitorChanged: changed,
+      summary: verificationMonitorSummary(data.verificationCases)
+    };
+    if (changed || options.persist !== false) {
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, preserveLatestIntegrations: false });
+      await writeData(data);
     }
-  });
-  data.integrations = data.integrations || {};
-  data.integrations.verification = {
-    ...(data.integrations.verification || {}),
-    lastMonitorAt: now,
-    lastMonitorSource: String(options.source || 'manual'),
-    lastMonitorChanged: changed,
-    summary: verificationMonitorSummary(data.verificationCases)
-  };
-  if (changed || options.persist !== false) {
-    await protectConcurrentLocalWrites(data, { preferIncoming: true, preserveLatestIntegrations: false });
-    await writeData(data);
+    return { ok: true, changed, checked: data.verificationCases.length, summary: verificationMonitorSummary(data.verificationCases), finishedAt: now };
+  } catch (error) {
+    await recordOperationalFailure('verification-monitor', error, {
+      route: 'Automatic verification monitor',
+      source: String(options.source || 'manual')
+    });
+    throw error;
   }
-  return { ok: true, changed, checked: data.verificationCases.length, summary: verificationMonitorSummary(data.verificationCases), finishedAt: now };
 }
 function verifyTrackerWebhook(rawBody, headers = {}) {
   if (!TRACKER_WEBHOOK_SECRET) return false;
@@ -1462,6 +1612,10 @@ async function runPassTimeGpsSync(options = {}) {
     passTimePollStatus.lastFinishedAt = new Date().toISOString();
     passTimePollStatus.lastError = String(error && error.message || error).slice(0, 300);
     passTimePollStatus.lastResult = null;
+    await recordOperationalFailure('passtime-gps-sync', error, {
+      route: 'PassTime read-only GPS sync',
+      source: String(options.source || 'automatic')
+    });
     return { ok: false, skipped: false, error: passTimePollStatus.lastError, checkedAt: passTimePollStatus.lastFinishedAt };
   } finally {
     passTimePollStatus.inFlight = false;
@@ -2373,6 +2527,46 @@ async function queueOwnerEmailNotification(data, event, payload = {}) {
   if (!settings.emailEnabled || !settings.emailRecipients.length) return null;
   if (settings.events.length && !settings.events.includes(event)) return null;
   return queueEmailNotification(data, { ...payload, event });
+}
+async function recordOperationalFailure(source, error, context = {}, options = {}) {
+  const message = String(error && error.message || error || 'Unknown operational failure').slice(0, 3000);
+  const safeSource = String(source || 'server').slice(0, 120);
+  const safeContext = {
+    ...context,
+    route: String(context.route || '').slice(0, 180),
+    customer: String(context.customer || '').slice(0, 160),
+    recurringPaymentId: String(context.recurringPaymentId || '').slice(0, 160),
+    eventId: String(context.eventId || '').slice(0, 160)
+  };
+  try {
+    await STATE_REPOSITORY.recordJobError(safeSource, message, safeContext, options.severity || 'error');
+  } catch (recordError) {
+    console.error('WheelsonAuto error monitor could not persist:', recordError && recordError.message || recordError);
+  }
+  if (!WOA_ERROR_ALERTS_ENABLED || options.alert === false) return;
+  const key = safeSource + '|' + message.slice(0, 160);
+  const previous = operationalErrorAlerts.get(key) || 0;
+  if (Date.now() - previous < WOA_ERROR_ALERT_WINDOW_MS) return;
+  operationalErrorAlerts.set(key, Date.now());
+  try {
+    const data = await readData();
+    const notification = await queueOwnerEmailNotification(data, 'system_error', {
+      customer: 'WheelsonAuto system',
+      subject: 'WheelsonAuto needs review: ' + safeSource,
+      body: [
+        'WheelsonAuto recorded an operational error.',
+        'Source: ' + safeSource,
+        'Error: ' + message,
+        safeContext.route ? 'Route: ' + safeContext.route : '',
+        safeContext.customer ? 'Customer: ' + safeContext.customer : '',
+        safeContext.recurringPaymentId ? 'Recurring record: ' + safeContext.recurringPaymentId : '',
+        'Time: ' + new Date().toISOString()
+      ].filter(Boolean).join('\n')
+    });
+    if (notification) await writeData(data);
+  } catch (alertError) {
+    console.error('WheelsonAuto error alert could not be queued:', alertError && alertError.message || alertError);
+  }
 }
 function recordDateKey(value) {
   const raw = String(value || '').trim();
@@ -4126,6 +4320,8 @@ const STAR_REPLY_SCHEMA = {
 };
 async function openAiReplyPlan(data, payload, context, fallback) {
   if (!OPENAI_API_KEY || !WOA_AI_MODEL) return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: OPENAI_API_KEY ? 'Star AI model is not set.' : 'OpenAI API key is not configured.' }, fallback);
+  const reservation = await reserveStarAiModelCall(data, 'customer_reply');
+  if (!reservation.allowed) return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: reservation.error }, fallback);
   const input = [
     {
       role: 'developer',
@@ -4221,9 +4417,11 @@ function starAccountingFallback(yearSummary = {}, insights = {}, taxCenter = {})
     ]
   };
 }
-async function starAccountingReview(yearSummary = {}, insights = {}, taxCenter = {}) {
+async function starAccountingReview(data = {}, yearSummary = {}, insights = {}, taxCenter = {}) {
   const fallback = starAccountingFallback(yearSummary, insights, taxCenter);
   if (!OPENAI_API_KEY || !WOA_AI_MODEL) return fallback;
+  const reservation = await reserveStarAiModelCall(data, 'accounting_review');
+  if (!reservation.allowed) return { ...fallback, providerError: reservation.error };
   const safeContext = {
     year: yearSummary.year,
     totals: yearSummary.totals,
@@ -4415,12 +4613,12 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const context = aiFindCustomerContext(data, payload, options.user || { role: 'Owner' });
   const fallback = aiPlanRules(data, payload, context);
+  const duplicateKey = String(options.sourceMessageId || payload.messageId || payload.externalId || '');
+  const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
+  if (existing && !options.forceNew) return { plan: existing.aiPlan || fallback, draft: existing, existing: true };
   let plan = await openAiReplyPlan(data, payload, context, fallback);
   plan = prepareAiSafeLink(data, plan, context);
   plan.preparedAction = starPreparedAction(data, plan, context, payload);
-  const duplicateKey = String(options.sourceMessageId || payload.messageId || payload.externalId || '');
-  const existing = duplicateKey && data.messages.find(item => item.aiSourceMessageId === duplicateKey && /AI draft|AI action/i.test(String(item.direction || '')));
-  if (existing && !options.forceNew) return { plan, draft: existing, existing: true };
   const messageFields = messageContextFields(context, { ...payload, customer: plan.customer || context.customerName });
   const stamp = new Date();
   const draft = {
@@ -5661,6 +5859,26 @@ function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) 
   res.end(body);
 }
 function json(res, status, payload, extra = {}) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store', ...extra }); }
+function privateDocumentAvailable(record = {}) {
+  return !!(record.storageKey || record.storagePath || record.signatureImagePath);
+}
+async function readPrivateDocumentBytes(record = {}) {
+  if (PRIVATE_DOCUMENT_STORE.isEncryptedDocument(record)) return PRIVATE_DOCUMENT_STORE.read(record);
+  const relativePath = String(record.storagePath || record.signatureImagePath || '');
+  const root = path.resolve(DATA_DIR, 'onboarding-uploads');
+  const filePath = path.resolve(DATA_DIR, relativePath);
+  if (!relativePath || !filePath.startsWith(root + path.sep)) {
+    const error = new Error('Private document storage metadata is invalid.');
+    error.statusCode = 403;
+    throw error;
+  }
+  return fs.readFile(filePath);
+}
+function redactPrivateDocumentMetadata(record = {}) {
+  const safe = { ...record, privateFileAvailable: privateDocumentAvailable(record) };
+  ['storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath'].forEach(key => delete safe[key]);
+  return safe;
+}
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
 function requestOrigin(req) {
   const raw = String(req.headers.origin || req.headers.referer || '').trim();
@@ -5772,7 +5990,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'signatureImagePath', 'signatureData'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
@@ -5789,6 +6007,19 @@ function mergeScopedCollection(currentRows, incomingRows, user) {
   const currentById = new Map((Array.isArray(currentRows) ? currentRows : []).map(row => [String(row && row.id || ''), row || {}]));
   const owned = incomingRows.map(row => preservePrivateOperationalFields(currentById.get(String(row && row.id || '')) || {}, { ...row, organizationId: userOrganizationId(user) }));
   return keep.concat(owned);
+}
+function preserveRedactedDocumentMetadata(currentRows, incomingRows) {
+  if (!Array.isArray(incomingRows)) return incomingRows;
+  const currentById = new Map((Array.isArray(currentRows) ? currentRows : []).map(row => [String(row && row.id || ''), row || {}]));
+  return incomingRows.map(document => {
+    const prior = currentById.get(String(document && document.id || '')) || {};
+    const safe = { ...(document || {}) };
+    ['storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData'].forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(prior, field)) safe[field] = prior[field];
+    });
+    delete safe.privateFileAvailable;
+    return safe;
+  });
 }
 const MECHANIC_MONEY_FIELDS = ['amount', 'cost', 'price', 'rate', 'weekly', 'weeklyAmount', 'balance', 'down', 'deposit', 'payment', 'paymentAmount', 'profit', 'income', 'recovery', 'recoveryAmount', 'deductible'];
 const MECHANIC_MONEY_FIELD_PATTERN = /(amount|cost|price|rate|weekly|balance|deposit|payment|profit|income|recovery|deductible)/i;
@@ -6177,11 +6408,8 @@ function stateForUserWrite(current, incoming, user) {
     ['subscriptions', 'billingInvoices', 'billingEvents'].forEach(key => {
       next[key] = Array.isArray(current[key]) ? current[key] : [];
     });
-    if (Array.isArray(next.documents)) next.documents = next.documents.map(document => {
-      const clean = { ...document };
-      delete clean.privateFileAvailable;
-      return clean;
-    });
+    next.documents = preserveRedactedDocumentMetadata(current.documents, next.documents);
+    next.eSignatures = preserveRedactedDocumentMetadata(current.eSignatures, next.eSignatures);
     return next;
   }
   const role = String(user && user.role || '').toLowerCase();
@@ -6364,7 +6592,8 @@ function stateForUserRead(data, user) {
   const owner = isOwnerUser(user);
   if (!owner) safe = dataScopedToOrganization(safe, userOrganizationId(user));
   enrichLinkedProfiles(safe);
-  if (Array.isArray(safe.documents)) safe.documents = safe.documents.map(document => ({ ...document, privateFileAvailable: !!document.storagePath }));
+  if (Array.isArray(safe.documents)) safe.documents = safe.documents.map(redactPrivateDocumentMetadata);
+  if (Array.isArray(safe.eSignatures)) safe.eSignatures = safe.eSignatures.map(redactPrivateDocumentMetadata);
   safe.integrations = safe.integrations || {};
   safe.integrations.messaging = { ...(safe.integrations.messaging || {}), ...publicMessagingStatus(data) };
   if (owner) {
@@ -7856,6 +8085,40 @@ function checkoutStatus() {
         : 'Add CLOVER_ECOMMERCE_PRIVATE_KEY and CLOVER_MERCHANT_ID in Render.')
   };
 }
+async function productionInfrastructurePreflight() {
+  const database = await STATE_REPOSITORY.health();
+  const documentStorage = PRIVATE_DOCUMENT_STORE.status();
+  const missing = [];
+  if (!database.productionReady) missing.push('PostgreSQL transactional state');
+  if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
+  if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
+  if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
+  if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
+  if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
+  if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
+  if (IDENTITY_PROVIDER === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) missing.push('Stripe Identity live runtime');
+  return {
+    database,
+    documentStorage,
+    missing,
+    hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
+    readyForLiveStripe: missing.length === 0,
+    message: missing.length
+      ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
+      : 'Transactional database, encrypted private storage, signed Stripe webhooks, and session safeguards are ready for controlled Stripe live testing.'
+  };
+}
+async function assertProductionInfrastructure() {
+  if (!WOA_PRODUCTION_HARDENING_REQUIRED) return { skipped: true };
+  const preflight = await productionInfrastructurePreflight();
+  if (!preflight.readyForLiveStripe) {
+    const error = new Error('Production hardening is enabled, but launch safeguards are incomplete: ' + preflight.missing.join(', ') + '.');
+    error.code = 'production_infrastructure_not_ready';
+    error.preflight = preflight;
+    throw error;
+  }
+  return preflight;
+}
 function systemReadiness(data, user = { role: 'Owner' }) {
   const scopedSource = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
   const scoped = JSON.parse(JSON.stringify(scopedSource || {}));
@@ -7870,6 +8133,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['CLOVER_HCO_WEBHOOK_SECRET', CLOVER_HCO_WEBHOOK_SECRET ? 'Set' : 'Missing', 'Signed Hosted Checkout payment reconciliation'],
     ['STRIPE_SECRET_KEY', STRIPE_SECRET_KEY ? 'Set' : 'Optional', 'Stripe Checkout, card setup, saved-card charges, and migration'],
     ['STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET ? 'Set' : 'Optional', 'Signed Stripe payment and dispute reconciliation'],
+    ['WOA_DATA_BACKEND', STATE_REPOSITORY.kind === 'postgres' ? 'PostgreSQL enabled' : 'JSON development fallback', 'Set postgres only after the controlled migration preflight passes; production Stripe launch requires PostgreSQL'],
+    ['DATABASE_URL', STATE_REPOSITORY.kind === 'postgres' ? 'Set' : 'Provider setup needed', 'Transactional PostgreSQL state, snapshots, webhook idempotency, recovery history, and uniqueness constraints'],
+    ['WOA_DOCUMENT_ENCRYPTION_KEY', PRIVATE_DOCUMENT_STORE.status().encryptionConfigured ? 'Set' : 'Missing', 'AES-256-GCM encryption for private IDs, insurance, signatures, contracts, receipts, and dispute evidence'],
+    ['WOA_DOCUMENT_STORAGE_PROVIDER', PRIVATE_DOCUMENT_STORE.status().productionReady ? 'S3-compatible private storage ready' : PRIVATE_DOCUMENT_STORE.status().configured ? 'Development-only local encrypted storage' : 'Provider setup needed', 'Use S3-compatible private object storage before storing new production identity files'],
+    ['WOA_PRODUCTION_HARDENING_REQUIRED', WOA_PRODUCTION_HARDENING_REQUIRED ? 'Set' : 'Recommended before live Stripe', 'Blocks production launch until database and private object-storage safeguards are configured'],
     ['WOA_VERIFICATION_WEBHOOK_SECRET', VERIFICATION_WEBHOOK_SECRET ? 'Set' : 'Manual-live', 'Signed insurance and background provider callbacks; Stripe Identity uses the signed Stripe webhook'],
     ['WOA_IDENTITY_PROVIDER', IDENTITY_PROVIDER || 'manual', 'Set to stripe only after live Stripe Identity is enabled; customer-uploaded license files remain private'],
     ['WOA_INSURANCE_PROVIDER', INSURANCE_PROVIDER || 'manual', 'Insurance verification adapter'],
@@ -7890,6 +8158,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['WOA_PAYMENT_PROVIDER', WOA_PAYMENT_PROVIDER || 'clover', 'Default provider adapter; Clover remains active until each Stripe migration is owner-confirmed'],
     ['PUBLIC_BASE_URL', PUBLIC_BASE_URL ? 'Set' : 'Missing', 'Customer payment/card setup links'],
     ['WOA_SESSION_SECRET', SESSION_SIGNING_SECRET_CONFIGURED ? 'Set' : 'Missing', 'Stable signed staff/customer session cookies'],
+    ['WOA_AI_MAX_REQUESTS_PER_DAY / WOA_AI_MAX_REQUESTS_PER_MONTH', WOA_AI_MAX_REQUESTS_PER_DAY + ' / ' + WOA_AI_MAX_REQUESTS_PER_MONTH + ' active', 'Atomic Star model-request safeguards; cap exhaustion falls back to rules instead of sending another model request'],
     ['WOA_AUTOPAY_MS', process.env.WOA_AUTOPAY_MS ? 'Set' : 'Default', 'WheelsonAuto autopay monitor interval']
   ];
   const routes = [
@@ -7933,6 +8202,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/tolls/receipt/send', 'Owner-approved E-ZPass reimbursement proof delivery'),
     route('GET', '/api/reports/deep.csv', 'Role-scoped deep CSV export'),
     route('GET', '/api/system/health', 'Role-scoped Star/system health snapshot'),
+    route('GET', '/api/system/recovery/snapshots', 'Owner PostgreSQL recovery snapshot list'),
+    route('POST', '/api/system/recovery/restore', 'Owner-confirmed PostgreSQL snapshot recovery'),
     route('POST', '/api/system/launch-readiness/tasks', 'Launch readiness Dispatch task sync'),
     route('POST', '/api/verification/document', 'Staff document proof verification'),
     route('POST', '/api/verification/paid-outside', 'Owner paid-outside payment verification'),
@@ -9351,11 +9622,11 @@ function defaultApiProviderRows(data = {}) {
       id: 'star-ai',
       name: 'Star AI / OpenAI',
       group: 'Comms',
-      status: messageStatus.aiProviderOperational ? 'Connected' : (messageStatus.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (messageStatus.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (messageStatus.aiProviderConfigured ? 'Testing' : 'Provider needed'))),
+      status: messageStatus.aiProviderOperational ? 'Connected' : (messageStatus.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (messageStatus.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (messageStatus.aiProviderBudgetLimited ? 'Paused - Star request cap' : (messageStatus.aiProviderConfigured ? 'Testing' : 'Provider needed')))),
       owner: 'Owner',
-      envKeys: 'OPENAI_API_KEY or WOA_OPENAI_API_KEY, WOA_AI_MODEL',
+      envKeys: 'OPENAI_API_KEY or WOA_OPENAI_API_KEY, WOA_AI_MODEL, WOA_AI_MAX_REQUESTS_PER_DAY, WOA_AI_MAX_REQUESTS_PER_MONTH',
       endpoint: 'OpenAI Responses API through /api/messages/star-ai and /api/messages/star-ai/test',
-      liveTest: 'Run Test Star provider, confirm a Responses API answer, verify sanitization, then approve one non-sensitive draft.'
+      liveTest: 'Run Test Star provider, confirm a Responses API answer, verify sanitization and the request cap, then approve one non-sensitive draft.'
     },
     { id: 'ezpass', name: 'WheelsonAuto Toll Import / E-ZPass', group: 'Risk', status: 'Ready - WheelsonAuto import', owner: 'Owner', envKeys: 'No external key required for CSV/TSV/JSON import', endpoint: '/api/tolls/import', liveTest: 'Preview statement, verify plate/VIN/customer separation, import once, import again to prove duplicate protection, then create one recovery link.' },
     { id: 'insurance', name: 'Insurance Verification + Monitoring', group: 'Risk', status: verificationReadiness.canopy.monitoringReady ? 'Testing - Canopy live proof needed' : (verificationReadiness.canopy.customerLinkReady ? 'Prepared - Canopy webhook needed' : 'Ready - manual review'), owner: 'Manager', envKeys: 'CANOPY_CONNECT_ALIAS, CANOPY_CLIENT_ID, CANOPY_CLIENT_SECRET, CANOPY_TEAM_ID, CANOPY_WEBHOOK_SECRET', endpoint: '/api/verification/cases/start, /api/verification/status, /api/verification/monitor/run, /api/webhooks/canopy', liveTest: 'Create one customer-authorized insurance link, receive a signed policy result, verify policy last-four/expiration, and confirm a monitoring refresh or reconnect alert.' },
@@ -9509,7 +9780,7 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: emailResult
     },
     'star-ai': {
-      status: status.aiProviderOperational ? 'Connected' : (status.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (status.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (status.aiProviderConfigured ? 'Testing' : 'Provider needed'))),
+      status: status.aiProviderOperational ? 'Connected' : (status.aiProviderCreditRequired ? 'Blocked - OpenAI credit needed' : (status.aiProviderCredentialIssue ? 'Blocked - OpenAI key' : (status.aiProviderBudgetLimited ? 'Paused - Star request cap' : (status.aiProviderConfigured ? 'Testing' : 'Provider needed')))),
       lastTestAt: status.aiLastHealthAt || status.aiLastProviderAt || '',
       lastTestResult: starResult
     },
@@ -9617,7 +9888,7 @@ function apiProviderLaunchGuidance(provider = {}) {
       : ['Finish sender/domain and inbound webhook setup, then send and receive one customer email from Messages.', 'Provider-accepted outbound email plus verified inbound reply on the same customer thread.'],
     'star-ai': connected
       ? ['Keep Star approval gates on for money/account actions and monitor provider health.', 'Successful sanitized Responses API answer plus one admin-approved non-sensitive draft.']
-      : [status.includes('credit') ? 'Add usable OpenAI API credit, then run Test Star provider and approve one non-sensitive draft.' : 'Add the OpenAI API key and usable API credit, then run Test Star provider and approve one non-sensitive draft.', 'Successful sanitized Responses API answer; money and account actions must remain admin-approved.'],
+      : [status.includes('cap') ? 'Raise or wait for the configured Star request cap, then run Test Star provider and confirm the safe rules fallback clears.' : (status.includes('credit') ? 'Add usable OpenAI API credit, then run Test Star provider and approve one non-sensitive draft.' : 'Add the OpenAI API key and usable API credit, then run Test Star provider and approve one non-sensitive draft.'), 'Successful sanitized Responses API answer; money and account actions must remain admin-approved.'],
     ezpass: connected
       ? ['Import each new E-ZPass statement through Tolls and clear only uncertain plate/customer matches.', 'Statement rows separated by customer and vehicle, duplicate re-import skipped, recovery totals visible in Tolls and Reports.']
       : ['Export CSV from E-ZPass, preview it in Tolls, verify the separated customer/car matches, then import the same file twice to prove duplicate protection.', 'Exact plate/VIN/customer matches, an unmatched review queue, duplicate count, and recovery totals tied to the source references.'],
@@ -10129,12 +10400,10 @@ function mergeById(preferred, fallback) {
   });
   return merged;
 }
-async function protectConcurrentLocalWrites(data, options = {}) {
-  await writeDataQueue.catch(() => {});
-  const latest = await readData();
+function mergeConcurrentState(data, latest, options = {}) {
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
-  ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'].forEach(key => {
+  CONCURRENT_COLLECTIONS.forEach(key => {
     data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
@@ -10143,6 +10412,16 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   data.payments = preferIncoming ? upsertById(latest.payments, data.payments) : upsertById(data.payments, latest.payments);
   if (options.preserveLatestIntegrations) data.integrations = latest.integrations || data.integrations || {};
   return data;
+}
+async function protectConcurrentLocalWrites(data, options = {}) {
+  const mergedOptions = { ...options, deletedIds: { ...inferredDeleteIds(data), ...(options.deletedIds || {}) } };
+  if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) {
+    Object.defineProperty(data, STATE_WRITE_META, { value: { options: mergedOptions, reason: options.reason || 'concurrent state merge' }, configurable: true });
+    return data;
+  }
+  await writeDataQueue.catch(() => {});
+  const latest = await readData();
+  return mergeConcurrentState(data, latest, mergedOptions);
 }
 async function syncCloverIntoData(data, options = {}) {
   data.integrations = data.integrations || {};
@@ -10249,6 +10528,10 @@ async function runAutoSync(options = {}) {
       await protectConcurrentLocalWrites(data);
       await writeData(data);
     } catch {}
+    await recordOperationalFailure('clover-auto-sync', err, {
+      route: 'WheelsonAuto automatic Clover sync',
+      source: String(options.source || 'automatic')
+    });
     return { ok: false, skipped: false, error: autoSyncStatus.lastError, status: autoSyncStatus };
   } finally {
     autoSyncStatus.inFlight = false;
@@ -11277,6 +11560,14 @@ async function attachStripeCardSetupCheckout(data, request, req) {
     autopayConsentUserAgent: request.autopayConsentUserAgent || String(req && req.headers && req.headers['user-agent'] || '').slice(0, 500),
     status: 'Stripe secure setup opened'
   });
+  stripeRecurringRowsForRequest(data, request).forEach(row => {
+    if (normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover') !== 'clover' || !stripeMigration.hasCloverSource(row)) return;
+    Object.assign(row, stripeMigrationPatch(row, stripeMigration.STATES.STRIPE_SETUP_SENT, {
+      at: now,
+      setupSentAt: now,
+      note: 'Stripe card setup link sent. Clover remains the active provider until a protected cutover is scheduled.'
+    }));
+  });
   await writeData(data);
   return session;
 }
@@ -11326,7 +11617,13 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       stripeCardBrand: card.brand || '',
       stripeCardLast4: card.last4 || '',
       stripeCardSavedAt: completedAt,
-      stripeMigrationStatus: hasLiveClover ? 'Stripe card ready - Clover remains active until owner confirmation' : 'Stripe active',
+      ...stripeMigrationPatch(row, hasLiveClover ? stripeMigration.STATES.STRIPE_CARD_SAVED : stripeMigration.STATES.STRIPE_ACTIVE, {
+        at: completedAt,
+        cardSavedAt: completedAt,
+        note: hasLiveClover
+          ? 'Stripe card saved. Schedule the next billing-date cutover before stopping Clover.'
+          : 'Stripe card saved for an existing Stripe schedule.'
+      }),
       pendingCardProvider: '',
       cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
       cardChangePendingAt: '',
@@ -11589,11 +11886,114 @@ function retryDelayPassed(row, date = new Date()) {
 function isWheelsonAutoManagedAutopay(row) {
   return !!(row && row.autoChargeEnabled && hasWheelsonAutoSavedCard(row));
 }
+function stripeMigrationPatch(row, nextState, details = {}) {
+  const migration = stripeMigration.transition(row, nextState, details);
+  return {
+    stripeMigration: migration,
+    stripeMigrationStatus: stripeMigration.stateLabel(migration.state),
+    stripeCutoverDate: migration.cutoverDate || '',
+    stripeCutoverScheduledAt: migration.cutoverScheduledAt || '',
+    cloverStoppedConfirmedAt: migration.cloverStoppedConfirmedAt || '',
+    cloverStoppedConfirmedBy: migration.cloverStoppedConfirmedBy || '',
+    firstStripeChargeAt: migration.firstStripeChargeAt || '',
+    firstStripePaymentIntentId: migration.firstStripePaymentIntentId || '',
+    cloverDisabledAt: migration.cloverDisabledAt || '',
+    cloverDisabledBy: migration.cloverDisabledBy || '',
+    lastBillingPeriodKey: migration.lastBillingPeriodKey || ''
+  };
+}
+function isDuplicateBillingPeriodError(err) {
+  return String(err && err.code || '') === 'duplicate_billing_period';
+}
+function assertRecurringChargeAllowed(data, recurring, payload, provider) {
+  const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const allowAdditionalManualCharge = payload.automatic !== true && payload.allowAdditionalManualCharge === true;
+  if (scheduledDueKey && !allowAdditionalManualCharge && scheduledDueKey <= localDateKey()) {
+    const syncedPayment = successfulRecurringPaymentEvidence(data, recurring, scheduledDueKey, localDateKey());
+    if (syncedPayment) {
+      const error = stripeMigration.duplicateChargeError(syncedPayment, scheduledDueKey);
+      error.message = 'A paid recurring payment was already recorded for ' + scheduledDueKey + ' (' + (syncedPayment.source || 'provider sync') + '). Review it before charging again.';
+      throw error;
+    }
+  }
+  if (scheduledDueKey) stripeMigration.assertBillingPeriodOpen(data, recurring, scheduledDueKey, { allowAdditionalManualCharge });
+  const migration = stripeMigration.migrationRecord(recurring);
+  const selectedProvider = normalizedPaymentProvider(provider || recurring.paymentProvider || recurring.provider || 'clover');
+  if (selectedProvider === 'stripe' && stripeMigration.hasCloverSource(recurring)) {
+    if (migration.state === stripeMigration.STATES.STRIPE_SETUP_SENT || migration.state === stripeMigration.STATES.STRIPE_CARD_SAVED) {
+      const error = new Error('Stripe card setup is complete, but the Stripe cutover has not been scheduled. Keep Clover active until the owner schedules a protected cutover date.');
+      error.code = 'stripe_cutover_not_scheduled';
+      error.statusCode = 409;
+      throw error;
+    }
+    if (migration.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
+      const error = new Error('Stripe cutover is scheduled for ' + (migration.cutoverDate || 'the next billing date') + '. Confirm Clover was stopped at cutover before the first Stripe charge.');
+      error.code = 'stripe_cutover_not_confirmed';
+      error.statusCode = 409;
+      throw error;
+    }
+    if (migration.state === stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING && !migration.cloverStoppedConfirmedAt) {
+      const error = new Error('The owner must confirm the Clover recurring schedule is stopped before the first Stripe charge.');
+      error.code = 'stripe_cutover_not_confirmed';
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+  return { scheduledDueKey, migration };
+}
+function finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso) {
+  const migration = stripeMigration.migrationRecord(recurring);
+  const billingPeriodKey = stripeMigration.billingPeriodKey(payment.scheduledDueDate);
+  if (!stripeMigration.hasCloverSource(recurring)) {
+    return stripeMigrationPatch(recurring, stripeMigration.STATES.STRIPE_ACTIVE, {
+      at: paymentAtIso,
+      lastBillingPeriodKey: billingPeriodKey,
+      note: 'Stripe payment recorded.'
+    });
+  }
+  if (migration.state !== stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING) {
+    return stripeMigrationPatch(recurring, migration.state, {
+      at: paymentAtIso,
+      lastBillingPeriodKey: billingPeriodKey,
+      note: 'Stripe payment recorded.'
+    });
+  }
+  const passed = stripeMigration.transition(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED, {
+    at: paymentAtIso,
+    firstStripeChargeAt: paymentAtIso,
+    firstStripePaymentIntentId: payment.stripePaymentIntentId || '',
+    lastBillingPeriodKey: billingPeriodKey,
+    note: 'First protected Stripe charge passed.'
+  });
+  const disabled = stripeMigration.transition({ ...recurring, stripeMigration: passed }, stripeMigration.STATES.CLOVER_DISABLED, {
+    at: paymentAtIso,
+    firstStripeChargeAt: paymentAtIso,
+    firstStripePaymentIntentId: payment.stripePaymentIntentId || '',
+    cloverDisabledAt: paymentAtIso,
+    cloverDisabledBy: migration.cloverStoppedConfirmedBy || 'Owner-confirmed cutover',
+    lastBillingPeriodKey: billingPeriodKey,
+    note: 'First Stripe charge passed after owner-confirmed Clover stop.'
+  });
+  return {
+    stripeMigration: disabled,
+    stripeMigrationStatus: stripeMigration.stateLabel(disabled.state),
+    stripeCutoverDate: disabled.cutoverDate || '',
+    stripeCutoverScheduledAt: disabled.cutoverScheduledAt || '',
+    cloverStoppedConfirmedAt: disabled.cloverStoppedConfirmedAt || '',
+    cloverStoppedConfirmedBy: disabled.cloverStoppedConfirmedBy || '',
+    firstStripeChargeAt: disabled.firstStripeChargeAt || '',
+    firstStripePaymentIntentId: disabled.firstStripePaymentIntentId || '',
+    cloverDisabledAt: disabled.cloverDisabledAt || '',
+    cloverDisabledBy: disabled.cloverDisabledBy || '',
+    lastBillingPeriodKey: disabled.lastBillingPeriodKey || ''
+  };
+}
 function isDueForWheelsonAutoAutopay(row, dateKey = localDateKey()) {
   const status = String(row && row.status || '').toLowerCase();
   if (Number(row && (row.retryCount || row.failedAttempts) || 0) >= 2) return false;
   if (status !== 'active' && !status.includes('1x failed')) return false;
   if (!isWheelsonAutoManagedAutopay(row)) return false;
+  if (!stripeMigration.automaticChargeAllowed(row, normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover'), dateKey)) return false;
   const dueKey = recurringDateKey(row);
   if (!dueKey || dueKey > dateKey) return false;
   if (dueKey === dateKey && businessMinutesNow() < chargeTimeMinutes(row)) return false;
@@ -11752,13 +12152,15 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
   return payment;
 }
 async function chargeStripeSavedCard(data, recurring, payload = {}) {
+  const amount = Number(payload.amount || recurring.amount || 0);
+  if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
+  const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'stripe');
   if (!stripe.configured()) throw Object.assign(new Error('Stripe saved-card charging is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
   const customerId = String(recurring.stripeCustomerId || '').trim();
   const paymentMethodId = String(recurring.stripePaymentMethodId || '').trim();
   if (!customerId || !paymentMethodId) throw new Error('Stripe card not found. Ask the customer to save a Stripe card through the WheelsonAuto customer portal.');
-  const amount = Number(payload.amount || recurring.amount || 0);
-  if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
-  const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const scheduledDueKey = chargeGuard.scheduledDueKey;
+  const billingPeriodKey = stripeMigration.billingPeriodKey(scheduledDueKey);
   const idempotencyKey = String(payload.idempotencyKey || (payload.automatic && scheduledDueKey
     ? ['woa-stripe-auto', recurring.id || payload.recurringPaymentId, scheduledDueKey, cents(amount)].join('-')
     : ['woa-stripe-manual', recurring.id || payload.recurringPaymentId, cents(amount), Date.now()].join('-'))).slice(0, 255);
@@ -11779,7 +12181,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
       vehicleId: identity.vehicleId || recurring.vehicleId || '',
       vin: identity.vin || recurring.vin || '',
       licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || ''
-    }, { flow: payload.automatic ? 'autopay' : 'manual_charge', scheduledDueDate: scheduledDueKey || '', amount: String(cents(amount)) })
+    }, { flow: payload.automatic ? 'autopay' : 'manual_charge', scheduledDueDate: scheduledDueKey || '', billingPeriodKey, amount: String(cents(amount)) })
   }, idempotencyKey);
   const paid = String(intent.status || '').toLowerCase() === 'succeeded';
   if (!paid) {
@@ -11821,6 +12223,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     source: 'Stripe saved-card charge',
     notes: String(payload.note || '').trim(),
     scheduledDueDate: scheduledDueKey,
+    billingPeriodKey,
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: customerId,
     stripePaymentMethodId: paymentMethodId
@@ -11843,7 +12246,8 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     lastPaymentResult: 'Paid',
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts,
-    autopayManagedBy: 'WheelsonAuto / Stripe'
+    autopayManagedBy: 'WheelsonAuto / Stripe',
+    ...finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso)
   };
   if (!payload.automatic) patch.lastManualChargeAt = paymentAtIso;
   if (resolvedNextRun && resolvedNextRun !== priorNextRun) Object.assign(patch, {
@@ -11863,6 +12267,9 @@ async function chargeSavedRecurringCard(data, payload, req) {
   const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
   if (provider === 'stripe') return chargeStripeSavedCard(data, recurring, payload);
   if (provider !== 'clover') throw new Error('Unsupported saved-card provider: ' + paymentProviderLabel(provider) + '.');
+  const amount = Number(payload.amount || recurring.amount || 0);
+  if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
+  const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'clover');
   let customerSource = recurringCustomerSource(recurring);
   let cardSource = recurringCardChargeSource({ ...recurring, cloverPaymentSource: payload.cloverPaymentSource || recurring.cloverPaymentSource });
   if ((!customerSource || !cardSource) && recurring.cloverSubscriptionId) {
@@ -11890,10 +12297,9 @@ async function chargeSavedRecurringCard(data, payload, req) {
   }
   const source = cardSource || (hasWheelsonAutoSavedCard(recurring) ? customerSource : '');
   if (!source) throw new Error('Clover shows a card on file for this recurring customer, but it did not return a chargeable Ecommerce saved-card token. Use Pay link for this charge, or save the customer card through WheelsonAuto checkout before using Charge saved card.');
-  const amount = Number(payload.amount || recurring.amount || 0);
-  if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
   const ref = chargeReference();
-  const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
+  const scheduledDueKey = chargeGuard.scheduledDueKey;
+  const billingPeriodKey = stripeMigration.billingPeriodKey(scheduledDueKey);
   const idempotencyKey = String(payload.idempotencyKey || (payload.automatic && scheduledDueKey
     ? ['woa-auto', recurring.id || payload.recurringPaymentId, scheduledDueKey, cents(amount)].join('-')
     : ['woa-manual', recurring.id || payload.recurringPaymentId, cents(amount), Date.now()].join('-'))).slice(0, 255);
@@ -11952,6 +12358,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
     source: 'Clover saved-card charge',
     notes: String(payload.note || '').trim(),
     scheduledDueDate: scheduledDueKey,
+    billingPeriodKey,
     recurringPaymentId: recurring.id || '',
     cloverCustomerId: recurring.cloverCustomerId || '',
     cloverSubscriptionId: recurring.cloverSubscriptionId || ''
@@ -12006,7 +12413,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   try {
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
@@ -12063,6 +12470,30 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeResult = 'Paid';
         result.charged += 1;
       } catch (err) {
+        if (isDuplicateBillingPeriodError(err)) {
+          const nextRun = nextFutureRecurringDate(row, dateKey, scheduledDueDate);
+          if (nextRun && nextRun !== scheduledDueDate) {
+            updateRecurringChargeState(data, row.id, {
+              nextRun,
+              adminNextRun: nextRun,
+              paymentDay: /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.paymentDay,
+              chargeDay: /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.chargeDay,
+              status: 'Active',
+              tone: 'good',
+              retryCount: 0,
+              failedAttempts: 0,
+              lastDuplicateChargeBlockAt: new Date().toISOString(),
+              lastDuplicateChargeBlockPaymentId: err.existingPayment && (err.existingPayment.id || err.existingPayment.providerPaymentId) || '',
+              lastScheduleReconciledAt: new Date().toISOString(),
+              lastScheduleReconciledFrom: scheduledDueDate,
+              lastScheduleReconcileSource: 'duplicate-charge protection',
+              lastScheduleReconcilePaymentId: err.existingPayment && (err.existingPayment.id || err.existingPayment.providerPaymentId) || ''
+            });
+          }
+          result.duplicateBlocked += 1;
+          result.errors.push((row.customer || row.id) + ': duplicate charge blocked');
+          continue;
+        }
         if (isPaymentNotFoundError(err)) {
           const payment = savePaymentNotFoundResult(data, row, {
             amount: row.amount,
@@ -12145,6 +12576,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     woaAutopayStatus.lastError = String(err && err.message || err);
     woaAutopayStatus.fatalError = woaAutopayStatus.lastError;
     woaAutopayStatus.lastResult = { dateKey, errors: [woaAutopayStatus.lastError] };
+    await recordOperationalFailure('autopay-run', err, { recurringPaymentId: options.recurringPaymentId || '', route: 'WheelsonAuto background autopay', dateKey });
     return { ok: false, skipped: false, error: woaAutopayStatus.lastError, status: woaAutopayStatus };
   } finally {
     woaAutopayStatus.inFlight = false;
@@ -12382,12 +12814,18 @@ async function stripeDisputeClaim(data, dispute = {}) {
   return claim;
 }
 async function recordStripeWebhookEvent(event = {}) {
+  const durableClaim = await STATE_REPOSITORY.claimWebhookEvent('stripe', event.id || '', { type: event.type || '', created: event.created || 0 });
+  if (!durableClaim.accepted) return { ok: true, received: false, duplicate: true, eventId: event.id || '' };
+  try {
   const data = await readData();
   data.integrations = data.integrations || {};
   data.integrations.stripe = data.integrations.stripe || {};
   const stripeState = data.integrations.stripe;
   stripeState.webhookEventIds = Array.isArray(stripeState.webhookEventIds) ? stripeState.webhookEventIds : [];
-  if (event.id && stripeState.webhookEventIds.includes(event.id)) return { ok: true, received: false, duplicate: true, eventId: event.id };
+  if (event.id && stripeState.webhookEventIds.includes(event.id)) {
+    await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id);
+    return { ok: true, received: false, duplicate: true, eventId: event.id };
+  }
   const type = String(event.type || '');
   const object = event.data && event.data.object || {};
   let cardSetupRequestId = '';
@@ -12445,7 +12883,13 @@ async function recordStripeWebhookEvent(event = {}) {
   stripeState.lastWebhookError = '';
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
+  await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
   return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId };
+  } catch (error) {
+    await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error).catch(() => {});
+    await recordOperationalFailure('stripe-webhook', error, { eventId: event.id || '', route: '/api/webhooks/stripe' });
+    throw error;
+  }
 }
 
 function telnyxWebhookEventType(payload = {}) {
@@ -12534,7 +12978,7 @@ function mergeTelnyxDeliveryUpdates(targetData, sourceData) {
 }
 async function persistTelnyxDeliveryUpdates(sourceData, result = {}) {
   const job = writeDataQueue.then(async () => {
-    const latest = repairDataIds(JSON.parse(await fs.readFile(DATA_FILE, 'utf8')));
+    const latest = await readData();
     const updated = mergeTelnyxDeliveryUpdates(latest, sourceData);
     latest.integrations = latest.integrations || {};
     latest.integrations.messaging = latest.integrations.messaging || {};
@@ -12609,6 +13053,10 @@ async function syncTelnyxDeliveryStatuses(options = {}) {
     return result;
   } catch (err) {
     telnyxDeliveryPollStatus.lastError = String(err && err.message || err);
+    await recordOperationalFailure('telnyx-delivery-sync', err, {
+      route: 'Telnyx message delivery status sync',
+      source: String(options.source || 'automatic')
+    });
     throw err;
   } finally {
     telnyxDeliveryPollStatus.inFlight = false;
@@ -13087,7 +13535,8 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'documents') {
         if (!session.profileCompletedAt) return json(res, 409, { ok: false, error: 'Complete the profile and pickup request first.' });
-        const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR);
+        if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
+        const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR, PRIVATE_DOCUMENT_STORE);
         if (normalizedIdentityProvider(session.identityProvider) === 'stripe') {
           session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
           if (session.stripeIdentityVerificationId) session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
@@ -13171,7 +13620,8 @@ const server = http.createServer(async (req, res) => {
         if (payload.electronicConsent !== true || payload.signatureMatchConsent !== true) return json(res, 400, { ok: false, error: 'Electronic-signature and signature-match confirmations are both required.' });
         const signedAt = new Date().toISOString();
         const signedContract = onboarding.buildContract(data, application, vehicle, session, template, { signedAt });
-        const signatureImage = await onboarding.saveSignatureImage(payload.signatureData, session, DATA_DIR);
+        if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
+        const signatureImage = await onboarding.saveSignatureImage(payload.signatureData, session, DATA_DIR, PRIVATE_DOCUMENT_STORE);
         const signature = {
           id: 'esign-' + crypto.randomBytes(9).toString('hex'),
           applicationId: application.id,
@@ -13190,6 +13640,11 @@ const server = http.createServer(async (req, res) => {
           signatureImageId: signatureImage.id,
           signatureImageHash: signatureImage.sha256,
           signatureImagePath: signatureImage.storagePath,
+          storagePath: signatureImage.storagePath || '',
+          storageKey: signatureImage.storageKey || '',
+          storageProvider: signatureImage.storageProvider || 'legacy-local',
+          storageSecurity: signatureImage.storageSecurity || (signatureImage.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
+          encryption: signatureImage.encryption || {},
           signatureImageContentType: signatureImage.contentType,
           signatureImageSize: signatureImage.size,
           electronicConsent: true,
@@ -14395,7 +14850,8 @@ const server = http.createServer(async (req, res) => {
       let storedFile = null;
       if (payload.file) {
         try {
-          storedFile = await onboarding.savePrivateDocument(payload.file, DATA_DIR, 'doc-customer-portal');
+          if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
+          storedFile = await onboarding.savePrivateDocument(payload.file, DATA_DIR, 'doc-customer-portal', PRIVATE_DOCUMENT_STORE, { organizationId: account.organizationId || MAIN_ORG_ID });
         } catch (error) {
           return json(res, 400, { ok: false, error: error.message || 'The document could not be uploaded.' });
         }
@@ -14429,6 +14885,10 @@ const server = http.createServer(async (req, res) => {
         size: storedFile && storedFile.size || 0,
         sha256: storedFile && storedFile.sha256 || '',
         storagePath: storedFile && storedFile.storagePath || '',
+        storageKey: storedFile && storedFile.storageKey || '',
+        storageProvider: storedFile && storedFile.storageProvider || (storedFile ? 'legacy-local' : ''),
+        storageSecurity: storedFile && (storedFile.storageSecurity || (storedFile.encryption ? 'encrypted' : 'legacy-local-unencrypted')) || '',
+        encryption: storedFile && storedFile.encryption || {},
         expires,
         date: localDateKey(),
         createdAt: new Date().toISOString(),
@@ -14499,11 +14959,12 @@ const server = http.createServer(async (req, res) => {
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
       const document = (data.documents || []).find(row => row.id === id && row.customerAccountId === account.id && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
-      if (!document || !document.storagePath) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
-      const root = path.resolve(DATA_DIR, 'onboarding-uploads');
-      const filePath = path.resolve(DATA_DIR, document.storagePath);
-      if (!filePath.startsWith(root + path.sep)) return send(res, 403, 'Invalid document path', 'text/plain; charset=utf-8');
-      return send(res, 200, await fs.readFile(filePath), document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+      if (!document || !privateDocumentAvailable(document)) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
+      try {
+        return send(res, 200, await readPrivateDocumentBytes(document), document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+      } catch (error) {
+        return send(res, Number(error && error.statusCode || 404), 'Document could not be opened', 'text/plain; charset=utf-8');
+      }
     }
     if (url.pathname === '/customer/card-change' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -15170,7 +15631,10 @@ const server = http.createServer(async (req, res) => {
       const yearSummary = integrationEngine.accountingYearSummary(entries, year);
       const insights = integrationEngine.accountingLedgerInsights(entries, { month });
       const taxCenter = integrationEngine.accountingTaxCenter(data, entries, { year, month });
-      const review = await starAccountingReview(yearSummary, insights, taxCenter);
+      const review = await starAccountingReview(data, yearSummary, insights, taxCenter);
+      appendAuditLog(data, user, 'Star accounting review prepared', [review.provider || 'rules', review.providerError || 'No provider error', year]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
       return json(res, 200, { ok: true, review });
     }
     if (url.pathname === '/api/accounting/ledger/rebuild' && req.method === 'POST') {
@@ -15595,23 +16059,25 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[3] || '');
       const data = await readData();
       const document = (data.documents || []).find(row => row.id === id);
-      if (!document || !rowVisibleToUserOrganization(document, user) || !document.storagePath) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
-      const root = path.resolve(DATA_DIR, 'onboarding-uploads');
-      const filePath = path.resolve(DATA_DIR, document.storagePath);
-      if (!filePath.startsWith(root + path.sep)) return send(res, 403, 'Invalid document path', 'text/plain; charset=utf-8');
-      const body = await fs.readFile(filePath);
-      return send(res, 200, body, document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+      if (!document || !rowVisibleToUserOrganization(document, user) || !privateDocumentAvailable(document)) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
+      try {
+        const body = await readPrivateDocumentBytes(document);
+        return send(res, 200, body, document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+      } catch (error) {
+        return send(res, Number(error && error.statusCode || 404), 'Document could not be opened', 'text/plain; charset=utf-8');
+      }
     }
     if (url.pathname.startsWith('/api/onboarding/signatures/') && req.method === 'GET') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can view private signatures.' });
       const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[3] || '');
       const data = await readData();
       const signature = (data.eSignatures || []).find(row => row.id === id);
-      if (!signature || !rowVisibleToUserOrganization(signature, user) || !signature.signatureImagePath) return send(res, 404, 'Signature not found', 'text/plain; charset=utf-8');
-      const root = path.resolve(DATA_DIR, 'onboarding-uploads');
-      const filePath = path.resolve(DATA_DIR, signature.signatureImagePath);
-      if (!filePath.startsWith(root + path.sep)) return send(res, 403, 'Invalid signature path', 'text/plain; charset=utf-8');
-      return send(res, 200, await fs.readFile(filePath), 'image/png', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+      if (!signature || !rowVisibleToUserOrganization(signature, user) || !privateDocumentAvailable(signature)) return send(res, 404, 'Signature not found', 'text/plain; charset=utf-8');
+      try {
+        return send(res, 200, await readPrivateDocumentBytes(signature), signature.signatureImageContentType || signature.contentType || 'image/png', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
+      } catch (error) {
+        return send(res, Number(error && error.statusCode || 404), 'Signature could not be opened', 'text/plain; charset=utf-8');
+      }
     }
     if (url.pathname === '/api/contract-template' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view the editable legal template.' });
@@ -16154,7 +16620,83 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/system/health' && req.method === 'GET') {
       const data = await readData();
-      return json(res, 200, systemHealthSnapshot(data, user));
+      const health = systemHealthSnapshot(data, user);
+      if (isOwnerUser(user)) {
+        const infrastructure = await productionInfrastructurePreflight();
+        const identityConflicts = stateRepository.identityConflicts(data);
+        health.infrastructure = {
+          ...infrastructure,
+          identityConflicts: identityConflicts.slice(0, 20),
+          openJobErrors: await STATE_REPOSITORY.recentJobErrors(12)
+        };
+      }
+      return json(res, 200, health);
+    }
+    if (url.pathname === '/api/system/infrastructure/preflight' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view production infrastructure readiness.' });
+      const data = await readData();
+      const infrastructure = await productionInfrastructurePreflight();
+      const conflicts = stateRepository.identityConflicts(data);
+      return json(res, 200, {
+        ok: infrastructure.readyForLiveStripe && conflicts.length === 0,
+        ...infrastructure,
+        identityConflicts: conflicts.slice(0, 50),
+        openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
+        requiredBeforeLiveStripe: [
+          'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL',
+          'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
+          'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
+          'WOA_SESSION_SECRET, WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1, and production hardening flag',
+          'Controlled backup restore and Stripe migration test record'
+        ]
+      });
+    }
+    if (url.pathname === '/api/system/recovery/snapshots' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view recovery snapshots.' });
+      if (!STATE_REPOSITORY.isTransactional || !STATE_REPOSITORY.isTransactional()) {
+        return json(res, 409, { ok: false, error: 'Recovery snapshots are available after PostgreSQL is enabled. JSON development mode does not provide transactional restore points.' });
+      }
+      const snapshots = await STATE_REPOSITORY.listSnapshots(50);
+      return json(res, 200, {
+        ok: true,
+        snapshots,
+        restoreConfirmationFormat: 'RESTORE SNAPSHOT <snapshot id>',
+        message: 'Restoring creates a new audited PostgreSQL snapshot. It never changes the retained JSON rollback file.'
+      });
+    }
+    if (url.pathname === '/api/system/recovery/restore' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can restore a recovery snapshot.' });
+      if (!STATE_REPOSITORY.isTransactional || !STATE_REPOSITORY.isTransactional()) {
+        return json(res, 409, { ok: false, error: 'Recovery snapshots require PostgreSQL transactional storage.' });
+      }
+      const payload = await readJsonBody(req);
+      const snapshotId = Number(payload.snapshotId || 0);
+      const expectedConfirmation = 'RESTORE SNAPSHOT ' + snapshotId;
+      if (payload.confirmed !== true || String(payload.confirmationPhrase || '').trim() !== expectedConfirmation) {
+        return json(res, 409, { ok: false, error: 'Type exactly "' + expectedConfirmation + '" and confirm before restoring a live snapshot.' });
+      }
+      await writeDataQueue.catch(() => {});
+      try {
+        const actor = user.name || user.username || 'Owner';
+        const restored = await STATE_REPOSITORY.restoreSnapshot(snapshotId, {
+          actor,
+          reason: 'owner-confirmed snapshot recovery',
+          transform: state => {
+            appendAuditLog(state, user, 'PostgreSQL snapshot restored', ['Snapshot ' + snapshotId, 'Controlled owner recovery', 'A new recovery snapshot was created automatically']);
+            return state;
+          }
+        });
+        return json(res, 200, {
+          ok: true,
+          restoredSnapshot: restored.restoredSnapshot,
+          version: restored.version,
+          checksum: restored.checksum,
+          message: 'Snapshot restored and audited. Refresh the workspace before continuing work.'
+        });
+      } catch (error) {
+        const status = error.code === 'snapshot_not_found' ? 404 : 409;
+        return json(res, status, { ok: false, error: String(error && error.message || error) });
+      }
     }
     if (url.pathname === '/api/system/launch-readiness/tasks' && req.method === 'POST') {
       if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts cannot create launch readiness tasks.' });
@@ -16207,7 +16749,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/reset' && req.method === 'POST') {
       if (!isOwnerUser(user) || process.env.WOA_ALLOW_DATA_RESET !== '1') return json(res, 403, { ok: false, error: 'Platform data reset is disabled. Enable WOA_ALLOW_DATA_RESET=1 only for an intentional owner maintenance window.' });
-      await fs.copyFile(SEED_FILE, DATA_FILE);
+      if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) return json(res, 409, { ok: false, error: 'Database mode blocks destructive seed resets. Restore a reviewed PostgreSQL snapshot through the controlled recovery workflow instead.' });
+      await writeData(JSON.parse(await fs.readFile(SEED_FILE, 'utf8')));
       return json(res, 200, { ok: true, data: await readData() });
     }
     if (url.pathname === '/api/integrations/clover/connect' && req.method === 'POST') {
@@ -16703,7 +17246,84 @@ const server = http.createServer(async (req, res) => {
       if (target === current) return json(res, 200, { ok: true, unchanged: true, paymentProvider: target, recurring });
       if (target === 'stripe') {
         if (!recurring.stripeCustomerId || !recurring.stripePaymentMethodId) return json(res, 409, { ok: false, error: 'Stripe card setup is not complete for this customer.' });
-        if ((recurring.cloverSubscriptionId || recurring.cloverPaymentSource) && payload.cloverStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that the Clover recurring schedule was stopped before activating Stripe. This prevents duplicate charges.' });
+        const action = String(payload.action || 'schedule').trim().toLowerCase();
+        const actor = user.name || user.username || 'Owner';
+        const now = new Date().toISOString();
+        const dueDate = recurringDateKey(recurring);
+        const migration = stripeMigration.migrationRecord(recurring);
+        if (action === 'schedule') {
+          const cutoverDate = validCalendarDateKey(payload.cutoverDate || dueDate);
+          if (!cutoverDate) return json(res, 409, { ok: false, error: 'Set the next charge date before scheduling a Stripe cutover.' });
+          if (cutoverDate < localDateKey()) return json(res, 409, { ok: false, error: 'Choose a future or today cutover date. Past billing dates cannot be safely migrated.' });
+          if (dueDate && cutoverDate !== dueDate) return json(res, 409, { ok: false, error: 'Set this customer\'s next charge date to the intended Stripe cutover date first. This keeps the billing period unambiguous.' });
+          const existing = stripeMigration.existingPaidPayment(data, recurring, cutoverDate);
+          if (existing) return json(res, 409, { ok: false, error: 'A payment is already recorded for the ' + cutoverDate + ' billing period. Select the next unpaid billing date before scheduling Stripe.', payment: existing });
+          const patch = {
+            paymentProvider: 'clover',
+            provider: 'Clover',
+            paymentSetup: 'Clover active - Stripe cutover scheduled',
+            autopayManagedBy: 'WheelsonAuto / Clover (cutover lock)',
+            status: 'Active',
+            tone: 'warn',
+            autoChargeEnabled: true,
+            stripeCutoverLocked: true,
+            stripeCutoverScheduledBy: actor,
+            ...stripeMigrationPatch(recurring, stripeMigration.STATES.CUTOVER_SCHEDULED, {
+              at: now,
+              cutoverDate,
+              cutoverScheduledAt: now,
+              cardSavedAt: recurring.stripeCardSavedAt || migration.cardSavedAt || now,
+              note: 'Protected Stripe cutover scheduled for ' + cutoverDate + '. Clover remains active until the owner confirms it was stopped.'
+            }),
+            updatedAt: now
+          };
+          updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
+          appendAuditLog(data, user, 'Stripe cutover scheduled', [recurring.customer || 'Unknown customer', 'Clover remains active', 'Cutover ' + cutoverDate, recurring.chargeTime || '18:00']);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+          return json(res, 200, {
+            ok: true,
+            scheduled: true,
+            paymentProvider: 'clover',
+            nextAction: 'On ' + cutoverDate + ', stop the Clover recurring schedule in Clover, then confirm the cutover here before the first Stripe charge.',
+            recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId)
+          });
+        }
+        if (action !== 'activate') return json(res, 400, { ok: false, error: 'Use schedule first, then activate after Clover is stopped.' });
+        if (migration.state !== stripeMigration.STATES.CUTOVER_SCHEDULED) return json(res, 409, { ok: false, error: 'Schedule the Stripe cutover before activating Stripe.' });
+        if (payload.cloverStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that the Clover recurring schedule was stopped before activating Stripe. This prevents duplicate charges.' });
+        const cutoverDate = migration.cutoverDate || dueDate;
+        if (cutoverDate && cutoverDate > localDateKey()) return json(res, 409, { ok: false, error: 'The protected cutover is scheduled for ' + cutoverDate + '. Keep Clover active until that date.' });
+        const existing = stripeMigration.existingPaidPayment(data, recurring, cutoverDate);
+        if (existing) return json(res, 409, { ok: false, error: 'A payment is already recorded for the ' + cutoverDate + ' billing period. WheelsonAuto will not activate Stripe for that already-paid period.', payment: existing });
+        const patch = {
+          paymentProvider: 'stripe',
+          provider: 'Stripe',
+          paymentSetup: 'Stripe card saved and chargeable - first protected charge pending',
+          cardLabel: recurring.stripeCardBrand || recurring.cardLabel || '',
+          cardLast4: recurring.stripeCardLast4 || recurring.cardLast4 || '',
+          cardSavedAt: recurring.stripeCardSavedAt || recurring.cardSavedAt || now,
+          autopayManagedBy: 'WheelsonAuto / Stripe',
+          status: 'Active',
+          tone: 'good',
+          autoChargeEnabled: true,
+          providerSwitchedAt: now,
+          providerSwitchedBy: actor,
+          stripeCutoverLocked: false,
+          ...stripeMigrationPatch(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, {
+            at: now,
+            cutoverDate,
+            cloverStoppedConfirmedAt: now,
+            cloverStoppedConfirmedBy: actor,
+            note: 'Owner confirmed the Clover recurring schedule was stopped. First Stripe charge is pending.'
+          }),
+          updatedAt: now
+        };
+        updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
+        appendAuditLog(data, user, 'Stripe cutover activated', [recurring.customer || 'Unknown customer', 'Clover stop confirmed', 'First Stripe charge pending', cutoverDate || recurring.nextRun || 'No next date']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, activated: true, paymentProvider: 'stripe', recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId) });
       }
       if (target === 'clover') {
         if (!recurring.cloverCustomerId || !recurring.cloverPaymentSource) return json(res, 409, { ok: false, error: 'A chargeable Clover saved-card source is not linked to this customer.' });
@@ -16717,13 +17337,21 @@ const server = http.createServer(async (req, res) => {
         cardLabel: recurring.stripeCardBrand || recurring.cardLabel || '',
         cardLast4: recurring.stripeCardLast4 || recurring.cardLast4 || '',
         cardSavedAt: recurring.stripeCardSavedAt || recurring.cardSavedAt || now,
-        stripeMigrationStatus: 'Stripe active - Clover stop confirmed',
+        ...stripeMigrationPatch(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, {
+          at: now,
+          cloverStoppedConfirmedAt: now,
+          cloverStoppedConfirmedBy: user.name || user.username || 'Owner',
+          note: 'Legacy owner-confirmed Stripe activation.'
+        }),
         autopayManagedBy: 'WheelsonAuto / Stripe'
       } : {
         paymentProvider: 'clover',
         provider: 'Clover',
         paymentSetup: 'Clover card saved and chargeable',
-        stripeMigrationStatus: 'Clover active - Stripe stop confirmed',
+        ...stripeMigrationPatch(recurring, stripeMigration.STATES.CLOVER_ACTIVE, {
+          at: now,
+          note: 'Owner confirmed Stripe was stopped before Clover reactivation.'
+        }),
         autopayManagedBy: 'WheelsonAuto / Clover'
       };
       Object.assign(patch, { status: 'Active', tone: 'good', autoChargeEnabled: true, providerSwitchedAt: now, providerSwitchedBy: user.name || user.username || 'Owner', updatedAt: now });
@@ -16743,6 +17371,12 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, charge: result.charge, payment: result.payment });
       } catch (err) {
         const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+        if (recurring && isDuplicateBillingPeriodError(err)) {
+          appendAuditLog(data, user, 'Duplicate charge blocked', [recurring.customer || 'Unknown customer', recurring.nextRun || 'Billing date not set', err.existingPayment && (err.existingPayment.id || err.existingPayment.providerPaymentId) || 'Existing payment']);
+          await protectConcurrentLocalWrites(data);
+          await writeData(data);
+          return json(res, 409, { ok: false, error: String(err && err.message || err), duplicateBlocked: true, payment: err.existingPayment || null });
+        }
         if (recurring && isPaymentNotFoundError(err)) {
           const payment = savePaymentNotFoundResult(data, recurring, payload, err, { source: 'Manual saved-card charge payment not found' });
           appendAuditLog(data, user, 'Manual saved-card charge not found', [recurring.customer || 'Unknown customer', moneyText(payment.amount || payload.amount || 0), String(err && err.message || err)]);
@@ -16784,12 +17418,14 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     const status = Math.max(400, Math.min(599, Number(err && err.statusCode || 500)));
     const message = String(err && err.message || err);
+    if (status >= 500) void recordOperationalFailure('http-request', err, { route: req.method + ' ' + String(req.url || '').slice(0, 180) }, { alert: true });
     if (String(req.url || '').startsWith('/api/')) return json(res, status, { ok: false, error: message });
     send(res, status, 'Server error: ' + message, 'text/plain; charset=utf-8');
   }
 });
 if (require.main === module) {
-  server.listen(PORT, HOST, () => {
+  assertProductionInfrastructure()
+    .then(() => server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
@@ -16838,7 +17474,11 @@ if (require.main === module) {
         })
         .catch(err => console.error('PassTime GPS background sync failed:', err && err.message || err)), PASSTIME_SYNC_MS);
     }
-  });
+    }))
+    .catch(error => {
+      console.error('WheelsonAuto refused to start with incomplete production safeguards:', error && error.message || error);
+      process.exitCode = 1;
+    });
 }
 module.exports = {
   server,

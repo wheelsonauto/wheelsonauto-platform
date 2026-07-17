@@ -3,13 +3,17 @@ const assert = require('node:assert');
 process.env.OPENAI_API_KEY = 'test-openai-key';
 process.env.WOA_AI_MODEL = 'gpt-5.4-nano';
 process.env.WOA_AI_TIMEOUT_MS = '5000';
+process.env.WOA_AI_MAX_REQUESTS_PER_DAY = '2';
+process.env.WOA_AI_MAX_REQUESTS_PER_MONTH = '4';
 
 const { openAiReplyPlan, openAiProviderReadiness } = require('../server');
 
 (async () => {
   let request = null;
+  let requestCount = 0;
   const originalFetch = global.fetch;
   global.fetch = async (url, options = {}) => {
+    requestCount += 1;
     request = { url: String(url), options };
     return {
       ok: true,
@@ -70,7 +74,8 @@ const { openAiReplyPlan, openAiProviderReadiness } = require('../server');
       tone: 'blue',
       reasons: ['Fallback']
     };
-    const plan = await openAiReplyPlan({}, {
+    const firstUsageData = {};
+    const plan = await openAiReplyPlan(firstUsageData, {
       customer: 'Test Customer',
       phone: '+13135550123',
       body: 'Can you send me a payment link?'
@@ -102,26 +107,30 @@ const { openAiReplyPlan, openAiProviderReadiness } = require('../server');
     assert.strictEqual(plan.approvalRequired, false);
     assert.strictEqual(plan.canAutoSend, true);
 
-    global.fetch = async () => ({
-      ok: true,
-      status: 200,
-      async json() {
-        return {
-          output_text: JSON.stringify({
-            reply: 'I charged the card and changed the schedule.',
-            intent: 'saved_card_charge',
-            actionType: 'charge_saved_card',
-            approvalRequired: false,
-            needsHuman: false,
-            canAutoSend: true,
-            confidence: 0.99,
-            tone: 'good',
-            reasons: ['Customer requested it.']
-          })
-        };
+    global.fetch = async () => {
+      requestCount += 1;
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            output_text: JSON.stringify({
+              reply: 'I charged the card and changed the schedule.',
+              intent: 'saved_card_charge',
+              actionType: 'charge_saved_card',
+              approvalRequired: false,
+              needsHuman: false,
+              canAutoSend: true,
+              confidence: 0.99,
+              tone: 'good',
+              reasons: ['Customer requested it.']
+            })
+          };
+        }
       }
-    });
-    const sensitivePlan = await openAiReplyPlan({}, { customer: 'Test Customer', body: 'Charge my card.' }, {
+    };
+    const sensitiveUsageData = {};
+    const sensitivePlan = await openAiReplyPlan(sensitiveUsageData, { customer: 'Test Customer', body: 'Charge my card.' }, {
       customerName: 'Test Customer',
       openClaims: [],
       maintenance: [],
@@ -134,8 +143,27 @@ const { openAiReplyPlan, openAiProviderReadiness } = require('../server');
     }, fallback);
     assert.strictEqual(sensitivePlan.approvalRequired, true, 'Server sanitizer must override an unsafe model approval decision.');
     assert.strictEqual(sensitivePlan.canAutoSend, false, 'Sensitive model output must never auto-send.');
+    assert.strictEqual(requestCount, 2, 'Only the two intended model calls should reach the provider before the quota test.');
 
-    console.log('Star provider runtime check passed: strict OpenAI output is parsed and sensitive actions remain approval-gated.');
+    const cappedReadiness = openAiProviderReadiness(sensitiveUsageData);
+    assert.strictEqual(cappedReadiness.aiProviderBudgetLimited, true, 'Star readiness must surface an exhausted configured request cap.');
+    assert.strictEqual(cappedReadiness.aiProviderStatus, 'OpenAI request cap reached', 'Star readiness must report the quota cap instead of claiming the provider is still available.');
+    const quotaPlan = await openAiReplyPlan({}, { customer: 'Test Customer', body: 'Can you help with my payment?' }, {
+      customerName: 'Test Customer',
+      openClaims: [],
+      maintenance: [],
+      applications: [],
+      paymentRequests: [],
+      cardSetupRequests: [],
+      documents: [],
+      tasks: [],
+      latestMessages: []
+    }, fallback);
+    assert.strictEqual(quotaPlan.provider, 'rules', 'Star must fall back to rules after reaching its configured request cap.');
+    assert.match(String(quotaPlan.providerError || ''), /request limit/i, 'The fallback must explain that the model-request cap was reached.');
+    assert.strictEqual(requestCount, 2, 'A capped Star request must not call the provider.');
+
+    console.log('Star provider runtime check passed: strict OpenAI output, approval gates, and request-cap fallback are verified.');
   } finally {
     global.fetch = originalFetch;
   }

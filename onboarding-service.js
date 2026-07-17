@@ -226,7 +226,7 @@ function validFileSignature(bytes, type) {
   return false;
 }
 
-async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload') {
+async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload', documentStore = null, options = {}) {
   const type = String(file && file.type || '').toLowerCase();
   const extension = safeExtension(type);
   if (!extension) throw new Error('Documents must be JPG, PNG, or PDF.');
@@ -235,10 +235,19 @@ async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload') {
   const bytes = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
   if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error('Each document must be between 1 byte and 5 MB.');
   if (!validFileSignature(bytes, type)) throw new Error('The uploaded file does not match its JPG, PNG, or PDF format.');
-  const folder = path.join(dataDir, 'onboarding-uploads');
-  await fs.mkdir(folder, { recursive: true });
   const prefix = text(idPrefix, 40).replace(/[^a-z0-9-]/gi, '') || 'doc-upload';
   const id = prefix + '-' + crypto.randomBytes(10).toString('hex');
+  if (documentStore && documentStore.isConfigured && documentStore.isConfigured()) {
+    return documentStore.save({
+      id,
+      bytes,
+      contentType: type,
+      originalName: text(file.name, 180),
+      organizationId: options.organizationId || file.organizationId || 'org-wheelsonauto'
+    });
+  }
+  const folder = path.join(dataDir, 'onboarding-uploads');
+  await fs.mkdir(folder, { recursive: true });
   const filename = id + extension;
   await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' });
   return {
@@ -247,11 +256,13 @@ async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload') {
     contentType: type,
     size: bytes.length,
     sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-    storagePath: path.join('onboarding-uploads', filename)
+    storagePath: path.join('onboarding-uploads', filename),
+    storageProvider: 'legacy-local',
+    storageSecurity: 'legacy-local-unencrypted'
   };
 }
 
-async function saveDocuments(data, session, application, files, dataDir) {
+async function saveDocuments(data, session, application, files, dataDir, documentStore = null) {
   ensureCollections(data);
   const required = ['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'];
   const byKind = new Map((files || []).map(file => [String(file.kind || ''), file]));
@@ -259,7 +270,9 @@ async function saveDocuments(data, session, application, files, dataDir) {
   const saved = [];
   for (const kind of required) {
     const file = byKind.get(kind) || {};
-    const stored = await savePrivateDocument(file, dataDir, 'doc-onboard');
+    const stored = await savePrivateDocument(file, dataDir, 'doc-onboard', documentStore, {
+      organizationId: session.organizationId || application.organizationId || 'org-wheelsonauto'
+    });
     data.documents = data.documents.filter(document => !(document.applicationId === application.id && document.onboardingSessionId === session.id && document.documentKind === kind));
     const record = {
       id: stored.id,
@@ -274,6 +287,10 @@ async function saveDocuments(data, session, application, files, dataDir) {
       size: stored.size,
       sha256: stored.sha256,
       storagePath: stored.storagePath,
+      storageKey: stored.storageKey || '',
+      storageProvider: stored.storageProvider || 'legacy-local',
+      storageSecurity: stored.storageSecurity || (stored.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
+      encryption: stored.encryption || {},
       status: 'Received - staff verification required',
       visibility: 'Private staff review',
       createdAt: new Date().toISOString()
@@ -288,15 +305,25 @@ async function saveDocuments(data, session, application, files, dataDir) {
   return saved;
 }
 
-async function saveSignatureImage(signatureData, session, dataDir) {
+async function saveSignatureImage(signatureData, session, dataDir, documentStore = null) {
   const match = String(signatureData || '').match(/^data:image\/png;base64,([a-z0-9+/=\s]+)$/i);
   if (!match) throw new Error('The drawn signature could not be verified.');
   const bytes = Buffer.from(match[1].replace(/\s+/g, ''), 'base64');
   if (bytes.length < 100 || bytes.length > 1024 * 1024) throw new Error('The drawn signature is empty or too large.');
   if (!validFileSignature(bytes, 'image/png')) throw new Error('The drawn signature is not a valid PNG image.');
+  const id = 'signature-' + crypto.randomBytes(10).toString('hex');
+  if (documentStore && documentStore.isConfigured && documentStore.isConfigured()) {
+    const stored = await documentStore.save({
+      id,
+      bytes,
+      contentType: 'image/png',
+      originalName: 'signature.png',
+      organizationId: session.organizationId || 'org-wheelsonauto'
+    });
+    return { ...stored, id, onboardingSessionId: session.id };
+  }
   const folder = path.join(dataDir, 'onboarding-uploads');
   await fs.mkdir(folder, { recursive: true });
-  const id = 'signature-' + crypto.randomBytes(10).toString('hex');
   const filename = id + '.png';
   await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' });
   return {
@@ -305,6 +332,8 @@ async function saveSignatureImage(signatureData, session, dataDir) {
     size: bytes.length,
     sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
     storagePath: path.join('onboarding-uploads', filename),
+    storageProvider: 'legacy-local',
+    storageSecurity: 'legacy-local-unencrypted',
     onboardingSessionId: session.id
   };
 }
