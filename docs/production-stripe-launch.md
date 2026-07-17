@@ -100,7 +100,9 @@ pnpm run migrate-json-to-postgres -- /secure/path/to/data-backup.json
 The importer refuses to overwrite an existing PostgreSQL organization unless
 `WOA_POSTGRES_MIGRATION_REPLACE=1` is supplied for a deliberate recovery
 operation. It verifies the canonical checksum after import and never deletes
-the JSON source.
+the JSON source. The launch preflight also rejects a reachable-but-empty
+database and any state or recovery snapshot whose checksum no longer matches;
+recover from a verified snapshot instead of manually editing production rows.
 
 Then configure Render:
 

@@ -21,6 +21,24 @@ function checksum(value) {
   return crypto.createHash('sha256').update(stableJson(value || {}), 'utf8').digest('hex');
 }
 
+function checksumEvidence(value, expectedChecksum) {
+  const expected = String(expectedChecksum || '').trim();
+  const actual = checksum(value);
+  return {
+    expected,
+    actual,
+    matches: !!expected && actual === expected
+  };
+}
+
+function assertChecksum(value, expectedChecksum, label = 'PostgreSQL state') {
+  const evidence = checksumEvidence(value, expectedChecksum);
+  if (evidence.matches) return evidence;
+  const error = new Error(label + ' checksum verification failed. Refusing to serve, mutate, or restore a corrupted state payload.');
+  error.code = 'woa_state_checksum_mismatch';
+  throw error;
+}
+
 function normalizeOrganizationId(value) {
   return String(value || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
 }
@@ -364,6 +382,7 @@ class PostgresStateRepository {
       return { state, version: 0, checksum: checksum(state), exists: false };
     }
     const row = result.rows[0];
+    assertChecksum(row.state, row.checksum, 'PostgreSQL state');
     return { state: this.repair(clone(row.state)), version: Number(row.version || 0), checksum: row.checksum || checksum(row.state), exists: true };
   }
 
@@ -430,7 +449,8 @@ class PostgresStateRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const existing = await client.query('SELECT state, version FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+      const existing = await client.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+      if (existing.rowCount) assertChecksum(existing.rows[0].state, existing.rows[0].checksum, 'Current PostgreSQL state');
       const previous = existing.rowCount ? this.repair(clone(existing.rows[0].state)) : this.repair(await this.seed());
       const merged = options.mergeState ? await options.mergeState(clone(previous)) : incomingState;
       const next = this.repair(clone(merged));
@@ -621,6 +641,7 @@ class PostgresStateRepository {
         throw error;
       }
       const snapshot = snapshotResult.rows[0];
+      assertChecksum(snapshot.state, snapshot.checksum, 'Recovery snapshot');
       let restored = this.repair(clone(snapshot.state));
       if (typeof options.transform === 'function') {
         const transformed = await options.transform(restored);
@@ -665,8 +686,33 @@ class PostgresStateRepository {
   async health() {
     try {
       await this.ensureSchema();
-      const result = await this.pool.query('SELECT version, updated_at FROM woa_state WHERE organization_id = $1', [this.organizationId]);
-      return { backend: 'postgres', connected: true, transactional: true, productionReady: true, version: result.rowCount ? Number(result.rows[0].version || 0) : 0, updatedAt: result.rowCount ? result.rows[0].updated_at : '' };
+      const result = await this.pool.query('SELECT state, version, checksum, updated_at FROM woa_state WHERE organization_id = $1', [this.organizationId]);
+      if (!result.rowCount) {
+        return {
+          backend: 'postgres',
+          connected: true,
+          transactional: true,
+          productionReady: false,
+          stateImported: false,
+          integrity: 'missing',
+          version: 0,
+          updatedAt: '',
+          error: 'PostgreSQL is reachable but WheelsonAuto state has not been imported.'
+        };
+      }
+      const row = result.rows[0];
+      const integrity = checksumEvidence(row.state, row.checksum);
+      return {
+        backend: 'postgres',
+        connected: true,
+        transactional: true,
+        productionReady: integrity.matches,
+        stateImported: true,
+        integrity: integrity.matches ? 'verified' : 'failed',
+        version: Number(row.version || 0),
+        updatedAt: row.updated_at,
+        error: integrity.matches ? '' : 'PostgreSQL state checksum verification failed.'
+      };
     } catch (error) {
       return { backend: 'postgres', connected: false, transactional: true, productionReady: false, error: String(error && error.message || error) };
     }
@@ -689,6 +735,8 @@ module.exports = {
   clone,
   stableJson,
   checksum,
+  checksumEvidence,
+  assertChecksum,
   identityEntries,
   identityConflicts,
   privateDocumentRows,

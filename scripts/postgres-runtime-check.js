@@ -74,6 +74,8 @@ async function main() {
     assert.strictEqual(stateRepository.checksum(restored.state), restored.checksum, 'Recovered state checksum must verify after the transaction commits.');
     const health = await repository.health();
     assert.strictEqual(health.productionReady, true, 'A reachable PostgreSQL state repository must report production-ready.');
+    assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
+    assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');
     console.log('PostgreSQL runtime recovery check passed: write, snapshot, restore, audit, checksum, Star quota, and cleanup verified.');
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});

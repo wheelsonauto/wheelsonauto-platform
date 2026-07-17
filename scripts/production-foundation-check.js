@@ -17,6 +17,11 @@ async function main() {
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     assert.strictEqual(stateRepository.checksum({ b: 2, a: { z: 3, y: 4 } }), stateRepository.checksum({ a: { y: 4, z: 3 }, b: 2 }), 'State checksums must be stable when a JSONB database changes object key order.');
+    const intactState = { records: [{ id: 'checksum-foundation-1', status: 'intact' }] };
+    const intactChecksum = stateRepository.checksum(intactState);
+    assert.strictEqual(stateRepository.checksumEvidence(intactState, intactChecksum).matches, true, 'A PostgreSQL state checksum must verify before the state is served or changed.');
+    assert.strictEqual(stateRepository.checksumEvidence({ ...intactState, records: [{ id: 'checksum-foundation-1', status: 'tampered' }] }, intactChecksum).matches, false, 'A modified PostgreSQL state payload must fail checksum verification.');
+    assert.throws(() => stateRepository.assertChecksum({ ...intactState, records: [{ id: 'checksum-foundation-1', status: 'tampered' }] }, intactChecksum, 'Foundation snapshot'), /checksum verification failed/i, 'A corrupted state snapshot must fail closed before recovery.');
     const first = await repository.read();
     assert.strictEqual(first.exists, false, 'A missing local data file must safely use the seed without writing it.');
     const next = {
@@ -78,7 +83,7 @@ async function main() {
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
 
-    console.log('Production foundation check passed: atomic state fallback, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, and Clover-to-Stripe duplicate protection are verified.');
+    console.log('Production foundation check passed: atomic state fallback, checksum fail-closed behavior, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, and Clover-to-Stripe duplicate protection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }
