@@ -3867,4 +3867,55 @@ Documents=function(){
 };
 Dashboard=BusinessDashboard;
 Website=WebsiteWorkspace;
+
+// The legacy feature layers each decorated Star's audit independently. On a
+// real fleet that repeated the same customer, claim, and provider scans several
+// times. Keep one focused audit pass at the final render boundary.
+var fastRiskAuditCache={key:'',items:[]};
+function fastRiskAuditKey(){
+  return [lastDataFingerprint,currentUser&&currentUser.role||'',(db.auditLogs||[]).length].join('|')
+}
+function fastStarSystemAuditItems(){
+  var cacheKey=fastRiskAuditKey();
+  if(fastRiskAuditCache.key===cacheKey)return fastRiskAuditCache.items.slice();
+  var roster=recurringRoster(),cars=db.vehicles||[],claims=db.claims||[],messages=db.messages||[],docs=db.documents||[],staff=db.staffAccounts||[],accounts=db.customerAccounts||[];
+  var paymentRisk=roster.filter(function(row){var key=paymentState(row).key;return key==='retry'||key==='contact'||key==='notfound'||key==='setup'});
+  var activeRoster=roster.filter(function(row){return !/removed|history|inactive|ended|cancel/i.test(String(row.status||''))});
+  var customerFleetGaps=activeRoster.filter(function(row){
+    var customer=findCustomerByName(row.customer)||{},contract=findContractByCustomer(row.customer)||{},car=findVehicle(row.vehicleId||customer.vehicleId||contract.vehicleId)||findVehicleByCustomer(row.customer);
+    return !String(row.customer||'').trim()||!car||!String(car.vin||'').trim()||!String(car.plate||car.stock||'').trim()||!String(car.tracker||'').trim()
+  });
+  var vehicleConflicts=cars.filter(function(car){return String(car.assignmentConflict||'').trim()||Array.isArray(car.assignmentClaims)&&car.assignmentClaims.length>1});
+  var openClaims=claims.filter(function(claim){return !/paid|closed|resolved|complete|denied/i.test(String(claim.status||'Open'))});
+  var defenseGaps=openClaims.filter(function(claim){
+    var hasCustomer=String(claim.customer||'').trim()&&!/unmatched|unknown|customer match needed/i.test(String(claim.customer));
+    var hasPayment=String(claim.paymentId||claim.cloverPaymentId||claim.transactionId||claim.externalId||claim.caseId||claim.disputeId||'').trim();
+    var hasProof=String(claim.evidence||claim.proof||claim.documentId||claim.reference||'').trim();
+    return !hasCustomer||!hasPayment||!hasProof||Number(claim.amount||0)<=0
+  });
+  var recoveryGaps=openClaims.filter(function(claim){return Math.max(0,Number(claim.amount||0)-Number(claim.paidAmount||claim.recoveredAmount||0))>0});
+  var messageStatus=messagingStatus(),pendingStar=messages.filter(function(message){var plan=message.aiPlan||{};return (plan.approvalRequired||plan.needsHuman)&&!/approved|sent|closed|rejected/i.test(String(message.status||''))});
+  var openCardLinks=(db.cardSetupRequests||[]).filter(function(request){return !/complete|saved|closed|deleted|expired|cancel/i.test(String(request.status||'Open'))});
+  var verificationReview=docs.filter(function(doc){return /review|pending|needed|missing|expired/i.test(String(doc.status||''))});
+  var providers=apiProviders(),providerReview=providers.filter(function(provider){var status=String(provider.status||'').toLowerCase();return !/connected|live|ready - manual adapter/.test(status)||!String(provider.endpoint||'').trim()||!String(provider.liveTest||'').trim()});
+  var activeStaff=staff.filter(staffStatusActive),roleIssues=(activeStaff.some(function(account){return String(account.role||'').toLowerCase()==='manager'})?0:1)+(activeStaff.some(function(account){return String(account.role||'').toLowerCase()==='mechanic'})?0:1)+accounts.filter(function(account){return !String(account.customer||account.customerId||'').trim()}).length;
+  var communicationReview=Number(!messageStatus.configured)+Number(!messageStatus.emailConfigured)+Number(!messageStatus.aiConfigured)+pendingStar.length;
+  var items=[
+    {source:'Launch readiness',title:'Payments/autopay lock',tone:paymentRisk.length?'warn':'good',count:paymentRisk.length,detail:paymentRisk.length?'Due, setup, failed, or payment-not-found rows need review.':'Payment statuses are mapped into Today and closeout.',fix:'Open Payments / Today and clear the source payment state before closeout.',view:'Payments',tab:'Today'},
+    {source:'Customer and fleet truth',title:'Customer + fleet truth',tone:customerFleetGaps.length||vehicleConflicts.length?'warn':'good',count:customerFleetGaps.length+vehicleConflicts.length,detail:customerFleetGaps.length+' active customer file(s) need vehicle identity review; '+vehicleConflicts.length+' assignment conflict(s).',fix:'Open Payments / Active or Operations / Assigned and correct the linked vehicle once.',view:'Payments',tab:'Active'},
+    {source:'Verification inbox',title:'License, insurance, and documents',tone:verificationReview.length?'warn':'good',count:verificationReview.length,detail:verificationReview.length?'Customer proof is waiting, missing, or expired.':'No saved document proof is waiting for staff review.',fix:'Open Documents / Review and approve or reject the source proof.',view:'Documents',tab:'Review'},
+    {source:'Defense packet',title:'Claims and dispute evidence',tone:defenseGaps.length?'warn':'good',count:defenseGaps.length,detail:defenseGaps.length?'Open cases are missing a customer/payment match, amount, or proof.':'Open claim and dispute evidence has no obvious saved gap.',fix:'Open Operations / Claims and finish the evidence packet before submitting or charging.',view:'Operations',tab:'Claims'},
+    {source:'Recovery ledger',title:'Tolls, claims, and reimbursements',tone:recoveryGaps.length?'warn':'good',count:recoveryGaps.length,detail:recoveryGaps.length?'Open recovery dollars still need collection or owner review.':'No open recovery balance is surfaced from current claims.',fix:'Open Operations / Claims and resolve the source recovery row.',view:'Operations',tab:'Claims'},
+    {source:'Messages and Star',title:'Messages + Star rules',tone:communicationReview?'warn':'good',count:communicationReview,detail:communicationReview?'Provider setup or Star approvals still need review.':'Messaging providers and current Star approvals are clear.',fix:'Open Messages / Setup or Star and finish provider proof or approval.',view:'Messages',tab:'Setup'},
+    {source:'Card setup',title:'Open card setup links',tone:openCardLinks.length?'warn':'good',count:openCardLinks.length,detail:openCardLinks.length?'Customers still have an open setup/change link.':'No open card setup/change link is waiting.',fix:'Open Messages / Follow-up and confirm the saved card becomes chargeable.',view:'Messages',tab:'Queue'},
+    {source:'API handoff',title:'Provider handoff',tone:providerReview.length?'warn':'good',count:providerReview.length,detail:providerReview.length?'Providers still need credentials, endpoint, controlled live test, or saved result.':'Current provider records contain the required handoff proof.',fix:'Open API Roadmap and complete one controlled provider test at a time.',view:'API Roadmap',tab:''},
+    {source:'Role access',title:'Roles + customer portals',tone:roleIssues?'warn':'good',count:roleIssues,detail:roleIssues?'A manager, mechanic, or customer account match needs review.':'Current staff roles and customer account matches are present.',fix:'Open Settings / Accounts and correct the source account or role.',view:'Settings',tab:''}
+  ];
+  items=items.filter(function(item){return item.tone!=='good'});
+  if(!items.length)items=[{source:'System health',title:'Core operating checks',tone:'good',count:0,detail:'Payments, customer/fleet truth, verification, recovery, messaging, providers, and role access have no surfaced review item.',fix:'Keep the daily closeout and controlled provider checks current.',view:'Dashboard',tab:'Overview'}];
+  items.sort(function(a,b){var weight={bad:0,warn:1,blue:2,good:3};return(weight[a.tone]||2)-(weight[b.tone]||2)||String(a.title).localeCompare(String(b.title))});
+  fastRiskAuditCache={key:cacheKey,items:items.slice(0,12)};
+  return fastRiskAuditCache.items.slice()
+}
+starSystemAuditItems=fastStarSystemAuditItems;
 if(!isPublic&&view==='Dashboard')queueRender();
