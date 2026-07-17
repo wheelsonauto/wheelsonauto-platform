@@ -3068,6 +3068,75 @@ Operations=function(){
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
 
+function customerFileLargeNoteContext(){
+  var fileId=val('fileId'),contract=(db.contracts||[]).find(function(row){return row.id===fileId}),customer=contract&&findCustomerByName(contract.customer)||{},vehicle=contract&&(findVehicle(contract.vehicleId||customer.vehicleId)||findVehicleByCustomer(contract.customer))||{};
+  return{contract:contract,customer:customer,vehicle:vehicle,source:[contract,customer,vehicle].find(function(row){return row&&row.notesOmitted===true})||null}
+}
+function polishCustomerFileLargeNotes(){
+  var context=customerFileLargeNoteContext(),field=document.getElementById('fileNotes');
+  if(!context.contract||!context.source||!field)return;
+  field.value='';
+  field.dataset.notesOmitted='1';
+  field.placeholder='Large imported notes are retained safely. Load only when you need to review or edit them.';
+  var holder=field.parentElement;
+  if(!holder||holder.querySelector('.large-note-notice'))return;
+  var kb=Math.max(1,Math.round(Number(context.source.notesBytes||0)/1024));
+  var preview=String(context.source.notesPreview||'').replace(/\s+/g,' ').trim().slice(0,180);
+  var notice=document.createElement('div');
+  notice.className='notice portal-note large-note-notice';
+  notice.innerHTML='<strong>Large imported note retained</strong><span>'+kb+' KB stays out of normal tab loads. '+(preview?esc(preview)+(preview.length>=180?'...':''):'')+'</span><button class="btn" type="button" data-action="load-customer-file-notes" data-id="'+esc(context.contract.id)+'">Load full note</button>';
+  holder.appendChild(notice)
+}
+function applyLoadedCustomerFileNotes(context,result){
+  var notes=String(result&&result.notes||''),field=document.getElementById('fileNotes');
+  [context.contract,context.customer,context.vehicle].forEach(function(row){
+    if(!row)return;
+    row.notes=notes;
+    delete row.notesPreview;
+    delete row.notesBytes;
+    delete row.notesOmitted
+  });
+  if(field){field.value=notes;delete field.dataset.notesOmitted;field.placeholder=''}
+  var notice=document.querySelector('.large-note-notice');
+  if(notice)notice.remove()
+}
+async function loadCustomerFileNotes(id){
+  var context=customerFileLargeNoteContext();
+  if(!context.contract||context.contract.id!==id)return{ok:false,error:'Customer file was not found.'};
+  try{
+    var response=await fetch('/api/customer-files/'+encodeURIComponent(id)+'/notes',{headers:{'Accept':'application/json'},cache:'no-store'});
+    var result=await response.json().catch(function(){return{ok:false,error:'Customer file note could not be loaded.'}});
+    if(!response.ok||!result.ok)return{ok:false,error:result.error||'Customer file note could not be loaded.'};
+    applyLoadedCustomerFileNotes(context,result);
+    return{ok:true,result:result}
+  }catch(error){return{ok:false,error:'Customer file note could not be loaded.'}}
+}
+document.addEventListener('click',function(event){
+  var button=event.target.closest('button[data-action]');
+  if(button&&(button.dataset.action==='open-contract'||button.dataset.action==='open-contract-for-name'))setTimeout(polishCustomerFileLargeNotes,0)
+});
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="load-customer-file-notes"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  button.disabled=true;
+  var loaded=await loadCustomerFileNotes(button.dataset.id||'');
+  button.disabled=false;
+  if(loaded.ok)notify('Full customer-file note loaded for review.');else notify(loaded.error||'Customer file note could not be loaded.')
+},true);
+window.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="save-contract-file"]'),field=document.getElementById('fileNotes');
+  if(!button||!field||field.dataset.notesOmitted!=='1')return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  button.disabled=true;
+  var loaded=await loadCustomerFileNotes(val('fileId')||button.dataset.id||'');
+  button.disabled=false;
+  if(!loaded.ok){notify(loaded.error||'Customer file note could not be retained. Please try again.');return}
+  button.click()
+},true);
+
 function openNativeVehicleEditor(v){
   v=v||{};var linkedByOther={};nativeOnlineVehicles().forEach(function(row){if(row.id!==v.id&&row.platformVehicleId)linkedByOther[row.platformVehicleId]=true});var available=(db.vehicles||[]).filter(function(car){return (isInventoryVehicle(car)&&!linkedByOther[car.id])||car.id===v.platformVehicleId}),options='<option value="">No internal fleet link</option>'+available.map(function(car){return '<option value="'+esc(car.id)+'" '+(car.id===v.platformVehicleId?'selected':'')+'>'+esc(vehicleName(car)+' | VIN '+(car.vin||'missing')+' | Tag '+(car.plate||car.stock||'missing')+' | '+(car.status||'Ready'))+'</option>'}).join('');
   openModal(v.id?'Edit online vehicle':'Add online vehicle','<div class="form"><div class="field span2"><label>Linked ready fleet car</label><select id="nativeVehicleLink">'+options+'</select></div><div class="field span2"><label>Public title</label><input id="nativeVehicleTitle" value="'+esc(v.title||'')+'" placeholder="2016 Ford Focus"></div><div class="field"><label>Weekly payment</label><input id="nativeVehicleWeekly" type="number" min="0" step="0.01" value="'+esc(v.weeklyPayment==null?(db.publicSite&&db.publicSite.defaultWeeklyPayment||229):v.weeklyPayment)+'"></div><div class="field"><label>Nonrefundable down payment</label><input id="nativeVehicleDown" type="number" min="0" step="0.01" value="'+esc(v.downPayment==null?(db.publicSite&&db.publicSite.defaultDownPayment||485):v.downPayment)+'"></div><div class="field"><label>Optional purchase price</label><input id="nativeVehiclePurchase" type="number" min="0" step="0.01" value="'+esc(v.optionalPurchasePrice||0)+'"></div><div class="field"><label>Mileage at listing</label><input id="nativeVehicleMileage" type="number" min="0" value="'+esc(v.mileage||0)+'"></div><div class="field"><label>Daily mileage allowance</label><input id="nativeVehicleDailyMiles" type="number" min="0" value="'+esc(v.dailyMileageAllowance||100)+'"></div><div class="field"><label>Excess mileage rate</label><input id="nativeVehicleExcess" type="number" min="0" step="0.01" value="'+esc(v.excessMileageRate||0)+'"></div><div class="field span2"><label>Photo URL</label><input id="nativeVehicleImage" value="'+esc(v.imageUrl||'')+'"></div><div class="field"><label>Availability</label><select id="nativeVehicleAvailability"><option>Available</option><option '+(v.availability==='Coming soon'?'selected':'')+'>Coming soon</option><option '+(v.availability==='Unavailable'?'selected':'')+'>Unavailable</option></select></div><label class="check"><input id="nativeVehiclePublished" type="checkbox" '+(v.published?'checked':'')+'> Publish on wheelsonauto.com</label><div class="field span2"><label>Description</label><textarea id="nativeVehicleDescription">'+esc(v.description||'')+'</textarea></div></div><div class="actions"><button class="btn primary" data-action="native-save-vehicle" data-id="'+esc(v.id||'')+'">Save online vehicle</button>'+(v.id?'<button class="btn danger" data-action="native-delete-vehicle" data-id="'+esc(v.id)+'">Delete</button>':'')+'</div>')

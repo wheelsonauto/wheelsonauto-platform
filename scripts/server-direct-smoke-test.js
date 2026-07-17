@@ -520,6 +520,9 @@ async function main() {
       { id: 'claim-direct-toll-review', type: 'Toll', source: 'Manual toll import', provider: 'E-ZPass', customer: 'Unassigned', plate: 'DIR-TOLL', reference: 'TOLL-DIRECT-001', amount: 12.75, status: 'Open', customerMatchStatus: 'Needs payment/customer match' },
       { id: 'claim-direct-unmatched-dispute', type: 'Clover dispute', source: 'Clover', customer: 'Unassigned', externalId: 'missing-payment-id', amount: 55, status: 'Open' }
     );
+    const preservedLargeNote = 'Direct smoke customer-file note retained without slowing normal dashboard state. '.repeat(700);
+    duplicateState.customers.unshift({ id: 'cus-direct-large-note', organizationId: 'org-wheelsonauto', name: 'Direct Large Note Customer', vehicle: 'Direct Large Note Vehicle', notes: preservedLargeNote, status: 'Active' });
+    duplicateState.contracts.unshift({ id: 'con-direct-large-note', organizationId: 'org-wheelsonauto', customer: 'Direct Large Note Customer', vehicle: 'Direct Large Note Vehicle', notes: preservedLargeNote, status: 'Active' });
     const duplicateWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateState });
     assert(duplicateWrite.status === 200 && duplicateWrite.json.ok && duplicateWrite.json.version, 'Owner state write failed or did not return the saved state version.');
     const savedStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
@@ -554,6 +557,16 @@ async function main() {
     assert(disputeCandidate.tracker === 'TRK-DSP', 'Dispute match candidate should carry tracker evidence.');
     assert(disputeCandidate.phone === '3135550199' && disputeCandidate.email === 'direct-dispute-customer@example.com', 'Dispute match candidate should carry contact evidence.');
     assert(String(disputeCandidate.matchReason || '').includes('same amount'), 'Dispute match candidate should explain why it was suggested.');
+
+    const compactLargeNote = (duplicateRead.json.contracts || []).find(row => row.id === 'con-direct-large-note');
+    assert(compactLargeNote && compactLargeNote.notesOmitted === true && compactLargeNote.notes === '', 'Large customer-file notes should be omitted from normal dashboard state.');
+    assert(Number(compactLargeNote.notesBytes || 0) === Buffer.byteLength(preservedLargeNote, 'utf8'), 'Compact customer-file state should retain the original note size metadata.');
+    const loadedLargeNote = await request(server, 'GET', '/api/customer-files/con-direct-large-note/notes', { cookie: ownerCookie });
+    assert(loadedLargeNote.status === 200 && loadedLargeNote.json && loadedLargeNote.json.notes === preservedLargeNote, 'Owner should be able to load the retained customer-file note on demand.');
+    const compactRoundTrip = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateRead.json });
+    assert(compactRoundTrip.status === 200 && compactRoundTrip.json && compactRoundTrip.json.ok, 'Compact dashboard state should save without losing retained notes.');
+    const retainedLargeNote = await request(server, 'GET', '/api/customer-files/con-direct-large-note/notes', { cookie: ownerCookie });
+    assert(retainedLargeNote.status === 200 && retainedLargeNote.json && retainedLargeNote.json.notes === preservedLargeNote, 'Saving compact dashboard state must preserve the original large customer-file note.');
 
     const blockedWebhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
       json: {

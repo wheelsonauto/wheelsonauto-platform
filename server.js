@@ -6400,9 +6400,53 @@ function apiAllowedForUser(user, pathname) {
   if ((role === 'mechanic' || role === 'manager') && ['/api/payment-links', '/api/recurring-payments', '/api/card-setup-requests'].some(prefix => pathname.startsWith(prefix))) return false;
   return true;
 }
+// A few legacy imports contain very large free-text notes. Keep the source
+// record intact, but do not make every dashboard refresh parse and ship it.
+const CLIENT_COMPACT_NOTE_COLLECTIONS = ['customers', 'contracts', 'vehicles'];
+const CLIENT_COMPACT_NOTE_LIMIT = 12 * 1024;
+const CLIENT_COMPACT_NOTE_PREVIEW_LIMIT = 900;
+function compactLargeNotesForClient(data = {}) {
+  const compact = { ...(data || {}) };
+  CLIENT_COMPACT_NOTE_COLLECTIONS.forEach(key => {
+    if (!Array.isArray(data[key])) return;
+    compact[key] = data[key].map(row => {
+      const notes = String(row && row.notes || '');
+      if (notes.length <= CLIENT_COMPACT_NOTE_LIMIT) return row;
+      return {
+        ...row,
+        notes: '',
+        notesPreview: notes.slice(0, CLIENT_COMPACT_NOTE_PREVIEW_LIMIT),
+        notesOmitted: true,
+        notesBytes: Buffer.byteLength(notes, 'utf8')
+      };
+    });
+  });
+  return compact;
+}
+function compactNoteRowKey(row = {}) {
+  return String(row.id || row.customer || row.name || '').trim();
+}
+function restoreCompactedClientNotes(current = {}, incoming = {}) {
+  const next = { ...(incoming || {}) };
+  CLIENT_COMPACT_NOTE_COLLECTIONS.forEach(key => {
+    if (!Array.isArray(next[key])) return;
+    const currentById = new Map((Array.isArray(current[key]) ? current[key] : []).map(row => [compactNoteRowKey(row), row || {}]));
+    next[key] = next[key].map(row => {
+      if (!row || typeof row !== 'object') return row;
+      const clean = { ...row };
+      const previous = currentById.get(compactNoteRowKey(clean));
+      if (clean.notesOmitted === true && previous && typeof previous.notes === 'string') clean.notes = previous.notes;
+      delete clean.notesPreview;
+      delete clean.notesBytes;
+      delete clean.notesOmitted;
+      return clean;
+    });
+  });
+  return next;
+}
 function stateForUserWrite(current, incoming, user) {
   if (isOwnerUser(user)) {
-    const next = preserveStaffLoginSecrets(current, incoming);
+    const next = restoreCompactedClientNotes(current, preserveStaffLoginSecrets(current, incoming));
     ['subscriptions', 'billingInvoices', 'billingEvents'].forEach(key => {
       next[key] = Array.isArray(current[key]) ? current[key] : [];
     });
@@ -6423,6 +6467,7 @@ function stateForUserWrite(current, incoming, user) {
       ? (role === 'mechanic' ? sanitizeMechanicCollectionWrite(key, current[key], incoming[key], user) : mergeScopedCollection(current[key], incoming[key], user))
       : incoming[key];
   });
+  restoreCompactedClientNotes(current, next);
   next.lastStaffSaveAt = new Date().toISOString();
   next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
   return next;
@@ -6553,7 +6598,7 @@ function preserveStaffLoginSecrets(current, incoming) {
   return next;
 }
 function redactStaffSecrets(data) {
-  const safe = JSON.parse(JSON.stringify(data || {}));
+  const safe = JSON.parse(JSON.stringify(compactLargeNotesForClient(data || {})));
   safe.staffAccounts = (safe.staffAccounts || []).map(staff => {
     delete staff.passwordHash;
     delete staff.passwordSalt;
@@ -16256,6 +16301,19 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 201, { ok: true, template: { id: template.id, name: template.name, version: template.version, hash: template.hash, status: template.status } });
+    }
+    if (url.pathname.startsWith('/api/customer-files/') && url.pathname.endsWith('/notes') && req.method === 'GET') {
+      if (!isOwnerUser(user) && String(user && user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can open customer-file notes.' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
+      const data = await readData();
+      const contract = (data.contracts || []).find(row => String(row && row.id || '') === id);
+      if (!contract || !rowVisibleToUserOrganization(contract, user)) return json(res, 404, { ok: false, error: 'Customer file not found.' });
+      const customerKey = normKey(contract.customer || contract.name || '');
+      const customer = (data.customers || []).find(row => normKey(row && (row.name || row.customer) || '') === customerKey) || {};
+      const vehicle = (data.vehicles || []).find(row => String(row && row.id || '') === String(contract.vehicleId || customer.vehicleId || '')) || {};
+      const source = [contract, customer, vehicle].find(row => String(row && row.notes || '').trim()) || contract;
+      const notes = String(source.notes || '');
+      return json(res, 200, { ok: true, id: contract.id, notes, bytes: Buffer.byteLength(notes, 'utf8'), source: source === customer ? 'customer' : source === vehicle ? 'vehicle' : 'customer file' });
     }
     if (url.pathname === '/api/state/version' && req.method === 'GET') return json(res, 200, { ok: true, version: await dataVersion() });
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
