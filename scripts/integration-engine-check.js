@@ -8,6 +8,7 @@ const data = {
   vehicles: [{ id: 'vehicle-1', year: 2018, make: 'Ford', model: 'Focus', vin: 'VIN123456789', plate: 'ABC123', tracker: 'Track One', currentCustomer: 'Test Customer' }],
   payments: [
     { id: 'payment-1', customer: 'Test Customer', vehicleId: 'vehicle-1', amount: 229, status: 'Paid', date: '2026-07-15', method: 'Clover saved card', cloverPaymentId: 'clover-payment-1' },
+    { id: 'payment-unverified-outside', customer: 'Test Customer', vehicleId: 'vehicle-1', amount: 9999, status: 'Paid outside app - needs verification', requiresVerification: true, date: '2026-07-15', method: 'Cash' },
     { id: 'payment-failed', customer: 'Test Customer', amount: 229, status: 'FAIL', date: '2026-07-15' }
   ],
   refundRequests: [{ id: 'refund-1', sourcePaymentId: 'payment-1', customer: 'Test Customer', vehicleId: 'vehicle-1', amount: 229, status: 'Refunded', providerRefundId: 'provider-refund-1', date: '2026-07-15' }],
@@ -190,6 +191,7 @@ assert.notEqual(franchiseMarketing.record.customerId, 'customer-marketing-1', 'A
 const ledger = engine.buildAccountingLedger(data, [{ sourceKey: 'payment:payment-1', quickBooksStatus: 'Synced', quickBooksEntityId: 'qb-1' }]);
 assert.equal(ledger.filter(row => row.sourceKey === 'payment:payment-1').length, 1);
 assert.equal(ledger.some(row => row.sourceKey === 'payment:payment-failed'), false, 'Failed payments must not enter the accounting ledger.');
+assert.equal(ledger.some(row => row.sourceKey === 'payment:payment-unverified-outside'), false, 'Unverified paid-outside reports must not enter collected revenue or the accounting ledger.');
 assert.equal(ledger.find(row => row.sourceKey === 'payment:payment-1').quickBooksStatus, 'Synced');
 assert.equal(ledger.find(row => row.sourceKey === 'refund:refund-1').signedAmount, -229);
 assert.equal(ledger.find(row => row.sourceKey === 'maintenance:service-1').signedAmount, -75);

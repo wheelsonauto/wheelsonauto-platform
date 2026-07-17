@@ -494,6 +494,11 @@ function verificationCase(data, payload = {}, actor = {}) {
     onboardingSessionId: text(payload.onboardingSessionId),
     policyNumberLast4: type === 'insurance' ? reference.slice(-4) : '',
     referenceLast4: type !== 'insurance' ? reference.slice(-4) : '',
+    carrier: type === 'insurance' ? text(payload.carrier).slice(0, 120) : '',
+    insuredName: type === 'insurance' ? text(payload.insuredName || customer).slice(0, 160) : '',
+    coveredVin: type === 'insurance' ? text(payload.coveredVin || payload.vin || profile.vin || vehicle.vin).slice(0, 40) : '',
+    effectiveAt: type === 'insurance' ? dateKey(payload.effectiveAt || payload.effectiveDate) : '',
+    coverageType: type === 'insurance' ? text(payload.coverageType).slice(0, 120) : '',
     expiresAt: dateKey(payload.expiresAt || payload.expires || payload.expirationDate),
     status: provider.toLowerCase() === 'manual' ? 'Needs staff review' : (payload.externalCaseId ? 'Provider pending' : 'Provider setup needed'),
     providerStatus: text(payload.providerStatus),
@@ -523,12 +528,32 @@ function reviewVerificationCase(record, payload = {}, actor = {}) {
   };
   const status = statuses[decision];
   if (!status) throw new Error('Choose approve, reject, request_correction, or close.');
+  const manualInsurance = text(record.type).toLowerCase() === 'insurance' && text(record.provider || 'manual').toLowerCase() === 'manual';
+  const checklist = {
+    insuredNameConfirmed: payload.insuredNameConfirmed === true,
+    vehicleConfirmed: payload.vehicleConfirmed === true,
+    coverageConfirmed: payload.coverageConfirmed === true,
+    datesConfirmed: payload.datesConfirmed === true
+  };
+  if (status === 'Verified' && manualInsurance) {
+    const expiresAt = dateKey(payload.expiresAt || payload.expires || record.expiresAt);
+    if (!expiresAt) throw new Error('Enter the insurance expiration date before approval.');
+    if (!Object.values(checklist).every(Boolean)) throw new Error('Confirm the insured name, covered vehicle/VIN, required coverage, and active policy dates before approval.');
+  }
   const now = new Date().toISOString();
   record.status = status;
   record.manualDecision = status;
   record.reviewedAt = now;
   record.reviewedBy = text(actor.name || actor.username || actor.role || 'Staff');
   record.notes = text(payload.notes || record.notes);
+  if (record.type === 'insurance') {
+    record.carrier = text(payload.carrier || record.carrier).slice(0, 120);
+    record.insuredName = text(payload.insuredName || record.insuredName || record.customer).slice(0, 160);
+    record.coveredVin = text(payload.coveredVin || record.coveredVin || record.vin).slice(0, 40);
+    record.effectiveAt = dateKey(payload.effectiveAt || payload.effectiveDate || record.effectiveAt);
+    record.coverageType = text(payload.coverageType || record.coverageType).slice(0, 120);
+    record.manualChecklist = checklist;
+  }
   if (payload.expiresAt || payload.expires) record.expiresAt = dateKey(payload.expiresAt || payload.expires);
   record.history = Array.isArray(record.history) ? record.history : [];
   record.history.push({ at: now, action: 'Staff review', status, by: record.reviewedBy, notes: text(payload.notes) });
@@ -559,6 +584,7 @@ function applyVerificationEvent(record, event = {}) {
 
 function paymentIsCollected(payment = {}) {
   const status = text(payment.status || payment.result).toLowerCase();
+  if (payment.requiresVerification === true || /needs? (admin )?verification|pending (admin )?verification|awaiting (admin )?verification|under review/.test(status)) return false;
   if (/fail|declin|void|cancel|not found|pending/.test(status)) return false;
   return /paid|approved|succeed|complete|captured|collected/.test(status) || (!!payment.cloverPaymentId && !status);
 }
@@ -681,6 +707,224 @@ function accountingLedgerSummary(entries = [], options = {}) {
     referenceGaps: referenceGaps.length,
     readyToClose: filtered.length > 0 && needsReview.length === 0 && identityGaps.length === 0 && referenceGaps.length === 0,
     byCategory: Array.from(byCategory.values()).sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+  };
+}
+
+function accountingLedgerInsights(entries = [], options = {}) {
+  const month = /^\d{4}-\d{2}$/.test(text(options.month)) ? text(options.month) : '';
+  const filtered = (entries || []).filter(entry => !month || dateKey(entry.date || entry.createdAt).startsWith(month));
+  const summary = accountingLedgerSummary(entries, { month });
+  const reconciled = filtered.filter(entry => /reconciled/i.test(text(entry.reconciliationStatus))).length;
+  const missingVehicle = filtered.filter(entry => /rental|down payment|toll|claim/i.test(text(entry.category)) && !text(entry.vehicle || entry.vin || entry.plate));
+  const uncategorized = filtered.filter(entry => /other operating|uncategorized/i.test(text(entry.category)));
+  const references = new Map();
+  filtered.forEach(entry => {
+    const reference = text(entry.reference).toLowerCase();
+    if (!reference) return;
+    references.set(reference, (references.get(reference) || 0) + 1);
+  });
+  const duplicateReferences = Array.from(references.values()).filter(count => count > 1).length;
+  const largestExpense = filtered.filter(entry => entry.direction === 'debit').sort((a, b) => number(b.amount) - number(a.amount))[0] || null;
+  const reviewFlags = [];
+  if (summary.needsReview) reviewFlags.push({ label: 'Unreconciled entries', count: summary.needsReview, level: 'warn' });
+  if (summary.identityGaps) reviewFlags.push({ label: 'Customer match missing', count: summary.identityGaps, level: 'bad' });
+  if (summary.referenceGaps) reviewFlags.push({ label: 'Reference missing', count: summary.referenceGaps, level: 'bad' });
+  if (missingVehicle.length) reviewFlags.push({ label: 'Vehicle identity missing', count: missingVehicle.length, level: 'warn' });
+  if (duplicateReferences) reviewFlags.push({ label: 'Duplicate reference review', count: duplicateReferences, level: 'warn' });
+  if (uncategorized.length) reviewFlags.push({ label: 'Category review', count: uncategorized.length, level: 'warn' });
+  return {
+    month,
+    reconciled,
+    total: filtered.length,
+    reviewProgress: filtered.length ? Math.round(reconciled / filtered.length * 100) : 0,
+    readyToClose: summary.readyToClose,
+    reviewFlags,
+    largestExpense: largestExpense ? {
+      amount: Math.abs(number(largestExpense.amount)),
+      category: text(largestExpense.category),
+      date: dateKey(largestExpense.date || largestExpense.createdAt),
+      reference: text(largestExpense.reference)
+    } : null
+  };
+}
+
+function accountingYearSummary(entries = [], year) {
+  const normalizedYear = /^\d{4}$/.test(text(year)) ? text(year) : String(new Date().getFullYear());
+  const filtered = (entries || []).filter(entry => dateKey(entry.date || entry.createdAt).startsWith(normalizedYear + '-'));
+  const months = [];
+  for (let month = 1; month <= 12; month += 1) {
+    const key = normalizedYear + '-' + String(month).padStart(2, '0');
+    months.push({ month: key, ...accountingLedgerSummary(filtered, { month: key }) });
+  }
+  const totals = accountingLedgerSummary(filtered);
+  return {
+    year: normalizedYear,
+    totals,
+    months,
+    categories: totals.byCategory
+  };
+}
+
+function accountingTaxSettings(data = {}) {
+  const saved = data.accountingTaxSettings || {};
+  const rawRate = Number(saved.salesTaxRate || 0);
+  const rate = Number.isFinite(rawRate) ? rawRate : 0;
+  const feeRate = number(saved.domesticSecurityFeeRate);
+  const feeDays = Math.round(number(saved.domesticSecurityFeeMaxDays));
+  return {
+    state: text(saved.state || 'NJ').toUpperCase().slice(0, 2),
+    salesTaxRate: rate > 0 && rate < 1 ? rate : 0.06625,
+    pricesIncludeSalesTax: saved.pricesIncludeSalesTax === true,
+    domesticSecurityFeeRate: feeRate > 0 && feeRate < 100 ? feeRate : 5,
+    domesticSecurityFeeMaxDays: feeDays > 0 && feeDays <= 60 ? feeDays : 28,
+    domesticSecurityFeeMode: ['review', 'enabled', 'disabled'].includes(text(saved.domesticSecurityFeeMode).toLowerCase()) ? text(saved.domesticSecurityFeeMode).toLowerCase() : 'review',
+    updatedAt: text(saved.updatedAt),
+    updatedBy: text(saved.updatedBy)
+  };
+}
+
+function accountingTaxCenter(data = {}, entries = [], options = {}) {
+  const settings = accountingTaxSettings(data);
+  const year = /^\d{4}$/.test(text(options.year)) ? text(options.year) : String(new Date().getFullYear());
+  const selectedMonth = /^\d{4}-\d{2}$/.test(text(options.month)) ? text(options.month) : year + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+  const selectedQuarter = Math.max(1, Math.min(4, Number(options.quarter || Math.ceil(Number(selectedMonth.slice(5, 7)) / 3))));
+  const collected = (data.payments || []).filter(paymentIsCollected).map(payment => {
+    const amount = Math.abs(number(payment.amount));
+    const recordedSalesTax = Math.abs(number(payment.salesTaxAmount || payment.taxAmount || payment.salesTax));
+    const exempt = payment.salesTaxExempt === true || payment.taxable === false || /exempt|non.?taxable/i.test(text(payment.taxStatus || payment.taxTreatment));
+    return {
+      date: dateKey(payment.date || payment.paidAt || payment.createdAt),
+      amount,
+      recordedSalesTax,
+      exempt,
+      classified: payment.taxable === true || payment.taxable === false || payment.salesTaxExempt === true || recordedSalesTax > 0 || !!text(payment.taxStatus || payment.taxTreatment)
+    };
+  }).filter(row => row.date.startsWith(year + '-'));
+  function salesFor(prefix) {
+    const rows = collected.filter(row => row.date.startsWith(prefix));
+    const taxableRows = rows.filter(row => !row.exempt);
+    const grossReceipts = taxableRows.reduce((sum, row) => sum + row.amount, 0);
+    const recordedSalesTax = taxableRows.reduce((sum, row) => sum + row.recordedSalesTax, 0);
+    const estimatedSalesTax = settings.pricesIncludeSalesTax
+      ? grossReceipts - grossReceipts / (1 + settings.salesTaxRate)
+      : grossReceipts * settings.salesTaxRate;
+    return {
+      transactions: rows.length,
+      grossReceipts,
+      exemptReceipts: rows.filter(row => row.exempt).reduce((sum, row) => sum + row.amount, 0),
+      recordedSalesTax,
+      estimatedSalesTax,
+      unclassifiedTransactions: rows.filter(row => !row.classified).length
+    };
+  }
+  const agreements = (data.contracts || []).map(contract => {
+    const start = dateKey(contract.rentalStartDate || contract.startDate || contract.pickupDate || contract.effectiveDate || contract.createdAt);
+    const end = dateKey(contract.endDate || contract.returnDate || contract.endedAt || contract.completedAt);
+    const explicitDays = Math.round(number(contract.rentalDays || contract.termDays));
+    let days = explicitDays;
+    if (!days && start) {
+      const endDate = end || dateKey(options.asOf || new Date().toISOString());
+      const startMs = Date.parse(start + 'T12:00:00Z');
+      const endMs = Date.parse(endDate + 'T12:00:00Z');
+      if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) days = Math.floor((endMs - startMs) / 86400000) + 1;
+    }
+    const applies = contract.domesticSecurityFeeApplies === true;
+    const excluded = contract.domesticSecurityFeeApplies === false;
+    const feeDays = Math.min(settings.domesticSecurityFeeMaxDays, Math.max(0, days || 0));
+    const explicitFee = Math.abs(number(contract.domesticSecurityFeeAmount));
+    const explicitFeeDate = dateKey(contract.domesticSecurityFeeDate || contract.domesticSecurityFeeRecordedAt);
+    const feeEntries = [];
+    if (explicitFee && (explicitFeeDate || start)) {
+      feeEntries.push({ date: explicitFeeDate || start, amount: explicitFee, recorded: true });
+    } else if (start) {
+      const startMs = Date.parse(start + 'T12:00:00Z');
+      for (let offset = 0; offset < feeDays; offset += 1) {
+        const date = new Date(startMs + offset * 86400000).toISOString().slice(0, 10);
+        feeEntries.push({ date, amount: settings.domesticSecurityFeeRate, recorded: false });
+      }
+    }
+    return {
+      id: text(contract.id),
+      customer: text(contract.customer || contract.name),
+      start,
+      end,
+      days,
+      feeDays,
+      applies,
+      excluded,
+      needsReview: !applies && !excluded,
+      feeEntries,
+      confirmedFee: applies && settings.domesticSecurityFeeMode !== 'disabled' ? feeEntries.reduce((sum, row) => sum + row.amount, 0) : 0,
+      potentialFee: !excluded && !applies && settings.domesticSecurityFeeMode !== 'disabled' ? feeEntries.reduce((sum, row) => sum + row.amount, 0) : 0,
+      classificationNotes: text(contract.domesticSecurityFeeNotes),
+      classifiedAt: text(contract.domesticSecurityFeeClassifiedAt),
+      classifiedBy: text(contract.domesticSecurityFeeClassifiedBy)
+    };
+  }).filter(row => row.feeEntries.some(entry => entry.date.startsWith(year + '-')));
+  function agreementFeeForPrefixes(row, prefixes) {
+    return row.feeEntries.filter(entry => prefixes.some(prefix => entry.date.startsWith(prefix))).reduce((sum, entry) => sum + entry.amount, 0);
+  }
+  function agreementSummaryForPrefixes(prefixes) {
+    const rows = agreements.filter(row => row.feeEntries.some(entry => prefixes.some(prefix => entry.date.startsWith(prefix))));
+    return {
+      domesticSecurityFeeConfirmed: rows.filter(row => row.applies && settings.domesticSecurityFeeMode !== 'disabled').reduce((sum, row) => sum + agreementFeeForPrefixes(row, prefixes), 0),
+      domesticSecurityFeePotential: rows.filter(row => row.needsReview && settings.domesticSecurityFeeMode !== 'disabled').reduce((sum, row) => sum + agreementFeeForPrefixes(row, prefixes), 0),
+      agreementsNeedingClassification: rows.filter(row => row.needsReview).length
+    };
+  }
+  function quarterPrefix(quarter) {
+    const startMonth = (quarter - 1) * 3 + 1;
+    return [0, 1, 2].map(offset => year + '-' + String(startMonth + offset).padStart(2, '0'));
+  }
+  function quarterSummary(quarter) {
+    const prefixes = quarterPrefix(quarter);
+    const sales = prefixes.map(prefix => salesFor(prefix)).reduce((total, row) => ({
+      transactions: total.transactions + row.transactions,
+      grossReceipts: total.grossReceipts + row.grossReceipts,
+      exemptReceipts: total.exemptReceipts + row.exemptReceipts,
+      recordedSalesTax: total.recordedSalesTax + row.recordedSalesTax,
+      estimatedSalesTax: total.estimatedSalesTax + row.estimatedSalesTax,
+      unclassifiedTransactions: total.unclassifiedTransactions + row.unclassifiedTransactions
+    }), { transactions: 0, grossReceipts: 0, exemptReceipts: 0, recordedSalesTax: 0, estimatedSalesTax: 0, unclassifiedTransactions: 0 });
+    const feeSummary = agreementSummaryForPrefixes(prefixes);
+    return {
+      quarter,
+      label: 'Q' + quarter + ' ' + year,
+      ...sales,
+      ...feeSummary
+    };
+  }
+  const monthly = Array.from({ length: 12 }, (_, index) => {
+    const month = year + '-' + String(index + 1).padStart(2, '0');
+    return { month, ...salesFor(month), ...agreementSummaryForPrefixes([month]) };
+  });
+  const quarterly = [1, 2, 3, 4].map(quarterSummary);
+  const yearSales = monthly.reduce((total, row) => ({
+    transactions: total.transactions + row.transactions,
+    grossReceipts: total.grossReceipts + row.grossReceipts,
+    exemptReceipts: total.exemptReceipts + row.exemptReceipts,
+    recordedSalesTax: total.recordedSalesTax + row.recordedSalesTax,
+    estimatedSalesTax: total.estimatedSalesTax + row.estimatedSalesTax,
+    unclassifiedTransactions: total.unclassifiedTransactions + row.unclassifiedTransactions
+  }), { transactions: 0, grossReceipts: 0, exemptReceipts: 0, recordedSalesTax: 0, estimatedSalesTax: 0, unclassifiedTransactions: 0 });
+  return {
+    year,
+    selectedMonth,
+    selectedQuarter,
+    settings,
+    month: monthly.find(row => row.month === selectedMonth) || { month: selectedMonth },
+    quarter: quarterly[selectedQuarter - 1],
+    yearly: {
+      ...yearSales,
+      netBooks: accountingYearSummary(entries, year).totals.net,
+      domesticSecurityFeeConfirmed: agreements.reduce((sum, row) => sum + row.confirmedFee, 0),
+      domesticSecurityFeePotential: agreements.reduce((sum, row) => sum + row.potentialFee, 0),
+      agreementsNeedingClassification: agreements.filter(row => row.needsReview).length
+    },
+    monthly,
+    quarterly,
+    agreements,
+    guidance: 'The New Jersey Domestic Security Fee is based on rental-agreement days, not whether the customer physically drove. WheelsonAuto keeps unclassified agreements in review until the owner or tax professional confirms their treatment.'
   };
 }
 
@@ -862,6 +1106,10 @@ module.exports = {
   applyVerificationEvent,
   buildAccountingLedger,
   accountingLedgerSummary,
+  accountingLedgerInsights,
+  accountingYearSummary,
+  accountingTaxSettings,
+  accountingTaxCenter,
   accountingPeriodSnapshot,
   reconcileAccountingEntry,
   buildQuickBooksJournalRows,

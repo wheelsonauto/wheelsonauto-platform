@@ -69,7 +69,10 @@ function response(body, status = 200) {
 
   const data = {
     customers: [{ id: 'customer-1', name: 'Test Driver', email: 'driver@example.com', vehicleId: 'vehicle-1' }],
-    contracts: [], recurringPayments: [],
+    contracts: [
+      { id: 'contract-dsf-confirmed', customer: 'Test Driver', vehicleId: 'vehicle-1', startDate: '2026-07-01', endDate: '2026-07-30', domesticSecurityFeeApplies: true },
+      { id: 'contract-dsf-review', customer: 'Review Driver', startDate: '2026-01-25', endDate: '2026-02-03' }
+    ], recurringPayments: [],
     vehicles: [{ id: 'vehicle-1', year: 2020, make: 'Ford', model: 'Escape', vin: 'VIN-ACCOUNTING-1', plate: 'TAG-1', currentCustomer: 'Test Driver' }],
     payments: [{ id: 'payment-1', customer: 'Test Driver', vehicleId: 'vehicle-1', amount: 229, status: 'Paid', date: '2026-07-17', method: 'Stripe card', providerPaymentId: 'stripe-payment-1' }],
     refundRequests: [], maintenance: [], claims: [],
@@ -80,6 +83,12 @@ function response(body, status = 200) {
   assert.equal(driverRecord.record.type, 'driver_record');
   engine.applyVerificationEvent(driverRecord.record, { providerStatus: 'consider', providerReportId: 'report-1' });
   assert.equal(driverRecord.record.status, 'Needs staff review', 'Checkr Consider must not auto-reject a customer.');
+  const manualInsurance = engine.verificationCase(data, { type: 'insurance', customer: 'Test Driver', vehicleId: 'vehicle-1', provider: 'Manual', reference: 'POLICY-TEST-7788', carrier: 'Test Mutual', insuredName: 'Test Driver', coveredVin: 'VIN-ACCOUNTING-1', coverageType: 'Full coverage', effectiveAt: '2026-01-01', expiresAt: '2027-01-01' }, { name: 'Manager' }).record;
+  assert.equal(manualInsurance.policyNumberLast4, '7788');
+  assert.throws(() => engine.reviewVerificationCase(manualInsurance, { decision: 'approve', expiresAt: '2027-01-01' }, { name: 'Manager' }), /Confirm the insured name/i, 'Manual insurance approval must require the complete review checklist.');
+  engine.reviewVerificationCase(manualInsurance, { decision: 'approve', expiresAt: '2027-01-01', insuredNameConfirmed: true, vehicleConfirmed: true, coverageConfirmed: true, datesConfirmed: true }, { name: 'Manager' });
+  assert.equal(manualInsurance.status, 'Verified');
+  assert.equal(manualInsurance.manualChecklist.vehicleConfirmed, true);
 
   let ledger = engine.buildAccountingLedger(data, []);
   assert.equal(ledger.length, 2);
@@ -94,6 +103,19 @@ function response(body, status = 200) {
   assert.equal(summary.debits, 65);
   assert.equal(summary.net, 164);
   assert.equal(summary.readyToClose, true);
+  const insights = engine.accountingLedgerInsights(ledger, { month: '2026-07' });
+  assert.equal(insights.reviewProgress, 100);
+  assert.equal(insights.readyToClose, true);
+  const yearSummary = engine.accountingYearSummary(ledger, '2026');
+  assert.equal(yearSummary.totals.net, 164);
+  assert.equal(yearSummary.months.length, 12);
+  const taxCenter = engine.accountingTaxCenter(data, ledger, { year: '2026', month: '2026-07', asOf: '2026-12-31' });
+  assert.equal(taxCenter.settings.salesTaxRate, 0.06625);
+  assert.equal(taxCenter.month.domesticSecurityFeeConfirmed, 140, 'A confirmed 30-day agreement should cap the DSF estimate at 28 days.');
+  assert.equal(taxCenter.monthly.find(row => row.month === '2026-01').domesticSecurityFeePotential, 35, 'Cross-month fee days should stay in the month they occur.');
+  assert.equal(taxCenter.monthly.find(row => row.month === '2026-02').domesticSecurityFeePotential, 15, 'Cross-month fee days should continue into the following month.');
+  assert.equal(taxCenter.yearly.agreementsNeedingClassification, 1);
+  assert(Math.abs(taxCenter.month.estimatedSalesTax - 15.17125) < 0.00001, 'NJ sales-tax preparation should use the configured 6.625% default.');
   const period = engine.accountingPeriodSnapshot(ledger, '2026-07', { name: 'Owner' });
   assert.equal(period.status, 'Closed');
   assert.equal(period.sourceHash.length, 64);
@@ -102,7 +124,7 @@ function response(body, status = 200) {
   const journalCredit = journal.reduce((sum, row) => sum + Number(row.credit || 0), 0);
   assert.equal(journalDebit, journalCredit, 'QuickBooks journal export must stay balanced.');
 
-  console.log('Risk/accounting checks passed: hosted consent, signed webhooks, masked policy data, monitoring, reconciliation, month close, and balanced export.');
+  console.log('Risk/accounting checks passed: hosted consent, signed webhooks, manual insurance controls, monitoring, native books, monthly/quarterly/yearly tax preparation, DSF allocation, reconciliation, month close, and balanced export.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

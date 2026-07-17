@@ -301,4 +301,16 @@ requireText('Fallback transaction report possible match note', app, "customer===
   'Pending today'
 ].forEach(text => requireText('Saved-card/manual charge backend', server, text));
 
+[
+  'paymentStronglyMatchesRecurring',
+  'todayDueMoneyTruth',
+  'scheduled due not fully paid',
+  'dailyCloseoutMoneyTruth',
+  'closeoutPaymentStronglyMatchesRecurring',
+  'appliedToExpected',
+  'outstandingCustomers',
+  'replaceDailyCloseoutTruthRow',
+  'not fully satisfied by a matching payment'
+].forEach(text => requireText('Customer-matched daily money truth', app + server, text));
+
 console.log('Payment workflow check passed: statuses, closeout, card actions, transaction matching, reassignment, and backend charge tracking are wired.');

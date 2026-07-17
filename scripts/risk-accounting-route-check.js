@@ -102,6 +102,7 @@ async function main() {
   process.env.CHECKR_WEBHOOK_SECRET = 'route-checkr-secret';
   process.env.CHECKR_USE_CASE_CONFIRMED = 'true';
   delete process.env.CHECKR_API_KEY;
+  delete process.env.OPENAI_API_KEY;
   delete require.cache[require.resolve('../server.js')];
   const { server } = require('../server.js');
 
@@ -142,6 +143,16 @@ async function main() {
     assert(startedInsurance.status === 200 && /^https:\/\/app\.usecanopy\.com\//.test(startedInsurance.json.customerActionUrl), 'Canopy hosted customer link was not created.');
     assert(!startedInsurance.json.customerActionUrl.includes('Route+Test') && !startedInsurance.json.customerActionUrl.includes('route%40example.com'), 'Canopy link must not put customer PII in its URL.');
 
+    const manualInsurance = await request(server, 'POST', '/api/verification/cases', {
+      cookie: managerCookie,
+      json: { type: 'insurance', customer: 'Manual Route Customer', vehicle: '2020 Manual Sedan', vin: 'MANUALROUTEVIN001', provider: 'Manual', reference: 'MANUAL-POLICY-6644', carrier: 'Route Mutual', insuredName: 'Manual Route Customer', coveredVin: 'MANUALROUTEVIN001', coverageType: 'Full coverage', effectiveAt: '2026-01-01', expiresAt: '2027-01-01' }
+    });
+    assert(manualInsurance.status === 201 && manualInsurance.json.verificationCase.status === 'Needs staff review', 'Manual insurance should enter the staff review queue.');
+    const incompleteManualReview = await request(server, 'POST', '/api/verification/cases/review', { cookie: managerCookie, json: { caseId: manualInsurance.json.verificationCase.id, decision: 'approve', expiresAt: '2027-01-01' } });
+    assert(incompleteManualReview.status === 400 && /insured name/i.test(incompleteManualReview.json.error || ''), 'Manual insurance must not approve without the full checklist.');
+    const approvedManualReview = await request(server, 'POST', '/api/verification/cases/review', { cookie: managerCookie, json: { caseId: manualInsurance.json.verificationCase.id, decision: 'approve', expiresAt: '2027-01-01', insuredNameConfirmed: true, vehicleConfirmed: true, coverageConfirmed: true, datesConfirmed: true, notes: 'All manual insurance checks completed.' } });
+    assert(approvedManualReview.status === 200 && approvedManualReview.json.verificationCase.status === 'Verified', 'Completed manual insurance review should approve.');
+
     const driverRecord = await request(server, 'POST', '/api/verification/cases', {
       cookie: ownerCookie,
       json: { type: 'driver_record', customer: 'Route Test Customer', email: 'route@example.com', reference: 'LICENSE-PRIVATE-9911' }
@@ -178,11 +189,31 @@ async function main() {
     });
     assert(duplicateCanopy.status === 200 && duplicateCanopy.json.duplicate, 'Duplicate provider events must be idempotent.');
 
+    const storedPath = path.join(dataDir, 'data.json');
+    const storedData = JSON.parse(await fs.readFile(storedPath, 'utf8'));
+    storedData.contracts = storedData.contracts || [];
+    storedData.contracts.push({ id: 'route-tax-contract', organizationId: 'org-wheelsonauto', customer: 'Route Tax Customer', startDate: '2026-01-10', endDate: '2026-01-19', status: 'Active' });
+    await fs.writeFile(storedPath, JSON.stringify(storedData, null, 2));
+
     const ownerLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: ownerCookie });
     const managerLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: managerCookie });
     const mechanicLedger = await request(server, 'GET', '/api/accounting/ledger', { cookie: mechanicCookie });
     assert(ownerLedger.status === 200 && managerLedger.status === 200, 'Owner and manager should be able to read the accounting ledger.');
+    assert(ownerLedger.json.insights && ownerLedger.json.yearSummary && ownerLedger.json.taxCenter && ownerLedger.json.taxCenter.monthly.length === 12 && ownerLedger.json.taxCenter.quarterly.length === 4, 'Accounting ledger should include native insights and monthly, quarterly, and yearly tax preparation.');
     assert(mechanicLedger.status === 403, 'Mechanics must not receive accounting records.');
+
+    const managerTaxSettings = await request(server, 'POST', '/api/accounting/tax-settings', { cookie: managerCookie, json: { salesTaxRate: 6.625, domesticSecurityFeeRate: 5, domesticSecurityFeeMaxDays: 28, domesticSecurityFeeMode: 'review' } });
+    assert(managerTaxSettings.status === 403, 'Manager must not change owner tax settings.');
+    const taxSettings = await request(server, 'POST', '/api/accounting/tax-settings', { cookie: ownerCookie, json: { state: 'NJ', salesTaxRate: 6.625, pricesIncludeSalesTax: false, domesticSecurityFeeRate: 5, domesticSecurityFeeMaxDays: 28, domesticSecurityFeeMode: 'review' } });
+    assert(taxSettings.status === 200 && taxSettings.json && taxSettings.json.settings && Math.abs(taxSettings.json.settings.salesTaxRate - 0.06625) < 0.0000001, 'Owner tax settings should normalize the NJ percent rate: ' + taxSettings.status + ' ' + taxSettings.text.slice(0, 300));
+    const managerClassification = await request(server, 'POST', '/api/accounting/tax-classification', { cookie: managerCookie, json: { contractId: 'route-tax-contract', domesticSecurityFeeApplies: true } });
+    assert(managerClassification.status === 403, 'Manager must not choose an agreement tax position.');
+    const classification = await request(server, 'POST', '/api/accounting/tax-classification', { cookie: ownerCookie, json: { contractId: 'route-tax-contract', domesticSecurityFeeApplies: true, notes: 'Owner test classification.' } });
+    assert(classification.status === 200 && classification.json.contract.domesticSecurityFeeApplies === true, 'Owner agreement classification should persist with an audit record.');
+    const starReview = await request(server, 'POST', '/api/accounting/star-review', { cookie: ownerCookie, json: { year: '2026', month: '2026-01' } });
+    assert(starReview.status === 200 && starReview.json.review && starReview.json.review.summary && Array.isArray(starReview.json.review.nextSteps), 'Star should return a usable aggregate accounting review without requiring a provider connection.');
+    const managerStarReview = await request(server, 'POST', '/api/accounting/star-review', { cookie: managerCookie, json: { year: '2026' } });
+    assert(managerStarReview.status === 403, 'Manager must not run owner tax analysis.');
 
     const managerAdjustment = await request(server, 'POST', '/api/accounting/adjustments', {
       cookie: managerCookie, json: { date: '2026-01-15', direction: 'debit', amount: 125, category: 'Insurance expense', notes: 'Should be owner only.' }
@@ -208,8 +239,10 @@ async function main() {
     assert(duplicateClose.status === 200 && duplicateClose.json.duplicate, 'Month close must be idempotent.');
     const quickBooksCsv = await request(server, 'GET', '/api/accounting/quickbooks.csv', { cookie: managerCookie });
     assert(quickBooksCsv.status === 200 && quickBooksCsv.text.includes('Journal No.') && quickBooksCsv.text.includes('ROUTE-RECEIPT-1'), 'QuickBooks journal export is missing the reconciled source entry.');
+    const taxCsv = await request(server, 'GET', '/api/accounting/tax-summary.csv?year=2026', { cookie: managerCookie });
+    assert(taxCsv.status === 200 && taxCsv.text.includes('Monthly') && taxCsv.text.includes('Quarterly') && taxCsv.text.includes('Yearly') && taxCsv.text.includes('DSF confirmed'), 'Tax export should include monthly, quarterly, yearly, sales-tax, and Domestic Security Fee preparation rows.');
 
-    console.log('Risk/accounting route checks passed: role isolation, consent, hosted links, signed webhooks, idempotency, masked references, reconciliation, month close, and QuickBooks export.');
+    console.log('Risk/accounting route checks passed: role isolation, manual insurance, consent, signed webhooks, native tax settings, DSF classification, Star review, reconciliation, month close, and tax-ready exports.');
   } finally {
     try { server.close(); } catch (_) {}
     await fs.rm(dataDir, { recursive: true, force: true });

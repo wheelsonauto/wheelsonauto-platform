@@ -112,7 +112,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260717-risk-accounting-114">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260717-final-tightening-131">';
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -1216,7 +1216,7 @@ function verificationProviderReadiness() {
       backgroundPackageReady: !!CHECKR_BACKGROUND_PACKAGE,
       mvrPackageReady: !!CHECKR_MVR_PACKAGE,
       signedWebhookReady: !!CHECKR_WEBHOOK_SECRET,
-      status: riskProviders.checkrConfigured(checkr) && CHECKR_USE_CASE_CONFIRMED ? 'Ready to test' : 'Provider setup needed'
+      status: riskProviders.checkrConfigured(checkr) && CHECKR_USE_CASE_CONFIRMED ? 'Ready to test' : 'Optional - connect later'
     },
     canopy: {
       configured: riskProviders.canopyConfigured(canopy),
@@ -1224,7 +1224,7 @@ function verificationProviderReadiness() {
       apiReadReady: !!(CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID),
       signedWebhookReady: !!CANOPY_WEBHOOK_SECRET,
       monitoringReady: !!(CANOPY_CONNECT_ALIAS && CANOPY_CLIENT_ID && CANOPY_CLIENT_SECRET && CANOPY_TEAM_ID && CANOPY_WEBHOOK_SECRET),
-      status: CANOPY_CONNECT_ALIAS ? (CANOPY_WEBHOOK_SECRET ? 'Ready to test' : 'Customer link ready; webhook setup needed') : 'Provider setup needed'
+      status: CANOPY_CONNECT_ALIAS ? (CANOPY_WEBHOOK_SECRET ? 'Ready to test' : 'Customer link ready; webhook setup needed') : 'Manual review live'
     }
   };
 }
@@ -2266,9 +2266,10 @@ function recordDateKey(value) {
 function closeoutPaymentPaid(payment = {}) {
   const status = String(payment.status || '').toLowerCase();
   const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.message, payment.error].filter(Boolean).join(' ')).toLowerCase();
+  const awaitingVerification = payment.requiresVerification === true || /needs? (admin )?verification|pending (admin )?verification|awaiting (admin )?verification|under review/.test(status);
   const paidOutside = status.includes('paid outside app') && !status.includes('rejected');
   const paid = status === 'paid' || paidOutside;
-  return paid && !/(refund|void|chargeback|dispute|failed|not found|rejected)/.test(meta + ' ' + status) && Number(payment.amount || 0) > 0;
+  return !awaitingVerification && paid && !/(refund|void|chargeback|dispute|failed|not found|rejected)/.test(meta + ' ' + status) && Number(payment.amount || 0) > 0;
 }
 function closeoutPaymentOutsideApp(payment = {}) {
   const status = String(payment.status || '').toLowerCase();
@@ -2388,6 +2389,68 @@ function closeoutPaymentCustomerName(data, payment = {}, recurringRows = allRecu
     if (sameAmount.length === 1) recurring = sameAmount[0];
   }
   return recurring && recurring.customer ? recurring.customer : 'Unmatched payment';
+}
+function closeoutPaymentStronglyMatchesRecurring(data = {}, payment = {}, recurring = {}) {
+  if (!payment || !recurring || !normKey(recurring.customer)) return false;
+  const key = normKey(recurring.customer);
+  const raw = String(payment.customer || '').trim();
+  if (raw && !weakCloseoutCustomerName(raw) && normKey(raw) === key) return true;
+  const described = closeoutDescriptionCustomer(payment);
+  if (described && normKey(described) === key) return true;
+  const paymentRecurringIds = [payment.recurringPaymentId, payment.recurringId, payment.cloverSubscriptionId, payment.subscriptionId].filter(Boolean).map(String);
+  if (paymentRecurringIds.includes(String(recurring.id || '')) || paymentRecurringIds.includes(String(recurring.cloverSubscriptionId || ''))) return true;
+  const customerReference = String(payment.cloverCustomerId || payment.customerId || payment.externalCustomerReference || '').trim();
+  if (customerReference && (customerReference === String(recurring.cloverCustomerId || '') || normKey(customerReference) === key)) return true;
+  if (payment.paymentRequestId) {
+    const request = (data.paymentRequests || []).find(row => row.id === payment.paymentRequestId);
+    if (request && (request.recurringPaymentId === recurring.id || normKey(request.customer) === key)) return true;
+  }
+  if (payment.email && recurring.email && emailKey(payment.email) === emailKey(recurring.email)) return true;
+  if (payment.phone && recurring.phone && phoneKey(payment.phone) === phoneKey(recurring.phone)) return true;
+  const vehicle = reportVehicleFor(data, recurring.customer, recurring.vehicleId);
+  const paymentVehicleKeys = [payment.vehicleId, payment.vin, payment.licensePlate, payment.plate, payment.tag].map(normKey).filter(Boolean);
+  const recurringVehicleKeys = [recurring.vehicleId, recurring.vin, recurring.licensePlate, recurring.plate, vehicle.id, vehicle.vin, vehicle.plate, vehicle.stock].map(normKey).filter(Boolean);
+  return paymentVehicleKeys.some(value => recurringVehicleKeys.includes(value));
+}
+function closeoutPaymentRepresentsScheduledDue(payment = {}) {
+  const meta = String([payment.method, payment.type, payment.source, payment.notes, payment.description, payment.status, payment.error].filter(Boolean).join(' ')).toLowerCase();
+  return /autopay|auto pay|recurring|weekly payment|fail|declin|error|not found/.test(meta);
+}
+function uniqueCloseoutRecurringMoneyRows(rows = []) {
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = normKey(row.customer) || String(row.id || '');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function dailyCloseoutMoneyTruth(data = {}, dateKeyValue = localDateKey(), recurringRows = allRecurringRows(data)) {
+  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
+  const collectedPayments = payments.filter(closeoutPaymentPaid);
+  const expectedRows = uniqueCloseoutRecurringMoneyRows(recurringRows.filter(row => {
+    if (!recurringEligibleForToday(row)) return false;
+    const stamped = [row.lastAutoChargeDate, row.lastAutoChargeAttemptDate, row.lastFailedAt].some(value => recordDateKey(value) === dateKeyValue);
+    const scheduledPayment = payments.some(payment => closeoutPaymentStronglyMatchesRecurring(data, payment, row) && closeoutPaymentRepresentsScheduledDue(payment));
+    return recurringDateKey(row) === dateKeyValue || stamped || scheduledPayment;
+  }));
+  const balances = expectedRows.map(row => {
+    const due = Number(row.amount || row.weeklyAmount || 0);
+    const paid = collectedPayments.filter(payment => closeoutPaymentStronglyMatchesRecurring(data, payment, row)).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    const applied = Math.min(due, paid);
+    return { row, due, applied, remaining: Math.max(0, due - applied) };
+  });
+  return {
+    payments,
+    collectedPayments,
+    expectedRows,
+    balances,
+    outstandingRows: balances.filter(balance => balance.remaining > 0).map(balance => balance.row),
+    expected: balances.reduce((sum, balance) => sum + balance.due, 0),
+    appliedToExpected: balances.reduce((sum, balance) => sum + balance.applied, 0),
+    stillOpen: balances.reduce((sum, balance) => sum + balance.remaining, 0),
+    collected: collectedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  };
 }
 function recurringLifecycleText(row = {}) {
   return String([
@@ -2617,15 +2680,17 @@ function reviewPaidOutsideProof(data, user, payload = {}) {
   return payment;
 }
 function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), ownerNote = '') {
-  const recurring = allRecurringRows(data).filter(row => recurringDueOrTouchedToday(row, dateKeyValue));
-  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
-  const paidPayments = payments.filter(closeoutPaymentPaid);
+  const allRecurring = allRecurringRows(data);
+  const recurring = allRecurring.filter(row => recurringDueOrTouchedToday(row, dateKeyValue));
+  const moneyTruth = dailyCloseoutMoneyTruth(data, dateKeyValue, allRecurring);
+  const payments = moneyTruth.payments;
+  const paidPayments = moneyTruth.collectedPayments;
   const paidOutsidePayments = paidPayments.filter(closeoutPaymentOutsideApp);
   const cloverPayments = paidPayments.filter(payment => /clover/i.test(String([payment.source, payment.method, payment.type, payment.notes].filter(Boolean).join(' '))) && !closeoutPaymentOutsideApp(payment));
   const paidOutsideAmount = paidOutsidePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const cloverCollected = cloverPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const expected = recurring.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
-  const collected = paidPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const expected = moneyTruth.expected;
+  const collected = moneyTruth.collected;
   const openPaymentRequests = (data.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
@@ -2645,7 +2710,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const pendingToday = recurringWithState.filter(item => item.state === 'Pending today').map(item => item.row);
   const failed = failedOnce.concat(failedTwice).concat(paymentNotFound);
   const pending = pendingToday.concat(chargeable).concat(cardLinked).concat(setupNeeded).concat(paymentNotFound);
-  const stillOpenAmount = Math.max(0, expected - collected);
+  const stillOpenAmount = moneyTruth.stillOpen;
   const peopleToContact = failedTwice.length + paymentNotFound.length;
   const closeoutContactItem = (row, status) => {
     const vehicle = reportVehicleFor(data, row.customer, row.vehicleId);
@@ -2752,6 +2817,7 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
     '',
     'Expected from due/active tracked customers: ' + moneyText(expected),
     'Collected in recorded paid transactions: ' + moneyText(collected),
+    'Applied to matching scheduled dues: ' + moneyText(moneyTruth.appliedToExpected),
     'Still open amount: ' + moneyText(stillOpenAmount),
     'Pending today: ' + pendingToday.length,
     'Chargeable or card linked: ' + (chargeable.length + cardLinked.length),
@@ -2817,6 +2883,9 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
       expected,
       collected,
       stillOpenAmount,
+      dueCustomers: moneyTruth.expectedRows.length,
+      outstandingCustomers: moneyTruth.outstandingRows.length,
+      appliedToExpected: moneyTruth.appliedToExpected,
       pending: pending.length,
       failed: failed.length,
       pendingToday: pendingToday.length,
@@ -3067,12 +3136,14 @@ function reportRowsForData(data = {}, user = { role: 'Owner' }) {
   const today = localDateKey();
   const recurring = allRecurringRows(scoped);
   const dueRows = recurring.filter(row => recurringDueOrTouchedToday(row, today));
+  const moneyTruth = dailyCloseoutMoneyTruth(scoped, today, recurring);
   const payments = uniqueCloseoutPayments(scoped.payments || []);
   const todayPayments = payments.filter(payment => recordDateKey(payment.date || payment.createdAt) === today);
-  const collectedToday = todayPayments.filter(closeoutPaymentPaid).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const expectedToday = dueRows.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
+  const collectedToday = moneyTruth.collected;
+  const expectedToday = moneyTruth.expected;
   addReportRow(rows, 'Daily closeout', today, 'All customers', '', '', '', '', 'Expected today', expectedToday, 'Open', 'WheelsonAuto', 'Due, paid, failed, setup, and payment-not-found customers tracked today');
   addReportRow(rows, 'Daily closeout', today, 'All customers', '', '', '', '', 'Collected today', collectedToday, 'Paid', 'WheelsonAuto/Clover', 'Collected transactions are deduped and exclude failed/refund/dispute records');
+  addReportRow(rows, 'Daily closeout', today, 'All customers', '', '', '', '', 'Still open', moneyTruth.stillOpen, moneyTruth.stillOpen ? 'Open' : 'Paid', 'WheelsonAuto', moneyTruth.outstandingRows.length + ' scheduled customer due(s) are not fully satisfied by a matching payment');
   addReportRow(rows, 'Daily closeout', today, 'All customers', '', '', '', '', 'Verification inbox', closeoutVerificationItems(scoped).length, 'Review', 'WheelsonAuto verification', 'Customer proof, paid-outside, service, toll, claim, and document reviews waiting');
   payments.forEach(payment => {
     const customer = closeoutPaymentCustomerName(scoped, payment, recurring);
@@ -3228,6 +3299,7 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const recurring = allRecurringRows(scoped);
   const payments = uniqueCloseoutPayments(scoped.payments || []);
   const dueToday = recurring.filter(row => recurringDueOrTouchedToday(row, today));
+  const moneyTruth = dailyCloseoutMoneyTruth(scoped, today, recurring);
   const failedOnce = dueToday.filter(row => closeoutRecurringState(row) === 'Failed once');
   const failedTwice = dueToday.filter(row => closeoutRecurringState(row) === 'Failed twice');
   const notFound = dueToday.filter(row => closeoutRecurringState(row) === 'Payment not found');
@@ -3236,10 +3308,10 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   const collectedPaymentsToday = todayPayments.filter(closeoutPaymentPaid);
   const paidOutsideToday = collectedPaymentsToday.filter(closeoutPaymentOutsideApp);
   const cloverPaymentsToday = collectedPaymentsToday.filter(payment => /clover/i.test(String([payment.source, payment.method, payment.type, payment.notes].filter(Boolean).join(' '))) && !closeoutPaymentOutsideApp(payment));
-  const collectedToday = collectedPaymentsToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const collectedToday = moneyTruth.collected;
   const paidOutsideAmountToday = paidOutsideToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const cloverCollectedToday = cloverPaymentsToday.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-  const expectedToday = dueToday.reduce((sum, row) => sum + Number(row.amount || row.weeklyAmount || 0), 0);
+  const expectedToday = moneyTruth.expected;
   const staleAutopay = staleAutopayScheduleRows(scoped, today);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
   const assignmentConflicts = assignmentConflictRows(scoped);
@@ -3341,8 +3413,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
     summary: {
       expectedToday,
       collectedToday,
-      stillOpenToday: Math.max(0, expectedToday - collectedToday),
-      dueToday: dueToday.length,
+      stillOpenToday: moneyTruth.stillOpen,
+      dueToday: moneyTruth.expectedRows.length,
       failedOnce: failedOnce.length,
       failedTwice: failedTwice.length,
       paymentNotFound: notFound.length,
@@ -3986,6 +4058,105 @@ async function openAiReplyPlan(data, payload, context, fallback) {
   } catch (err) {
     const message = err && err.name === 'AbortError' ? 'OpenAI provider timed out.' : String(err && err.message || err);
     return sanitizeAiPlan({ ...fallback, mode: 'rules', provider: 'rules', providerError: message }, fallback);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+const STAR_ACCOUNTING_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    alerts: { type: 'array', items: { type: 'string' }, maxItems: 8 },
+    nextSteps: { type: 'array', items: { type: 'string' }, maxItems: 8 },
+    filingNotes: { type: 'array', items: { type: 'string' }, maxItems: 8 }
+  },
+  required: ['summary', 'alerts', 'nextSteps', 'filingNotes'],
+  additionalProperties: false
+};
+function starAccountingFallback(yearSummary = {}, insights = {}, taxCenter = {}) {
+  const totals = yearSummary.totals || {};
+  const alerts = (insights.reviewFlags || []).map(row => row.count + ' ' + row.label.toLowerCase());
+  const unclassified = Number(taxCenter.yearly && taxCenter.yearly.unclassifiedTransactions || 0);
+  const agreementReview = Number(taxCenter.yearly && taxCenter.yearly.agreementsNeedingClassification || 0);
+  if (unclassified) alerts.push(unclassified + ' payment transaction(s) still need sales-tax classification');
+  if (agreementReview) alerts.push(agreementReview + ' rental agreement(s) still need Domestic Security Fee classification');
+  const nextSteps = [];
+  if (Number(totals.needsReview || 0)) nextSteps.push('Reconcile every source entry against its payment, receipt, invoice, or bank evidence.');
+  if (unclassified) nextSteps.push('Mark payment transactions taxable or exempt before using the sales-tax estimate to file.');
+  if (agreementReview) nextSteps.push('Confirm each agreement as Domestic Security Fee applicable or excluded with a qualified New Jersey tax professional.');
+  nextSteps.push('Close each completed month after exceptions are cleared and retain the exported source ledger.');
+  nextSteps.push('Review the quarterly and yearly package with a qualified tax professional before filing.');
+  return {
+    ok: true,
+    provider: 'rules',
+    model: '',
+    year: yearSummary.year || taxCenter.year || '',
+    summary: 'WheelsonAuto Books shows ' + moneyText(totals.credits || 0) + ' money in, ' + moneyText(totals.debits || 0) + ' money out, and ' + moneyText(totals.net || 0) + ' net for ' + (yearSummary.year || taxCenter.year || 'the selected year') + '.',
+    alerts: alerts.length ? alerts.slice(0, 8) : ['No automatic bookkeeping exceptions were found.'],
+    nextSteps: nextSteps.slice(0, 8),
+    filingNotes: [
+      'Sales-tax estimates are preparation aids until taxable treatment and whether prices include tax are confirmed.',
+      'The New Jersey Domestic Security Fee is based on rental-agreement days, not physical vehicle use.',
+      'Star prepares and explains records but does not file returns or choose a legal tax position without owner approval.'
+    ]
+  };
+}
+async function starAccountingReview(yearSummary = {}, insights = {}, taxCenter = {}) {
+  const fallback = starAccountingFallback(yearSummary, insights, taxCenter);
+  if (!OPENAI_API_KEY || !WOA_AI_MODEL) return fallback;
+  const safeContext = {
+    year: yearSummary.year,
+    totals: yearSummary.totals,
+    categories: (yearSummary.categories || []).slice(0, 30),
+    months: (yearSummary.months || []).map(row => ({ month: row.month, credits: row.credits, debits: row.debits, net: row.net, needsReview: row.needsReview })),
+    reviewFlags: insights.reviewFlags || [],
+    taxCenter: {
+      settings: taxCenter.settings,
+      monthly: taxCenter.monthly,
+      quarterly: taxCenter.quarterly,
+      yearly: taxCenter.yearly,
+      guidance: taxCenter.guidance
+    }
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WOA_AI_TIMEOUT_MS);
+  try {
+    const requestBody = {
+      model: WOA_AI_MODEL,
+      input: [
+        { role: 'developer', content: 'You are Star, the built-in WheelsonAuto bookkeeping and tax-preparation assistant. Analyze aggregate business totals only. Explain bookkeeping exceptions, monthly and quarterly filing preparation, sales-tax classification gaps, and New Jersey Domestic Security Fee review gaps. Do not claim a return was filed, do not choose an uncertain legal tax position, and do not replace a tax professional. Return concise JSON only.' },
+        { role: 'user', content: JSON.stringify(safeContext) }
+      ],
+      max_output_tokens: 1400,
+      store: false,
+      truncation: 'auto',
+      safety_identifier: 'woa-star-accounting-' + String(yearSummary.year || 'year'),
+      prompt_cache_key: 'wheelsonauto-star-accounting-v1',
+      text: { format: { type: 'json_schema', name: 'wheelsonauto_star_accounting', strict: true, schema: STAR_ACCOUNTING_SCHEMA } }
+    };
+    if (starModelSupportsReasoning(WOA_AI_MODEL)) requestBody.reasoning = { effort: WOA_AI_REASONING_EFFORT };
+    else requestBody.temperature = 0.1;
+    const response = await fetch(OPENAI_BASE_URL + '/responses', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + OPENAI_API_KEY, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify(requestBody)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error && body.error.message || 'OpenAI accounting review failed.');
+    const output = body.output_text || (body.output || []).flatMap(item => item.content || []).map(part => part.text || '').join('\n');
+    const parsed = parseStarAiJson(output);
+    return {
+      ...fallback,
+      provider: 'openai',
+      model: WOA_AI_MODEL,
+      summary: String(parsed.summary || fallback.summary).slice(0, 1200),
+      alerts: Array.isArray(parsed.alerts) ? parsed.alerts.slice(0, 8).map(item => String(item).slice(0, 300)) : fallback.alerts,
+      nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps.slice(0, 8).map(item => String(item).slice(0, 300)) : fallback.nextSteps,
+      filingNotes: Array.isArray(parsed.filingNotes) ? parsed.filingNotes.slice(0, 8).map(item => String(item).slice(0, 300)) : fallback.filingNotes
+    };
+  } catch (error) {
+    return { ...fallback, providerError: error && error.name === 'AbortError' ? 'Star accounting review timed out.' : String(error && error.message || error).slice(0, 240) };
   } finally {
     clearTimeout(timeout);
   }
@@ -6304,7 +6475,7 @@ function customerSessionUser(req) {
   }
 }
 function customerLoginPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>View your application, vehicle, payment schedule, service reminders, and account messages.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Email or phone number<input name="username" inputmode="email" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><button>Sign in</button><div class="login-pin">Use the email or mobile number entered on your application. Staff should use the main WheelsonAuto Portal login.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>View your application, vehicle, payment schedule, service reminders, and account messages.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Email, phone, or username<input name="username" inputmode="email" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><button>Sign in</button><div class="login-pin">Use the email, mobile number, or username on your customer account. Staff should use the main WheelsonAuto Portal login.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
 }
 function customerForgotPage(message = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer help</div><h1>Reset access</h1><p>Send the office a secure request. We will verify the account before changing any login.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, passwords are changed by WheelsonAuto after account verification.</div><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Back to customer login</a></form></main></body></html>';
@@ -6775,7 +6946,7 @@ function customerPortalHtml(account, state) {
   const portalStatementForm = '<form method="POST" action="/customer/statement-request" class="customer-message-form customer-statement-form"><label>Request account document<select name="requestType"><option>Account statement</option><option>Payoff balance</option><option>Payment history</option><option>Balance letter</option></select></label><label>Note<input name="note" maxlength="200" placeholder="What do you need it for?"></label><button class="btn primary" type="submit">Request document</button><small>The office verifies the account before sending any statement, payoff, or balance document.</small></form>';
   const currentCardProvider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
   const cardChangeForm = '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="' + escapeHtml(currentCardProvider) + '"><button class="btn primary" type="submit">Change card on file (' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ')</button><small>Opens secure ' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ' card setup. WheelsonAuto never sees the full card number.</small></form>' + (currentCardProvider !== 'stripe' && stripe.configured() ? '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="stripe"><button class="btn" type="submit">Prepare Stripe card</button><small>Saves a Stripe card without stopping Clover. The owner confirms the provider switch separately.</small></form>' : '');
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=secure-upload-2-mobile-workspaces"></script></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=focused-workspaces-3"></script></body></html>';
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
 customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
@@ -7679,7 +7850,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/accounting/adjustments', 'Owner-created source-linked accounting adjustment'),
     route('POST', '/api/accounting/reconcile', 'Owner accounting reconciliation decision'),
     route('POST', '/api/accounting/periods/close', 'Owner month-close snapshot'),
+    route('POST', '/api/accounting/tax-settings', 'Owner tax-preparation settings'),
+    route('POST', '/api/accounting/tax-classification', 'Owner Domestic Security Fee agreement classification'),
+    route('POST', '/api/accounting/star-review', 'Star aggregate books and tax-preparation review'),
     route('GET', '/api/accounting/export.csv', 'Source-linked accounting ledger CSV'),
+    route('GET', '/api/accounting/tax-summary.csv', 'Monthly, quarterly, and yearly tax-preparation CSV'),
     route('GET', '/api/accounting/quickbooks.csv', 'Balanced QuickBooks journal CSV'),
     route('GET', '/api/pickups/calendar', 'Pickup calendar, ICS, and maps records'),
     route('POST', '/api/pickups/:id/calendar', 'Prepare deterministic pickup calendar record'),
@@ -11921,6 +12096,9 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   const paidAt = details.paidAt || new Date().toISOString();
   const provider = normalizedPaymentProvider(details.provider || request.paymentProvider || 'clover');
   const providerName = paymentProviderLabel(provider);
+  const stripePaymentIntentId = provider === 'stripe'
+    ? String(details.stripePaymentIntentId || details.providerPaymentId || request.stripePaymentIntentId || '').trim()
+    : '';
   request.status = 'Paid through verified ' + providerName + ' webhook';
   request.paymentProvider = provider;
   request.paidAt = request.paidAt || paidAt;
@@ -11929,7 +12107,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   request.webhookVerifiedAt = paidAt;
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
-    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' });
+    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' });
   }
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
   if (recurring) {
@@ -12104,7 +12282,7 @@ async function recordStripeWebhookEvent(event = {}) {
       const request = (data.paymentRequests || []).find(row => row.id === metadata.paymentRequestId || row.id === object.client_reference_id || row.stripeCheckoutSessionId === object.id || row.providerCheckoutSessionId === object.id);
       if (request) {
         const intentId = stripeObjectId(object.payment_intent);
-        recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: intentId, paidAt: Number(object.created || 0) ? new Date(Number(object.created) * 1000).toISOString() : new Date().toISOString() });
+        recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: intentId, stripePaymentIntentId: intentId, paidAt: Number(object.created || 0) ? new Date(Number(object.created) * 1000).toISOString() : new Date().toISOString() });
         request.stripeCheckoutSessionId = object.id || '';
         request.stripePaymentIntentId = intentId;
         paymentRequestId = request.id;
@@ -13512,7 +13690,7 @@ const server = http.createServer(async (req, res) => {
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const body = String(form.get('body') || '').trim().slice(0, 1200);
-      if (!body) return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      if (!body) return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
       const data = await readData();
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && String(item.status || 'Active').toLowerCase() !== 'disabled');
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
@@ -13585,7 +13763,7 @@ const server = http.createServer(async (req, res) => {
       });
 	      appendCustomerPortalAudit(data, account, 'Customer portal message received', [message.customer, triage.intent, triage.status, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
 	    }
 	    if (url.pathname === '/customer/receipt-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
@@ -13655,7 +13833,7 @@ const server = http.createServer(async (req, res) => {
 	      });
 	      appendCustomerPortalAudit(data, account, 'Customer portal receipt requested', [customerName, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '', message.amount ? moneyText(message.amount) : 'No amount']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
 	    }
 	    if (url.pathname === '/customer/statement-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
@@ -13771,7 +13949,7 @@ const server = http.createServer(async (req, res) => {
 	      });
 	      appendCustomerPortalAudit(data, account, 'Customer portal statement requested', [customerName, requestType, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '', note || 'No note']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
 	    }
 	    if (url.pathname === '/customer/paid-outside' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -13782,7 +13960,7 @@ const server = http.createServer(async (req, res) => {
       const paidDate = String(form.get('paidDate') || '').trim();
       const note = String(form.get('note') || '').trim().slice(0, 1200);
       const proofUrl = String(form.get('proofUrl') || form.get('url') || '').trim().slice(0, 500);
-      if (!Number.isFinite(amount) || amount <= 0) return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      if (!Number.isFinite(amount) || amount <= 0) return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
       const data = await readData();
       const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
@@ -13866,7 +14044,7 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal paid-outside reported', [customerName, moneyText(amount), method, vehicleName || payment.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
     }
     if (url.pathname === '/customer/service-request' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -13962,7 +14140,7 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal service requested', [customerName, type, due, vehicleName || service.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-service' });
     }
     if (url.pathname === '/customer/issue-report' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -14061,7 +14239,7 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal issue reported', [customerName, type, moneyText(claim.amount || 0), vehicleName || claim.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-issues' });
     }
     if (url.pathname === '/customer/document-update' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -14187,7 +14365,7 @@ const server = http.createServer(async (req, res) => {
       appendCustomerPortalAudit(data, account, 'Customer portal document submitted', [customerName, type, provider || reference || 'Document proof', vehicleName || document.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
       if (jsonUpload) return json(res, 201, { ok: true, message: 'Document uploaded securely for WheelsonAuto verification.', document: { id: document.id, type: document.type, status: document.status, originalName: document.originalName, portalDownloadUrl: '/customer/documents/' + encodeURIComponent(document.id) } });
-      return send(res, 302, '', 'text/plain', { Location: '/customer' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
     }
     if (url.pathname.startsWith('/customer/documents/') && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -14250,7 +14428,7 @@ const server = http.createServer(async (req, res) => {
         });
         appendCustomerPortalAudit(data, account, 'Customer portal card change needs review', [customerName, message.status, message.vehicleId || 'No vehicle linked']);
         await writeData(data);
-        return send(res, 302, '', 'text/plain', { Location: '/customer' });
+        return send(res, 302, '', 'text/plain', { Location: '/customer#portal-card' });
       }
       const setup = createCardSetupRequest(data, {
         id: recurring.id || account.recurringPaymentId,
@@ -14774,7 +14952,8 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const record = (data.verificationCases || []).find(row => row.id === payload.caseId && rowVisibleToUserOrganization(row, user));
       if (!record) return json(res, 404, { ok: false, error: 'Verification case was not found.' });
-      integrationEngine.reviewVerificationCase(record, payload, user);
+      try { integrationEngine.reviewVerificationCase(record, payload, user); }
+      catch (error) { return json(res, 400, { ok: false, error: String(error && error.message || error) }); }
       appendAuditLog(data, user, 'Verification case reviewed', [record.customer, record.type, record.status, record.vehicle || 'No vehicle linked']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
@@ -14787,15 +14966,77 @@ const server = http.createServer(async (req, res) => {
       const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
       const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
       const month = /^\d{4}-\d{2}$/.test(String(url.searchParams.get('month') || '')) ? String(url.searchParams.get('month')) : localDateKey().slice(0, 7);
+      const summary = integrationEngine.accountingLedgerSummary(entries, { month });
+      const taxCenter = integrationEngine.accountingTaxCenter(scoped, entries, { year: month.slice(0, 4), month });
       return json(res, 200, {
         ok: true,
         generatedAt: new Date().toISOString(),
         month,
-        summary: integrationEngine.accountingLedgerSummary(entries, { month }),
+        summary,
+        insights: integrationEngine.accountingLedgerInsights(entries, { month }),
+        yearSummary: integrationEngine.accountingYearSummary(entries, month.slice(0, 4)),
+        taxCenter,
         periods: (scoped.accountingPeriods || []).slice().sort((a, b) => String(b.month).localeCompare(String(a.month))),
-        quickBooks: { configured: !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET), realmId: QUICKBOOKS_REALM_ID ? 'stored in Render' : '', status: QUICKBOOKS_REALM_ID ? 'Credentials saved - OAuth connection still required' : 'Provider setup needed' },
+        quickBooks: { configured: !!(QUICKBOOKS_REALM_ID && QUICKBOOKS_CLIENT_ID && QUICKBOOKS_CLIENT_SECRET), realmId: QUICKBOOKS_REALM_ID ? 'stored in Render' : '', status: QUICKBOOKS_REALM_ID ? 'Optional credentials saved - OAuth still required' : 'Optional export only' },
         entries
       });
+    }
+    if (url.pathname === '/api/accounting/tax-settings' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can change accounting tax settings.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      let salesTaxRate = Number(payload.salesTaxRate);
+      if (salesTaxRate > 1) salesTaxRate /= 100;
+      if (!Number.isFinite(salesTaxRate) || salesTaxRate <= 0 || salesTaxRate >= 1) return json(res, 400, { ok: false, error: 'Enter a sales-tax rate between 0 and 100 percent.' });
+      const domesticSecurityFeeRate = Math.round(Math.abs(Number(payload.domesticSecurityFeeRate || 0)) * 100) / 100;
+      const domesticSecurityFeeMaxDays = Math.round(Math.abs(Number(payload.domesticSecurityFeeMaxDays || 0)));
+      const domesticSecurityFeeMode = String(payload.domesticSecurityFeeMode || 'review').toLowerCase();
+      if (!domesticSecurityFeeRate || domesticSecurityFeeRate > 100) return json(res, 400, { ok: false, error: 'Enter a valid Domestic Security Fee daily rate.' });
+      if (!domesticSecurityFeeMaxDays || domesticSecurityFeeMaxDays > 60) return json(res, 400, { ok: false, error: 'Enter a Domestic Security Fee day limit between 1 and 60.' });
+      if (!['review', 'enabled', 'disabled'].includes(domesticSecurityFeeMode)) return json(res, 400, { ok: false, error: 'Choose review, enabled, or disabled for the Domestic Security Fee workflow.' });
+      const data = await readData();
+      data.accountingTaxSettings = {
+        state: String(payload.state || 'NJ').toUpperCase().slice(0, 2),
+        salesTaxRate,
+        pricesIncludeSalesTax: payload.pricesIncludeSalesTax === true,
+        domesticSecurityFeeRate,
+        domesticSecurityFeeMaxDays,
+        domesticSecurityFeeMode,
+        updatedAt: new Date().toISOString(),
+        updatedBy: String(user.name || user.username || user.role || 'Owner')
+      };
+      appendAuditLog(data, user, 'Accounting tax settings updated', [data.accountingTaxSettings.state, (salesTaxRate * 100).toFixed(3) + '% sales tax', moneyText(domesticSecurityFeeRate) + ' domestic security fee', domesticSecurityFeeMaxDays + ' day cap', domesticSecurityFeeMode]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, settings: integrationEngine.accountingTaxSettings(data) });
+    }
+    if (url.pathname === '/api/accounting/tax-classification' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can classify an agreement for tax preparation.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      if (payload.domesticSecurityFeeApplies !== true && payload.domesticSecurityFeeApplies !== false) return json(res, 400, { ok: false, error: 'Choose whether the Domestic Security Fee applies to this agreement.' });
+      const data = await readData();
+      const contract = (data.contracts || []).find(row => row.id === payload.contractId && rowVisibleToUserOrganization(row, user));
+      if (!contract) return json(res, 404, { ok: false, error: 'Agreement was not found.' });
+      contract.domesticSecurityFeeApplies = payload.domesticSecurityFeeApplies;
+      contract.domesticSecurityFeeNotes = String(payload.notes || '').trim().slice(0, 800);
+      contract.domesticSecurityFeeClassifiedAt = new Date().toISOString();
+      contract.domesticSecurityFeeClassifiedBy = String(user.name || user.username || user.role || 'Owner');
+      appendAuditLog(data, user, 'Domestic Security Fee agreement classified', [contract.customer || contract.id, payload.domesticSecurityFeeApplies ? 'Applicable' : 'Excluded', contract.startDate || contract.pickupDate || 'Start date missing']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, contract });
+    }
+    if (url.pathname === '/api/accounting/star-review' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can ask Star to review tax and accounting records.' });
+      const payload = await readJsonBody(req, 64 * 1024);
+      const year = /^\d{4}$/.test(String(payload.year || '')) ? String(payload.year) : localDateKey().slice(0, 4);
+      const month = /^\d{4}-\d{2}$/.test(String(payload.month || '')) ? String(payload.month) : localDateKey().slice(0, 7);
+      const data = await readData();
+      const entries = integrationEngine.buildAccountingLedger(data, data.ledgerEntries || []);
+      const yearSummary = integrationEngine.accountingYearSummary(entries, year);
+      const insights = integrationEngine.accountingLedgerInsights(entries, { month });
+      const taxCenter = integrationEngine.accountingTaxCenter(data, entries, { year, month });
+      const review = await starAccountingReview(yearSummary, insights, taxCenter);
+      return json(res, 200, { ok: true, review });
     }
     if (url.pathname === '/api/accounting/ledger/rebuild' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can rebuild the accounting ledger.' });
@@ -14891,6 +15132,23 @@ const server = http.createServer(async (req, res) => {
       const rows = [['Date', 'Category', 'Direction', 'Amount', 'Customer', 'Vehicle', 'VIN', 'Tag', 'Method', 'Status', 'Reference', 'Reconciliation', 'Reconciled by', 'QuickBooks status', 'Source key']]
         .concat(entries.map(row => [row.date, row.category, row.direction, row.amount, row.customer, row.vehicle, row.vin, row.plate, row.method, row.status, row.reference, row.reconciliationStatus, row.reconciledBy, row.quickBooksStatus, row.sourceKey]));
       return send(res, 200, rows.map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n', 'text/csv; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-accounting-ledger.csv"', 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/api/accounting/tax-summary.csv' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can export accounting tax summaries.' });
+      const data = await readData();
+      const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+      const entries = integrationEngine.buildAccountingLedger(scoped, scoped.ledgerEntries || []);
+      const year = /^\d{4}$/.test(String(url.searchParams.get('year') || '')) ? String(url.searchParams.get('year')) : localDateKey().slice(0, 4);
+      const tax = integrationEngine.accountingTaxCenter(scoped, entries, { year });
+      const books = integrationEngine.accountingYearSummary(entries, year);
+      const rows = [['Section', 'Period', 'Gross taxable receipts', 'Exempt receipts', 'Recorded sales tax', 'Estimated sales tax', 'Unclassified transactions', 'DSF confirmed', 'DSF potential review', 'Agreements needing classification', 'Book net']];
+      tax.monthly.forEach(row => rows.push(['Monthly', row.month, row.grossReceipts, row.exemptReceipts, row.recordedSalesTax, row.estimatedSalesTax, row.unclassifiedTransactions, row.domesticSecurityFeeConfirmed, row.domesticSecurityFeePotential, row.agreementsNeedingClassification, '']));
+      tax.quarterly.forEach(row => rows.push(['Quarterly', row.label, row.grossReceipts, row.exemptReceipts, row.recordedSalesTax, row.estimatedSalesTax, row.unclassifiedTransactions, row.domesticSecurityFeeConfirmed, row.domesticSecurityFeePotential, row.agreementsNeedingClassification, '']));
+      rows.push(['Yearly', year, tax.yearly.grossReceipts, tax.yearly.exemptReceipts, tax.yearly.recordedSalesTax, tax.yearly.estimatedSalesTax, tax.yearly.unclassifiedTransactions, tax.yearly.domesticSecurityFeeConfirmed, tax.yearly.domesticSecurityFeePotential, tax.yearly.agreementsNeedingClassification, tax.yearly.netBooks]);
+      books.categories.forEach(row => rows.push(['Book category', row.category, row.credits, row.debits, '', '', row.count, '', '', '', row.net]));
+      rows.push(['Guidance', year, '', '', '', '', '', '', '', '', tax.guidance]);
+      return send(res, 200, rows.map(row => row.map(reportCsvCell).join(',')).join('\n') + '\n', 'text/csv; charset=utf-8', { 'Content-Disposition': 'attachment; filename="wheelsonauto-tax-summary-' + year + '.csv"', 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/api/accounting/quickbooks.csv' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();

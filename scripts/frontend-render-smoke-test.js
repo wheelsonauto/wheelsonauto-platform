@@ -245,7 +245,10 @@ function assertHealthy(label, output, required = []) {
   assert(!/\bundefined\b/.test(output), label + ' rendered "undefined".');
   assert(!/\bNaN\b/.test(output), label + ' rendered "NaN".');
   assert(!/\[object Object\]/.test(output), label + ' rendered an object string.');
-  required.forEach(text => assert(output.includes(text), label + ' is missing: ' + text));
+  required.forEach(text => {
+    const mainStart = output.indexOf('<main');
+    assert(output.includes(text), label + ' is missing: ' + text + '. Main: ' + output.slice(Math.max(0, mainStart), Math.max(0, mainStart) + 1800));
+  });
 }
 
 function assertNo(label, output, banned = []) {
@@ -573,7 +576,9 @@ function ownerSmoke() {
     ['Verification background', 'Insurance', 'Background', ['Verification', 'Background checks', 'background check', 'last four characters', 'integration-workspace'], true],
     ['Messages Star', 'Messages', 'Star', ['Messages', 'Ask Star', 'Review queue', 'message-star-focused', 'message-thread-grid'], false],
     ['Messages queue', 'Messages', 'Queue', ['Messages', 'Follow-up', 'message-focused-list'], false],
-    ['Documents', 'Documents', undefined, ['Documents', 'Customer requests', 'Document vault', 'Payment receipt', 'Receipts'], true],
+    ['Documents review', 'Documents', 'Review', ['Documents', 'Verification inbox', 'Customer proof'], true],
+    ['Documents vault', 'Documents', 'Vault', ['Documents', 'Document vault', 'Payment receipt'], true],
+    ['Documents requests', 'Documents', 'Requests', ['Documents', 'Customer portal requests', 'Search portal requests'], true],
     ['Tolls open', 'Tolls', 'Open', ['Tolls', 'Toll recovery command', 'Toll follow-up route', 'Open recovery', 'Missing file', 'Ready to collect', 'toll-recovery-list'], true],
     ['Tolls missing file', 'Tolls', 'Missing file', ['Tolls', 'Missing file tolls and violations', 'Search tolls by customer', 'Provider setup'], true],
     ['Marketing', 'Marketing', undefined, ['Marketing command', 'Lead follow-up command', 'Lead board', 'Search follow-up by customer', 'Search leads by customer'], true],
@@ -590,13 +595,21 @@ function ownerSmoke() {
     ['Dashboard overview', 'Dashboard', 'Overview', ['Dashboard', 'Business overview', 'Money today'], false],
     ['Dashboard closeout', 'Dashboard', 'Closeout', ['Dashboard', 'Daily closeout', 'Expected today'], false],
     ['Dashboard accounting', 'Dashboard', 'Accounting', ['Dashboard', 'Accounting ledger', 'One source of truth', '/api/accounting/quickbooks.csv', 'tamper-evident source hash', 'integration-workspace'], false],
-    ['Dashboard risk', 'Dashboard', 'Risk', ['Dashboard', 'Risk', 'Star system auditor', 'Dispute identity resolver', 'Customer risk report'], false],
+    ['Dashboard risk', 'Dashboard', 'Risk', ['Dashboard', 'Risk', 'Star system auditor'], false],
     ['Legacy owner Reports redirect', 'Reports', 'Accounting', ['Dashboard', 'Accounting ledger', 'One source of truth'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);
     if (compact) assertCompactBoard(label, output, required);
     else assertHealthy(label, output, required);
   });
+  context.dashboardDetailState.Accounting = 'Cars';
+  assertHealthy('Dashboard accounting cars', renderView(context, 'Dashboard', 'Accounting'), ['Dashboard', 'Car profitability & recovery', 'Collected', 'Service cost']);
+  context.dashboardDetailState.Accounting = 'Books';
+  context.dashboardDetailState.Risk = 'Disputes';
+  assertHealthy('Dashboard risk disputes', renderView(context, 'Dashboard', 'Risk'), ['Dashboard', 'Dispute identity resolver', 'Name-missing disputes']);
+  context.dashboardDetailState.Risk = 'Customers';
+  assertHealthy('Dashboard customer risk', renderView(context, 'Dashboard', 'Risk'), ['Dashboard', 'Customer risk report', 'payment setup']);
+  context.dashboardDetailState.Risk = 'Health';
   const ownerClaimsOpen = renderView(context, 'Claims & Issues', 'Open');
   assertNo('Owner Claims duplicate boards', ownerClaimsOpen, ['Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge']);
   const ownerPickups = renderView(context, 'Applications', 'Pickups');

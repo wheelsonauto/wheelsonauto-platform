@@ -4,7 +4,7 @@
   function setupPortalNavigation() {
     var portal = document.querySelector('.customer-portal');
     var hub = portal && portal.querySelector('.customer-action-hub');
-    if (!portal || !hub || !window.matchMedia) return;
+    if (!portal || !hub) return;
     var mobile = window.matchMedia('(max-width: 760px)');
     var links = Array.prototype.slice.call(hub.querySelectorAll('a[href^="#portal-"]'));
     var panels = Array.prototype.slice.call(portal.querySelectorAll('.customer-panel[id^="portal-"]'));
@@ -17,21 +17,25 @@
       '#portal-issues': ['portal-issues'],
       '#portal-messages': ['portal-messages']
     };
-    function resetDesktop() {
-      portal.classList.remove('customer-mobile-focused', 'customer-mobile-detail');
-      panels.forEach(function (panel) { panel.classList.remove('portal-mobile-visible'); if (panel.parentNode) panel.parentNode.classList.remove('portal-mobile-has-visible'); });
-      links.forEach(function (link) { link.classList.remove('active'); link.removeAttribute('aria-current'); });
-    }
     function show(hash, scroll) {
-      if (!mobile.matches) { resetDesktop(); return; }
       var key = groups[hash] ? hash : '#portal-overview';
       var visible = groups[key];
-      portal.classList.add('customer-mobile-focused');
-      portal.classList.toggle('customer-mobile-detail', key !== '#portal-overview');
+      portal.classList.add('customer-portal-focused');
+      portal.classList.toggle('customer-portal-detail', key !== '#portal-overview');
+      portal.classList.toggle('customer-mobile-focused', mobile.matches);
+      portal.classList.toggle('customer-mobile-detail', mobile.matches && key !== '#portal-overview');
       panels.forEach(function (panel) {
         var showPanel = visible.indexOf(panel.id) >= 0;
+        panel.classList.toggle('portal-visible', showPanel);
         panel.classList.toggle('portal-mobile-visible', showPanel);
-        if (panel.parentNode) panel.parentNode.classList.toggle('portal-mobile-has-visible', Array.prototype.some.call(panel.parentNode.children, function (child) { return child.classList && child.classList.contains('portal-mobile-visible'); }));
+        if (panel.parentNode) {
+          var visibleCount = Array.prototype.filter.call(panel.parentNode.children, function (child) {
+            return child.classList && child.classList.contains('portal-visible');
+          }).length;
+          panel.parentNode.classList.toggle('portal-has-visible', visibleCount > 0);
+          panel.parentNode.classList.toggle('portal-single-visible', visibleCount === 1);
+          panel.parentNode.classList.toggle('portal-mobile-has-visible', visibleCount > 0);
+        }
       });
       links.forEach(function (link) {
         var active = link.getAttribute('href') === key;
@@ -43,12 +47,11 @@
     }
     links.forEach(function (link) {
       link.addEventListener('click', function (event) {
-        if (!mobile.matches) return;
         event.preventDefault();
         show(link.getAttribute('href'), true);
       });
     });
-    function applyLayout() { if (mobile.matches) show(window.location.hash, false); else resetDesktop(); }
+    function applyLayout() { show(window.location.hash, false); }
     if (mobile.addEventListener) mobile.addEventListener('change', applyLayout); else mobile.addListener(applyLayout);
     applyLayout();
   }

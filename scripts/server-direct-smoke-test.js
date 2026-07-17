@@ -1220,7 +1220,7 @@ async function main() {
     assert(staleVerificationWebhook.status === 401, 'Verification HMAC signatures older than five minutes must be rejected.');
     const manualInsurance = await request(server, 'POST', '/api/verification/cases', { cookie: managerCookie, json: { type: 'insurance', customer: 'Direct Dispute Customer', vehicleId: 'veh-direct-dispute-car', provider: 'Manual', reference: 'POLICY-DIRECT-9876', expiresAt: '2030-02-01' } });
     assert(manualInsurance.status === 201 && manualInsurance.json.verificationCase.status === 'Needs staff review' && manualInsurance.json.verificationCase.policyNumberLast4 === '9876', 'Manual insurance verification should enter the staff review queue without retaining the full policy number.');
-    const approvedInsurance = await request(server, 'POST', '/api/verification/cases/review', { cookie: managerCookie, json: { caseId: manualInsurance.json.verificationCase.id, decision: 'approve', notes: 'Insurance card and vehicle identity reviewed.' } });
+    const approvedInsurance = await request(server, 'POST', '/api/verification/cases/review', { cookie: managerCookie, json: { caseId: manualInsurance.json.verificationCase.id, decision: 'approve', expiresAt: '2030-02-01', insuredNameConfirmed: true, vehicleConfirmed: true, coverageConfirmed: true, datesConfirmed: true, notes: 'Insurance card and vehicle identity reviewed.' } });
     assert(approvedInsurance.status === 200 && approvedInsurance.json.verificationCase.status === 'Verified', 'Manager should be able to approve a reviewed insurance case.');
     const manualBackground = await request(server, 'POST', '/api/verification/cases', { cookie: managerCookie, json: { type: 'background', customer: 'Direct Dispute Customer', vehicleId: 'veh-direct-dispute-car', provider: 'Manual', reference: 'BACKGROUND-DIRECT-4321', notes: 'Applicant screening review.' } });
     assert(manualBackground.status === 201 && manualBackground.json.verificationCase.status === 'Needs staff review' && manualBackground.json.verificationCase.referenceLast4 === '4321' && !JSON.stringify(manualBackground.json).includes('BACKGROUND-DIRECT-4321'), 'Manual background verification should use the secure last-four-only review queue.');
@@ -1641,7 +1641,7 @@ async function main() {
         note: 'Receipt handed to office during smoke test.'
       }
     });
-    assert(customerPaidOutside.status === 302 && customerPaidOutside.location === '/customer', 'Customer paid-outside report should return to the portal.');
+    assert(customerPaidOutside.status === 302 && customerPaidOutside.location === '/customer#portal-payments', 'Customer paid-outside report should return to Payments.');
     const customerPaidOutsideState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const paidOutsideCandidates = (customerPaidOutsideState.json.payments || []).filter(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown');
     const paidOutsidePayment = paidOutsideCandidates.find(item => item.status === 'Paid outside app - needs verification' && item.date === '2026-08-02' && String(item.notes || '').includes('smoke test'));
@@ -1658,7 +1658,7 @@ async function main() {
 	    const customerReceiptNoAuth = await request(server, 'POST', '/customer/receipt-request');
 	    assert(customerReceiptNoAuth.status === 302 && customerReceiptNoAuth.location === '/customer/login', 'Customer receipt request should require customer login.');
 	    const customerReceiptRequest = await request(server, 'POST', '/customer/receipt-request', { cookie: customerCookie, form: { paymentHint: 'Need receipt for the latest $229 payment.' } });
-	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer', 'Customer receipt request should return to the customer portal.');
+	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer#portal-documents', 'Customer receipt request should return to Documents.');
 	    const customerReceiptState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const receiptMessage = (customerReceiptState.json.messages || []).find(item => item.event === 'customer_receipt_request' && item.customer === 'Alicia Brown');
 	    assert(receiptMessage && receiptMessage.status === 'Needs admin approval' && receiptMessage.aiPlan && receiptMessage.aiPlan.actionType === 'send_receipt' && receiptMessage.aiPlan.approvalRequired === true, 'Customer receipt request should create an admin-approved send_receipt message.');
@@ -1668,7 +1668,7 @@ async function main() {
 	    const customerStatementNoAuth = await request(server, 'POST', '/customer/statement-request');
 	    assert(customerStatementNoAuth.status === 302 && customerStatementNoAuth.location === '/customer/login', 'Customer account statement request should require customer login.');
 	    const customerStatementRequest = await request(server, 'POST', '/customer/statement-request', { cookie: customerCookie, form: { requestType: 'Payoff balance', note: 'Need payoff amount before Friday.' } });
-	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer', 'Customer statement request should return to the customer portal.');
+	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer#portal-documents', 'Customer statement request should return to Documents.');
 	    const customerStatementState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const statementMessage = (customerStatementState.json.messages || []).find(item => item.event === 'customer_statement_request' && item.customer === 'Alicia Brown');
 	    assert(statementMessage && statementMessage.status === 'Needs admin approval' && statementMessage.aiPlan && statementMessage.aiPlan.actionType === 'send_account_statement' && statementMessage.aiPlan.approvalRequired === true, 'Customer statement request should create an admin-approved send_account_statement message.');
@@ -1689,7 +1689,7 @@ async function main() {
         notes: 'Check engine light came on during the customer portal smoke test.'
       }
     });
-    assert(customerServiceRequest.status === 302 && customerServiceRequest.location === '/customer', 'Customer service request should return to the customer portal.');
+    assert(customerServiceRequest.status === 302 && customerServiceRequest.location === '/customer#portal-service', 'Customer service request should return to Service.');
     const customerServiceState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerServiceJob = (customerServiceState.json.maintenance || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Warning light' && item.due === '2026-08-01' && String(item.notes || '').includes('smoke test'));
     assert(customerServiceJob && customerServiceJob.vehicleId === 'veh-003' && customerServiceJob.vin === '3LN6L2G91FR123456' && customerServiceJob.proofUrl === 'https://proof.example/check-engine-light', 'Customer service request should create a vehicle-linked maintenance job with proof: ' + JSON.stringify(customerServiceJob || null));
@@ -1708,7 +1708,7 @@ async function main() {
         notes: 'Notice number PORTAL-TOLL-SMOKE.'
       }
     });
-    assert(customerIssueRequest.status === 302 && customerIssueRequest.location === '/customer', 'Customer issue report should return to the customer portal.');
+    assert(customerIssueRequest.status === 302 && customerIssueRequest.location === '/customer#portal-issues', 'Customer issue report should return to Issues.');
     const customerIssueState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerIssue = (customerIssueState.json.claims || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Toll / E-ZPass notice' && item.incidentDate === '2026-08-03');
     assert(customerIssue && customerIssue.vehicleId === 'veh-003' && customerIssue.vin === '3LN6L2G91FR123456' && customerIssue.amount === 12.5 && customerIssue.customerMatchStatus === 'Matched from customer portal' && customerIssue.proofUrl === 'https://proof.example/ezpass-notice', 'Customer issue report should create a vehicle-linked claim/issue with proof: ' + JSON.stringify(customerIssue || null));
@@ -1728,7 +1728,7 @@ async function main() {
         notes: 'Customer portal proof update smoke test.'
       }
     });
-    assert(customerDocumentUpdate.status === 302 && customerDocumentUpdate.location === '/customer', 'Customer document update should return to the customer portal.');
+    assert(customerDocumentUpdate.status === 302 && customerDocumentUpdate.location === '/customer#portal-documents', 'Customer document update should return to Documents.');
     const customerDocumentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerDocument = (customerDocumentState.json.documents || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.reference === 'POLICY-PORTAL-SMOKE');
     assert(customerDocument && customerDocument.vehicleId === 'veh-003' && customerDocument.vin === '3LN6L2G91FR123456' && customerDocument.status === 'Needs verification' && customerDocument.requiresVerification === true && customerDocument.url === 'https://proof.example/insurance-photo', 'Customer document update should create a vehicle-linked verification document with proof URL: ' + JSON.stringify(customerDocument || null));
@@ -1809,7 +1809,7 @@ async function main() {
     assert(customerPortalMessageNoAuth.status === 302 && customerPortalMessageNoAuth.location === '/customer/login', 'Customer portal messages should require customer login.');
 
     const customerPortalMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, form: { body: 'Can you help me update my card and confirm my next payment?' } });
-    assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer', 'Customer portal message should return to portal.');
+    assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer#portal-messages', 'Customer portal message should return to Messages.');
     const customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const savedPortalMessage = (customerPortalMessageRead.json.messages || []).find(message => message.channel === 'Customer portal' && message.customer === 'Alicia Brown' && /update my card/i.test(message.body || ''));
     assert(savedPortalMessage, 'Customer portal message should be saved in staff Messages.');
@@ -2139,6 +2139,7 @@ async function main() {
       { id: 'clover-payment-report-candidate', cloverPaymentId: 'pay-report-candidate', customer: 'Unmatched Clover payment', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 456, status: 'Paid', notes: 'WheelsonAuto weekly payment' },
       { id: 'payment-direct-reconciled-link', paymentRequestId: 'plink-direct-closeout-already-paid', customer: 'Direct Reconciled Link', date: '2099-12-30', method: 'Clover Hosted Checkout', source: 'Clover Hosted Checkout', amount: 77, status: 'Paid' },
       { id: 'payment-closeout-paid-outside', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Paid outside app', source: 'WheelsonAuto', amount: 45, status: 'Paid outside app', notes: 'Cash verified' },
+      { id: 'payment-closeout-paid-outside-unverified', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Paid outside app', source: 'Customer portal', amount: 9999, status: 'Paid outside app - needs verification', requiresVerification: true, notes: 'Customer report awaiting staff review' },
       { id: 'clover-payment-closeout-failed', cloverPaymentId: 'pay-closeout-failed', customer: 'Direct Closeout Customer', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 777, status: 'FAIL', notes: 'Declined' },
       { id: 'clover-payment-closeout-removed-history', cloverPaymentId: 'pay-closeout-removed-history', customer: 'Direct Closeout Removed', date: '2099-12-31', method: 'Debit Card', source: 'Clover', amount: 99, status: 'FAIL', notes: 'Historical failed attempt' }
     );
@@ -2194,7 +2195,7 @@ async function main() {
     });
     assert([200, 202].includes(closeoutDedupNotification.status) && closeoutDedupNotification.json.ok, 'Duplicate-safe daily closeout notification failed.');
     assert(closeoutDedupNotification.json.summary.collected === 1401, 'Daily closeout should dedupe duplicate Clover paid rows, count verified paid-outside payments, resolve external customer refs, and ignore failed rows.');
-    assert(closeoutDedupNotification.json.summary.transactions === 6, 'Daily closeout should report unique transaction rows after dedupe, including historical failed transactions.');
+    assert(closeoutDedupNotification.json.summary.transactions === 7, 'Daily closeout should report unique transaction rows after dedupe, including historical failures and unverified paid-outside reports without counting the latter as collected.');
     assert(closeoutDedupNotification.json.summary.expected < 987654 && !closeoutDedupNotification.json.summary.contactRows.some(row => row.customer === 'Direct Closeout Removed'), 'Removed recurring customers must not count toward Today expected money or contact work.');
     assert(closeoutDedupNotification.json.summary.paidOutsideApp === 1 && closeoutDedupNotification.json.summary.paidOutsideAmount === 45, 'Daily closeout should break out paid-outside-app records separately.');
     assert(closeoutDedupNotification.json.summary.cloverCollected === 1356 && closeoutDedupNotification.json.summary.cloverTransactions === 3, 'Daily closeout should keep Clover collected totals separate from paid-outside-app records.');
@@ -2203,7 +2204,7 @@ async function main() {
     assert(closeoutDedupNotification.json.summary.staleAutopaySchedules >= 1 && closeoutDedupNotification.json.summary.staleAutopayAmount >= 70 && Array.isArray(closeoutDedupNotification.json.summary.staleAutopayRows) && closeoutDedupNotification.json.summary.staleAutopayRows.some(row => row.customer === 'Direct Closeout Stale Autopay' && row.vin === 'DIRECTSTALEVIN' && row.tag === 'DIR-STL'), 'Daily closeout should expose stale autopay schedules with customer, VIN, tag, amount, and review status.');
     assert(closeoutDedupNotification.json.summary.pendingStarApprovals >= 1 && Array.isArray(closeoutDedupNotification.json.summary.starApprovalRows) && closeoutDedupNotification.json.summary.starApprovalRows.some(row => row.customer === 'Alicia Brown'), 'Daily closeout should expose pending Star approval rows with customer context.');
     assert(closeoutDedupNotification.json.summary.receiptRequests >= 1 && closeoutDedupNotification.json.summary.statementRequests >= 1, 'Daily closeout should separately count receipt and statement/payoff requests waiting for approval.');
-    assert(closeoutDedupNotification.json.summary.pendingToday >= 1 && closeoutDedupNotification.json.summary.stillOpenAmount === Math.max(0, closeoutDedupNotification.json.summary.expected - closeoutDedupNotification.json.summary.collected), 'Daily closeout should expose due customer counts and still-open amount.');
+    assert(closeoutDedupNotification.json.summary.pendingToday >= 1 && closeoutDedupNotification.json.summary.expected === 1799 && closeoutDedupNotification.json.summary.appliedToExpected === 777 && closeoutDedupNotification.json.summary.stillOpenAmount === 1022 && closeoutDedupNotification.json.summary.outstandingCustomers === 4, 'Daily closeout must only apply a collected payment to the matching customer due; unrelated or ambiguously unmatched money cannot reduce still-open balances.');
     assert(closeoutDedupNotification.json.summary.peopleToContact === 2 && closeoutDedupNotification.json.summary.paidTransactions === 4, 'Daily closeout should expose contact and paid transaction counts.');
     assert(Array.isArray(closeoutDedupNotification.json.summary.contactRows) && closeoutDedupNotification.json.summary.contactRows.some(row => row.customer === 'Direct Closeout Failed Twice' && row.vin === 'DIRECTFAILED2VIN') && closeoutDedupNotification.json.summary.contactRows.some(row => row.customer === 'Direct Closeout Payment Missing' && row.tag === 'DIR-PNF'), 'Daily closeout should return structured contact rows with customer, VIN, and tag evidence.');
     assert(closeoutDedupNotification.json.summary.vehicleAssignmentConflicts >= 1, 'Daily closeout should expose vehicle assignment conflicts before owner signoff.');
