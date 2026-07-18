@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -9,6 +9,62 @@ const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
 const stripeMigration = require('../stripe-migration');
 const { runCliArgumentChecks } = require('./cli-argument-check');
+
+async function verifyGracefulShutdown(root, dataDir) {
+  const child = spawn(process.execPath, ['server.js'], {
+    cwd: root,
+    env: {
+      PATH: process.env.PATH || '',
+      HOME: process.env.HOME || '',
+      TMPDIR: process.env.TMPDIR || '',
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      DATA_DIR: dataDir,
+      HOST: '127.0.0.1',
+      PORT: '0',
+      WOA_DATA_BACKEND: 'json',
+      WOA_PRODUCTION_HARDENING_REQUIRED: '0',
+      WOA_AUTO_SYNC_MS: '3600000',
+      WOA_AUTOPAY_MS: '3600000',
+      WOA_AUTO_SYNC_STARTUP_DELAY_MS: '3600000',
+      WOA_MESSAGING_ENABLED: '0',
+      WOA_EMAIL_ENABLED: '0',
+      WOA_STAR_AI_ENABLED: '0',
+      WOA_TRACKER_PROVIDER: 'none',
+      PUBLIC_BASE_URL: 'http://127.0.0.1'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let output = '';
+  let startedResolve;
+  const started = new Promise(resolve => { startedResolve = resolve; });
+  const capture = chunk => {
+    output += String(chunk || '');
+    if (/WheelsonAuto platform running/i.test(output)) startedResolve(true);
+  };
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+  const startupTimer = setTimeout(() => startedResolve(false), 10000);
+  const didStart = await started;
+  clearTimeout(startupTimer);
+  if (!didStart) {
+    child.kill('SIGKILL');
+    await exited;
+    throw new Error('The isolated graceful-shutdown server did not start: ' + output.slice(-2000));
+  }
+  child.kill('SIGTERM');
+  const exitResult = await Promise.race([
+    exited,
+    new Promise(resolve => setTimeout(() => resolve({ timedOut: true }), 10000))
+  ]);
+  if (exitResult.timedOut) {
+    child.kill('SIGKILL');
+    await exited;
+    throw new Error('The isolated server did not finish graceful shutdown within 10 seconds: ' + output.slice(-2000));
+  }
+  assert.strictEqual(exitResult.code, 0, 'The isolated production process must exit cleanly after SIGTERM. Output: ' + output.slice(-2000));
+  assert.match(output, /draining active requests and state writes/i, 'The production process must enter its explicit drain path before exiting.');
+}
 
 async function main() {
   runCliArgumentChecks();
@@ -20,6 +76,15 @@ async function main() {
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
+    const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
+    const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
+    assert(serverSource.includes("url.pathname === '/healthz'") && serverSource.includes("release: ASSET_VERSION"), 'Production must expose a minimal unauthenticated health route without loading the staff workspace.');
+    assert(/healthCheckPath:\s*\/healthz/.test(renderBlueprint), 'Render must probe the dedicated health route instead of treating an open port as application readiness.');
+    assert(/autoDeployTrigger:\s*checksPass/.test(renderBlueprint), 'Render must wait for the repository production gate before deploying main.');
+    assert(/branches:\s*\[main\]/.test(productionWorkflow) && /npm run check/.test(productionWorkflow) && /timeout-minutes:\s*20/.test(productionWorkflow), 'The main production gate must run the complete regression suite with a bounded timeout.');
+    assert(/maxShutdownDelaySeconds:\s*60/.test(renderBlueprint), 'Render must allow enough time for active money actions and state writes to drain.');
+    assert(serverSource.includes('async function gracefulShutdown') && serverSource.includes("process.once('SIGTERM'") && serverSource.includes('await writeDataQueue.catch'), 'Production shutdown must stop accepting requests and drain queued state writes before exit.');
+    await verifyGracefulShutdown(path.resolve(__dirname, '..'), path.join(temp, 'graceful-runtime'));
     assert(serverSource.includes('function reportBackgroundTaskFailure') && serverSource.includes("recordOperationalFailure(source, error, context, { alert: true })"), 'Every scheduled worker failure must use the shared durable monitor and owner-alert path.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
@@ -66,6 +131,9 @@ async function main() {
     assert.strictEqual(stripeMigration.automaticChargeAllowed(ambiguousLegacyStripe, 'stripe', '2026-07-24'), false, 'An ambiguous legacy Stripe/Clover row must not autocharge until the owner completes the controlled cutover.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
+    const jsonReadiness = await repository.readiness();
+    assert.strictEqual(jsonReadiness.connected, true, 'The deployment readiness probe must accept a readable JSON seed in compatibility mode.');
+    assert.strictEqual(jsonReadiness.stateAvailable, true, 'The deployment readiness probe must confirm that application state is available.');
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(jsonAutopayLock.acquired, true, 'The JSON development fallback should retain the in-process autopay lock contract.');
     await jsonAutopayLock.release();

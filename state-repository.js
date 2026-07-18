@@ -359,6 +359,17 @@ class JsonStateRepository {
     return { state: next, version: await this.version(), checksum: checksum(next) };
   }
 
+  async readiness() {
+    const version = await this.version();
+    if (version !== 'missing') return { backend: 'json', connected: true, stateAvailable: true };
+    try {
+      await fs.access(this.seedFile);
+      return { backend: 'json', connected: true, stateAvailable: true };
+    } catch (error) {
+      return { backend: 'json', connected: false, stateAvailable: false, error: String(error && error.message || error) };
+    }
+  }
+
   async health() {
     return {
       backend: 'json',
@@ -1372,6 +1383,21 @@ class PostgresStateRepository {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  async readiness() {
+    try {
+      await this.ensureSchema();
+      const result = await this.pool.query('SELECT version FROM woa_state WHERE organization_id = $1', [this.organizationId]);
+      return {
+        backend: 'postgres',
+        connected: true,
+        stateAvailable: result.rowCount === 1,
+        version: result.rowCount === 1 ? Number(result.rows[0].version || 0) : 0
+      };
+    } catch (error) {
+      return { backend: 'postgres', connected: false, stateAvailable: false, error: String(error && error.message || error) };
     }
   }
 

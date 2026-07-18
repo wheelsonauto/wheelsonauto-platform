@@ -15263,6 +15263,17 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname.startsWith('/api/')) return json(res, 403, { ok: false, error: 'Cross-origin account changes are not allowed.' });
       return send(res, 403, 'Cross-origin account changes are not allowed.', 'text/plain; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
+    if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
+      const repository = await STATE_REPOSITORY.readiness();
+      const ready = repository.connected === true && repository.stateAvailable === true;
+      const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+      if (req.method === 'HEAD') return send(res, ready ? 200 : 503, '', 'application/json; charset=utf-8', headers);
+      return json(res, ready ? 200 : 503, {
+        ok: ready,
+        service: 'wheelsonauto-platform',
+        release: ASSET_VERSION
+      }, headers);
+    }
     if (await staticFile(req, res, url.pathname, url.searchParams)) return;
     if (url.pathname.startsWith('/native-media/') && req.method === 'GET') {
       const filename = String(url.pathname.split('/').pop() || '');
@@ -19745,7 +19756,38 @@ const server = http.createServer(async (req, res) => {
     send(res, status, 'Server error: ' + message, 'text/plain; charset=utf-8');
   }
 });
+
+let gracefulShutdownStarted = false;
+
+async function gracefulShutdown(signal) {
+  if (gracefulShutdownStarted) return;
+  gracefulShutdownStarted = true;
+  console.log('WheelsonAuto received ' + signal + '; draining active requests and state writes.');
+  const forceExit = setTimeout(() => {
+    console.error('WheelsonAuto graceful shutdown exceeded 55 seconds.');
+    process.exit(1);
+  }, 55000);
+  forceExit.unref();
+  const closeError = await new Promise(resolve => {
+    server.close(error => resolve(error || null));
+    if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+  });
+  const backgroundDeadline = Date.now() + 45000;
+  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, passTimePollStatus];
+  while (backgroundStatuses.some(status => status.inFlight) && Date.now() < backgroundDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await writeDataQueue.catch(() => {});
+  if (STATE_REPOSITORY && typeof STATE_REPOSITORY.close === 'function') {
+    await STATE_REPOSITORY.close().catch(() => {});
+  }
+  clearTimeout(forceExit);
+  process.exit(closeError ? 1 : 0);
+}
+
 if (require.main === module) {
+  process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+  process.once('SIGINT', () => { void gracefulShutdown('SIGINT'); });
   assertProductionInfrastructure()
     .then(() => server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);

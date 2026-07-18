@@ -242,6 +242,9 @@ async function main() {
       await restartedRepository.close();
     }
     const health = await repository.health();
+    const readiness = await repository.readiness();
+    assert.strictEqual(readiness.connected, true, 'The lightweight PostgreSQL deployment probe must confirm database connectivity.');
+    assert.strictEqual(readiness.stateAvailable, true, 'The lightweight PostgreSQL deployment probe must confirm the imported organization state without loading the full JSON document.');
     assert.strictEqual(health.productionReady, true, 'A reachable PostgreSQL state repository must report production-ready.');
     assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
     assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');

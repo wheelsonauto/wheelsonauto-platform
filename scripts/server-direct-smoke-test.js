@@ -252,6 +252,12 @@ async function main() {
   };
 
   try {
+    const health = await request(server, 'GET', '/healthz');
+    assert(health.status === 200 && health.json && health.json.ok === true && health.json.service === 'wheelsonauto-platform' && /^platform-/.test(health.json.release || ''), 'The unauthenticated deployment health check must prove the server and state repository are responsive.');
+    assert(!/customer|payment|vehicle|database|postgres|json/i.test(JSON.stringify(health.json)), 'The public deployment health check must not expose customer data or infrastructure details.');
+    const healthHead = await request(server, 'HEAD', '/healthz');
+    assert(healthHead.status === 200 && healthHead.text === '', 'The deployment health check must support a bodyless HEAD probe.');
+
     let monitoredTwilioSyncError = null;
     try {
       await syncTwilioInboundMessages({
