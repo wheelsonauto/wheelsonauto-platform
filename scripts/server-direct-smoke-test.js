@@ -218,6 +218,7 @@ async function main() {
     nextRecurringOccurrence,
     nextFutureRecurringDate,
     successfulRecurringPaymentEvidence,
+    retryDelayPassed,
     recurringCustomerId,
     mergeRecurringSubscriptionDetail,
     mergeRecurringCustomerDetail,
@@ -283,6 +284,11 @@ async function main() {
     assert(nextRecurringOccurrence({ frequency: 'Weekly' }, '2026-07-10') === '2026-07-17', 'Weekly autopay should advance by seven days.');
     assert(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-10') === '2026-07-24', 'Bi-weekly autopay should advance by fourteen days.');
     assert(nextFutureRecurringDate({ frequency: 'Weekly', nextRun: '2026-07-10' }, '2026-07-16') === '2026-07-17', 'An overdue Friday schedule should advance to the next future Friday instead of drifting to the runner day.');
+    const retryBoundary = new Date('2026-07-18T18:00:00.000Z');
+    assert(retryDelayPassed({ retryCount: 1, lastAutoChargeAttemptAt: new Date(retryBoundary.getTime() - 59 * 60 * 1000).toISOString() }, retryBoundary) === false, 'A failed autopay must not retry before the full one-hour delay passes.');
+    assert(retryDelayPassed({ retryCount: 1, lastAutoChargeAttemptAt: new Date(retryBoundary.getTime() - 60 * 60 * 1000).toISOString() }, retryBoundary) === true, 'A failed autopay must become retryable at the one-hour boundary.');
+    assert(retryDelayPassed({ retryCount: 0, status: 'Stripe confirmation pending', lastAutoChargeAttemptAt: new Date(retryBoundary.getTime() - 59 * 60 * 1000).toISOString() }, retryBoundary) === false, 'An unconfirmed Stripe attempt must retain the same one-hour reconciliation delay even before a decline is counted.');
+    assert(retryDelayPassed({ retryCount: 0 }, retryBoundary) === true, 'A first autopay attempt must not be delayed by the retry guard.');
     const cailahVehicle = { id: 'veh-sheet-058', name: '2018 Ford Fiesta Silver', vin: '3FADP4AJ8JM111119', plate: 'G90WGR' };
     const natashaVehicle = { id: 'veh-sheet-059', name: '2018 Ford Fiesta Silver', vin: '3FADP4AJ2JM106014', plate: 'A17WWM' };
     const cailahFile = { customer: 'Cailah Breanne Taylor', vehicle: '2018 Ford Fiesta Silver', vehicleId: cailahVehicle.id, vin: cailahVehicle.vin, plate: cailahVehicle.plate };
@@ -2765,6 +2771,7 @@ async function main() {
     const stalePaidDueDate = autopayDateOffset(-14);
     const overdueChargeDueDate = autopayDateOffset(-7);
     const amountEditNextRun = autopayDateOffset(14);
+    const lateEditOriginalRun = autopayDateOffset(7);
     const autopayState = JSON.parse(JSON.stringify(notificationState.json));
     autopayState.recurringPayments = autopayState.recurringPayments || [];
     autopayState.recurringPayments.unshift({
@@ -2882,6 +2889,25 @@ async function main() {
       cloverCustomerId: 'custamount001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
+    }, {
+      id: 'direct-autopay-late-schedule-edit',
+      customer: 'Direct Late Schedule Edit',
+      phone: '3135550998',
+      email: 'late-schedule-edit@example.com',
+      vehicle: '2022 Hyundai Sonata',
+      vin: 'DIRECTLATEEDITVIN',
+      amount: 93,
+      frequency: 'Weekly',
+      nextRun: lateEditOriginalRun,
+      paymentDay: calendarDayName(lateEditOriginalRun),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      cloverCustomerId: 'custeditlate001',
+      paymentSetup: 'Card saved through WheelsonAuto',
+      cardSavedAt: new Date().toISOString()
     });
     const autopayWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: autopayState });
     assert(autopayWrite.status === 200 && autopayWrite.json.ok, 'Autopay smoke setup failed.');
@@ -2904,6 +2930,21 @@ async function main() {
     const amountEditRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const amountEditRow = amountEditRead.json.recurringPayments.find(row => row.id === 'direct-autopay-amount-edit');
     assert(amountEditRow && amountEditRow.amount === 279 && amountEditRow.nextRun === amountEditNextRun && amountEditRow.paymentDay === calendarDayName(amountEditNextRun) && amountEditRow.chargeTime === '18:00' && amountEditRow.frequency === 'Weekly' && amountEditRow.status === 'Active' && amountEditRow.autoChargeEnabled === true, 'An amount edit must preserve date, weekday, time, frequency, status, and enabled autopay state.');
+    const lateScheduleEdit = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: 'direct-autopay-late-schedule-edit',
+        amount: 93,
+        frequency: 'Weekly',
+        nextRun: autopayTodayKey,
+        paymentDay: 'Monday',
+        chargeTime: '00:00',
+        status: 'Active',
+        autopayManagedBy: 'WheelsonAuto'
+      }
+    });
+    assert(lateScheduleEdit.status === 200 && lateScheduleEdit.json.ok && lateScheduleEdit.json.scheduleChanged, 'Editing an autopay to today after its selected charge time should save as a real schedule change.');
+    assert(lateScheduleEdit.json.paymentDay === calendarDayName(autopayTodayKey), 'A same-day schedule edit must derive its weekday from the selected calendar date.');
     const enrichedPaymentLink = await request(server, 'POST', '/api/payment-links', {
       cookie: ownerCookie,
       json: { recurringPaymentId: 'direct-autopay-fail-once' }
@@ -2915,9 +2956,9 @@ async function main() {
     global.fetch = async (url, options = {}) => {
       if (String(url).includes('/v1/charges')) {
         const body = JSON.parse(String(options.body || '{}'));
-        if (body.source === 'custsuccess001') {
+        if (body.source === 'custsuccess001' || body.source === 'custeditlate001') {
           successfulAutopayChargeCalls += 1;
-          return { ok: true, status: 200, async text() { return JSON.stringify({ id: 'charge-direct-overdue-001', status: 'succeeded', paid: true, captured: true }); } };
+          return { ok: true, status: 200, async text() { return JSON.stringify({ id: body.source === 'custeditlate001' ? 'charge-direct-late-edit-001' : 'charge-direct-overdue-001', status: 'succeeded', paid: true, captured: true }); } };
         }
         return { ok: false, status: 402, async text() { return JSON.stringify({ message: 'Direct card decline' }); } };
       }
@@ -2932,8 +2973,8 @@ async function main() {
     } finally {
       global.fetch = autopayOriginalFetch;
     }
-    assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 1 && autopayRun.json.charged === 1 && autopayRun.json.reconciled === 1, 'Autopay should charge one overdue unpaid row, reconcile one already-paid stale row, and keep the payment-not-found path visible.');
-    assert(successfulAutopayChargeCalls === 1 && secondAutopayRun.json.charged === 0, 'Repeating the autopay runner must not charge a completed scheduled occurrence twice.');
+    assert([200, 207].includes(autopayRun.status) && autopayRun.json.notFound === 1 && autopayRun.json.charged === 2 && autopayRun.json.reconciled === 1, 'Autopay should charge the overdue row and the same-day late schedule edit, reconcile one already-paid stale row, and keep the payment-not-found path visible.');
+    assert(successfulAutopayChargeCalls === 2 && secondAutopayRun.json.charged === 0, 'Repeating the autopay runner must not charge a completed scheduled occurrence twice.');
     const autopayRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(autopayRead.json.messages.some(message => message.event === 'payment_not_found' && message.customer === 'Direct Missing Token'), 'Payment-not-found notification should be saved in Messages.');
     assert(autopayRead.json.messages.some(message => message.event === 'payment_failed' && message.customer === 'Direct Failed Once' && /1x failed/i.test(message.subject || '')), '1x failed payment notification should be saved in Messages.');
@@ -2947,6 +2988,8 @@ async function main() {
     assert(reconciledPaidRow && reconciledPaidRow.nextRun > autopayTodayKey && calendarDayName(reconciledPaidRow.nextRun) === calendarDayName(stalePaidDueDate) && reconciledPaidRow.lastScheduleReconciledFrom === stalePaidDueDate, 'A manually paid stale schedule should move to its next future weekday without another card charge.');
     const overdueChargedRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-success-overdue');
     assert(overdueChargedRow && overdueChargedRow.nextRun > autopayTodayKey && calendarDayName(overdueChargedRow.nextRun) === calendarDayName(overdueChargeDueDate) && overdueChargedRow.lastAutoChargeResult === 'Paid', 'A successful overdue autopay must persist the next future occurrence on the original weekday.');
+    const lateEditedChargedRow = autopayRead.json.recurringPayments.find(row => row.id === 'direct-autopay-late-schedule-edit');
+    assert(lateEditedChargedRow && lateEditedChargedRow.nextRun > autopayTodayKey && calendarDayName(lateEditedChargedRow.nextRun) === calendarDayName(autopayTodayKey) && lateEditedChargedRow.lastAutoChargeResult === 'Paid', 'An autopay edited to today after its scheduled time must charge once and advance to the next occurrence on the selected weekday.');
 
     const cutoverRecurringId = 'direct-stripe-cutover';
     const cutoverState = JSON.parse(JSON.stringify(autopayRead.json));
@@ -3238,6 +3281,72 @@ async function main() {
       json: { recurringPaymentId: stripeTimeoutRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
     });
     assert(stripeDuplicateAfterWebhook.status === 409 && stripeDuplicateAfterWebhook.json.duplicateBlocked, 'A reconciled timed-out Stripe payment must block a second charge for the same billing period.');
+
+    const stripeFailureRecoveryRecurringId = 'direct-stripe-failure-recovery';
+    const stripeFailureRecoveryState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    stripeFailureRecoveryState.json.recurringPayments.unshift({
+      id: stripeFailureRecoveryRecurringId,
+      customer: 'Direct Stripe Failure Recovery',
+      phone: '3135550788',
+      email: 'stripe-failure-recovery@example.com',
+      vehicle: '2023 Stripe Recovery Car',
+      vehicleId: 'veh-direct-stripe-failure-recovery',
+      vin: 'DIRECTSTRIPERECOVERYVIN',
+      plate: 'DIR-STRIPE-RECOVERY',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      stripeCustomerId: 'cus_direct_failure_recovery',
+      stripePaymentMethodId: 'pm_direct_failure_recovery',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Stripe card saved and chargeable',
+      autopayManagedBy: 'WheelsonAuto / Stripe'
+    });
+    const stripeFailureRecoverySeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeFailureRecoveryState.json });
+    assert(stripeFailureRecoverySeed.status === 200 && stripeFailureRecoverySeed.json.ok, 'Stripe failure-to-success recovery setup failed.');
+    const stripeFailureRecoveryCreated = Math.floor(Date.now() / 1000);
+    const stripeFailureRecoveryObject = {
+      object: 'payment_intent',
+      id: 'pi_direct_failure_recovery_001',
+      status: 'requires_payment_method',
+      amount: 22900,
+      amount_received: 0,
+      currency: 'usd',
+      customer: 'cus_direct_failure_recovery',
+      payment_method: 'pm_direct_failure_recovery',
+      created: stripeFailureRecoveryCreated,
+      last_payment_error: { message: 'Temporary direct decline' },
+      metadata: {
+        recurringPaymentId: stripeFailureRecoveryRecurringId,
+        flow: 'autopay',
+        scheduledDueDate: autopayTodayKey,
+        billingPeriodKey: 'due:' + autopayTodayKey,
+        amount: '22900'
+      }
+    };
+    const stripeFailureRecoveryTimestamp = String(stripeFailureRecoveryCreated);
+    const stripeFailureRecoveryFailedBody = JSON.stringify({ id: 'evt_direct_stripe_failure_recovery_failed', type: 'payment_intent.payment_failed', livemode: true, created: stripeFailureRecoveryCreated, data: { object: stripeFailureRecoveryObject } });
+    const stripeFailureRecoveryFailedSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeFailureRecoveryTimestamp + '.' + stripeFailureRecoveryFailedBody).digest('hex');
+    const stripeFailureRecoveryFailed = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeFailureRecoveryTimestamp + ',v1=' + stripeFailureRecoveryFailedSignature }, raw: stripeFailureRecoveryFailedBody });
+    assert(stripeFailureRecoveryFailed.status === 200 && stripeFailureRecoveryFailed.json.stripePaymentIntentResult && /1x failed/i.test(String(stripeFailureRecoveryFailed.json.stripePaymentIntentResult.status || '')), 'A signed Stripe failure webhook must record the first failed attempt.');
+    const stripeFailureRecoverySuccessObject = { ...stripeFailureRecoveryObject, status: 'succeeded', amount_received: 22900, latest_charge: 'ch_direct_failure_recovery_001', last_payment_error: null };
+    const stripeFailureRecoverySuccessBody = JSON.stringify({ id: 'evt_direct_stripe_failure_recovery_succeeded', type: 'payment_intent.succeeded', livemode: true, created: stripeFailureRecoveryCreated + 1, data: { object: stripeFailureRecoverySuccessObject } });
+    const stripeFailureRecoverySuccessSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeFailureRecoveryTimestamp + '.' + stripeFailureRecoverySuccessBody).digest('hex');
+    const stripeFailureRecoverySuccess = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeFailureRecoveryTimestamp + ',v1=' + stripeFailureRecoverySuccessSignature }, raw: stripeFailureRecoverySuccessBody });
+    assert(stripeFailureRecoverySuccess.status === 200 && stripeFailureRecoverySuccess.json.stripePaymentIntentResult && stripeFailureRecoverySuccess.json.stripePaymentIntentResult.matched, 'A later signed Stripe success webhook must repair the earlier failed payment intent.');
+    const stripeFailureRecoveryRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeFailureRecoveryRow = stripeFailureRecoveryRead.json.recurringPayments.find(row => row.id === stripeFailureRecoveryRecurringId);
+    const stripeFailureRecoveryPayment = (stripeFailureRecoveryRead.json.payments || []).find(payment => payment.stripePaymentIntentId === 'pi_direct_failure_recovery_001');
+    assert(stripeFailureRecoveryPayment && stripeFailureRecoveryPayment.status === 'Paid' && stripeFailureRecoveryPayment.customer === 'Direct Stripe Failure Recovery' && stripeFailureRecoveryPayment.vin === 'DIRECTSTRIPERECOVERYVIN', 'Failure-to-success webhook recovery must leave one named paid transaction with vehicle evidence.');
+    assert(stripeFailureRecoveryRow && stripeFailureRecoveryRow.status === 'Active' && stripeFailureRecoveryRow.retryCount === 0 && stripeFailureRecoveryRow.failedAttempts === 0 && stripeFailureRecoveryRow.nextRun > autopayTodayKey, 'Failure-to-success webhook recovery must reset retry state and advance the recurring schedule exactly once.');
 
     const stripeDuplicatePeriodRecurringId = 'direct-stripe-duplicate-period-review';
     const stripeDuplicatePeriodState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

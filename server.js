@@ -19974,6 +19974,7 @@ module.exports = {
   nextRecurringOccurrence,
   nextFutureRecurringDate,
   successfulRecurringPaymentEvidence,
+  retryDelayPassed,
   isDueForWheelsonAutoAutopay,
   recurringCustomerId,
   mergeRecurringSubscriptionDetail,
