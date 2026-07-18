@@ -1288,6 +1288,11 @@ async function main() {
     assert(managerOperationalAlertValidation.status === 403, 'Manager must not validate operational failure alerts.');
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
+    const ownerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
+    assert(ownerLaunchPreflight.status === 200 && ownerLaunchPreflight.json, 'Owner must be able to read the controlled Stripe launch preflight.');
+    assert(Array.isArray(ownerLaunchPreflight.json.missing) && ownerLaunchPreflight.json.missing.includes('controlled PostgreSQL recovery drill'), 'The owner launch preflight must block Stripe launch until a fresh controlled PostgreSQL recovery drill is recorded.');
+    assert(ownerLaunchPreflight.json.recoveryDrill && ownerLaunchPreflight.json.recoveryDrill.ready === false, 'The owner launch preflight must expose an unverified recovery-drill gate instead of treating JSON development state as production-ready.');
+    assert(!Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.recoveryDrill, 'configurationFingerprint'), 'Recovery drill fingerprints must remain server-only even in the owner launch preflight.');
     assert(typeof reportBackgroundTaskFailure === 'function', 'Background worker failures must share the durable operational-monitor path.');
     const monitoredFailure = new Error('Direct monitored background failure');
     const firstMonitoredFailure = await recordOperationalFailure('direct-background-monitor', monitoredFailure, {
