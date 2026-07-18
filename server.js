@@ -9782,7 +9782,12 @@ async function cloverGetRecurring(pathname) {
   const text = await response.text();
   let body = {};
   try { body = text ? JSON.parse(text) : {}; } catch { body = { raw: text }; }
-  if (!response.ok) throw new Error('Clover recurring API ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
+  if (!response.ok) {
+    const error = new Error('Clover recurring API ' + response.status + ': ' + (body.message || body.error || text || 'Request failed'));
+    error.statusCode = response.status;
+    error.provider = 'clover-recurring';
+    throw error;
+  }
   return body;
 }
 function cloverElements(body) { return Array.isArray(body.elements) ? body.elements : []; }
@@ -11683,7 +11688,15 @@ async function syncCloverIntoData(data, options = {}) {
       if (recurring.warning) result.warnings.push(recurring.warning);
     } catch (err) {
       data.integrations.clover.lastRecurringPlanSyncError = String(err && err.message || err);
-      result.errors.push(data.integrations.clover.lastRecurringPlanSyncError);
+      const preserved = preserveCloverRecurringRosterAfterProviderError(data, err);
+      if (preserved) {
+        result.recurringPlans = preserved.recurringPlans;
+        result.recurringMembers = preserved.recurringMembers;
+        result.recurringPreserved = true;
+        result.warnings.push(preserved.warning);
+      } else {
+        result.errors.push(data.integrations.clover.lastRecurringPlanSyncError);
+      }
     }
   }
   data.integrations.clover.connected = result.errors.length === 0 || data.integrations.clover.connected === true;
@@ -12063,6 +12076,29 @@ function cloverRecurringCountWarning(savedSummary = {}, apiSummary = {}) {
   return savedActive > apiActive
     ? 'Clover recurring API returned ' + apiActive + ' active subscriptions, less than saved Plan Manager total ' + savedActive + '. Keeping saved plan totals.'
     : '';
+}
+function preserveCloverRecurringRosterAfterProviderError(data = {}, error = {}) {
+  const clover = data.integrations && data.integrations.clover || {};
+  const status = Number(error.statusCode || (String(error.message || '').match(/Clover recurring API\s+(\d{3})/i) || [])[1] || 0);
+  const savedPlans = Array.isArray(clover.recurringPlans) ? clover.recurringPlans : [];
+  const savedMembers = Array.isArray(clover.recurringPlanMembers) ? clover.recurringPlanMembers : [];
+  const localRows = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+  const preserved = savedPlans.length + savedMembers.length + localRows.length;
+  if (![401, 403, 404].includes(status) || !preserved) return null;
+  const warning = 'Clover recurring roster refresh returned ' + status + '. Keeping the last verified recurring roster while customer and payment sync continue. Review the Clover merchant API token before relying on roster changes.';
+  clover.lastRecurringPlanSyncWarning = warning;
+  clover.lastRecurringPlanSyncDegradedAt = new Date().toISOString();
+  clover.lastRecurringPlanSyncDegradedStatus = status;
+  clover.lastRecurringPlanSyncPreservedPlans = savedPlans.length;
+  clover.lastRecurringPlanSyncPreservedMembers = savedMembers.length;
+  return {
+    warning,
+    status,
+    recurringPlans: savedPlans.length,
+    recurringMembers: savedMembers.length,
+    localRecurring: localRows.length,
+    preservedSavedRoster: true
+  };
 }
 function amountFromRecurringValue(value) {
   if (value == null) return 0;
@@ -12479,10 +12515,8 @@ async function syncCloverRecurringPlans(data) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   const attempted = [];
-  const planPaths = [
-    '/recurring/v1/plans?limit=100',
-    '/recurring/v1/merchants/' + CLOVER_MERCHANT_ID + '/plans?limit=100'
-  ];
+  // Clover scopes recurring requests with X-Clover-Merchant-Id, not a merchant path segment.
+  const planPaths = ['/recurring/v1/plans?limit=100'];
   let plansBody;
   for (const planPath of planPaths) {
     try {
@@ -12503,10 +12537,7 @@ async function syncCloverRecurringPlans(data) {
     const planId = plan.id || plan.uuid;
     let subscriptions = [];
     if (planId) {
-      const subscriptionPaths = [
-        '/recurring/v1/plans/' + encodeURIComponent(planId) + '/subscriptions?limit=200',
-        '/recurring/v1/merchants/' + CLOVER_MERCHANT_ID + '/plans/' + encodeURIComponent(planId) + '/subscriptions?limit=200'
-      ];
+      const subscriptionPaths = ['/recurring/v1/plans/' + encodeURIComponent(planId) + '/subscriptions?limit=200'];
       for (const subscriptionPath of subscriptionPaths) {
         try {
           subscriptions = collectionElements(await cloverGetRecurring(subscriptionPath));
@@ -20107,6 +20138,7 @@ module.exports = {
   membersFromRecurringSubscriptions,
   mapCloverPayment,
   cloverRecurringCountWarning,
+  preserveCloverRecurringRosterAfterProviderError,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,
   activeHostedCheckoutHref,

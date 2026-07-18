@@ -225,6 +225,7 @@ async function main() {
     membersFromRecurringSubscriptions,
     mapCloverPayment,
     cloverRecurringCountWarning,
+    preserveCloverRecurringRosterAfterProviderError,
     stripeLiveWebhookEvidence,
     stripeIdentityLiveWebhookEvidence,
     stripeWebhookConfigurationFingerprint,
@@ -257,6 +258,13 @@ async function main() {
     const recurringCountWarning = cloverRecurringCountWarning({ activeCustomers: 57 }, { activeCustomers: 55 });
     assert(/55 active subscriptions/.test(recurringCountWarning) && /saved Plan Manager total 57/.test(recurringCountWarning), 'A lower Clover recurring count must remain a preservation warning instead of deleting saved customers or failing the whole sync.');
     assert(cloverRecurringCountWarning({ activeCustomers: 55 }, { activeCustomers: 57 }) === '', 'A complete or larger Clover recurring result must not create a false preservation warning.');
+    const recurringProviderFallbackState = { recurringPayments: [{ id: 'rec-preserved-local' }], integrations: { clover: { recurringPlans: [{ id: 'plan-preserved' }], recurringPlanMembers: [{ id: 'member-preserved' }] } } };
+    const recurringUnauthorized = Object.assign(new Error('Clover recurring API 401: Unauthorized'), { statusCode: 401 });
+    const recurringPreserved = preserveCloverRecurringRosterAfterProviderError(recurringProviderFallbackState, recurringUnauthorized);
+    assert(recurringPreserved && recurringPreserved.preservedSavedRoster === true && recurringPreserved.recurringPlans === 1 && recurringPreserved.recurringMembers === 1 && recurringPreserved.localRecurring === 1, 'A Clover recurring authorization failure must preserve the last verified roster and local schedule records.');
+    assert(/401/.test(recurringPreserved.warning) && /Review the Clover merchant API token/.test(recurringPreserved.warning), 'A preserved Clover recurring roster must remain an explicit token warning instead of being reported healthy.');
+    assert(preserveCloverRecurringRosterAfterProviderError({ recurringPayments: [], integrations: { clover: {} } }, recurringUnauthorized) === null, 'An empty Clover recurring state must not hide an authorization failure behind a preservation warning.');
+    assert(preserveCloverRecurringRosterAfterProviderError(recurringProviderFallbackState, Object.assign(new Error('Clover recurring API 500: failure'), { statusCode: 500 })) === null, 'Unexpected Clover server failures must remain hard sync errors.');
     const health = await request(server, 'GET', '/healthz');
     assert(health.status === 200 && health.json && health.json.ok === true && health.json.service === 'wheelsonauto-platform' && /^platform-/.test(health.json.release || ''), 'The unauthenticated deployment health check must prove the server and state repository are responsive.');
     assert(Object.prototype.hasOwnProperty.call(health.json, 'commit'), 'The deployment health check must include its short deploy-commit verification field.');

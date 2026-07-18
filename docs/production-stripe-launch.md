@@ -344,6 +344,15 @@ confirmation that Clover is stopped. The first successful Stripe charge is the
 only event that completes the customer migration. Do not bulk-cancel Clover
 plans based on name matching alone.
 
+The Clover recurring roster uses the documented `/recurring/v1/plans` and
+`/recurring/v1/plans/{planId}/subscriptions` endpoints with the merchant ID in
+the `X-Clover-Merchant-Id` header. If Clover returns `401`, `403`, or `404`
+while a verified roster already exists, WheelsonAuto preserves that roster and
+continues customer/payment synchronization, but records a degraded recurring
+warning. Treat the preserved roster as read-only evidence until the Clover
+merchant API token is corrected; do not schedule a customer cutover from a
+stale roster alone.
+
 ## 6. Provider Settings
 
 ### Star AI
