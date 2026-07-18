@@ -195,7 +195,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-stripe-timeout-155';
+const ASSET_VERSION = 'platform-20260718-autopay-restart-156';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -13544,6 +13544,21 @@ function patchRecurringAdminState(data, id, patch) {
 function chargeReference() {
   return ('WOA' + Date.now().toString(36)).slice(-12).toUpperCase();
 }
+function cloverAutomaticChargeAttemptNumber(row = {}) {
+  return Math.max(1, Math.min(2, Number(row.retryCount || row.failedAttempts || 0) + 1));
+}
+function cloverRecurringChargeIdempotencyKey(recurring, payload = {}, scheduledDueKey = '', amount = 0) {
+  if (payload.idempotencyKey) return String(payload.idempotencyKey).slice(0, 255);
+  const recurringId = String(recurring && (recurring.id || recurring.cloverSubscriptionId) || payload.recurringPaymentId || 'recurring').trim();
+  if (payload.automatic === true && scheduledDueKey) {
+    const firstAttemptKey = ['woa-auto', recurringId, scheduledDueKey, cents(amount)].join('-');
+    const attemptNumber = cloverAutomaticChargeAttemptNumber(recurring);
+    // Keep the original production key for attempt one so a deploy or restart
+    // cannot turn an already-submitted Clover request into a second charge.
+    return String(attemptNumber === 1 ? firstAttemptKey : firstAttemptKey + '-attempt-' + attemptNumber).slice(0, 255);
+  }
+  return String(['woa-manual', recurringId, cents(amount), Date.now()].join('-')).slice(0, 255);
+}
 function stripeChargeAttemptIsPending(attempt) {
   return !!(attempt && ['requesting', 'confirmation_pending', 'processing'].includes(String(attempt.status || '').toLowerCase()));
 }
@@ -13688,6 +13703,8 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
     source: options.source || 'WheelsonAuto payment check',
     notes: [String(payload.note || '').trim(), message].filter(Boolean).join(' | '),
     recurringPaymentId: row.id || '',
+    paymentProvider: 'clover',
+    cloverIdempotencyKey: String(row.cloverChargeAttempt && row.cloverChargeAttempt.idempotencyKey || row.lastCloverChargeIdempotencyKey || ''),
     cloverCustomerId: row.cloverCustomerId || '',
     cloverSubscriptionId: row.cloverSubscriptionId || '',
     ...identity
@@ -13707,7 +13724,10 @@ function savePaymentNotFoundResult(data, row, payload = {}, err, options = {}) {
     vehicleId: payment.vehicleId,
     vin: payment.vin,
     plate: payment.plate,
-    tracker: payment.tracker
+    tracker: payment.tracker,
+    paymentProvider: 'clover',
+    cloverIdempotencyKey: payment.cloverIdempotencyKey || '',
+    recurringPaymentId: payment.recurringPaymentId
   });
   updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
     status,
@@ -13869,6 +13889,7 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     providerPaymentId: stripePaymentIntentId || '',
     stripePaymentIntentId,
     stripeIdempotencyKey: paymentProvider === 'stripe' ? String(stripeAttempt.idempotencyKey || options.stripeIdempotencyKey || '') : '',
+    cloverIdempotencyKey: paymentProvider === 'clover' ? String(options.cloverIdempotencyKey || row.lastCloverChargeIdempotencyKey || '') : '',
     cloverCustomerId: row.cloverCustomerId || '',
     cloverSubscriptionId: row.cloverSubscriptionId || '',
     ...identity
@@ -13894,6 +13915,7 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     paymentProvider,
     stripePaymentIntentId,
     stripeIdempotencyKey: payment.stripeIdempotencyKey || '',
+    cloverIdempotencyKey: payment.cloverIdempotencyKey || '',
     recurringPaymentId: payment.recurringPaymentId
   });
   updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
@@ -14240,9 +14262,18 @@ async function chargeSavedRecurringCard(data, payload, req) {
   const ref = chargeReference();
   const scheduledDueKey = chargeGuard.scheduledDueKey;
   const billingPeriodKey = stripeMigration.billingPeriodKey(scheduledDueKey);
-  const idempotencyKey = String(payload.idempotencyKey || (payload.automatic && scheduledDueKey
-    ? ['woa-auto', recurring.id || payload.recurringPaymentId, scheduledDueKey, cents(amount)].join('-')
-    : ['woa-manual', recurring.id || payload.recurringPaymentId, cents(amount), Date.now()].join('-'))).slice(0, 255);
+  const idempotencyKey = cloverRecurringChargeIdempotencyKey(recurring, payload, scheduledDueKey, amount);
+  const cloverAttempt = {
+    idempotencyKey,
+    automatic: payload.automatic === true,
+    attemptNumber: payload.automatic === true ? cloverAutomaticChargeAttemptNumber(recurring) : 1,
+    amountCents: cents(amount),
+    scheduledDueDate: scheduledDueKey || '',
+    status: 'requesting',
+    startedAt: new Date().toISOString()
+  };
+  recurring.lastCloverChargeIdempotencyKey = idempotencyKey;
+  recurring.cloverChargeAttempt = cloverAttempt;
   const chargeBody = {
     amount: cents(amount),
     currency: 'USD',
@@ -14257,10 +14288,21 @@ async function chargeSavedRecurringCard(data, payload, req) {
   if (cardSource && source === cardSource) {
     chargeBody.stored_credentials = { sequence: 'SUBSEQUENT', is_scheduled: payload.automatic === true, initiator: 'MERCHANT' };
   }
-  const charge = await cloverPostCharge({
-    idempotencyKey,
-    charge: chargeBody
-  }, req);
+  let charge;
+  try {
+    charge = await cloverPostCharge({
+      idempotencyKey,
+      charge: chargeBody
+    }, req);
+  } catch (error) {
+    recurring.cloverChargeAttempt = {
+      ...cloverAttempt,
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      providerError: String(error && error.message || error).slice(0, 500)
+    };
+    throw error;
+  }
   const status = String(charge.status || charge.result || '').toLowerCase();
   const paid = status === 'paid' || status === 'succeeded' || status === 'success' || charge.paid === true || charge.captured === true;
   const paymentAt = new Date();
@@ -14301,7 +14343,8 @@ async function chargeSavedRecurringCard(data, payload, req) {
     billingPeriodKey,
     recurringPaymentId: recurring.id || '',
     cloverCustomerId: recurring.cloverCustomerId || '',
-    cloverSubscriptionId: recurring.cloverSubscriptionId || ''
+    cloverSubscriptionId: recurring.cloverSubscriptionId || '',
+    cloverIdempotencyKey: idempotencyKey
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   data.payments.unshift(payment);
@@ -14320,6 +14363,7 @@ async function chargeSavedRecurringCard(data, payload, req) {
     plate: payment.plate,
     tracker: payment.tracker,
     cloverPaymentId: payment.cloverPaymentId,
+    cloverIdempotencyKey: idempotencyKey,
     recurringPaymentId: payment.recurringPaymentId
   });
   const chargeStatePatch = {
@@ -14330,6 +14374,13 @@ async function chargeSavedRecurringCard(data, payload, req) {
     nextRun: resolvedNextRun,
     lastPaymentAt: paymentAtIso,
     lastCloverChargeId: payment.cloverChargeId,
+    lastCloverChargeIdempotencyKey: idempotencyKey,
+    cloverChargeAttempt: {
+      ...cloverAttempt,
+      status: paid ? 'succeeded' : 'unconfirmed',
+      cloverChargeId: payment.cloverChargeId,
+      completedAt: paymentAtIso
+    },
     lastPaymentResult: payment.status,
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts
@@ -14540,7 +14591,13 @@ async function runWheelsonAutoAutopay(options = {}) {
         saveFailedChargeResult(data, row, {
           amount: row.amount,
           note: 'WheelsonAuto autopay failed for due date ' + scheduledDueDate
-        }, err, { dateKey, attempts, method: paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' saved card', source: 'WheelsonAuto autopay failed charge' });
+        }, err, {
+          dateKey,
+          attempts,
+          method: paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' saved card',
+          source: 'WheelsonAuto autopay failed charge',
+          cloverIdempotencyKey: row.cloverChargeAttempt && row.cloverChargeAttempt.idempotencyKey || row.lastCloverChargeIdempotencyKey || ''
+        });
         queueCustomerMessage(data, row, attempts >= 2 ? '2x failed payment' : '1x failed payment', 'Ready to send', 'Hi ' + (row.customer || 'there') + ', this is WheelsonAuto. Your payment of $' + Number(row.amount || 0).toLocaleString() + ' did not go through' + (attempts >= 2 ? ' after two attempts. Please contact us today.' : '. We will retry once, but please contact us if you need help.'), attempts >= 2 ? 'bad' : 'warn');
         await queueOwnerEmailNotification(data, 'payment_failed', {
           customer: row.customer || 'Unknown customer',
@@ -19957,7 +20014,7 @@ const server = http.createServer(async (req, res) => {
       const nextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
       const frequency = String(payload.frequency || (recurring && recurring.frequency) || 'Weekly').trim();
       const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
-      const status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
+      let status = String(payload.status || (recurring && recurring.status) || 'Active').trim();
       const requestedPaymentDay = String(payload.paymentDay || payload.chargeDay || (recurring && (recurring.paymentDay || recurring.chargeDay)) || '').trim();
       const paymentDay = /week/i.test(frequency) && validCalendarDateKey(nextRun) ? calendarDayName(nextRun) : requestedPaymentDay;
       const chargeTime = String(payload.chargeTime || payload.paymentTime || (recurring && (recurring.chargeTime || recurring.paymentTime)) || '18:00').trim();
@@ -19967,6 +20024,8 @@ const server = http.createServer(async (req, res) => {
       const retryRule = String(payload.retryRule || (recurring && recurring.retryRule) || 'Retry once then contact').trim();
       const managedBy = String(payload.autopayManagedBy || (recurring && recurring.autopayManagedBy) || '').trim();
       if (!id || !nextRun) return json(res, 400, { ok: false, error: 'Choose a recurring customer and a WheelsonAuto due date.' });
+      if (!validCalendarDateKey(nextRun)) return json(res, 400, { ok: false, error: 'Choose a valid WheelsonAuto due date from the calendar.' });
+      if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(chargeTime)) return json(res, 400, { ok: false, error: 'Choose a valid charge time.' });
       if (!frequency) return json(res, 400, { ok: false, error: 'Choose how often this customer should be charged.' });
       if (amount !== undefined && (!Number.isFinite(amount) || amount < 0)) return json(res, 400, { ok: false, error: 'Enter a valid autopay amount.' });
       if (monthlyDay !== undefined && (!Number.isFinite(monthlyDay) || monthlyDay < 1 || monthlyDay > 31)) return json(res, 400, { ok: false, error: 'Choose a valid monthly day.' });
@@ -19976,6 +20035,21 @@ const server = http.createServer(async (req, res) => {
         || String(recurring.paymentDay || recurring.chargeDay || '') !== paymentDay
         || String(recurring.chargeTime || recurring.paymentTime || '18:00') !== chargeTime
         || (monthlyDay !== undefined && Number(recurring.monthlyDay || 0) !== monthlyDay);
+      const amountOrScheduleChanged = amountChanged || scheduleChanged;
+      const providerConfirmationPending = stripeChargeAttemptIsPending(recurring.stripeChargeAttempt)
+        || /confirmation pending/i.test(String(recurring.status || ''));
+      if (amountOrScheduleChanged && providerConfirmationPending) {
+        return json(res, 409, {
+          ok: false,
+          confirmationPending: true,
+          error: 'A provider charge is still being confirmed for this customer. Wait for reconciliation before changing the amount or schedule so the payment cannot be orphaned or duplicated.'
+        });
+      }
+      const billingAnchorChanged = String(recurring.nextRun || '') !== nextRun
+        || String(recurring.frequency || 'Weekly') !== frequency;
+      const priorRetryCount = Number(recurring.retryCount || recurring.failedAttempts || 0);
+      const retryReset = billingAnchorChanged && priorRetryCount > 0;
+      if (retryReset && /failed/i.test(status) && !/removed|history|ended|stopped/i.test(status)) status = 'Active';
       const explicitlyEnabled = Object.prototype.hasOwnProperty.call(payload, 'autoChargeEnabled');
       let enableWheelsonAutoCharge = explicitlyEnabled
         ? payload.autoChargeEnabled === true || String(payload.autoChargeEnabled).toLowerCase() === 'true'
@@ -19997,6 +20071,15 @@ const server = http.createServer(async (req, res) => {
       };
       const updatedAt = new Date().toISOString();
       if (scheduleChanged) patch.adminScheduleChangedAt = updatedAt;
+      if (retryReset) Object.assign(patch, {
+        retryCount: 0,
+        failedAttempts: 0,
+        tone: 'good',
+        retryResetAt: updatedAt,
+        retryResetReason: 'Billing date or frequency changed by admin',
+        retryResetFromDueDate: String(recurring.nextRun || ''),
+        retryResetFromAttempts: priorRetryCount
+      });
       if (amountChanged) patch.amountChangedAt = updatedAt;
       if (amount !== undefined) patch.amount = amount;
       if (monthlyDay !== undefined) patch.monthlyDay = monthlyDay;
@@ -20005,7 +20088,7 @@ const server = http.createServer(async (req, res) => {
       enrichLinkedProfiles(data);
       appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
-      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged });
+      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = await readJsonBody(req);
@@ -20476,6 +20559,8 @@ module.exports = {
   successfulRecurringPaymentEvidence,
   retryDelayPassed,
   isDueForWheelsonAutoAutopay,
+  cloverAutomaticChargeAttemptNumber,
+  cloverRecurringChargeIdempotencyKey,
   recurringPlanIdFromSubscription,
   recurringPlansFromSubscriptions,
   uniqueRecurringSubscriptions,
