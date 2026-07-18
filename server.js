@@ -176,6 +176,7 @@ const STATE_REPOSITORY = stateRepository.createStateRepository({
   sslMode: process.env.WOA_POSTGRES_SSL_MODE || '',
   maxConnections: process.env.WOA_POSTGRES_MAX_CONNECTIONS || 4,
   snapshotLimit: WOA_POSTGRES_SNAPSHOT_LIMIT,
+  rateLimitSecret: SESSION_SIGNING_SECRET,
   applicationName: 'wheelsonauto-platform'
 });
 const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
@@ -195,7 +196,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-cutover-quarantine-157';
+const ASSET_VERSION = 'platform-20260718-durable-rate-limits-158';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -256,10 +257,8 @@ const passTimePollStatus = {
   lastResult: null,
   lastLoggedAt: 0
 };
-const loginFailureBuckets = new Map();
 const LOGIN_THROTTLE_LIMIT = Math.max(3, Number(process.env.WOA_LOGIN_THROTTLE_LIMIT || 6));
 const LOGIN_THROTTLE_WINDOW_MS = Math.max(60000, Number(process.env.WOA_LOGIN_THROTTLE_WINDOW_MS || 10 * 60 * 1000));
-const publicActionBuckets = new Map();
 const PUBLIC_APPLICATION_LIMIT = Math.max(3, Number(process.env.WOA_PUBLIC_APPLICATION_LIMIT || 8));
 const PUBLIC_APPLICATION_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_WINDOW_MS || 60 * 60 * 1000));
 const PUBLIC_APPLICATION_DUPLICATE_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_DUPLICATE_MS || 15 * 60 * 1000));
@@ -7376,47 +7375,21 @@ function requestIp(req) {
   if (forwarded.length) return forwarded[forwarded.length - 1];
   return String(headers['x-real-ip'] || (req.socket && req.socket.remoteAddress) || 'local').trim() || 'local';
 }
-function publicActionLimit(req, action, limit, windowMs) {
-  const now = Date.now();
-  const key = [String(action || 'public'), requestIp(req)].join('|');
-  const bucket = publicActionBuckets.get(key);
-  if (!bucket || now - Number(bucket.firstAt || 0) >= windowMs) {
-    publicActionBuckets.set(key, { count: 1, firstAt: now, lastAt: now });
-    return { allowed: true, retryAfterSeconds: 0 };
-  }
-  if (Number(bucket.count || 0) >= limit) {
-    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((windowMs - (now - Number(bucket.firstAt || 0))) / 1000)) };
-  }
-  bucket.count = Number(bucket.count || 0) + 1;
-  bucket.lastAt = now;
-  if (publicActionBuckets.size > 5000) {
-    for (const [bucketKey, value] of publicActionBuckets.entries()) {
-      if (now - Number(value.lastAt || value.firstAt || 0) > Math.max(PUBLIC_APPLICATION_WINDOW_MS, PUBLIC_HELP_WINDOW_MS)) publicActionBuckets.delete(bucketKey);
-    }
-  }
-  return { allowed: true, retryAfterSeconds: 0 };
+async function publicActionLimit(req, action, limit, windowMs) {
+  return STATE_REPOSITORY.consumeRateLimit('public-' + String(action || 'action'), requestIp(req), limit, windowMs);
 }
 function loginThrottleKey(req, realm, identity) {
   return [realm || 'login', requestIp(req), normalizeLogin(identity || 'blank')].join('|');
 }
-function loginThrottleWaitMs(key) {
-  const now = Date.now();
-  const bucket = loginFailureBuckets.get(key);
-  if (!bucket || now - Number(bucket.firstAt || 0) > LOGIN_THROTTLE_WINDOW_MS) {
-    loginFailureBuckets.delete(key);
-    return 0;
-  }
-  if (Number(bucket.count || 0) < LOGIN_THROTTLE_LIMIT) return 0;
-  return Math.max(1000, LOGIN_THROTTLE_WINDOW_MS - (now - Number(bucket.firstAt || 0)));
+async function loginThrottleWaitMs(key) {
+  const result = await STATE_REPOSITORY.checkRateLimit('login-failure', key, LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
+  return result.allowed ? 0 : result.retryAfterMs;
 }
-function recordLoginFailure(key) {
-  const now = Date.now();
-  const bucket = loginFailureBuckets.get(key);
-  if (!bucket || now - Number(bucket.firstAt || 0) > LOGIN_THROTTLE_WINDOW_MS) loginFailureBuckets.set(key, { count: 1, firstAt: now, lastAt: now });
-  else loginFailureBuckets.set(key, { count: Number(bucket.count || 0) + 1, firstAt: bucket.firstAt, lastAt: now });
+async function recordLoginFailure(key) {
+  return STATE_REPOSITORY.consumeRateLimit('login-failure', key, LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
 }
-function clearLoginFailure(key) {
-  loginFailureBuckets.delete(key);
+async function clearLoginFailure(key) {
+  return STATE_REPOSITORY.clearRateLimit('login-failure', key);
 }
 function loginThrottleMessage(waitMs) {
   return 'Too many failed login attempts. Wait about ' + Math.ceil(Number(waitMs || 0) / 60000) + ' minute(s), then try again or use password help.';
@@ -16025,7 +15998,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 302, '', 'text/plain', { Location: checkout.href });
     }
     if (url.pathname === '/api/public/applications' && req.method === 'POST') {
-      const applicationRate = publicActionLimit(req, 'public-application', PUBLIC_APPLICATION_LIMIT, PUBLIC_APPLICATION_WINDOW_MS);
+      const applicationRate = await publicActionLimit(req, 'public-application', PUBLIC_APPLICATION_LIMIT, PUBLIC_APPLICATION_WINDOW_MS);
       if (!applicationRate.allowed) return json(res, 429, { ok: false, error: 'Too many application attempts from this connection. Wait before trying again.' }, { 'Retry-After': String(applicationRate.retryAfterSeconds) });
       const payload = await readJsonBody(req, 256 * 1024);
       const data = await readData();
@@ -16225,7 +16198,7 @@ const server = http.createServer(async (req, res) => {
           const mode = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity is prepared in test mode but cannot verify live customers.' : 'Stripe Identity is not connected.';
           return json(res, 503, { ok: false, error: mode + ' WheelsonAuto staff can continue with manual review until the live Stripe identity connection is enabled.' });
         }
-        const identityRate = publicActionLimit(req, 'stripe-identity', 12, 60 * 60 * 1000);
+        const identityRate = await publicActionLimit(req, 'stripe-identity', 12, 60 * 60 * 1000);
         if (!identityRate.allowed) return json(res, 429, { ok: false, error: 'Too many identity-verification attempts. Wait before trying again.' }, { 'Retry-After': String(identityRate.retryAfterSeconds) });
         const onboardingState = nativeSite.onboardingStatus(data, session, application);
         if (!onboardingState.documents) return json(res, 409, { ok: false, error: 'Upload the license, selfie, and insurance files before starting secure identity verification.' });
@@ -16849,7 +16822,7 @@ const server = http.createServer(async (req, res) => {
       const username = form.get('username') || '';
       const password = form.get('password') || '';
       const throttleKey = loginThrottleKey(req, 'customer', username);
-      const waitMs = loginThrottleWaitMs(throttleKey);
+      const waitMs = await loginThrottleWaitMs(throttleKey);
       if (waitMs) return send(res, 429, customerLoginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const data = await readData();
       let account = findCustomerAccountByLogin(data, username, password);
@@ -16869,15 +16842,15 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (!account) {
-        recordLoginFailure(throttleKey);
+        await recordLoginFailure(throttleKey);
         return send(res, 401, customerLoginPage('That customer login did not match an active account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       }
-      clearLoginFailure(throttleKey);
+      await clearLoginFailure(throttleKey);
       return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: '/customer' });
     }
     if (url.pathname === '/customer/forgot' && req.method === 'GET') return send(res, 200, customerForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/forgot' && req.method === 'POST') {
-      const helpRate = publicActionLimit(req, 'customer-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
+      const helpRate = await publicActionLimit(req, 'customer-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
       if (!helpRate.allowed) return send(res, 429, customerForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const identity = String(form.get('identity') || '').trim();
@@ -17754,7 +17727,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/forgot' && req.method === 'GET') return send(res, 200, staffForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/forgot' && req.method === 'POST') {
-      const helpRate = publicActionLimit(req, 'staff-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
+      const helpRate = await publicActionLimit(req, 'staff-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
       if (!helpRate.allowed) return send(res, 429, staffForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const identity = String(form.get('identity') || '').trim();
@@ -17815,27 +17788,27 @@ const server = http.createServer(async (req, res) => {
       const password = form.get('password') || '';
       const pin = form.get('pin') || '';
       const throttleKey = loginThrottleKey(req, 'staff', username || (pin ? 'pin-login' : 'blank'));
-      const waitMs = loginThrottleWaitMs(throttleKey);
+      const waitMs = await loginThrottleWaitMs(throttleKey);
       if (waitMs) return send(res, 429, loginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const data = await readData();
       const ownerRecord = data.security && data.security.ownerLogin || {};
       const environmentOwnerSource = ownerEnvironmentAuthSource(username, password, pin);
       if (environmentOwnerSource) {
-        clearLoginFailure(throttleKey);
+        await clearLoginFailure(throttleKey);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser(environmentOwnerSource, ownerRecord))), Location: '/' });
       }
       if (storedOwnerLoginMatches(data, username, password)) {
-        clearLoginFailure(throttleKey);
+        await clearLoginFailure(throttleKey);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser('owner_stored', ownerRecord))), Location: '/' });
       }
       const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
       if (staff) {
-        clearLoginFailure(throttleKey);
+        await clearLoginFailure(throttleKey);
         const user = staffLoginUser(staff);
         user.companyName = companyNameById(data, user.organizationId);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(user)), Location: '/' });
       }
-      recordLoginFailure(throttleKey);
+      await recordLoginFailure(throttleKey);
       return send(res, 401, loginPage('That login did not match an active account.'));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });

@@ -164,6 +164,14 @@ async function main() {
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(jsonAutopayLock.acquired, true, 'The JSON development fallback should retain the in-process autopay lock contract.');
     await jsonAutopayLock.release();
+    assert.strictEqual((await repository.checkRateLimit('login-failure', 'staff|198.51.100.10|owner', 2, 60000)).allowed, true, 'A fresh local security throttle must allow the first attempt.');
+    assert.strictEqual((await repository.consumeRateLimit('login-failure', 'staff|198.51.100.10|owner', 2, 60000)).allowed, true, 'The local security throttle must consume the first attempt.');
+    assert.strictEqual((await repository.consumeRateLimit('login-failure', 'staff|198.51.100.10|owner', 2, 60000)).allowed, true, 'The local security throttle must allow the configured final attempt.');
+    const blockedJsonRateLimit = await repository.checkRateLimit('login-failure', 'staff|198.51.100.10|owner', 2, 60000);
+    assert.strictEqual(blockedJsonRateLimit.allowed, false, 'The local security throttle must block after the configured limit.');
+    assert(blockedJsonRateLimit.retryAfterSeconds > 0, 'A blocked local security throttle must return retry guidance.');
+    await repository.clearRateLimit('login-failure', 'staff|198.51.100.10|owner');
+    assert.strictEqual((await repository.checkRateLimit('login-failure', 'staff|198.51.100.10|owner', 2, 60000)).allowed, true, 'A successful local login must clear its failure throttle.');
     const firstJsonWebhookClaim = await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' });
     assert.strictEqual(firstJsonWebhookClaim.accepted, true, 'The first development webhook event should be claimable.');
     const activeJsonWebhookDuplicate = await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' });

@@ -11,7 +11,7 @@ const recoveryProofConfirmed = process.env.WOA_POSTGRES_RUNTIME_PROOF_CONFIRM ==
 const recoveryProofDatabaseUrl = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL || process.env.DATABASE_URL || '').trim();
 const recoveryProofOrganizationId = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID || stateRepository.DEFAULT_ORGANIZATION_ID).trim() || stateRepository.DEFAULT_ORGANIZATION_ID;
 const recoveryProofSecret = String(process.env.WOA_RECOVERY_DRILL_CONFIGURATION_SECRET || process.env.WOA_SESSION_SECRET || '').trim();
-const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v2';
+const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v3';
 
 function databaseTargetIdentity(value) {
   const raw = String(value || '').trim();
@@ -41,6 +41,7 @@ function recoveryProofUsesTestDatabase() {
 
 async function removeTestRows(repository, organizationId) {
   const pool = repository.pool;
+  await pool.query('DELETE FROM woa_rate_limits WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_idempotency_keys WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_identity_index WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_active_assignments WHERE organization_id = $1', [organizationId]);
@@ -99,11 +100,13 @@ async function main() {
   }
   const organizationId = 'org-postgres-runtime-test-' + crypto.randomBytes(6).toString('hex');
   const foreignOrganizationId = 'org-postgres-runtime-foreign-' + crypto.randomBytes(6).toString('hex');
+  const rateLimitSecret = 'postgres-runtime-rate-limit-secret';
   const repository = stateRepository.createStateRepository({
     backend: 'postgres',
     databaseUrl,
     organizationId,
     snapshotLimit: 12,
+    rateLimitSecret,
     applicationName: 'wheelsonauto-postgres-runtime-check',
     seed: async () => ({ vehicles: [], customers: [], payments: [] })
   });
@@ -112,6 +115,7 @@ async function main() {
     databaseUrl,
     organizationId,
     snapshotLimit: 12,
+    rateLimitSecret,
     applicationName: 'wheelsonauto-postgres-runtime-lock-check',
     seed: async () => ({ vehicles: [], customers: [], payments: [] })
   });
@@ -124,6 +128,33 @@ async function main() {
     const releasedAutopayLock = await competingRepository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(releasedAutopayLock.acquired, true, 'The PostgreSQL autopay lock must be available to the next worker after the first worker releases it.');
     await releasedAutopayLock.release();
+
+    const rateLimitKey = 'staff|198.51.100.25|runtime-owner';
+    assert.strictEqual((await repository.consumeRateLimit('login-failure', rateLimitKey, 2, 10 * 60 * 1000)).allowed, true, 'The first PostgreSQL login failure must consume the durable shared throttle.');
+    assert.strictEqual((await competingRepository.consumeRateLimit('login-failure', rateLimitKey, 2, 10 * 60 * 1000)).allowed, true, 'A second worker must atomically consume the configured final login attempt.');
+    const blockedSharedRateLimit = await repository.checkRateLimit('login-failure', rateLimitKey, 2, 10 * 60 * 1000);
+    assert.strictEqual(blockedSharedRateLimit.allowed, false, 'The PostgreSQL throttle must block across competing workers after the configured limit.');
+    assert(blockedSharedRateLimit.retryAfterSeconds > 0, 'The durable PostgreSQL throttle must return retry guidance.');
+    const storedRateLimit = await repository.pool.query('SELECT key_hash FROM woa_rate_limits WHERE organization_id = $1 AND scope = $2', [organizationId, 'login-failure']);
+    assert.strictEqual(storedRateLimit.rowCount, 1, 'The durable throttle must keep one tenant-scoped counter for the login identity.');
+    assert(/^[a-f0-9]{64}$/.test(String(storedRateLimit.rows[0].key_hash || '')), 'The durable throttle must store only an HMAC identity instead of a raw IP address or username.');
+    assert(!JSON.stringify(storedRateLimit.rows[0]).includes('198.51.100.25') && !JSON.stringify(storedRateLimit.rows[0]).includes('runtime-owner'), 'The PostgreSQL throttle row must not expose raw login identity details.');
+    const rateLimitRestartRepository = stateRepository.createStateRepository({
+      backend: 'postgres',
+      databaseUrl,
+      organizationId,
+      snapshotLimit: 12,
+      rateLimitSecret,
+      applicationName: 'wheelsonauto-postgres-runtime-rate-limit-restart',
+      seed: async () => ({ vehicles: [], customers: [], payments: [] })
+    });
+    try {
+      assert.strictEqual((await rateLimitRestartRepository.checkRateLimit('login-failure', rateLimitKey, 2, 10 * 60 * 1000)).allowed, false, 'A new server process must retain the PostgreSQL login throttle after restart.');
+    } finally {
+      await rateLimitRestartRepository.close();
+    }
+    await competingRepository.clearRateLimit('login-failure', rateLimitKey);
+    assert.strictEqual((await repository.checkRateLimit('login-failure', rateLimitKey, 2, 10 * 60 * 1000)).allowed, true, 'A successful login from any worker must clear the durable shared failure throttle.');
 
     const firstWebhookClaim = await repository.claimWebhookEvent('stripe', 'evt-postgres-runtime-processing', { type: 'payment_intent.succeeded' });
     assert.strictEqual(firstWebhookClaim.accepted, true, 'The first PostgreSQL webhook worker must claim the event.');
@@ -325,6 +356,7 @@ async function main() {
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
     const recoveryDrillProof = await recordRecoveryDrillProof(organizationId, {
       durableJobLock: true,
+      durableRateLimit: true,
       webhookLeaseRecovery: true,
       idempotencyLeaseRecovery: true,
       snapshotRestore: true,
@@ -332,7 +364,7 @@ async function main() {
       stateChecksum: true,
       migrationProof: true
     });
-    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, reviewable job errors, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
+    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, restart-safe security throttles, Stripe money-action idempotency, reviewable job errors, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await removeTestRows(repository, foreignOrganizationId).catch(() => {});

@@ -6,9 +6,11 @@ const path = require('path');
 
 const MIGRATION_ID = '20260717_production_state_foundation_v1';
 const TRANSACTIONAL_INDEX_MIGRATION_ID = '20260718_transactional_resource_assignment_indexes_v2';
+const DURABLE_RATE_LIMIT_MIGRATION_ID = '20260718_durable_security_rate_limits_v3';
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'durableJobLock',
+  'durableRateLimit',
   'webhookLeaseRecovery',
   'idempotencyLeaseRecovery',
   'snapshotRestore',
@@ -108,6 +110,47 @@ function idempotencyScopeKey(scope, key) {
     throw error;
   }
   return { scope: normalizedScope, key: normalizedKey };
+}
+
+function rateLimitIdentity(scope, key, secret, organizationId) {
+  const normalizedScope = String(scope || '').trim().slice(0, 120);
+  const rawKey = String(key || '').trim();
+  if (!normalizedScope || !rawKey) {
+    const error = new Error('A rate-limit scope and identity are required.');
+    error.code = 'woa_rate_limit_identity_required';
+    throw error;
+  }
+  const signingKey = String(secret || organizationId || DEFAULT_ORGANIZATION_ID);
+  return {
+    scope: normalizedScope,
+    keyHash: crypto.createHmac('sha256', signingKey)
+      .update([normalizeOrganizationId(organizationId), normalizedScope, rawKey].join('\u0000'), 'utf8')
+      .digest('hex')
+  };
+}
+
+function rateLimitPolicy(limit, windowMs) {
+  return {
+    limit: Math.max(1, Math.min(1000000, Math.floor(Number(limit || 1)))),
+    windowMs: Math.max(1000, Math.min(30 * 24 * 60 * 60 * 1000, Math.floor(Number(windowMs || 60000))))
+  };
+}
+
+function rateLimitResult(count, limit, expiresAt, consumed) {
+  const requestCount = Math.max(0, Number(count || 0));
+  const maximum = Math.max(1, Number(limit || 1));
+  const expiresAtMs = expiresAt instanceof Date ? expiresAt.getTime() : Date.parse(expiresAt || '');
+  const allowed = consumed ? requestCount <= maximum : requestCount < maximum;
+  const retryAfterMs = allowed || !Number.isFinite(expiresAtMs) ? 0 : Math.max(1000, expiresAtMs - Date.now());
+  return {
+    allowed,
+    count: requestCount,
+    limit: maximum,
+    remaining: Math.max(0, maximum - requestCount),
+    retryAfterMs,
+    retryAfterSeconds: retryAfterMs ? Math.max(1, Math.ceil(retryAfterMs / 1000)) : 0,
+    expiresAt: Number.isFinite(expiresAtMs) ? new Date(expiresAtMs).toISOString() : ''
+  };
 }
 
 function idempotencyRequestMismatchError(scope, key) {
@@ -591,6 +634,8 @@ class JsonStateRepository {
     this.aiUsageReservations = new Map();
     this.webhookEventClaims = new Map();
     this.idempotencyClaims = new Map();
+    this.rateLimitBuckets = new Map();
+    this.rateLimitSecret = String(options.rateLimitSecret || this.organizationId);
     this.idempotencyProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.idempotencyProcessingLeaseMs || 10 * 60 * 1000)));
     this.idempotencyClaimLimit = Math.max(100, Math.min(5000, Number(options.idempotencyClaimLimit || 1000)));
     this.jobErrorFile = options.jobErrorFile || (this.dataFile ? this.dataFile + '.job-errors.json' : '');
@@ -660,6 +705,41 @@ class JsonStateRepository {
       recoveryDrillReady: false,
       version: await this.version()
     };
+  }
+
+  async checkRateLimit(scope, key, limit, windowMs) {
+    const identity = rateLimitIdentity(scope, key, this.rateLimitSecret, this.organizationId);
+    const policy = rateLimitPolicy(limit, windowMs);
+    const mapKey = [this.organizationId, identity.scope, identity.keyHash].join('|');
+    const bucket = this.rateLimitBuckets.get(mapKey);
+    if (!bucket || Number(bucket.expiresAt || 0) <= Date.now()) {
+      this.rateLimitBuckets.delete(mapKey);
+      return rateLimitResult(0, policy.limit, '', false);
+    }
+    return rateLimitResult(bucket.count, policy.limit, new Date(bucket.expiresAt), false);
+  }
+
+  async consumeRateLimit(scope, key, limit, windowMs) {
+    const identity = rateLimitIdentity(scope, key, this.rateLimitSecret, this.organizationId);
+    const policy = rateLimitPolicy(limit, windowMs);
+    const mapKey = [this.organizationId, identity.scope, identity.keyHash].join('|');
+    const now = Date.now();
+    const current = this.rateLimitBuckets.get(mapKey);
+    const bucket = !current || Number(current.expiresAt || 0) <= now
+      ? { count: 1, expiresAt: now + policy.windowMs }
+      : { count: Math.min(2147483647, Number(current.count || 0) + 1), expiresAt: current.expiresAt };
+    this.rateLimitBuckets.set(mapKey, bucket);
+    if (this.rateLimitBuckets.size > 5000) {
+      for (const [bucketKey, value] of this.rateLimitBuckets.entries()) {
+        if (Number(value.expiresAt || 0) <= now) this.rateLimitBuckets.delete(bucketKey);
+      }
+    }
+    return rateLimitResult(bucket.count, policy.limit, new Date(bucket.expiresAt), true);
+  }
+
+  async clearRateLimit(scope, key) {
+    const identity = rateLimitIdentity(scope, key, this.rateLimitSecret, this.organizationId);
+    return this.rateLimitBuckets.delete([this.organizationId, identity.scope, identity.keyHash].join('|'));
   }
 
   async claimWebhookEvent(provider, eventId, payload = {}) {
@@ -990,6 +1070,8 @@ class PostgresStateRepository {
     this.snapshotLimit = Math.max(10, Math.min(1000, Number(options.snapshotLimit || 180)));
     this.webhookProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.webhookProcessingLeaseMs || 10 * 60 * 1000)));
     this.idempotencyProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.idempotencyProcessingLeaseMs || 10 * 60 * 1000)));
+    this.rateLimitSecret = String(options.rateLimitSecret || this.organizationId);
+    this.lastRateLimitPruneAt = 0;
     this.pool = pgPool(options);
     this.schemaReady = null;
   }
@@ -1116,6 +1198,17 @@ class PostgresStateRepository {
         await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT \'\'');
         await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()');
         await client.query('CREATE INDEX IF NOT EXISTS woa_idempotency_keys_claim_idx ON woa_idempotency_keys (organization_id, status, processing_started_at DESC)');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_rate_limits (
+          organization_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          key_hash TEXT NOT NULL,
+          request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+          window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          expires_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, scope, key_hash)
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS woa_rate_limits_expiry_idx ON woa_rate_limits (organization_id, expires_at)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_identity_index (
           organization_id TEXT NOT NULL,
           kind TEXT NOT NULL,
@@ -1199,6 +1292,7 @@ class PostgresStateRepository {
         )`);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [TRANSACTIONAL_INDEX_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DURABLE_RATE_LIMIT_MIGRATION_ID]);
         const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
@@ -1369,6 +1463,60 @@ class PostgresStateRepository {
     } finally {
       client.release();
     }
+  }
+
+  async pruneExpiredRateLimits() {
+    const now = Date.now();
+    if (now - this.lastRateLimitPruneAt < 60 * 60 * 1000) return;
+    this.lastRateLimitPruneAt = now;
+    await this.pool.query(`DELETE FROM woa_rate_limits
+      WHERE organization_id = $1 AND expires_at < now() - interval '1 day'`, [this.organizationId]);
+  }
+
+  async checkRateLimit(scope, key, limit, windowMs) {
+    const identity = rateLimitIdentity(scope, key, this.rateLimitSecret, this.organizationId);
+    const policy = rateLimitPolicy(limit, windowMs);
+    await this.ensureSchema();
+    const result = await this.pool.query(`SELECT request_count, expires_at
+      FROM woa_rate_limits
+      WHERE organization_id = $1 AND scope = $2 AND key_hash = $3 AND expires_at > now()`, [
+      this.organizationId, identity.scope, identity.keyHash
+    ]);
+    if (!result.rowCount) return rateLimitResult(0, policy.limit, '', false);
+    return rateLimitResult(result.rows[0].request_count, policy.limit, result.rows[0].expires_at, false);
+  }
+
+  async consumeRateLimit(scope, key, limit, windowMs) {
+    const identity = rateLimitIdentity(scope, key, this.rateLimitSecret, this.organizationId);
+    const policy = rateLimitPolicy(limit, windowMs);
+    await this.ensureSchema();
+    await this.pruneExpiredRateLimits();
+    const result = await this.pool.query(`INSERT INTO woa_rate_limits (
+        organization_id, scope, key_hash, request_count, window_started_at, expires_at, updated_at
+      ) VALUES ($1, $2, $3, 1, now(), now() + ($4::bigint * interval '1 millisecond'), now())
+      ON CONFLICT (organization_id, scope, key_hash) DO UPDATE SET
+        request_count = CASE
+          WHEN woa_rate_limits.expires_at <= now() THEN 1
+          ELSE LEAST(2147483647, woa_rate_limits.request_count + 1)
+        END,
+        window_started_at = CASE WHEN woa_rate_limits.expires_at <= now() THEN now() ELSE woa_rate_limits.window_started_at END,
+        expires_at = CASE
+          WHEN woa_rate_limits.expires_at <= now() THEN now() + ($4::bigint * interval '1 millisecond')
+          ELSE woa_rate_limits.expires_at
+        END,
+        updated_at = now()
+      RETURNING request_count, expires_at`, [
+      this.organizationId, identity.scope, identity.keyHash, policy.windowMs
+    ]);
+    return rateLimitResult(result.rows[0].request_count, policy.limit, result.rows[0].expires_at, true);
+  }
+
+  async clearRateLimit(scope, key) {
+    const identity = rateLimitIdentity(scope, key, this.rateLimitSecret, this.organizationId);
+    await this.ensureSchema();
+    const result = await this.pool.query(`DELETE FROM woa_rate_limits
+      WHERE organization_id = $1 AND scope = $2 AND key_hash = $3`, [this.organizationId, identity.scope, identity.keyHash]);
+    return result.rowCount > 0;
   }
 
   async claimWebhookEvent(provider, eventId, payload = {}) {
@@ -2141,6 +2289,7 @@ function createStateRepository(options = {}) {
 module.exports = {
   MIGRATION_ID,
   TRANSACTIONAL_INDEX_MIGRATION_ID,
+  DURABLE_RATE_LIMIT_MIGRATION_ID,
   DEFAULT_ORGANIZATION_ID,
   clone,
   stableJson,
