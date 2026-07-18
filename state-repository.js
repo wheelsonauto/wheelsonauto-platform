@@ -435,6 +435,10 @@ function identityWarnings(state = {}) {
       resourceType: 'vehicle',
       resourceId: id,
       label: label || id,
+      plate: String(vehicle && (vehicle.plate || vehicle.tag || vehicle.stock) || '').trim(),
+      tracker: String(vehicle && (vehicle.tracker || vehicle.trackerName) || '').trim(),
+      customer: String(vehicle && vehicle.currentCustomer || '').trim(),
+      status: String(vehicle && vehicle.status || '').trim(),
       message: 'Vehicle is missing VIN: ' + (label || id)
     });
   });

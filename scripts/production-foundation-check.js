@@ -404,9 +404,10 @@ async function main() {
       verificationCases: [{ id: 'verification-alias-one', provider: 'Canopy', externalCaseId: 'pull-one', providerPullId: 'pull-one' }]
     };
     assert.strictEqual(stateRepository.identityEntries(repeatedVerificationAliasOnOneCase).filter(entry => entry.kind === 'verification_provider_case:canopy').length, 1, 'The same provider identifier stored in two fields on one case must produce one database identity row.');
-    const missingVinWarnings = stateRepository.identityWarnings({ vehicles: [{ id: 'vehicle-missing-vin', year: 2013, make: 'BMW', model: '528XI' }] });
+    const missingVinWarnings = stateRepository.identityWarnings({ vehicles: [{ id: 'vehicle-missing-vin', year: 2013, make: 'BMW', model: '528XI', plate: 'VIN-REVIEW', tracker: 'Tracker 12', currentCustomer: 'VIN Review Customer', status: 'Rented' }] });
     assert.strictEqual(missingVinWarnings.length, 1, 'A vehicle without a VIN must remain visible for owner review before Stripe cutover.');
     assert.strictEqual(missingVinWarnings[0].kind, 'vehicle_missing_vin', 'A missing VIN warning must retain a stable review category.');
+    assert.deepStrictEqual({ plate: missingVinWarnings[0].plate, tracker: missingVinWarnings[0].tracker, customer: missingVinWarnings[0].customer, status: missingVinWarnings[0].status }, { plate: 'VIN-REVIEW', tracker: 'Tracker 12', customer: 'VIN Review Customer', status: 'Rented' }, 'A VIN review warning must identify the tag, tracker, assigned customer, and fleet status needed to find the physical vehicle.');
     assert.strictEqual(stateRepository.identityWarnings({ vehicles: [{ id: 'application-placeholder', year: 'test', make: 'test', status: 'Pending application' }] }).length, 0, 'A pending application placeholder must not be treated as an operational fleet VIN blocker.');
 
     const indexedBusinessState = {
