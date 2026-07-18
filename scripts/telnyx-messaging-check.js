@@ -245,6 +245,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert(!failedRegistration.campaignActive && failedRegistration.campaignStatus === 'Not found' && failedRegistration.historicalCampaignStatus === 'TCR_FAILED', 'A rejected campaign must remain history instead of becoming the current campaign.');
   assert(failedRegistration.registrationStage === 'campaign_creation' && /Create the corrected campaign/.test(failedRegistration.summary), 'A verified brand with only a rejected campaign must advance to corrected campaign creation.');
   assert(/exact customer consent flow/.test(failedRegistration.historicalFailureReason), 'Historical Telnyx failure reasons must remain available for diagnosis.');
+  assert(/exact customer consent flow/.test(failedRegistration.summary) && /exact customer consent flow/.test(failedRegistration.nextAction), 'A rejected Telnyx campaign must show its exact carrier reason in both the saved status and next action.');
   const unverifiedBrandRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',

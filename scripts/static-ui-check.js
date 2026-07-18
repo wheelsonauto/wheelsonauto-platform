@@ -232,6 +232,11 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Vehicle identity review',
   'VIN review'
 ]);
+assertIncludes('Actionable Telnyx carrier rejection surface', app, [
+  'Previous carrier rejection:',
+  'historicalFailureReason',
+  'carrierRegistrationStatus||status.carrierRegistrationNextAction'
+]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
   'clarifyCoreReadinessLanguage',
   'Core operational check for environment keys',

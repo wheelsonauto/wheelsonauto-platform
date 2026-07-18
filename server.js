@@ -211,7 +211,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-launch-clarity-162';
+const ASSET_VERSION = 'platform-20260718-telnyx-rejection-163';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1181,6 +1181,8 @@ function telnyxCarrierReadiness(data = {}, provider = '') {
     carrierBrandVerified: !!registration.brandVerified,
     carrierCampaignStatus: registration.campaignStatus || '',
     carrierHistoricalCampaignStatus: registration.historicalCampaignStatus || '',
+    carrierHistoricalFailureReason: String(registration.historicalFailureReason || '').trim().slice(0, 800),
+    carrierFailureReason: String(registration.failureReason || registration.historicalFailureReason || '').trim().slice(0, 800),
     carrierDeliveryStatus: status || (records.length ? 'unconfirmed' : 'not_tested'),
     carrierDeliveryErrorCode: errorCode,
     carrierDeliveryError: String(latest.providerErrorMessage || '').trim()
@@ -1435,7 +1437,12 @@ function telnyxLiveLaunchEvidence(data = {}) {
   else if (!settings.enabled) error = 'Turn on WheelsonAuto messaging before the Stripe launch.';
   else if (!MESSAGING_FROM_NUMBER || !TELNYX_API_KEY || !TELNYX_PUBLIC_KEY) error = 'Configure the Telnyx number, API key, and signed webhook public key in Render.';
   else if (!(saved.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID) || saved.smsWebhookConnected !== true) error = 'Connect the Telnyx messaging profile and signed inbound webhook from Messages setup.';
-  else if (!carrier.carrierRegistrationVerified) error = 'Finish Telnyx 10DLC approval and assign the number to an active campaign.';
+  else if (!carrier.carrierRegistrationVerified) {
+    const rejectionReason = String(carrier.carrierFailureReason || carrier.carrierHistoricalFailureReason || '').trim().slice(0, 500);
+    error = rejectionReason
+      ? 'Telnyx 10DLC is blocked by the carrier rejection: ' + rejectionReason + ' Review it with Telnyx before resubmitting or assigning the number.'
+      : 'Finish Telnyx 10DLC approval and assign the number to an active campaign.';
+  }
   else if (!deliveryVerified) error = deliveryConfigurationMatched && delivery.fresh ? 'Send a Telnyx test text and wait for a delivered carrier receipt.' : 'Run a fresh Telnyx delivery test after the current Render messaging configuration is deployed.';
   else if (!inboundVerified) error = inboundConfigurationMatched && inbound.fresh ? 'Reply to the Telnyx test text so WheelsonAuto records a signed inbound proof.' : 'Send a fresh signed inbound Telnyx reply after the current Render messaging configuration is deployed.';
   return {
@@ -1449,7 +1456,10 @@ function telnyxLiveLaunchEvidence(data = {}) {
     delivery,
     inbound,
     live,
-    error
+    error,
+    carrierRegistrationStatus: carrier.carrierRegistrationStatus || '',
+    carrierRegistrationStage: carrier.carrierRegistrationStage || '',
+    carrierFailureReason: carrier.carrierFailureReason || carrier.carrierHistoricalFailureReason || ''
   };
 }
 function resendLiveLaunchEvidence(data = {}) {
@@ -2565,8 +2575,10 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     summary = 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.' + (failureReason ? ' Reason: ' + failureReason : '');
   } else if (brandVerified) {
     registrationStage = 'campaign_creation';
-    nextAction = 'Create a corrected customer-care campaign for the verified brand, then wait for carrier approval.';
-    summary = 'Telnyx brand is verified. Create the corrected campaign next.' + (historicalCampaignStatus ? ' The previous ' + historicalCampaignStatus + ' campaign remains history only.' : '');
+    nextAction = historicalFailureReason
+      ? 'Review the previous carrier rejection with Telnyx before resubmitting: ' + historicalFailureReason
+      : 'Create a corrected customer-care campaign for the verified brand, then wait for carrier approval.';
+    summary = 'Telnyx brand is verified.' + (historicalCampaignStatus ? ' The previous ' + historicalCampaignStatus + ' campaign remains history only.' : '') + (historicalFailureReason ? ' Rejection reason: ' + historicalFailureReason + ' Create the corrected campaign only after Telnyx confirms the rejection is resolved.' : ' Create the corrected campaign next.');
   } else if (brandStatus) {
     registrationStage = 'brand_verification';
     nextAction = 'Complete Telnyx brand verification before creating a campaign.';

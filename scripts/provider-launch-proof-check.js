@@ -143,6 +143,20 @@ assert.strictEqual(telnyx.inboundVerified, true);
 const staleTelnyx = clone(data);
 staleTelnyx.integrations.messaging.lastTelnyxInboundConfigurationFingerprint = 'stale-proof';
 assert.strictEqual(telnyxLiveLaunchEvidence(staleTelnyx).live, false, 'A Telnyx proof from another configuration must not unlock the launch gate.');
+const rejectedTelnyx = clone(data);
+rejectedTelnyx.integrations.messaging.telnyx10dlc = {
+  checkedAt: new Date().toISOString(),
+  numberAssigned: false,
+  campaignActive: false,
+  campaignStatus: 'Not found',
+  historicalCampaignStatus: 'TCR_FAILED',
+  historicalFailureReason: 'Brand does not qualify for submitted campaign use-case.',
+  registrationStage: 'campaign_creation'
+};
+const rejectedTelnyxEvidence = telnyxLiveLaunchEvidence(rejectedTelnyx);
+assert.strictEqual(rejectedTelnyxEvidence.live, false, 'A rejected 10DLC campaign must keep the live launch gate closed.');
+assert.match(rejectedTelnyxEvidence.error, /Brand does not qualify for submitted campaign use-case/, 'The live launch gate must preserve the actionable Telnyx carrier rejection reason.');
+assert.strictEqual(rejectedTelnyxEvidence.carrierRegistrationStage, 'campaign_creation', 'The Telnyx launch evidence must expose the current corrective stage without exposing secrets.');
 
 const resend = resendLiveLaunchEvidence(data);
 assert.strictEqual(resend.live, true, 'Resend launch proof must require the verified WheelsonAuto sender plus fresh outbound and inbound provider evidence.');
