@@ -198,8 +198,16 @@ class SecureDocumentStore {
     const url = s3ObjectUrl(this.s3, storageKey);
     const headers = signingHeaders('PUT', url, bytes, this.s3);
     headers['Content-Type'] = 'application/octet-stream';
+    headers['If-None-Match'] = '*';
     const response = await this.fetchObject(url, { method: 'PUT', headers, body: bytes });
-    if (!response.ok) throw new Error('Private object storage upload failed (' + response.status + ').');
+    if (!response.ok) {
+      const error = new Error(response.status === 409 || response.status === 412
+        ? 'Private object storage upload refused to overwrite an existing object.'
+        : 'Private object storage upload failed (' + response.status + ').');
+      if (response.status === 409 || response.status === 412) error.code = 'private_object_already_exists';
+      error.statusCode = response.status;
+      throw error;
+    }
     return { storageKey, storagePath: '' };
   }
 

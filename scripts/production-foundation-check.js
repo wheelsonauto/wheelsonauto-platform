@@ -443,6 +443,8 @@ async function main() {
       const objectKey = new URL(url).pathname;
       if (!authorized) return storageResponse(403);
       if (method === 'PUT') {
+        const writeOnce = Object.entries(headers).some(([key, value]) => key.toLowerCase() === 'if-none-match' && value === '*');
+        if (writeOnce && s3Objects.has(objectKey)) return storageResponse(412);
         s3Objects.set(objectKey, Buffer.from(options.body || Buffer.alloc(0)));
         return storageResponse(200);
       }
@@ -466,6 +468,14 @@ async function main() {
       fetch: privateS3Fetch
     });
     assert(privateS3Store.status().productionReady && privateS3Store.status().secureTransport, 'Production private storage must require a complete S3 configuration over HTTPS.');
+    await privateS3Store.writeObject('immutability-check/object.bin', Buffer.from('original encrypted object'));
+    await assert.rejects(
+      () => privateS3Store.writeObject('immutability-check/object.bin', Buffer.from('replacement encrypted object')),
+      error => error && error.code === 'private_object_already_exists' && error.statusCode === 412,
+      'S3-compatible writes must use a conditional write and fail closed instead of overwriting an immutable encrypted object.'
+    );
+    assert.strictEqual((await privateS3Store.readObject('immutability-check/object.bin')).toString('utf8'), 'original encrypted object', 'A rejected S3 collision must preserve the original encrypted object.');
+    await privateS3Store.deleteObject('immutability-check/object.bin');
     const privateS3Probe = await privateS3Store.probe({ organizationId: 'org-test-s3' });
     assert(privateS3Probe.ok && privateS3Probe.publicReadBlocked === true && privateS3Probe.objectDeleted, 'The production storage probe must prove anonymous reads are blocked before deleting its encrypted object.');
     const privateS3Backups = encryptedStateBackup.createEncryptedStateBackupStore({
