@@ -227,6 +227,67 @@ function stripeCutoverLaunchError(message, code, missing = []) {
   return error;
 }
 
+function stripeLaunchSafetyError(message, code, missing = [], statusCode = 503) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  error.missing = Array.isArray(missing) ? missing.slice(0, 50) : [];
+  return error;
+}
+
+function stripeCardPreparationReady(options = {}) {
+  if (options.isolatedTestMode === true) return true;
+  return options.configured === true
+    && text(options.keyMode).toLowerCase() === 'live'
+    && options.webhookSecretConfigured === true;
+}
+
+function assertStripeCardPreparationReady(options = {}) {
+  if (stripeCardPreparationReady(options)) return { ready: true, isolatedTestMode: options.isolatedTestMode === true };
+  const missing = [];
+  if (options.configured !== true || text(options.keyMode).toLowerCase() !== 'live') missing.push('Stripe live secret key');
+  if (options.webhookSecretConfigured !== true) missing.push('Stripe signed webhook secret');
+  throw stripeLaunchSafetyError(
+    'Stripe card setup is not live. Keep Clover active until the live Stripe key and signed webhook secret are configured.',
+    'stripe_card_preparation_not_live',
+    missing
+  );
+}
+
+function stripeMoneyActionsArmed(options = {}) {
+  if (options.isolatedTestMode === true) return true;
+  return options.productionHardeningRequired === true && stripeCardPreparationReady(options);
+}
+
+function assertStripeMoneyActionsArmed(options = {}) {
+  if (stripeMoneyActionsArmed(options)) return { ready: true, isolatedTestMode: options.isolatedTestMode === true };
+  const missing = [];
+  if (options.productionHardeningRequired !== true) missing.push('WOA_PRODUCTION_HARDENING_REQUIRED=1');
+  if (options.configured !== true || text(options.keyMode).toLowerCase() !== 'live') missing.push('Stripe live secret key');
+  if (options.webhookSecretConfigured !== true) missing.push('Stripe signed webhook secret');
+  throw stripeLaunchSafetyError(
+    'Stripe money actions are locked. Keep Clover active until production hardening, the live Stripe key, and the signed webhook secret are enabled.',
+    'stripe_money_actions_not_armed',
+    missing,
+    409
+  );
+}
+
+function stripeLiveResultAccepted(options = {}) {
+  if (options.isolatedTestMode === true) return true;
+  return text(options.keyMode).toLowerCase() === 'live' && options.livemode === true;
+}
+
+function assertStripeLiveResult(options = {}) {
+  if (stripeLiveResultAccepted(options)) return { accepted: true, isolatedTestMode: options.isolatedTestMode === true };
+  throw stripeLaunchSafetyError(
+    (text(options.label) || 'Stripe result') + ' was not a live-mode result. WheelsonAuto ignored it so test activity cannot change a real customer account.',
+    'stripe_live_result_required',
+    ['Stripe live-mode provider result'],
+    409
+  );
+}
+
 function assertStripeCutoverLaunchReady(options = {}) {
   if (options.isolatedTestMode === true) return { ready: true, isolatedTestMode: true };
   if (options.productionHardeningRequired !== true) {
@@ -397,6 +458,13 @@ module.exports = {
   existingPaidPayment,
   isolatedProviderTestMode,
   stripeCutoverLaunchError,
+  stripeLaunchSafetyError,
+  stripeCardPreparationReady,
+  assertStripeCardPreparationReady,
+  stripeMoneyActionsArmed,
+  assertStripeMoneyActionsArmed,
+  stripeLiveResultAccepted,
+  assertStripeLiveResult,
   assertStripeCutoverLaunchReady,
   duplicateChargeError,
   assertBillingPeriodOpen,

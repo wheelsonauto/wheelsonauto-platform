@@ -31,6 +31,25 @@ async function run() {
   assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'test', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1' }), true, 'Explicit isolated tests may exercise the cutover state machine without live providers.');
   assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'test', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1', RENDER: 'true' }), false, 'A Render deployment must never enable the isolated provider-test path.');
   assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'production', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1' }), false, 'Production must never enable the isolated provider-test path.');
+  assert.strictEqual(stripeMigration.stripeCardPreparationReady({ configured: true, keyMode: 'test', webhookSecretConfigured: true }), false, 'A Stripe test key must never expose customer card setup on a deployed site.');
+  assert.strictEqual(stripeMigration.stripeCardPreparationReady({ configured: true, keyMode: 'live', webhookSecretConfigured: true }), true, 'A live Stripe key and signed webhook secret may prepare cards before cutover.');
+  assert.throws(
+    () => stripeMigration.assertStripeCardPreparationReady({ configured: true, keyMode: 'test', webhookSecretConfigured: true }),
+    error => error && error.code === 'stripe_card_preparation_not_live' && error.statusCode === 503,
+    'Customer card preparation must fail closed outside live mode.'
+  );
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ configured: true, keyMode: 'live', webhookSecretConfigured: true, productionHardeningRequired: false }), false, 'A live key alone must not arm Stripe money actions.');
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ configured: true, keyMode: 'test', webhookSecretConfigured: true, productionHardeningRequired: true }), false, 'Production hardening must never arm a Stripe test key.');
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ configured: true, keyMode: 'live', webhookSecretConfigured: true, productionHardeningRequired: true }), true, 'Live Stripe money actions require hardening, a live key, and a signed webhook secret.');
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ isolatedTestMode: true }), true, 'Explicit isolated tests may exercise Stripe money workflows without a live account.');
+  assert.throws(
+    () => stripeMigration.assertStripeMoneyActionsArmed({ configured: true, keyMode: 'live', webhookSecretConfigured: true, productionHardeningRequired: false }),
+    error => error && error.code === 'stripe_money_actions_not_armed' && error.statusCode === 409,
+    'Stripe charges and refunds must fail closed until production hardening is armed.'
+  );
+  assert.strictEqual(stripeMigration.stripeLiveResultAccepted({ keyMode: 'live', livemode: true }), true, 'Signed live Stripe results may update customer records.');
+  assert.strictEqual(stripeMigration.stripeLiveResultAccepted({ keyMode: 'live', livemode: false }), false, 'Stripe test events must not update real customer records.');
+  assert.strictEqual(stripeMigration.stripeLiveResultAccepted({ isolatedTestMode: true, keyMode: 'test', livemode: false }), true, 'Isolated local/CI tests may process Stripe test events.');
   assert.throws(
     () => stripeMigration.assertStripeCutoverLaunchReady({ productionHardeningRequired: false }),
     error => error && error.code === 'stripe_cutover_launch_not_armed' && error.statusCode === 409,
@@ -107,6 +126,10 @@ async function run() {
     'applyRefundPaymentCompletion',
     'identity.verification_session.verified',
     'STRIPE_IDENTITY_RUNTIME_READY',
+    'assertStripeCardPreparationReady',
+    'assertStripeMoneyActionsArmed',
+    'stripeLiveResultAccepted',
+    'stripeLivemode',
     'Owner must review reason-specific evidence',
     'Stripe card ready - Clover remains active until owner confirmation',
     'recurringCardReadyForProvider',

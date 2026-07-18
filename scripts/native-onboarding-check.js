@@ -154,7 +154,8 @@ async function main() {
   assert(stripeStateWithoutStripeCard.documents && !stripeStateWithoutStripeCard.card && stripeStateWithoutStripeCard.paymentProvider === 'stripe', 'Stripe onboarding must require the selfie and must not accept a Clover card source as Stripe-ready.');
   stripeStatusFixture.recurringPayments[0].stripeCustomerId = 'cus_stripe_state';
   stripeStatusFixture.recurringPayments[0].stripePaymentMethodId = 'pm_stripe_state';
-  assert(nativeSite.onboardingStatus(stripeStatusFixture, { id: 'session-stripe-state', paymentProvider: 'stripe' }, { id: 'app-stripe-state', pricingSnapshot: {} }).card, 'Stripe onboarding should unlock only after both Stripe customer and payment-method references are saved.');
+  stripeStatusFixture.recurringPayments[0].stripeLivemode = true;
+  assert(nativeSite.onboardingStatus(stripeStatusFixture, { id: 'session-stripe-state', paymentProvider: 'stripe' }, { id: 'app-stripe-state', pricingSnapshot: {} }).card, 'Stripe onboarding should unlock only after live-mode customer and payment-method references are saved.');
 
   const initial = {
     business: { name: 'WheelsonAuto' },

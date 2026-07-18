@@ -220,13 +220,14 @@ async function main() {
   const webhookSecret = 'whsec_wheelsonauto_full_lifecycle';
   global.fetch = fakeStripe.fetch;
   process.env.TZ = 'America/New_York';
+  process.env.NODE_ENV = 'test';
+  process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
   process.env.WOA_SESSION_SECRET = 'stripe-lifecycle-session-secret';
   process.env.WOA_PAYMENT_PROVIDER = 'stripe';
   process.env.WOA_ONBOARDING_PAYMENT_PROVIDER = 'stripe';
   process.env.WOA_IDENTITY_PROVIDER = 'stripe';
-  process.env.WOA_STRIPE_IDENTITY_TEST_MODE = '1';
   process.env.STRIPE_SECRET_KEY = 'sk_test_wheelsonauto_lifecycle';
   process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
   process.env.STRIPE_API_BASE = fakeStripe.baseUrl;

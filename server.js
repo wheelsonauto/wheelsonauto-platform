@@ -114,8 +114,8 @@ const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || process.env.W
 const STRIPE_API_BASE = (process.env.STRIPE_API_BASE || 'https://api.stripe.com/v1').replace(/\/+$/, '');
 const stripe = stripeAdapter.stripeClient({ secretKey: STRIPE_SECRET_KEY, apiBase: STRIPE_API_BASE });
 const STRIPE_KEY_MODE = /^sk_live_/.test(STRIPE_SECRET_KEY) ? 'live' : /^sk_test_/.test(STRIPE_SECRET_KEY) ? 'test' : STRIPE_SECRET_KEY ? 'unknown' : 'missing';
-const WOA_STRIPE_IDENTITY_TEST_MODE = process.env.WOA_STRIPE_IDENTITY_TEST_MODE === '1';
-const STRIPE_IDENTITY_RUNTIME_READY = IDENTITY_PROVIDER === 'stripe' && stripe.configured() && (STRIPE_KEY_MODE === 'live' || WOA_STRIPE_IDENTITY_TEST_MODE);
+const STRIPE_ISOLATED_PROVIDER_TEST_MODE = stripeMigration.isolatedProviderTestMode(process.env);
+const STRIPE_IDENTITY_RUNTIME_READY = IDENTITY_PROVIDER === 'stripe' && stripe.configured() && (STRIPE_KEY_MODE === 'live' || STRIPE_ISOLATED_PROVIDER_TEST_MODE);
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
 const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
@@ -8143,7 +8143,11 @@ function customerPortalHtml(account, state) {
   const portalReceiptForm = '<form method="POST" action="/customer/receipt-request" class="customer-message-form customer-receipt-form"><label>Request payment receipt<input name="paymentHint" maxlength="160" placeholder="Payment date, amount, or note"></label><button class="btn primary" type="submit">Request receipt</button><small>This asks the office to verify the payment and send the correct receipt.</small></form>';
   const portalStatementForm = '<form method="POST" action="/customer/statement-request" class="customer-message-form customer-statement-form"><label>Request account document<select name="requestType"><option>Account statement</option><option>Payoff balance</option><option>Payment history</option><option>Balance letter</option></select></label><label>Note<input name="note" maxlength="200" placeholder="What do you need it for?"></label><button class="btn primary" type="submit">Request document</button><small>The office verifies the account before sending any statement, payoff, or balance document.</small></form>';
   const currentCardProvider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
-  const cardChangeForm = '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="' + escapeHtml(currentCardProvider) + '"><button class="btn primary" type="submit">Change card on file (' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ')</button><small>Opens secure ' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ' card setup. WheelsonAuto never sees the full card number.</small></form>' + (currentCardProvider !== 'stripe' && stripe.configured() ? '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="stripe"><button class="btn" type="submit">Prepare Stripe card</button><small>Saves a Stripe card without stopping Clover. The owner confirms the provider switch separately.</small></form>' : '');
+  const stripePreparationReady = stripeCardPreparationReady();
+  const currentCardChange = currentCardProvider !== 'stripe' || stripePreparationReady
+    ? '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="' + escapeHtml(currentCardProvider) + '"><button class="btn primary" type="submit">Change card on file (' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ')</button><small>Opens secure ' + escapeHtml(paymentProviderLabel(currentCardProvider)) + ' card setup. WheelsonAuto never sees the full card number.</small></form>'
+    : '<div class="notice">Stripe card changes are locked until the live Stripe key and signed webhook are connected. Contact WheelsonAuto for a Clover card-update link.</div>';
+  const cardChangeForm = currentCardChange + (currentCardProvider !== 'stripe' && stripePreparationReady ? '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="stripe"><button class="btn" type="submit">Prepare Stripe card</button><small>Saves a live Stripe card without stopping Clover. The owner confirms the provider switch separately.</small></form>' : '');
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=focused-workspaces-3"></script></body></html>';
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
@@ -8529,6 +8533,7 @@ function applyStripeIdentitySession(data, session, application, object = {}, eve
 async function syncStripeIdentitySession(data, session, application) {
   if (normalizedIdentityProvider(session && session.identityProvider) !== 'stripe' || !session.stripeIdentityVerificationId) return { changed: false, status: '' };
   const object = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
+  assertStripeLiveResult(object && object.livemode, 'Stripe Identity status');
   return applyStripeIdentitySession(data, session, application, object);
 }
 function addDaysToDateKey(value, days) {
@@ -8552,6 +8557,10 @@ function paymentProviderLabel(value) {
   return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment provider';
 }
 function activeHostedCheckoutHref(request) {
+  if (normalizedPaymentProvider(request && request.paymentProvider || 'clover') === 'stripe') {
+    if (!stripeMoneyActionsArmed()) return '';
+    if (!stripeMigration.isolatedProviderTestMode(process.env) && String(request && request.stripeCheckoutKeyMode || '') !== 'live') return '';
+  }
   const createdAt = Date.parse(request && request.checkoutCreatedAt || '');
   return request && request.checkoutHref && Number.isFinite(createdAt) && Date.now() - createdAt < 14 * 60 * 1000 ? request.checkoutHref : '';
 }
@@ -8564,7 +8573,10 @@ function nativeOnboardingProvider(session, recurring) {
 }
 function recurringCardReadyForProvider(recurring, provider) {
   if (!recurring) return false;
-  if (normalizedPaymentProvider(provider) === 'stripe') return !!(String(recurring.stripeCustomerId || '').trim() && String(recurring.stripePaymentMethodId || '').trim() && !stripeCardAuthenticationRequired(recurring));
+  if (normalizedPaymentProvider(provider) === 'stripe') {
+    const verifiedMode = recurring.stripeLivemode === true || stripeMigration.isolatedProviderTestMode(process.env);
+    return !!(verifiedMode && String(recurring.stripeCustomerId || '').trim() && String(recurring.stripePaymentMethodId || '').trim() && !stripeCardAuthenticationRequired(recurring));
+  }
   return !!(String(recurring.cloverPaymentSource || recurring.paymentSourceId || '').trim());
 }
 function nativeOnboardingPaymentRequests(data, session, application, provider = '') {
@@ -8959,7 +8971,7 @@ async function cloverEcommerceFetch(pathname, options = {}) {
 }
 function checkoutStatus() {
   const provider = normalizedPaymentProvider();
-  const adapterReady = provider === 'stripe' ? stripe.configured() : provider === 'clover' && !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
+  const adapterReady = provider === 'stripe' ? stripeMoneyActionsArmed() : provider === 'clover' && !!(CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
   const signedWebhookReady = provider === 'stripe' ? !!STRIPE_WEBHOOK_SECRET : provider === 'clover' && !!CLOVER_HCO_WEBHOOK_SECRET;
   const verifiedPaymentPipelineReady = adapterReady && signedWebhookReady;
   return {
@@ -9376,6 +9388,37 @@ async function assertStripeCutoverLaunchReady(data) {
     productionHardeningRequired: true,
     preflight
   });
+}
+function stripeProviderSafetyOptions() {
+  return {
+    isolatedTestMode: stripeMigration.isolatedProviderTestMode(process.env),
+    configured: stripe.configured(),
+    keyMode: STRIPE_KEY_MODE,
+    webhookSecretConfigured: !!STRIPE_WEBHOOK_SECRET,
+    productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED
+  };
+}
+function stripeCardPreparationReady() {
+  return stripeMigration.stripeCardPreparationReady(stripeProviderSafetyOptions());
+}
+function assertStripeCardPreparationReady() {
+  return stripeMigration.assertStripeCardPreparationReady(stripeProviderSafetyOptions());
+}
+function stripeMoneyActionsArmed() {
+  return stripeMigration.stripeMoneyActionsArmed(stripeProviderSafetyOptions());
+}
+function assertStripeMoneyActionsArmed() {
+  return stripeMigration.assertStripeMoneyActionsArmed(stripeProviderSafetyOptions());
+}
+function assertStripeLiveResult(livemode, label) {
+  return stripeMigration.assertStripeLiveResult({
+    ...stripeProviderSafetyOptions(),
+    livemode: livemode === true,
+    label
+  });
+}
+function isStripeLaunchGuardError(error) {
+  return ['stripe_card_preparation_not_live', 'stripe_money_actions_not_armed', 'stripe_live_result_required'].includes(String(error && error.code || ''));
 }
 function systemReadiness(data, user = { role: 'Owner' }) {
   const scopedSource = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
@@ -9855,6 +9898,7 @@ function preparedRefundRequest(data, payload = {}, user = {}) {
     cloverChargeId,
     stripePaymentIntentId,
     stripeChargeId,
+    stripeLivemode: paymentProvider === 'stripe' && payment.stripeLivemode === true,
     customer: payment.customer || payload.customer || '',
     vehicle: payment.vehicle || '',
     vehicleId: payment.vehicleId || '',
@@ -9881,6 +9925,10 @@ async function executePreparedRefund(data, request, user = {}) {
   if (!request) throw new Error('Refund request was not found.');
   if (refundRequestCompleted(request.status)) return request;
   const provider = normalizedRefundProvider(request.paymentProvider || request.provider);
+  if (provider === 'stripe') {
+    assertStripeMoneyActionsArmed();
+    assertStripeLiveResult(request.stripeLivemode, 'Stripe refund source payment');
+  }
   const now = new Date().toISOString();
   const completedBy = String(user.name || user.username || user.role || 'Owner');
   try {
@@ -12973,7 +13021,9 @@ function publicPayHtml(request, message = '') {
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   const vehicle = escapeHtml(request.vehicle || 'WheelsonAuto recurring payment');
   const provider = paymentProviderLabel(request.paymentProvider);
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit">Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
+  const paymentReady = normalizedPaymentProvider(request.paymentProvider) !== 'stripe' || stripeMoneyActionsArmed();
+  const providerNotice = paymentReady ? '' : '<div class="notice" style="margin-top:12px">This Stripe payment link is not live yet. WheelsonAuto will send a fresh secure link after production launch checks are complete.</div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + providerNotice + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit"' + (paymentReady ? '' : ' disabled') + '>Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
 }
 function paymentResultHtml(title, message, returnUrl = 'https://www.wheelsonauto.com/', returnLabel = 'Back to WheelsonAuto') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></section></main></div></body></html>';
@@ -13124,7 +13174,7 @@ function setupCardHtml(request, message = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '<script src="' + sdkUrl + '"></script></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save your card securely with Clover so WheelsonAuto can run authorized recurring and manual catch-up payments.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Card setup is not ready yet. WheelsonAuto needs the Clover Ecommerce public key and private key in Render.</div>' : '') + '<form id="cardSetupForm" class="form" style="margin-top:14px"><div class="field span2"><label>Name on card</label><input id="cardName" autocomplete="cc-name" value="' + escapeHtml(request.customer || '') + '"' + disabled + '></div><div class="field span2"><label>Card number</label><div id="cardNumber" class="clover-field"></div><div id="cardNumberErrors" class="small err"></div></div><div class="field"><label>Expiration</label><div id="cardDate" class="clover-field"></div><div id="cardDateErrors" class="small err"></div></div><div class="field"><label>CVV</label><div id="cardCvv" class="clover-field"></div><div id="cardCvvErrors" class="small err"></div></div><div class="field"><label>ZIP</label><div id="cardZip" class="clover-field"></div><div id="cardZipErrors" class="small err"></div></div><label class="check span2"><input id="consent" type="checkbox"' + disabled + '> I authorize WheelsonAuto to save this card with Clover and charge authorized recurring payments, retries, and manual catch-up payments for my account.</label><div class="notice span2">Your card is entered in Clover secure fields for tokenization. WheelsonAuto stores only the Clover saved-card/customer reference, not the card number or CVV.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Save card with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Cancel</a></div></form><div id="setupMessage" class="notice" style="display:none;margin-top:12px"></div></section></main></div><script>window.__CARD_SETUP__=' + JSON.stringify(config).replace(/</g, '\\u003c') + ';</script><script src="/card-setup.js?v=clover-iframe-1"></script></body></html>';
 }
 function stripeSetupCardHtml(request, message = '') {
-  const setupReady = stripe.configured();
+  const setupReady = stripeCardPreparationReady();
   const disabled = setupReady ? '' : ' disabled';
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div></body></html>';
@@ -13168,8 +13218,8 @@ async function ensureStripeCustomer(data, request) {
   return customer.id;
 }
 async function attachStripeCardSetupCheckout(data, request, req) {
-  if (!stripe.configured()) throw Object.assign(new Error('Stripe card setup is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
-  if (request.stripeCheckoutHref && request.stripeCheckoutSessionId && Date.now() - Date.parse(request.stripeCheckoutCreatedAt || '') < 23 * 60 * 60 * 1000) {
+  assertStripeCardPreparationReady();
+  if (request.stripeCheckoutHref && request.stripeCheckoutSessionId && String(request.stripeCheckoutKeyMode || '') === STRIPE_KEY_MODE && Date.now() - Date.parse(request.stripeCheckoutCreatedAt || '') < 23 * 60 * 60 * 1000) {
     return { id: request.stripeCheckoutSessionId, url: request.stripeCheckoutHref };
   }
   const customerId = await ensureStripeCustomer(data, request);
@@ -13197,6 +13247,7 @@ async function attachStripeCardSetupCheckout(data, request, req) {
     stripeCheckoutSessionId: session.id || '',
     stripeCheckoutHref: session.url || '',
     stripeCheckoutCreatedAt: now,
+    stripeCheckoutKeyMode: STRIPE_KEY_MODE,
     autopayConsentAt: request.autopayConsentAt || now,
     autopayConsentIp: request.autopayConsentIp || requestIp(req),
     autopayConsentUserAgent: request.autopayConsentUserAgent || String(req && req.headers && req.headers['user-agent'] || '').slice(0, 500),
@@ -13223,17 +13274,23 @@ function stripeObjectId(value) {
   return typeof value === 'string' ? value : String(value && value.id || '');
 }
 async function completeStripeCardSetup(data, request, sessionInput) {
+  assertStripeCardPreparationReady();
   if (request.stripePaymentMethodId && /stripe card saved/i.test(String(request.status || ''))) {
-    return { recurring: stripeRecurringRowsForRequest(data, request)[0] || null, alreadyCompleted: true };
+    if (request.stripeLivemode === true || stripeMigration.isolatedProviderTestMode(process.env)) {
+      return { recurring: stripeRecurringRowsForRequest(data, request)[0] || null, alreadyCompleted: true };
+    }
+    throw stripeMigration.stripeLaunchSafetyError('This saved Stripe card has no verified live-mode proof. Send a fresh live Stripe setup link before using it.', 'stripe_live_result_required', ['Verified live Stripe card setup'], 409);
   }
   const sessionId = stripeObjectId(sessionInput) || request.stripeCheckoutSessionId;
   if (!sessionId) throw new Error('Stripe checkout session was not provided.');
   const session = typeof sessionInput === 'object' && sessionInput && sessionInput.mode ? sessionInput : await stripe.retrieveCheckoutSession(sessionId);
+  assertStripeLiveResult(session.livemode, 'Stripe card setup session');
   if (session.mode !== 'setup' || String(session.status || '').toLowerCase() !== 'complete') throw new Error('Stripe has not completed this card setup.');
   const metadata = session.metadata || {};
   if (metadata.cardSetupRequestId && metadata.cardSetupRequestId !== request.id) throw new Error('Stripe card setup did not match this WheelsonAuto request.');
   let setupIntent = session.setup_intent;
   if (typeof setupIntent === 'string' || !setupIntent || typeof setupIntent.payment_method === 'string') setupIntent = await stripe.retrieveSetupIntent(stripeObjectId(setupIntent));
+  assertStripeLiveResult(setupIntent && setupIntent.livemode, 'Stripe SetupIntent');
   if (!setupIntent || String(setupIntent.status || '').toLowerCase() !== 'succeeded') throw new Error('Stripe did not return a completed SetupIntent.');
   const paymentMethod = setupIntent.payment_method || {};
   const paymentMethodId = stripeObjectId(paymentMethod);
@@ -13252,6 +13309,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
     stripeCardBrand: card.brand || '',
     stripeCardLast4: card.last4 || '',
     stripeCardSavedAt: completedAt,
+    stripeLivemode: session.livemode === true && setupIntent.livemode === true,
     stripeMigrationStatus: 'Stripe card ready - Clover remains active until owner confirmation'
   });
   const rows = stripeRecurringRowsForRequest(data, request);
@@ -13272,6 +13330,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       stripeCardBrand: card.brand || '',
       stripeCardLast4: card.last4 || '',
       stripeCardSavedAt: completedAt,
+      stripeLivemode: session.livemode === true && setupIntent.livemode === true,
       ...stripeMigrationPatch(row, nextMigrationState, {
         at: completedAt,
         cardSavedAt: completedAt,
@@ -13307,7 +13366,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
     });
   });
   const profile = (data.customers || []).find(row => request.customer && normKey(row.name || row.customer) === normKey(request.customer));
-  if (profile) Object.assign(profile, { stripeCustomerId: customerId, stripePaymentMethodId: paymentMethodId, stripeCardBrand: card.brand || '', stripeCardLast4: card.last4 || '', stripeCardSavedAt: completedAt, updatedAt: completedAt });
+  if (profile) Object.assign(profile, { stripeCustomerId: customerId, stripePaymentMethodId: paymentMethodId, stripeCardBrand: card.brand || '', stripeCardLast4: card.last4 || '', stripeCardSavedAt: completedAt, stripeLivemode: session.livemode === true && setupIntent.livemode === true, updatedAt: completedAt });
   const onboardingSession = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
   if (onboardingSession) Object.assign(onboardingSession, { cardCompletedAt: completedAt, autopayConsentAt: request.autopayConsentAt || completedAt, status: 'Card linked' });
   await queueOwnerEmailNotification(data, 'card_setup_completed', {
@@ -14154,8 +14213,9 @@ async function completeStripeRecurringChargeClaim(scope, key, response = {}, cla
 async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
+  assertStripeMoneyActionsArmed();
+  assertStripeLiveResult(recurring.stripeLivemode, 'Saved Stripe card');
   const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'stripe');
-  if (!stripe.configured()) throw Object.assign(new Error('Stripe saved-card charging is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
   const customerId = String(recurring.stripeCustomerId || '').trim();
   const paymentMethodId = String(recurring.stripePaymentMethodId || '').trim();
   if (!customerId || !paymentMethodId) throw new Error('Stripe card not found. Ask the customer to save a Stripe card through the WheelsonAuto customer portal.');
@@ -14272,6 +14332,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     throw error;
   }
   const paid = String(intent.status || '').toLowerCase() === 'succeeded';
+  assertStripeLiveResult(intent && intent.livemode, 'Stripe PaymentIntent');
   if (!paid) {
     const intentStatus = String(intent.status || 'unconfirmed').toLowerCase();
     if (intentStatus === 'processing') {
@@ -14353,6 +14414,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: customerId,
     stripePaymentMethodId: paymentMethodId,
+    stripeLivemode: intent.livemode === true,
     stripeIdempotencyKey: idempotencyKey
   };
   data.payments = Array.isArray(data.payments) ? data.payments : [];
@@ -14584,7 +14646,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -14650,6 +14712,11 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.lastAutoChargeResult = 'Paid';
         result.charged += 1;
       } catch (err) {
+        if (isStripeLaunchGuardError(err)) {
+          result.providerBlocked += 1;
+          result.errors.push((row.customer || row.id) + ': Stripe launch safety blocked the charge; customer retry status was not changed.');
+          continue;
+        }
         if (isStripeAuthenticationRequired(err)) {
           const payment = saveStripeAuthenticationRequiredResult(data, row, {
             amount: row.amount,
@@ -14851,7 +14918,7 @@ async function attachCloverCheckout(data, request) {
   return checkout;
 }
 async function attachStripeCheckout(data, request) {
-  if (!stripe.configured()) throw Object.assign(new Error('Stripe checkout is not connected. Add STRIPE_SECRET_KEY in Render.'), { statusCode: 503 });
+  assertStripeMoneyActionsArmed();
   const customerId = await ensureStripeCustomer(data, request);
   const metadata = stripeMetadata({ ...request, paymentRequestId: request.id }, { flow: 'payment' });
   const session = await stripe.createSetupCheckoutSession({
@@ -14886,6 +14953,7 @@ async function attachStripeCheckout(data, request) {
   request.providerCheckoutSessionId = session.id || '';
   request.checkoutHref = session.url || '';
   request.checkoutCreatedAt = new Date().toISOString();
+  request.stripeCheckoutKeyMode = STRIPE_KEY_MODE;
   await writeData(data);
   return { ...session, href: session.url || '' };
 }
@@ -14912,7 +14980,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   request.webhookVerifiedAt = paidAt;
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
-    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' });
+    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' });
   }
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
   if (recurring) {
@@ -15081,6 +15149,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: stripeObjectId(intent.customer) || recurring.stripeCustomerId || '',
     stripePaymentMethodId: stripeObjectId(intent.payment_method) || recurring.stripePaymentMethodId || '',
+    stripeLivemode: intent.livemode === true,
     stripeIdempotencyKey: claim.idempotencyKey,
     duplicateBillingPeriod,
     duplicatePaymentId: duplicateBillingPeriod ? String(duplicateBillingPeriodPayment.id || '') : '',
@@ -15140,6 +15209,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     lastPaymentAt: paymentAtIso,
     lastStripePaymentIntentId: intentId,
     lastStripeChargeId: chargeId,
+    stripeLivemode: intent.livemode === true || recurring.stripeLivemode === true,
     lastPaymentResult: payment.status,
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts,
@@ -15535,6 +15605,17 @@ async function recordStripeWebhookEvent(event = {}) {
   const durableClaim = await STATE_REPOSITORY.claimWebhookEvent('stripe', event.id || '', { type: event.type || '', created: event.created || 0 });
   if (!durableClaim.accepted) return { ok: !durableClaim.inProgress, received: false, duplicate: true, retry: !!durableClaim.inProgress, inProgress: !!durableClaim.inProgress, eventId: event.id || '' };
   try {
+  if (!stripeMigration.stripeLiveResultAccepted({ ...stripeProviderSafetyOptions(), livemode: event.livemode === true })) {
+    await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
+    return {
+      ok: true,
+      received: false,
+      ignored: true,
+      eventId: event.id || '',
+      type: String(event.type || ''),
+      reason: 'Stripe test-mode or unverifiable event ignored outside isolated local/CI testing.'
+    };
+  }
   const data = await readData();
   data.integrations = data.integrations || {};
   data.integrations.stripe = data.integrations.stripe || {};
@@ -15567,7 +15648,7 @@ async function recordStripeWebhookEvent(event = {}) {
       const request = (data.paymentRequests || []).find(row => row.id === metadata.paymentRequestId || row.id === object.client_reference_id || row.stripeCheckoutSessionId === object.id || row.providerCheckoutSessionId === object.id);
       if (request) {
         const intentId = stripeObjectId(object.payment_intent);
-        recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: intentId, stripePaymentIntentId: intentId, paidAt: Number(object.created || 0) ? new Date(Number(object.created) * 1000).toISOString() : new Date().toISOString() });
+        recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: intentId, stripePaymentIntentId: intentId, stripeLivemode: event.livemode === true, paidAt: Number(object.created || 0) ? new Date(Number(object.created) * 1000).toISOString() : new Date().toISOString() });
         request.stripeCheckoutSessionId = object.id || '';
         request.stripePaymentIntentId = intentId;
         paymentRequestId = request.id;
@@ -16117,6 +16198,9 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (String(request.status || '').toLowerCase().includes('card saved')) {
+        if (normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' && request.stripeLivemode !== true && !stripeMigration.isolatedProviderTestMode(process.env)) {
+          return send(res, 409, stripeSetupCardHtml(request, 'This Stripe card has no verified live-mode proof. WheelsonAuto must send a fresh live setup link before it can be used.'));
+        }
         return send(res, 200, paymentResultHtml('Card already saved', 'This WheelsonAuto card setup link has already been completed.'));
       }
       return send(res, 200, normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' ? stripeSetupCardHtml(request) : setupCardHtml(request));
@@ -16138,10 +16222,12 @@ const server = http.createServer(async (req, res) => {
         if (returnedSessionId && expectedSessionId && returnedSessionId !== expectedSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned secure checkout did not match this WheelsonAuto payment request. No payment was recorded.'));
         if (normalizedPaymentProvider(request.paymentProvider) === 'stripe' && returnedSessionId) {
           try {
+            assertStripeMoneyActionsArmed();
             const session = await stripe.retrieveCheckoutSession(returnedSessionId);
+            assertStripeLiveResult(session && session.livemode, 'Stripe payment checkout');
             const paymentIntent = session.payment_intent || {};
             if (String(session.payment_status || '').toLowerCase() === 'paid' && stripeObjectId(paymentIntent)) {
-              recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: stripeObjectId(paymentIntent), paidAt: new Date(Number(session.created || 0) * 1000 || Date.now()).toISOString() });
+              recordHostedCheckoutPayment(data, request, { provider: 'stripe', providerPaymentId: stripeObjectId(paymentIntent), stripeLivemode: session.livemode === true, paidAt: new Date(Number(session.created || 0) * 1000 || Date.now()).toISOString() });
               request.stripePaymentIntentId = stripeObjectId(paymentIntent);
               request.stripeCheckoutSessionId = session.id || returnedSessionId;
               await protectConcurrentLocalWrites(data, { preferIncoming: true });
@@ -16395,6 +16481,7 @@ const server = http.createServer(async (req, res) => {
         if (!onboardingState.documents) return json(res, 409, { ok: false, error: 'Upload the license, selfie, and insurance files before starting secure identity verification.' });
         if (session.stripeIdentityVerificationId) {
           const remote = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
+          assertStripeLiveResult(remote && remote.livemode, 'Stripe Identity status');
           const applied = applyStripeIdentitySession(data, session, application, remote);
           if (applied.status === 'verified') {
             await protectConcurrentLocalWrites(data, { preferIncoming: true });
@@ -16431,6 +16518,7 @@ const server = http.createServer(async (req, res) => {
             }
           }
         }, 'woa-identity-' + session.id + '-attempt-' + attempt);
+        assertStripeLiveResult(verification && verification.livemode, 'Stripe Identity session');
         if (!verification || !verification.id || !verification.url) return json(res, 502, { ok: false, error: 'Stripe did not return a secure identity-verification page.' });
         if (session.stripeIdentityVerificationId && session.stripeIdentityVerificationId !== verification.id) {
           session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
@@ -16505,6 +16593,9 @@ const server = http.createServer(async (req, res) => {
         const existingRecurring = nativeOnboardingRecurring(data, session, application);
         const paymentProvider = nativeOnboardingProvider(session, existingRecurring);
         const providerName = paymentProviderLabel(paymentProvider);
+        if (paymentProvider === 'stripe') {
+          try { assertStripeCardPreparationReady(); } catch (error) { return json(res, Number(error.statusCode || 503), { ok: false, code: error.code, error: error.message }); }
+        }
         if (recurringCardReadyForProvider(existingRecurring, paymentProvider)) return json(res, 200, { ok: true, message: providerName + ' card is already linked. Continue to the required payments.' });
         const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && normalizedPaymentProvider(row.paymentProvider || 'clover') === paymentProvider && !/saved|complete|cancel|failed/i.test(String(row.status || '')));
         if (openSetup) return json(res, 200, { ok: true, redirectUrl: openSetup.url, message: 'Opening the existing secure ' + providerName + ' card setup.' });
@@ -17816,6 +17907,9 @@ const server = http.createServer(async (req, res) => {
       const recurring = context.recurring || {};
       const customerName = context.customerName || account.customer || account.name || 'Customer';
       const requestedProvider = normalizedPaymentProvider(form.get('paymentProvider') || recurring.paymentProvider || recurring.provider || WOA_PAYMENT_PROVIDER);
+      if (requestedProvider === 'stripe') {
+        try { assertStripeCardPreparationReady(); } catch (error) { return send(res, Number(error.statusCode || 503), paymentResultHtml('Stripe card setup is not live', error.message, '/customer#portal-card', 'Back to my account')); }
+      }
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       if (!recurring.id && !account.recurringPaymentId) {
         const message = {
@@ -18083,10 +18177,10 @@ const server = http.createServer(async (req, res) => {
         await writeData(data);
         return json(res, 200, { ok: true, refund: request });
       } catch (err) {
-        appendAuditLog(data, user, providerLabel + ' refund failed', [request.customer || 'Unknown customer', moneyText(request.amount), String(err && err.message || err)]);
+        appendAuditLog(data, user, providerLabel + (isStripeLaunchGuardError(err) ? ' refund blocked by launch safety' : ' refund failed'), [request.customer || 'Unknown customer', moneyText(request.amount), String(err && err.message || err)]);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return json(res, 400, { ok: false, error: String(err && err.message || err), refund: request });
+        return json(res, Number(err && err.statusCode || 400), { ok: false, code: String(err && err.code || ''), error: String(err && err.message || err), refund: request });
       }
     }
     if ((url.pathname === '/api/integrations/clover/refunds/complete-manual' || url.pathname === '/api/integrations/payments/refunds/complete-manual') && req.method === 'POST') {
@@ -18809,6 +18903,9 @@ const server = http.createServer(async (req, res) => {
       if (competingSession || vehicle.heldApplicationId && vehicle.heldApplicationId !== application.id) return json(res, 409, { ok: false, error: 'This vehicle is already held in another active onboarding file. Resolve that file before approving a second customer.' });
       const onboardingProvider = normalizedPaymentProvider(payload.paymentProvider || WOA_ONBOARDING_PAYMENT_PROVIDER);
       if (!['clover', 'stripe'].includes(onboardingProvider)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe for this onboarding payment path.' });
+      if (onboardingProvider === 'stripe') {
+        try { assertStripeMoneyActionsArmed(); } catch (error) { return json(res, Number(error.statusCode || 409), { ok: false, code: error.code, error: error.message }); }
+      }
       const onboardingIdentityProvider = IDENTITY_PROVIDER === 'stripe' ? 'stripe' : 'manual';
       if (onboardingIdentityProvider === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) {
         const reason = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity has only a test key.' : 'Stripe Identity does not have a usable live key.';
@@ -20355,6 +20452,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/card-setup-requests' && req.method === 'POST') {
       const payload = await readJsonBody(req);
+      if (normalizedPaymentProvider(payload.paymentProvider || payload.provider || WOA_PAYMENT_PROVIDER) === 'stripe') assertStripeCardPreparationReady();
       const data = await readData();
       const created = createCardSetupRequest(data, payload);
       appendAuditLog(data, user, 'Card setup link created', [created.autopay.customer || payload.customer || 'Unknown customer', moneyText(created.autopay.amount || payload.amount || 0), created.request.url || 'Setup link saved']);
@@ -20412,6 +20510,7 @@ const server = http.createServer(async (req, res) => {
           });
         }
         if (!recurring.stripeCustomerId || !recurring.stripePaymentMethodId) return json(res, 409, { ok: false, error: 'Stripe card setup is not complete for this customer.' });
+        if (recurring.stripeLivemode !== true && !stripeMigration.isolatedProviderTestMode(process.env)) return json(res, 409, { ok: false, error: 'This Stripe card has no verified live-mode setup proof. Send a fresh live Stripe card link before scheduling the cutover.' });
         const dueDate = recurringDateKey(recurring);
         if (action === 'schedule') {
           if (![stripeMigration.STATES.STRIPE_CARD_SAVED, stripeMigration.STATES.CUTOVER_SCHEDULED].includes(migration.state)) {
@@ -20525,6 +20624,12 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, charge: result.charge, payment: result.payment });
       } catch (err) {
         const recurring = findRecurringRow(data, payload.recurringPaymentId || payload.id);
+        if (isStripeLaunchGuardError(err)) {
+          appendAuditLog(data, user, 'Stripe charge blocked by launch safety', [recurring && recurring.customer || payload.recurringPaymentId || 'Unknown customer', String(err && err.message || err)]);
+          await protectConcurrentLocalWrites(data);
+          await writeData(data);
+          return json(res, Number(err.statusCode || 409), { ok: false, providerBlocked: true, code: String(err.code || ''), error: String(err && err.message || err) });
+        }
         if (recurring && isDuplicateBillingPeriodError(err)) {
           appendAuditLog(data, user, 'Duplicate charge blocked', [recurring.customer || 'Unknown customer', recurring.nextRun || 'Billing date not set', err.existingPayment && (err.existingPayment.id || err.existingPayment.providerPaymentId) || 'Existing payment']);
           await protectConcurrentLocalWrites(data);

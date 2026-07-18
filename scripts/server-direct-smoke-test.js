@@ -3182,8 +3182,18 @@ async function main() {
       cookie: ownerCookie,
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
     });
+    const unarmedStripeCheckout = await request(server, 'POST', '/api/payment-links', {
+      cookie: ownerCookie,
+      json: { customer: 'Launch Guard Customer', amount: 1, paymentProvider: 'stripe', createCheckout: true }
+    });
+    const ignoredTestWebhookBody = JSON.stringify({ id: 'evt_direct_test_mode_ignored', type: 'payment_intent.succeeded', livemode: false, created: Math.floor(Date.now() / 1000), data: { object: { id: 'pi_direct_test_mode_ignored', object: 'payment_intent', livemode: false, status: 'succeeded', metadata: { flow: 'manual_charge', recurringPaymentId: cutoverRecurringId } } } });
+    const ignoredTestWebhookTimestamp = Math.floor(Date.now() / 1000);
+    const ignoredTestWebhookSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(ignoredTestWebhookTimestamp + '.' + ignoredTestWebhookBody).digest('hex');
+    const ignoredTestWebhook = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + ignoredTestWebhookTimestamp + ',v1=' + ignoredTestWebhookSignature }, raw: ignoredTestWebhookBody });
     process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = isolatedProviderTestSetting;
     assert(unarmedCutover.status === 409 && /cutover is not armed/i.test(unarmedCutover.json.error || ''), 'The live provider-switch route must keep Clover active until production hardening is armed.');
+    assert(unarmedStripeCheckout.status === 409 && /money actions are locked/i.test(unarmedStripeCheckout.json.error || ''), 'Stripe checkout must stay locked until production hardening is armed.');
+    assert(ignoredTestWebhook.status === 200 && ignoredTestWebhook.json.ignored === true && /test-mode/i.test(ignoredTestWebhook.json.reason || ''), 'A deployed-style runtime must acknowledge but never apply Stripe test-mode webhooks.');
     const ambiguousCutover = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }

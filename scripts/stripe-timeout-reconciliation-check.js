@@ -114,6 +114,8 @@ async function main() {
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
   process.env.WOA_SESSION_SECRET = 'stripe-timeout-session-secret';
+  process.env.NODE_ENV = 'test';
+  process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
   process.env.WOA_PAYMENT_PROVIDER = 'stripe';
   process.env.STRIPE_SECRET_KEY = 'sk_test_wheelsonauto_timeout';
   process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;

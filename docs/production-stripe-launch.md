@@ -369,6 +369,23 @@ can use Stripe for new customers while existing customers migrate one at a
 time. Configure Stripe webhook events for successful/failed payment intents,
 refunds, disputes, setup intents, and Stripe Identity updates. The webhook
 must be signed and reach the live platform before it is treated as connected.
+Stripe customer card preparation is exposed only when the server has an
+`sk_live_...` key and a signed webhook secret. Charges, hosted payment
+checkouts, and refunds remain locked until
+`WOA_PRODUCTION_HARDENING_REQUIRED=1` and the server startup preflight is
+green. Stripe test keys and test-mode webhook events are ignored on Render and
+cannot mark cards, identity checks, or payments as real customer activity.
+`WOA_ALLOW_ISOLATED_PROVIDER_TESTS=1` works only with `NODE_ENV=test` outside
+Render/production; it is strictly for local and CI regression tests.
+
+To collect the two live proofs needed before hardening, keep the environment
+onboarding provider set to Stripe but create one explicitly Clover-funded test
+onboarding file for the live Stripe Identity check, and create one separate
+live Stripe card-preparation request without charging it. Those signed live
+Identity and card-setup callbacks can clear provider proof while every Stripe
+money action remains locked. Then enable production hardening and run the full
+Stripe-funded onboarding rehearsal below.
+
 The launch preflight records a dedicated proof only when the signed live event
 matches a WheelsonAuto card-setup, payment, refund, or dispute record. Generic
 Stripe account traffic is acknowledged but cannot create or overwrite launch

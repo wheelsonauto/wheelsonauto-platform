@@ -192,7 +192,7 @@ function onboardingStatus(data, session, application) {
   const identityStatus = String(session.identityVerificationStatus || (identityProvider === 'stripe' ? 'not_started' : 'manual_review')).trim().toLowerCase();
   const identityVerified = identityProvider !== 'stripe' || identityStatus === 'verified';
   const cardReady = paymentProvider === 'stripe'
-    ? !!(recurring.stripeCustomerId && recurring.stripePaymentMethodId)
+    ? !!(recurring.stripeCustomerId && recurring.stripePaymentMethodId && recurring.stripeLivemode === true)
     : !!(recurring.cloverPaymentSource || recurring.paymentSourceId);
   const paid = request => !!(request && /paid|success/i.test(String(request.status || '')));
   return {
