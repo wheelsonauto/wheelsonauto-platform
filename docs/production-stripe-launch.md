@@ -21,6 +21,12 @@ artifact and must never be committed as part of a code release.
   in the normal state JSON.
 - Keep a dated, access-controlled copy of the current `data.json` before any
   intentional data migration. Do not add that file to a commit.
+- Never take a migration snapshot while the application is writable. Set
+  `WOA_MIGRATION_MAINTENANCE_MODE=1`, deploy, and confirm `/healthz` reports
+  `"migrationMaintenance":true` first. The mode keeps reads and staff login
+  available, returns retryable `503` responses for business writes and
+  provider webhooks, and does not start autopay, sync, messaging, or monitoring
+  background writers.
 - Run `pnpm run secret-hygiene-check` before a release. It rejects committed
   production-key signatures and private key blocks without printing the secret
   value if one is found.
@@ -115,9 +121,21 @@ encryption key changes, run the validation again before enabling
 
 ## 3. Migrate Platform State to PostgreSQL
 
-After the test database has passed, pause production writes, provision the
-production PostgreSQL database, and retain a protected rollback copy of the
-live state. First run the preflight against the exact protected source copy:
+After the test database has passed, provision the production PostgreSQL
+database. Then set `WOA_MIGRATION_MAINTENANCE_MODE=1` in Render and deploy the
+current tested commit. Confirm all three conditions before copying live state:
+
+```text
+GET /healthz returns 200
+migrationMaintenance is true
+POST /api/state returns 503 with code migration_maintenance
+```
+
+The `503` response includes `Retry-After: 120`, so Stripe, Clover, Telnyx, and
+other well-behaved providers can retry rather than losing an event. Keep this
+write freeze active through the protected copy, import, checksum verification,
+and backend switch. Retain that protected copy as the rollback artifact. First
+run the preflight against the exact protected source copy:
 
 ```sh
 pnpm run postgres-preflight -- /secure/path/to/data-backup.json
@@ -206,8 +224,16 @@ WOA_POSTGRES_SNAPSHOT_LIMIT=180
 WOA_SESSION_SECRET=<long random secret>
 WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1
 WOA_OWNER_PIN_FALLBACK_ENABLED=0
+WOA_MIGRATION_MAINTENANCE_MODE=0
 # Set WOA_PRODUCTION_HARDENING_REQUIRED=1 only after the full preflight is clear.
 ```
+
+Apply `DATABASE_URL`, `WOA_DATA_BACKEND=postgres`, and
+`WOA_MIGRATION_MAINTENANCE_MODE=0` in the same final deployment. Do not reopen
+writes on the JSON backend after taking the protected source copy. If that
+deployment fails its health check, restore the protected JSON configuration
+with maintenance mode still enabled, investigate, and repeat the import from a
+new protected snapshot; never let both stores accept writes.
 
 Restart once and visit the owner-only endpoint:
 

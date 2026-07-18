@@ -150,6 +150,7 @@ const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.e
 const WOA_DEPLOY_COMMIT = String(process.env.RENDER_GIT_COMMIT || process.env.WOA_DEPLOY_COMMIT || '').trim().slice(0, 12);
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
+const WOA_MIGRATION_MAINTENANCE_MODE = process.env.WOA_MIGRATION_MAINTENANCE_MODE === '1';
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_MESSAGING_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
@@ -15285,6 +15286,28 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
   };
 }
 
+const MIGRATION_MAINTENANCE_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const MIGRATION_MAINTENANCE_SAFE_WRITE_PATHS = new Set(['/login']);
+
+function migrationMaintenanceBlocks(req, url) {
+  if (!WOA_MIGRATION_MAINTENANCE_MODE) return false;
+  if (!MIGRATION_MAINTENANCE_WRITE_METHODS.has(String(req.method || '').toUpperCase())) return false;
+  return !MIGRATION_MAINTENANCE_SAFE_WRITE_PATHS.has(String(url && url.pathname || ''));
+}
+
+function sendMigrationMaintenance(res, url) {
+  const headers = {
+    'Cache-Control': 'no-store',
+    'Retry-After': '120',
+    'X-WheelsonAuto-Migration-Maintenance': 'active'
+  };
+  const message = 'WheelsonAuto is temporarily read-only while protected production data is being migrated. No payment, customer, fleet, document, or provider update was accepted. Retry after maintenance is complete.';
+  if (String(url && url.pathname || '').startsWith('/api/')) {
+    return json(res, 503, { ok: false, code: 'migration_maintenance', retryable: true, error: message }, headers);
+  }
+  return send(res, 503, message, 'text/plain; charset=utf-8', headers);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     res.__woaAcceptEncoding = req.headers && req.headers['accept-encoding'] || '';
@@ -15302,10 +15325,12 @@ const server = http.createServer(async (req, res) => {
         ok: ready,
         service: 'wheelsonauto-platform',
         release: ASSET_VERSION,
-        commit: WOA_DEPLOY_COMMIT
+        commit: WOA_DEPLOY_COMMIT,
+        migrationMaintenance: WOA_MIGRATION_MAINTENANCE_MODE
       }, headers);
     }
     if (await staticFile(req, res, url.pathname, url.searchParams)) return;
+    if (migrationMaintenanceBlocks(req, url)) return sendMigrationMaintenance(res, url);
     if (url.pathname.startsWith('/native-media/') && req.method === 'GET') {
       const filename = String(url.pathname.split('/').pop() || '');
       if (!/^[a-f0-9]{20,64}\.(?:jpg|jpeg|png|webp|avif)$/i.test(filename)) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
@@ -19838,6 +19863,10 @@ if (require.main === module) {
   assertProductionInfrastructure()
     .then(() => server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
+    if (WOA_MIGRATION_MAINTENANCE_MODE) {
+      console.log('WheelsonAuto migration maintenance mode is active: business writes and every background writer are paused.');
+      return;
+    }
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
       .catch(err => reportBackgroundTaskFailure('twilio-inbound-setup', err, { route: 'Twilio inbound SMS webhook setup', source: 'startup' }, 'Twilio inbox auto-connect')), 250);
