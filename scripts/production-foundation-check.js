@@ -174,6 +174,17 @@ async function main() {
     const completedJsonIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
     assert.strictEqual(completedJsonIdempotencyDuplicate.completed, true, 'A completed local Stripe billing-period claim must be permanently deduplicated.');
     assert.strictEqual(completedJsonIdempotencyDuplicate.response.paymentIntentId, 'pi_foundation_idempotency_1', 'A completed local Stripe billing-period claim must retain its reconciliation result.');
+    const providerClaimKey = 'period:rec-foundation-provider:2026-07-24';
+    const providerClaimRequest = { recurringPaymentId: 'rec-foundation-provider', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };
+    const providerClaim = await repository.claimIdempotencyKey(idempotencyScope, providerClaimKey, providerClaimRequest);
+    await repository.failIdempotencyKey(idempotencyScope, providerClaimKey, new Error('Worker received a provisional failure.'), { claimToken: providerClaim.claimToken });
+    assert.strictEqual(await repository.completeIdempotencyKey(idempotencyScope, providerClaimKey, { paymentIntentId: 'pi_provider_late_success', status: 'succeeded' }, { providerAuthoritative: true }), true, 'A signed provider success must authoritatively settle a previously failed local claim.');
+    const providerSettledDuplicate = await repository.claimIdempotencyKey(idempotencyScope, providerClaimKey, providerClaimRequest);
+    assert.strictEqual(providerSettledDuplicate.completed, true, 'A provider-reconciled late success must permanently close the billing period against another charge.');
+    assert.strictEqual(providerSettledDuplicate.response.paymentIntentId, 'pi_provider_late_success', 'Provider reconciliation must retain the exact Stripe PaymentIntent proof.');
+    assert.strictEqual(await repository.completeIdempotencyKey(idempotencyScope, providerClaimKey, { paymentIntentId: 'pi_conflicting_later_event', status: 'succeeded' }, { providerAuthoritative: true }), true, 'Replaying provider success against a completed claim must remain idempotent.');
+    const providerReplay = await repository.claimIdempotencyKey(idempotencyScope, providerClaimKey, providerClaimRequest);
+    assert.strictEqual(providerReplay.response.paymentIntentId, 'pi_provider_late_success', 'A completed billing-period claim must preserve its first authoritative PaymentIntent proof.');
     await assert.rejects(() => repository.recordMigrationProof({}), /cannot record a PostgreSQL import proof/i, 'The JSON development fallback must never pretend it recorded production migration evidence.');
     assert.strictEqual(stateRepository.checksum({ b: 2, a: { z: 3, y: 4 } }), stateRepository.checksum({ a: { y: 4, z: 3 }, b: 2 }), 'State checksums must be stable when a JSONB database changes object key order.');
     const intactState = { records: [{ id: 'checksum-foundation-1', status: 'intact' }] };

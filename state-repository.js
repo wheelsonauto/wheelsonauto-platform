@@ -752,9 +752,15 @@ class JsonStateRepository {
     const identity = idempotencyScopeKey(scope, key);
     const mapKey = [this.organizationId, identity.scope, identity.key].join('|');
     const existing = this.idempotencyClaims.get(mapKey);
-    if (!existing) throw new Error('The durable idempotency claim was not found while completing the money action.');
+    const providerAuthoritative = options.providerAuthoritative === true;
+    if (!existing) {
+      if (providerAuthoritative) return false;
+      throw new Error('The durable idempotency claim was not found while completing the money action.');
+    }
     const claimToken = String(options.claimToken || '').trim();
-    if (String(existing.status || '') !== 'claimed') return false;
+    const status = String(existing.status || '');
+    if (providerAuthoritative && status === 'completed') return true;
+    if (status !== 'claimed' && !(providerAuthoritative && status === 'failed')) return false;
     if (claimToken && claimToken !== String(existing.claimToken || '')) return false;
     const now = new Date().toISOString();
     this.idempotencyClaims.set(mapKey, { ...existing, status: 'completed', response: clone(response || {}), completedAt: now, updatedAt: now, lastError: '' });
@@ -1475,16 +1481,20 @@ class PostgresStateRepository {
   async completeIdempotencyKey(scope, key, response = {}, options = {}) {
     const identity = idempotencyScopeKey(scope, key);
     const claimToken = String(options.claimToken || '').trim();
+    const providerAuthoritative = options.providerAuthoritative === true;
     await this.ensureSchema();
     const tokenCondition = claimToken ? ' AND claim_token = $5' : '';
+    const statusCondition = providerAuthoritative ? "status IN ('claimed', 'failed', 'completed')" : "status = 'claimed'";
+    const responseExpression = providerAuthoritative ? "CASE WHEN status = 'completed' THEN response ELSE $4::jsonb END" : '$4::jsonb';
+    const completedAtExpression = providerAuthoritative ? 'COALESCE(completed_at, now())' : 'now()';
     const params = [this.organizationId, identity.scope, identity.key, JSON.stringify(response || {})];
     if (claimToken) params.push(claimToken);
     const result = await this.pool.query(`UPDATE woa_idempotency_keys
-      SET status = 'completed', response = $4::jsonb, completed_at = now(), updated_at = now(), last_error = ''
-      WHERE organization_id = $1 AND scope = $2 AND key = $3 AND status = 'claimed'${tokenCondition}
+      SET status = 'completed', response = ${responseExpression}, completed_at = ${completedAtExpression}, updated_at = now(), last_error = ''
+      WHERE organization_id = $1 AND scope = $2 AND key = $3 AND ${statusCondition}${tokenCondition}
       RETURNING attempts`, params);
     if (!result.rowCount) {
-      if (claimToken) return false;
+      if (claimToken || providerAuthoritative) return false;
       throw new Error('The durable idempotency claim was not found while completing the money action.');
     }
     return true;

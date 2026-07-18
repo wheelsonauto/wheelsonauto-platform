@@ -195,7 +195,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-state-integrity-154';
+const ASSET_VERSION = 'platform-20260718-stripe-timeout-155';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -14018,7 +14018,16 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         vehicleId: identity.vehicleId || recurring.vehicleId || '',
         vin: identity.vin || recurring.vin || '',
         licensePlate: identity.licensePlate || recurring.licensePlate || recurring.plate || ''
-      }, { flow: payload.automatic ? 'autopay' : 'manual_charge', scheduledDueDate: scheduledDueKey || '', billingPeriodKey, amount: String(cents(amount)) })
+      }, {
+        flow: payload.automatic ? 'autopay' : 'manual_charge',
+        scheduledDueDate: scheduledDueKey || '',
+        billingPeriodKey,
+        amount: String(cents(amount)),
+        chargeIdempotencyKey: idempotencyKey,
+        chargeClaimKey: idempotencyClaimKey,
+        chargeAutomatic: payload.automatic === true ? 'true' : 'false',
+        chargeAdditionalManual: payload.allowAdditionalManualCharge === true ? 'true' : 'false'
+      })
     }, idempotencyKey);
   } catch (error) {
     if (isStripeConfirmationPendingError(error)) {
@@ -14712,10 +14721,33 @@ function isWheelsonAutoStripeSavedCardIntent(intent = {}) {
 function stripeAttemptMatchesPaymentIntent(attempt = {}, intent = {}, scheduledDueKey = '') {
   if (!attempt || !stripeChargeAttemptIsPending(attempt)) return false;
   const intentId = stripeObjectId(intent);
+  const intentIdempotencyKey = String(intent && intent.metadata && intent.metadata.chargeIdempotencyKey || '').trim();
   if (attempt.paymentIntentId && intentId) return attempt.paymentIntentId === intentId;
+  if (attempt.idempotencyKey && intentIdempotencyKey) return String(attempt.idempotencyKey) === intentIdempotencyKey;
   const attemptDue = validCalendarDateKey(attempt.scheduledDueDate || '');
   const due = validCalendarDateKey(scheduledDueKey);
   return (!attemptDue && !due) || (!!attemptDue && attemptDue === due);
+}
+function stripePaymentIntentClaimDescriptor(recurring, intent = {}, scheduledDueKey = '') {
+  const metadata = intent.metadata || {};
+  const attempt = recurring && recurring.stripeChargeAttempt || {};
+  const automatic = String(metadata.chargeAutomatic || '').toLowerCase() === 'true' || String(metadata.flow || '').toLowerCase() === 'autopay';
+  const additionalManualCharge = String(metadata.chargeAdditionalManual || '').toLowerCase() === 'true';
+  const idempotencyKey = String(metadata.chargeIdempotencyKey || attempt.idempotencyKey || '').trim();
+  const explicitClaimKey = String(metadata.chargeClaimKey || '').trim();
+  const claimKey = explicitClaimKey || stripeRecurringChargeClaimKey(recurring, {
+    recurringPaymentId: metadata.recurringPaymentId || recurring && recurring.id || '',
+    automatic,
+    allowAdditionalManualCharge: additionalManualCharge
+  }, { idempotencyKey }, scheduledDueKey);
+  return {
+    scope: 'stripe_recurring_charge',
+    key: claimKey,
+    idempotencyKey,
+    automatic,
+    additionalManualCharge,
+    explicit: !!explicitClaimKey
+  };
 }
 function recordStripePaymentReceipt(data, payment = {}) {
   const intentId = String(payment.stripePaymentIntentId || '').trim();
@@ -14765,6 +14797,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const currentAttempt = recurring.stripeChargeAttempt || {};
   const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || currentAttempt.scheduledDueDate || recurringDateKey(recurring));
   const billingPeriodKey = String(metadata.billingPeriodKey || currentAttempt.billingPeriodKey || stripeMigration.billingPeriodKey(scheduledDueKey)).trim();
+  const claim = stripePaymentIntentClaimDescriptor(recurring, intent, scheduledDueKey);
   const paymentAt = stripePaymentIntentDate(intent);
   const paymentAtIso = paymentAt.toISOString();
   const paymentDateKey = localDateKey(paymentAt);
@@ -14811,7 +14844,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: stripeObjectId(intent.customer) || recurring.stripeCustomerId || '',
     stripePaymentMethodId: stripeObjectId(intent.payment_method) || recurring.stripePaymentMethodId || '',
-    stripeIdempotencyKey: currentAttempt.idempotencyKey || '',
+    stripeIdempotencyKey: claim.idempotencyKey,
     duplicateBillingPeriod,
     duplicatePaymentId: duplicateBillingPeriod ? String(duplicateBillingPeriodPayment.id || '') : '',
     duplicatePaymentReference: duplicateBillingPeriod ? String(duplicatePaymentReference) : '',
@@ -14916,7 +14949,19 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
       'Autopay paused'
     ]);
   }
-  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id, alreadyPaid, duplicateBillingPeriod, duplicatePayment: duplicateBillingPeriodPayment || null, advanced: resolvedNextRun !== priorNextRun };
+  return {
+    matched: true,
+    recurringPaymentId: recurring.id || '',
+    paymentIntentId: intentId,
+    paymentId: payment.id,
+    alreadyPaid,
+    duplicateBillingPeriod,
+    duplicatePayment: duplicateBillingPeriodPayment || null,
+    advanced: resolvedNextRun !== priorNextRun,
+    idempotencyClaimScope: claim.scope,
+    idempotencyClaimKey: claim.key,
+    stripeIdempotencyKey: claim.idempotencyKey
+  };
 }
 function applyStripePaymentIntentFailed(data, intent = {}) {
   const intentId = stripeObjectId(intent);
@@ -14927,6 +14972,7 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
   if (existing && stripeMigration.paymentIsPaid(existing.status)) return { matched: true, ignored: true, reason: 'A later Stripe success is already recorded for this payment intent.', recurringPaymentId: recurring.id || '', paymentIntentId: intentId };
   const metadata = intent.metadata || {};
   const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.scheduledDueDate || recurringDateKey(recurring));
+  const claim = stripePaymentIntentClaimDescriptor(recurring, intent, scheduledDueKey);
   const paidBillingPeriod = stripeMigration.existingPaidPayment(data, recurring, scheduledDueKey);
   if (paidBillingPeriod) return {
     matched: true,
@@ -14935,7 +14981,10 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
     reason: 'A successful payment is already recorded for this billing period. This late Stripe failure cannot downgrade it.',
     recurringPaymentId: recurring.id || '',
     paymentIntentId: intentId,
-    existingPaymentId: paidBillingPeriod.id || ''
+    existingPaymentId: paidBillingPeriod.id || '',
+    idempotencyClaimScope: claim.scope,
+    idempotencyClaimKey: claim.key,
+    stripeIdempotencyKey: claim.idempotencyKey
   };
   const providerError = String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe reported a failed saved-card payment.');
   if (isStripeAuthenticationRequired(intent)) {
@@ -14949,9 +14998,9 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
       source: 'Stripe signed payment webhook authentication required',
       stripePaymentIntentId: intentId
     });
-    return { matched: true, authenticationRequired: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id || '', status: payment.status || '' };
+    return { matched: true, authenticationRequired: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id || '', status: payment.status || '', idempotencyClaimScope: claim.scope, idempotencyClaimKey: claim.key, stripeIdempotencyKey: claim.idempotencyKey };
   }
-  if (existing) return { matched: true, duplicate: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: existing.id || '' };
+  if (existing) return { matched: true, duplicate: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: existing.id || '', idempotencyClaimScope: claim.scope, idempotencyClaimKey: claim.key, stripeIdempotencyKey: claim.idempotencyKey };
   const currentAttempt = recurring.stripeChargeAttempt || {};
   updateStripeChargeAttempt(data, recurring, currentAttempt && Object.keys(currentAttempt).length ? currentAttempt : {
     idempotencyKey: '',
@@ -14978,7 +15027,7 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
     paymentProvider: 'stripe',
     stripePaymentIntentId: intentId
   });
-  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id || '', status: payment.status || '' };
+  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id || '', status: payment.status || '', idempotencyClaimScope: claim.scope, idempotencyClaimKey: claim.key, stripeIdempotencyKey: claim.idempotencyKey };
 }
 
 function stripePaymentForObject(data, object = {}) {
@@ -15216,6 +15265,35 @@ function recordStripeRefundWebhookEvent(data, event = {}, object = {}) {
   if (eventId) request.stripeWebhookEventIds = [eventId, ...request.stripeWebhookEventIds].slice(0, 100);
   return request.id;
 }
+async function settleStripePaymentIntentClaimFromWebhook(type, result = {}) {
+  if (!result || result.matched !== true || result.ignored === true || result.alreadyPaid === true) return false;
+  const scope = String(result.idempotencyClaimScope || '').trim();
+  const key = String(result.idempotencyClaimKey || '').trim();
+  if (!scope || !key) return false;
+  if (type === 'payment_intent.succeeded') {
+    const settled = await STATE_REPOSITORY.completeIdempotencyKey(scope, key, {
+      paymentIntentId: result.paymentIntentId || '',
+      recurringPaymentId: result.recurringPaymentId || '',
+      paymentId: result.paymentId || '',
+      status: 'succeeded',
+      source: 'Stripe signed webhook'
+    }, { providerAuthoritative: true });
+    result.idempotencyClaimSettled = settled === true;
+    result.idempotencyClaimAction = settled ? 'completed' : 'not_found';
+    return settled === true;
+  }
+  if (type === 'payment_intent.payment_failed' || type === 'payment_intent.requires_action') {
+    const failed = await STATE_REPOSITORY.failIdempotencyKey(scope, key, new Error(
+      type === 'payment_intent.requires_action'
+        ? 'Stripe signed webhook requires customer authentication.'
+        : 'Stripe signed webhook confirmed the payment attempt failed.'
+    ));
+    result.idempotencyClaimSettled = failed === true;
+    result.idempotencyClaimAction = failed ? 'failed' : 'already_terminal_or_missing';
+    return failed === true;
+  }
+  return false;
+}
 async function recordStripeWebhookEvent(event = {}) {
   const durableClaim = await STATE_REPOSITORY.claimWebhookEvent('stripe', event.id || '', { type: event.type || '', created: event.created || 0 });
   if (!durableClaim.accepted) return { ok: !durableClaim.inProgress, received: false, duplicate: true, retry: !!durableClaim.inProgress, inProgress: !!durableClaim.inProgress, eventId: event.id || '' };
@@ -15327,6 +15405,7 @@ async function recordStripeWebhookEvent(event = {}) {
   }
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
+  if (stripePaymentIntentResult) await settleStripePaymentIntentClaimFromWebhook(type, stripePaymentIntentResult);
   await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
   return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, stripeDisputeIgnored, stripeDisputeIgnoreReason, identitySessionId, refundRequestId, stripePaymentIntentResult };
   } catch (error) {
