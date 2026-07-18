@@ -832,6 +832,39 @@ async function writeData(data) {
   writeDataQueue = job.catch(() => {});
   return job;
 }
+function stateReferencesPrivateDocument(state, record) {
+  const id = String(record && record.id || '').trim();
+  const storageKey = String(record && record.storageKey || '').trim();
+  const storagePath = String(record && record.storagePath || '').trim();
+  if (!id && !storageKey && !storagePath) return false;
+  if ((state.documents || []).some(row =>
+    id && String(row.id || '').trim() === id
+    || storageKey && String(row.storageKey || '').trim() === storageKey
+    || storagePath && String(row.storagePath || '').trim() === storagePath
+  )) return true;
+  return (state.eSignatures || []).some(row =>
+    id && String(row.signatureImageId || '').trim() === id
+    || storageKey && String(row.storageKey || '').trim() === storageKey
+    || storagePath && String(row.storagePath || row.signatureImagePath || '').trim() === storagePath
+  );
+}
+async function discardUncommittedPrivateDocuments(records) {
+  const candidates = (Array.isArray(records) ? records : [records]).filter(Boolean);
+  if (!candidates.length) return { removed: 0, retained: 0 };
+  const latest = await readData();
+  const uncommitted = candidates.filter(record => !stateReferencesPrivateDocument(latest, record));
+  const removed = await onboarding.discardPrivateDocuments(uncommitted, DATA_DIR, PRIVATE_DOCUMENT_STORE);
+  return { removed, retained: candidates.length - uncommitted.length };
+}
+async function attachPrivateDocumentRollback(error, records) {
+  try {
+    error.privateDocumentRollback = await discardUncommittedPrivateDocuments(records);
+  } catch (rollbackError) {
+    error.privateDocumentRollbackError = rollbackError;
+    await recordOperationalFailure('private-document-rollback', rollbackError, { route: 'private document persistence', source: 'state write rollback' }).catch(() => {});
+  }
+  return error;
+}
 function safeStateBackupResult(result = {}) {
   return {
     organizationId: String(result.organizationId || ''),
@@ -16565,20 +16598,24 @@ const server = http.createServer(async (req, res) => {
         if (!session.profileCompletedAt) return json(res, 409, { ok: false, error: 'Complete the profile and pickup request first.' });
         if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
         const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR, PRIVATE_DOCUMENT_STORE);
-        if (normalizedIdentityProvider(session.identityProvider) === 'stripe') {
-          session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
-          if (session.stripeIdentityVerificationId) session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
-          session.stripeIdentityVerificationId = '';
-          session.identityVerificationStatus = 'not_started';
-          session.identityVerificationLastErrorCode = '';
-          session.identityVerificationLastError = '';
-          session.identityVerifiedAt = '';
+        try {
+          if (normalizedIdentityProvider(session.identityProvider) === 'stripe') {
+            session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
+            if (session.stripeIdentityVerificationId) session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
+            session.stripeIdentityVerificationId = '';
+            session.identityVerificationStatus = 'not_started';
+            session.identityVerificationLastErrorCode = '';
+            session.identityVerificationLastError = '';
+            session.identityVerifiedAt = '';
+          }
+          session.documentReviewStatus = 'Waiting on staff';
+          session.signatureReviewStatus = 'Waiting on customer';
+          session.reviewStatus = 'Documents waiting';
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        } catch (error) {
+          throw await attachPrivateDocumentRollback(error, saved);
         }
-        session.documentReviewStatus = 'Waiting on staff';
-        session.signatureReviewStatus = 'Waiting on customer';
-        session.reviewStatus = 'Documents waiting';
-        await protectConcurrentLocalWrites(data, { preferIncoming: true });
-        await writeData(data);
         return json(res, 201, { ok: true, message: 'License, identity selfie, and insurance received for private staff review.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
       }
       if (action === 'identity') {
@@ -16695,8 +16732,12 @@ const server = http.createServer(async (req, res) => {
         });
         application.onboardingStatus = 'Signature waiting for comparison';
         application.updatedAt = signedAt;
-        await protectConcurrentLocalWrites(data, { preferIncoming: true });
-        await writeData(data);
+        try {
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        } catch (error) {
+          throw await attachPrivateDocumentRollback(error, signatureImage);
+        }
         return json(res, 201, { ok: true, message: 'Agreement signed and locked. WheelsonAuto will compare the signature with the driver license.' });
       }
       if (action === 'card') {
@@ -17982,7 +18023,12 @@ const server = http.createServer(async (req, res) => {
         body: message.body
       });
       appendCustomerPortalAudit(data, account, 'Customer portal document submitted', [customerName, type, provider || reference || 'Document proof', vehicleName || document.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
-      await writeData(data);
+      try {
+        await writeData(data);
+      } catch (error) {
+        if (storedFile) throw await attachPrivateDocumentRollback(error, storedFile);
+        throw error;
+      }
       if (jsonUpload) return json(res, 201, { ok: true, message: 'Document uploaded securely for WheelsonAuto verification.', document: { id: document.id, type: document.type, status: document.status, originalName: document.originalName, portalDownloadUrl: '/customer/documents/' + encodeURIComponent(document.id) } });
       return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
     }

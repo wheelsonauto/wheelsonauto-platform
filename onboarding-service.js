@@ -262,44 +262,84 @@ async function savePrivateDocument(file, dataDir, idPrefix = 'doc-upload', docum
   };
 }
 
+async function discardPrivateDocument(stored, dataDir, documentStore = null) {
+  if (!stored || typeof stored !== 'object') return false;
+  const storageKey = String(stored.storageKey || '').trim();
+  if (storageKey) {
+    if (!documentStore || typeof documentStore.deleteObject !== 'function') {
+      throw new Error('Encrypted private document cleanup requires the active document store.');
+    }
+    await documentStore.deleteObject(storageKey);
+    return true;
+  }
+  const storagePath = String(stored.storagePath || '').trim();
+  if (!storagePath) return false;
+  const uploadRoot = path.resolve(dataDir, 'onboarding-uploads');
+  const target = path.resolve(dataDir, storagePath);
+  if (!target.startsWith(uploadRoot + path.sep)) throw new Error('Refusing to remove a private document outside the onboarding upload directory.');
+  await fs.rm(target, { force: true });
+  return true;
+}
+
+async function discardPrivateDocuments(records, dataDir, documentStore = null) {
+  const results = await Promise.allSettled((Array.isArray(records) ? records : []).map(record => discardPrivateDocument(record, dataDir, documentStore)));
+  const failures = results.filter(result => result.status === 'rejected');
+  if (failures.length) {
+    const error = new Error('Private document rollback could not remove ' + failures.length + ' uncommitted object(s).');
+    error.code = 'private_document_rollback_failed';
+    error.causes = failures.map(result => String(result.reason && result.reason.message || result.reason));
+    throw error;
+  }
+  return results.filter(result => result.status === 'fulfilled' && result.value).length;
+}
+
 async function saveDocuments(data, session, application, files, dataDir, documentStore = null) {
   ensureCollections(data);
   const required = ['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'];
   const byKind = new Map((files || []).map(file => [String(file.kind || ''), file]));
   if (!required.every(kind => byKind.has(kind))) throw new Error('License front, license back, identity selfie, and insurance proof are all required.');
   const saved = [];
-  for (const kind of required) {
-    const file = byKind.get(kind) || {};
-    const organizationId = session.organizationId || application.organizationId || 'org-wheelsonauto';
-    const stored = await savePrivateDocument(file, dataDir, 'doc-onboard', documentStore, {
-      organizationId
-    });
-    data.documents = data.documents.filter(document => !(document.applicationId === application.id && document.onboardingSessionId === session.id && document.documentKind === kind));
-    const record = {
-      id: stored.id,
-      organizationId,
-      applicationId: application.id,
-      onboardingSessionId: session.id,
-      onlineVehicleId: session.onlineVehicleId,
-      customer: application.name || '',
-      type: kind === 'insurance' ? 'Insurance' : kind === 'identity_selfie' ? 'Identity selfie' : kind === 'driver_license_front' ? 'Driver license front' : 'Driver license back',
-      documentKind: kind,
-      originalName: stored.originalName,
-      contentType: stored.contentType,
-      size: stored.size,
-      sha256: stored.sha256,
-      storagePath: stored.storagePath,
-      storageKey: stored.storageKey || '',
-      storageProvider: stored.storageProvider || 'legacy-local',
-      storageSecurity: stored.storageSecurity || (stored.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
-      encryption: stored.encryption || {},
-      status: 'Received - staff verification required',
-      visibility: 'Private staff review',
-      createdAt: new Date().toISOString()
-    };
-    data.documents.unshift(record);
-    saved.push(record);
+  try {
+    for (const kind of required) {
+      const file = byKind.get(kind) || {};
+      const organizationId = session.organizationId || application.organizationId || 'org-wheelsonauto';
+      const stored = await savePrivateDocument(file, dataDir, 'doc-onboard', documentStore, {
+        organizationId
+      });
+      saved.push({
+        id: stored.id,
+        organizationId,
+        applicationId: application.id,
+        onboardingSessionId: session.id,
+        onlineVehicleId: session.onlineVehicleId,
+        customer: application.name || '',
+        type: kind === 'insurance' ? 'Insurance' : kind === 'identity_selfie' ? 'Identity selfie' : kind === 'driver_license_front' ? 'Driver license front' : 'Driver license back',
+        documentKind: kind,
+        originalName: stored.originalName,
+        contentType: stored.contentType,
+        size: stored.size,
+        sha256: stored.sha256,
+        storagePath: stored.storagePath,
+        storageKey: stored.storageKey || '',
+        storageProvider: stored.storageProvider || 'legacy-local',
+        storageSecurity: stored.storageSecurity || (stored.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
+        encryption: stored.encryption || {},
+        status: 'Received - staff verification required',
+        visibility: 'Private staff review',
+        createdAt: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    try {
+      await discardPrivateDocuments(saved, dataDir, documentStore);
+    } catch (rollbackError) {
+      error.rollbackError = rollbackError;
+    }
+    throw error;
   }
+  const requiredKinds = new Set(required);
+  data.documents = data.documents.filter(document => !(document.applicationId === application.id && document.onboardingSessionId === session.id && requiredKinds.has(document.documentKind)));
+  data.documents.unshift(...saved.slice().reverse());
   session.documentsCompletedAt = new Date().toISOString();
   session.documentReviewStatus = 'Waiting on staff';
   session.reviewStatus = 'Documents waiting';
@@ -443,6 +483,8 @@ module.exports = {
   buildContract,
   saveDocuments,
   savePrivateDocument,
+  discardPrivateDocument,
+  discardPrivateDocuments,
   saveSignatureImage,
   pickupWindow,
   pickupWeekday,
