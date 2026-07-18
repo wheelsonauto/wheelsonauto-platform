@@ -75,6 +75,7 @@ async function main() {
     await fs.writeFile(seedFile, JSON.stringify({ vehicles: [], customers: [], payments: [], documents: [], eSignatures: [] }), 'utf8');
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+    const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
     const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
     const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
@@ -87,6 +88,9 @@ async function main() {
     assert(serverSource.includes('async function gracefulShutdown') && serverSource.includes("process.once('SIGTERM'") && serverSource.includes('await writeDataQueue.catch'), 'Production shutdown must stop accepting requests and drain queued state writes before exit.');
     await verifyGracefulShutdown(path.resolve(__dirname, '..'), path.join(temp, 'graceful-runtime'));
     assert(serverSource.includes('function reportBackgroundTaskFailure') && serverSource.includes("recordOperationalFailure(source, error, context, { alert: true })"), 'Every scheduled worker failure must use the shared durable monitor and owner-alert path.');
+    assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical records and active vehicle assignments into transactionally synchronized indexes.');
+    assert(stateRepositorySource.includes('PRIMARY KEY (organization_id, provider, event_id)') && stateRepositorySource.includes('$webhook_tenant_primary_key$'), 'Webhook uniqueness must be company-scoped for current and previously migrated PostgreSQL databases.');
+    assert(stateRepositorySource.includes('await this.syncCriticalResourceIndex(client, next)') && stateRepositorySource.includes('await this.syncActiveAssignmentIndex(client, next)'), 'Normal writes and controlled recovery must synchronize critical record and assignment indexes in the state transaction.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
     const operationalFailureEnd = serverSource.indexOf('function reportBackgroundTaskFailure', operationalFailureStart);
@@ -267,6 +271,64 @@ async function main() {
     assert.strictEqual(missingVinWarnings.length, 1, 'A vehicle without a VIN must remain visible for owner review before Stripe cutover.');
     assert.strictEqual(missingVinWarnings[0].kind, 'vehicle_missing_vin', 'A missing VIN warning must retain a stable review category.');
     assert.strictEqual(stateRepository.identityWarnings({ vehicles: [{ id: 'application-placeholder', year: 'test', make: 'test', status: 'Pending application' }] }).length, 0, 'A pending application placeholder must not be treated as an operational fleet VIN blocker.');
+
+    const indexedBusinessState = {
+      vehicles: [{ id: 'vehicle-index-1', vin: 'INDEXVIN000000001', status: 'Rented', currentCustomer: 'Maya Stone' }],
+      customers: [{ id: 'customer-index-1', name: 'Maya Stone', vehicleId: 'vehicle-index-1', status: 'Active' }],
+      contracts: [{ id: 'file-index-1', customer: 'Maya R Stone', vehicleId: 'vehicle-index-1', status: 'Active' }],
+      recurringPayments: [{ id: 'recurring-index-1', customer: 'Maya Stone', vehicleId: 'vehicle-index-1', status: 'Active' }],
+      payments: [{ id: 'payment-index-1', customer: 'Maya Stone', vehicleId: 'vehicle-index-1', status: 'Paid' }]
+    };
+    const resourceIndexRows = stateRepository.criticalResourceIndexRows(indexedBusinessState);
+    assert.strictEqual(resourceIndexRows.length, 5, 'The PostgreSQL resource index must include the vehicle, customer, customer file, autopay row, and payment record.');
+    assert(resourceIndexRows.some(row => row.resourceType === 'customer_file' && row.resourceId === 'file-index-1' && row.vehicleId === 'vehicle-index-1'), 'A customer file index row must retain its stable file id and vehicle link.');
+    assert.throws(
+      () => stateRepository.criticalResourceIndexRows({ customers: [{ name: 'Missing Stable Id' }] }),
+      error => error && error.code === 'woa_resource_identity_missing',
+      'A critical record without a stable id must fail before a PostgreSQL state transaction commits.'
+    );
+    assert.throws(
+      () => stateRepository.criticalResourceIndexRows({ contracts: [{ id: 'duplicate-file' }, { id: 'duplicate-file' }] }),
+      error => error && error.code === 'woa_resource_identity_conflict',
+      'Duplicate customer-file ids must fail before a PostgreSQL state transaction commits.'
+    );
+    const activeAssignments = stateRepository.activeAssignmentIndexRows(indexedBusinessState);
+    assert.strictEqual(activeAssignments.length, 1, 'Matching active customer, file, and autopay rows must collapse into one vehicle assignment.');
+    assert.strictEqual(activeAssignments[0].customerName, 'Maya Stone', 'The active assignment index must retain the canonical saved customer name.');
+    assert.strictEqual(activeAssignments[0].sourceRefs.length, 3, 'The active assignment must preserve each authoritative source for later recovery review.');
+    assert.strictEqual(stateRepository.activeAssignmentIndexRows({
+      vehicles: [{ id: 'vehicle-history', status: 'Ready', currentCustomer: 'Old Customer' }],
+      customers: [{ id: 'customer-history', name: 'Old Customer', vehicleId: 'vehicle-history', status: 'History' }]
+    }).length, 0, 'History rows and stale current-customer values on ready fleet cars must not create active assignments.');
+    const correctedStaleVehicle = stateRepository.activeAssignmentIndexRows({
+      vehicles: [{ id: 'vehicle-stale-name', status: 'Rented', currentCustomer: 'Previous Customer' }],
+      customers: [{ id: 'customer-current', name: 'Current Customer', vehicleId: 'vehicle-stale-name', status: 'Active' }]
+    });
+    assert.strictEqual(correctedStaleVehicle[0].customerName, 'Current Customer', 'An authoritative active record must replace a stale vehicle current-customer fallback without creating a false conflict.');
+    const approvedAliasAssignment = stateRepository.activeAssignmentIndexRows({
+      vehicles: [{ id: 'vehicle-alias', status: 'Rented' }],
+      customers: [{ id: 'customer-alias', name: 'Khaled Jazzar', vehicleId: 'vehicle-alias', status: 'Active' }],
+      contracts: [{ id: 'file-alias', customer: 'KJ Holdings', vehicleId: 'vehicle-alias', status: 'Active' }],
+      assignmentCustomerAliases: [{ id: 'alias-1', vehicleId: 'vehicle-alias', canonicalCustomer: 'Khaled Jazzar', aliasCustomer: 'KJ Holdings', active: true }]
+    });
+    assert.strictEqual(approvedAliasAssignment.length, 1, 'An explicitly approved customer alias must reconcile to one active vehicle assignment.');
+    assert.throws(
+      () => stateRepository.activeAssignmentIndexRows({
+        vehicles: [{ id: 'vehicle-conflict', status: 'Rented' }],
+        customers: [{ id: 'customer-a', name: 'Customer Alpha', vehicleId: 'vehicle-conflict', status: 'Active' }],
+        contracts: [{ id: 'file-b', customer: 'Customer Beta', vehicleId: 'vehicle-conflict', status: 'Active' }]
+      }),
+      error => error && error.code === 'woa_assignment_identity_conflict',
+      'Two active customers claiming the same vehicle must fail the entire database write.'
+    );
+    assert.throws(
+      () => stateRepository.activeAssignmentIndexRows({
+        vehicles: [{ id: 'vehicle-present', status: 'Ready' }],
+        customers: [{ id: 'customer-missing-car', name: 'Missing Car Customer', vehicleId: 'vehicle-not-found', status: 'Active' }]
+      }),
+      error => error && error.code === 'woa_assignment_vehicle_missing',
+      'An active customer record pointing to a missing vehicle must fail instead of silently disappearing from Fleet.'
+    );
 
     const documentRoot = path.join(temp, 'private-documents');
     const foundationV1Key = Buffer.alloc(32, 9).toString('base64');

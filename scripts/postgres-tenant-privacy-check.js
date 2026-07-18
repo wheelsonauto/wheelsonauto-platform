@@ -99,10 +99,59 @@ async function verifyWebhookTenantScope() {
   });
 }
 
+async function verifyTransactionalIndexIsolation() {
+  const repository = repositoryForUnitCheck();
+  const calls = [];
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql: String(sql), values });
+      return { rowCount: 1, rows: [] };
+    }
+  };
+  const state = {
+    vehicles: [{ id: 'vehicle-tenant-a', status: 'Rented', currentCustomer: 'Tenant A Customer' }],
+    customers: [{ id: 'customer-tenant-a', name: 'Tenant A Customer', vehicleId: 'vehicle-tenant-a', status: 'Active' }],
+    contracts: [{ id: 'file-tenant-a', customer: 'Tenant A Customer', vehicleId: 'vehicle-tenant-a', status: 'Active' }]
+  };
+  await repository.syncCriticalResourceIndex(client, state);
+  await repository.syncActiveAssignmentIndex(client, state);
+  const resourceDelete = calls.find(call => /DELETE FROM woa_resource_index/.test(call.sql));
+  const resourceInsert = calls.find(call => /INSERT INTO woa_resource_index/.test(call.sql));
+  const assignmentDelete = calls.find(call => /DELETE FROM woa_active_assignments/.test(call.sql));
+  const assignmentInsert = calls.find(call => /INSERT INTO woa_active_assignments/.test(call.sql));
+  assert(resourceDelete && resourceInsert && assignmentDelete && assignmentInsert, 'Both transactional indexes must replace their company rows in one repository transaction.');
+  [resourceDelete, resourceInsert, assignmentDelete, assignmentInsert].forEach(call => {
+    assert.strictEqual(call.values[0], 'org-tenant-a', 'Every critical-record and assignment index statement must bind the current company first.');
+  });
+  const resourceRows = JSON.parse(resourceInsert.values[1]);
+  const assignmentRows = JSON.parse(assignmentInsert.values[1]);
+  assert.strictEqual(resourceRows.length, 3, 'The tenant resource index must contain only the supplied company records.');
+  assert.strictEqual(assignmentRows.length, 1, 'The tenant assignment index must contain one authoritative vehicle owner.');
+  assert.strictEqual(assignmentRows[0].vehicleId, 'vehicle-tenant-a', 'The assignment index must retain the company vehicle id.');
+
+  const conflictCalls = [];
+  await assert.rejects(
+    () => repository.syncActiveAssignmentIndex({
+      async query(sql, values = []) {
+        conflictCalls.push({ sql: String(sql), values });
+        return { rowCount: 1, rows: [] };
+      }
+    }, {
+      vehicles: [{ id: 'vehicle-conflict-a', status: 'Rented' }],
+      customers: [{ id: 'customer-conflict-a', name: 'First Customer', vehicleId: 'vehicle-conflict-a', status: 'Active' }],
+      contracts: [{ id: 'file-conflict-a', customer: 'Second Customer', vehicleId: 'vehicle-conflict-a', status: 'Active' }]
+    }),
+    error => error && error.code === 'woa_assignment_identity_conflict',
+    'An ambiguous active assignment must fail before deleting the last known-good company index.'
+  );
+  assert.strictEqual(conflictCalls.length, 0, 'Assignment conflicts must be detected before any PostgreSQL index statement runs.');
+}
+
 async function main() {
   await verifyDocumentMetadataIsolation();
   await verifyWebhookTenantScope();
-  console.log('PostgreSQL tenant privacy check passed: webhook claims and terminal updates are company-scoped; document metadata rejects cross-company overwrite, rejects duplicate ids, and purges stale rows transactionally.');
+  await verifyTransactionalIndexIsolation();
+  console.log('PostgreSQL tenant privacy check passed: webhooks, critical resources, active assignments, and private document metadata remain company-scoped and fail closed on conflicts.');
 }
 
 main().catch(error => {

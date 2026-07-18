@@ -195,7 +195,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-clover-reconcile-153';
+const ASSET_VERSION = 'platform-20260718-state-integrity-154';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -5134,15 +5134,7 @@ function softNameMatch(a, b) {
   return overlap.length >= Math.min(2, at.length, bt.length);
 }
 function sameAssignmentCustomer(a, b) {
-  const ak = normKey(a), bk = normKey(b);
-  if (!ak || !bk) return false;
-  if (ak === bk) return true;
-  const at = nameTokens(ak), bt = nameTokens(bk);
-  if (at.length < 2 || bt.length < 2) return false;
-  const shorter = at.length <= bt.length ? at : bt;
-  const longer = at.length <= bt.length ? bt : at;
-  if (shorter.every(token => longer.includes(token))) return true;
-  return at[0] === bt[0] && at[at.length - 1] === bt[bt.length - 1];
+  return stateRepository.sameAssignmentCustomer(a, b);
 }
 function assignmentAliasRows(data = {}, vehicleId = '') {
   const id = String(vehicleId || '').trim();
@@ -5152,37 +5144,7 @@ function assignmentAliasRows(data = {}, vehicleId = '') {
   });
 }
 function sameApprovedAssignmentCustomer(data = {}, vehicleId = '', a, b) {
-  if (sameAssignmentCustomer(a, b)) return true;
-  const first = normKey(a);
-  const second = normKey(b);
-  if (!first || !second) return false;
-  const graph = new Map();
-  assignmentAliasRows(data, vehicleId).forEach(row => {
-    const names = [row.canonicalCustomer, row.aliasCustomer]
-      .concat(Array.isArray(row.aliases) ? row.aliases : [])
-      .map(normKey)
-      .filter(Boolean);
-    names.forEach(name => {
-      if (!graph.has(name)) graph.set(name, new Set());
-      names.forEach(other => {
-        if (other !== name) graph.get(name).add(other);
-      });
-    });
-  });
-  if (!graph.has(first)) return false;
-  const seen = new Set([first]);
-  const queue = [first];
-  while (queue.length) {
-    const name = queue.shift();
-    if (name === second) return true;
-    (graph.get(name) || []).forEach(other => {
-      if (!seen.has(other)) {
-        seen.add(other);
-        queue.push(other);
-      }
-    });
-  }
-  return false;
+  return stateRepository.sameApprovedAssignmentCustomer(data, vehicleId, a, b);
 }
 function activeAssignmentClaimsForVehicle(data = {}, vehicleId = '') {
   const id = String(vehicleId || '').trim();
@@ -5305,14 +5267,7 @@ function sameProfileVehicle(a = {}, b = {}) {
   return !!(vehicleA && vehicleB && vehicleA === vehicleB);
 }
 function activeAssignmentRecord(row = {}) {
-  const customer = String(row.customer || row.name || '').trim();
-  const vehicleId = String(row.vehicleId || '').trim();
-  if (!customer || !vehicleId) return null;
-  const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' ')).toLowerCase();
-  // A lead or pickup hold can reserve a car, but it must not compete with a live
-  // customer file/autopay assignment until the customer is actually active.
-  if (/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|pending application|pending approval|awaiting approval|awaiting pickup|pending pickup|\bdraft\b|\blead\b|\bprospect\b|\bnew\b)/.test(status)) return null;
-  return { customer, vehicleId };
+  return stateRepository.activeAssignmentCandidate(row);
 }
 function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '', sameCustomer = sameAssignmentCustomer) {
   let changed = 0;

@@ -43,6 +43,8 @@ async function removeTestRows(repository, organizationId) {
   const pool = repository.pool;
   await pool.query('DELETE FROM woa_idempotency_keys WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_identity_index WHERE organization_id = $1', [organizationId]);
+  await pool.query('DELETE FROM woa_active_assignments WHERE organization_id = $1', [organizationId]);
+  await pool.query('DELETE FROM woa_resource_index WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_documents WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_job_errors WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_webhook_events WHERE organization_id = $1', [organizationId]);
@@ -144,10 +146,12 @@ async function main() {
     assert.strictEqual(reclaimedWebhookClaim.reclaimed, true, 'Expired PostgreSQL webhook recovery should be recorded as a reclaimed claim.');
     await competingRepository.completeWebhookEvent('stripe', staleWebhookEventId);
 
-    const foreignWebhookEventId = 'evt-postgres-runtime-foreign-' + crypto.randomBytes(5).toString('hex');
+    const foreignWebhookEventId = 'evt-postgres-runtime-processing';
     await repository.pool.query(`INSERT INTO woa_webhook_events (
       provider, event_id, organization_id, status, payload, attempts, processing_started_at
     ) VALUES ('stripe', $1, $2, 'processing', '{}'::jsonb, 1, now())`, [foreignWebhookEventId, foreignOrganizationId]);
+    const sameProviderEventAcrossCompanies = await repository.pool.query('SELECT organization_id FROM woa_webhook_events WHERE provider = $1 AND event_id = $2 ORDER BY organization_id', ['stripe', foreignWebhookEventId]);
+    assert.strictEqual(sameProviderEventAcrossCompanies.rowCount, 2, 'The same provider event id must remain independently unique inside each company instead of colliding across franchise accounts.');
     await repository.completeWebhookEvent('stripe', foreignWebhookEventId);
     await repository.failWebhookEvent('stripe', foreignWebhookEventId, new Error('must not cross tenant boundary'));
     const foreignWebhook = await repository.pool.query('SELECT status, last_error FROM woa_webhook_events WHERE organization_id = $1 AND provider = $2 AND event_id = $3', [foreignOrganizationId, 'stripe', foreignWebhookEventId]);
@@ -188,8 +192,9 @@ async function main() {
     await competingRepository.failIdempotencyKey(idempotencyScope, staleIdempotencyKey, new Error('stale recovery cleanup'));
 
     const firstState = {
-      vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1' }],
-      customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com' }],
+      vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1', status: 'Rented', currentCustomer: 'Version One Customer' }],
+      customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com', vehicleId: 'vehicle-runtime-1', status: 'Active' }],
+      contracts: [{ id: 'file-runtime-1', customer: 'Version One Customer', vehicleId: 'vehicle-runtime-1', status: 'Active' }],
       payments: [],
       documents: [{
         id: 'document-runtime-1',
@@ -203,6 +208,11 @@ async function main() {
       auditLogs: []
     };
     const firstWrite = await repository.write(firstState, { reason: 'runtime test first state', actor: 'test' });
+    const firstResourceIndex = await repository.pool.query('SELECT resource_type, resource_id FROM woa_resource_index WHERE organization_id = $1 ORDER BY resource_type, resource_id', [organizationId]);
+    assert.strictEqual(firstResourceIndex.rowCount, stateRepository.criticalResourceIndexRows(firstState).length, 'A PostgreSQL state write must transactionally synchronize every critical resource id.');
+    const firstAssignmentIndex = await repository.pool.query('SELECT vehicle_id, customer_name, source_refs FROM woa_active_assignments WHERE organization_id = $1', [organizationId]);
+    assert.strictEqual(firstAssignmentIndex.rowCount, 1, 'A PostgreSQL state write must create one authoritative active assignment for the rented vehicle.');
+    assert.strictEqual(firstAssignmentIndex.rows[0].customer_name, 'Version One Customer', 'The transactional assignment index must retain the active customer name.');
     const firstDocumentMetadata = await repository.pool.query('SELECT organization_id, customer, object_key FROM woa_documents WHERE organization_id = $1 AND id = $2', [organizationId, 'document-runtime-1']);
     assert.strictEqual(firstDocumentMetadata.rowCount, 1, 'A PostgreSQL state write must transactionally synchronize private document metadata.');
     assert.strictEqual(firstDocumentMetadata.rows[0].customer, 'Version One Customer', 'Private document metadata must retain its customer owner.');
@@ -219,6 +229,21 @@ async function main() {
       actor: 'runtime migration proof test'
     });
     assert.strictEqual(migrationProof.migrationProofReady, true, 'A matching source checksum/count proof must be recorded with the imported PostgreSQL snapshot.');
+
+    const stateBeforeConflict = await repository.read();
+    await assert.rejects(
+      () => repository.write({
+        ...firstState,
+        customers: firstState.customers.concat({ id: 'customer-runtime-conflict', name: 'Different Runtime Customer', vehicleId: 'vehicle-runtime-1', status: 'Active' })
+      }, { reason: 'runtime conflict must roll back', actor: 'test' }),
+      error => error && error.code === 'woa_assignment_identity_conflict',
+      'A conflicting active vehicle owner must roll back the whole PostgreSQL state transaction.'
+    );
+    const stateAfterConflict = await repository.read();
+    assert.strictEqual(stateAfterConflict.version, stateBeforeConflict.version, 'A rejected assignment conflict must not advance the authoritative state version.');
+    assert.strictEqual(stateAfterConflict.checksum, stateBeforeConflict.checksum, 'A rejected assignment conflict must leave the authoritative state checksum unchanged.');
+    const assignmentAfterConflict = await repository.pool.query('SELECT customer_name FROM woa_active_assignments WHERE organization_id = $1 AND vehicle_id = $2', [organizationId, 'vehicle-runtime-1']);
+    assert.strictEqual(assignmentAfterConflict.rows[0].customer_name, 'Version One Customer', 'A rejected assignment conflict must preserve the last known-good assignment index.');
 
     const secondState = {
       ...firstState,
@@ -290,6 +315,8 @@ async function main() {
     assert.strictEqual(health.productionReady, true, 'A reachable PostgreSQL state repository must report production-ready.');
     assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
     assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');
+    assert.strictEqual(health.resourceIndexReady, true, 'A production-ready PostgreSQL repository must have a complete critical-resource index.');
+    assert.strictEqual(health.assignmentIndexReady, true, 'A production-ready PostgreSQL repository must have a complete active-assignment index.');
     assert.strictEqual(health.snapshotIntegrity, 'verified', 'The latest PostgreSQL recovery snapshot must verify its own checksum.');
     assert.strictEqual(health.snapshotVersionMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state version.');
     assert.strictEqual(health.snapshotChecksumMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state checksum.');

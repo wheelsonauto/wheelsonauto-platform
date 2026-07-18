@@ -5,6 +5,7 @@ const fs = require('fs/promises');
 const path = require('path');
 
 const MIGRATION_ID = '20260717_production_state_foundation_v1';
+const TRANSACTIONAL_INDEX_MIGRATION_ID = '20260718_transactional_resource_assignment_indexes_v2';
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'durableJobLock',
@@ -276,7 +277,7 @@ function normalizedIdentity(value) {
 }
 
 function rowId(row, fallback) {
-  return String(row && (row.id || row.paymentRequestId || row.recurringPaymentId || row.providerPaymentId || row.stripePaymentIntentId || row.cloverPaymentId) || fallback || '').trim();
+  return String(row && (row.id || row.paymentRequestId || row.recurringPaymentId || row.providerPaymentId || row.stripePaymentIntentId || row.cloverPaymentId || row.cloverSubscriptionId || row.subscriptionId || row.externalCaseId || row.providerCaseId) || fallback || '').trim();
 }
 
 function pushIdentity(entries, kind, value, resourceType, resourceId) {
@@ -357,6 +358,224 @@ function privateDocumentRows(state = {}) {
     originalName: signature.originalName || 'signature.png',
     contentType: signature.contentType || 'image/png'
   }))).filter(row => row && row.id && (row.storageKey || row.storagePath));
+}
+
+const CRITICAL_RESOURCE_COLLECTIONS = Object.freeze([
+  ['vehicles', 'vehicle'],
+  ['onlineVehicles', 'online_vehicle'],
+  ['customers', 'customer'],
+  ['contracts', 'customer_file'],
+  ['applications', 'application'],
+  ['verificationCases', 'verification_case'],
+  ['documents', 'document'],
+  ['eSignatures', 'e_signature'],
+  ['onboardingSessions', 'onboarding_session'],
+  ['pickupAppointments', 'pickup_appointment'],
+  ['recurringPayments', 'recurring_payment'],
+  ['payments', 'payment'],
+  ['paymentRequests', 'payment_request'],
+  ['refundRequests', 'refund_request'],
+  ['cardSetupRequests', 'card_setup_request'],
+  ['claims', 'claim'],
+  ['maintenance', 'maintenance'],
+  ['customerAccounts', 'customer_account']
+]);
+const INACTIVE_ASSIGNMENT_PATTERN = /(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|pending application|pending approval|awaiting approval|awaiting pickup|pending pickup|\bdraft\b|\blead\b|\bprospect\b|\bnew\b)/i;
+const AVAILABLE_VEHICLE_PATTERN = /\b(ready|available|in lot|fleet ready|prep|in prep)\b/i;
+
+function criticalResourceIndexRows(state = {}) {
+  const rows = [];
+  const seen = new Set();
+  CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
+    const records = Array.isArray(state[collection]) ? state[collection] : [];
+    records.forEach((record, index) => {
+      const resourceId = rowId(record);
+      if (!resourceId) {
+        const error = new Error('Critical ' + resourceType.replace(/_/g, ' ') + ' record at index ' + index + ' has no stable id. Refusing an unrecoverable database write.');
+        error.code = 'woa_resource_identity_missing';
+        error.resourceType = resourceType;
+        error.recordIndex = index;
+        throw error;
+      }
+      const identity = resourceType + '\u0000' + resourceId;
+      if (seen.has(identity)) {
+        const error = new Error('Critical ' + resourceType.replace(/_/g, ' ') + ' id ' + resourceId + ' appears more than once. Refusing an ambiguous database write.');
+        error.code = 'woa_resource_identity_conflict';
+        error.resourceType = resourceType;
+        error.resourceId = resourceId;
+        throw error;
+      }
+      seen.add(identity);
+      const customer = resourceType === 'customer'
+        ? record && (record.customer || record.name || record.email)
+        : record && (record.customer || record.customerName || record.applicantName || record.renter || record.accountName);
+      rows.push({
+        resourceType,
+        resourceId,
+        customerKey: normalizedIdentity(customer),
+        vehicleId: String(resourceType === 'vehicle' || resourceType === 'online_vehicle' ? resourceId : record && record.vehicleId || '').trim(),
+        status: String(record && (record.status || record.stage || record.state) || '').trim().slice(0, 160)
+      });
+    });
+  });
+  return rows.sort((left, right) => left.resourceType.localeCompare(right.resourceType) || left.resourceId.localeCompare(right.resourceId));
+}
+
+function assignmentNameTokens(value) {
+  return normalizedIdentity(value).split(/[^a-z0-9]+/).filter(token => token.length > 2 && !['and', 'the', 'jr', 'sr'].includes(token));
+}
+
+function sameAssignmentCustomer(a, b) {
+  const first = normalizedIdentity(a);
+  const second = normalizedIdentity(b);
+  if (!first || !second) return false;
+  if (first === second) return true;
+  const firstTokens = assignmentNameTokens(first);
+  const secondTokens = assignmentNameTokens(second);
+  if (firstTokens.length < 2 || secondTokens.length < 2) return false;
+  const shorter = firstTokens.length <= secondTokens.length ? firstTokens : secondTokens;
+  const longer = firstTokens.length <= secondTokens.length ? secondTokens : firstTokens;
+  if (shorter.every(token => longer.includes(token))) return true;
+  return firstTokens[0] === secondTokens[0] && firstTokens[firstTokens.length - 1] === secondTokens[secondTokens.length - 1];
+}
+
+function approvedAssignmentAliases(state = {}, vehicleId = '') {
+  const id = String(vehicleId || '').trim();
+  if (!id) return [];
+  return (Array.isArray(state.assignmentCustomerAliases) ? state.assignmentCustomerAliases : []).filter(row => {
+    return row && row.active !== false && String(row.vehicleId || '').trim() === id;
+  });
+}
+
+function sameApprovedAssignmentCustomer(state = {}, vehicleId = '', a, b) {
+  if (sameAssignmentCustomer(a, b)) return true;
+  const first = normalizedIdentity(a);
+  const second = normalizedIdentity(b);
+  if (!first || !second) return false;
+  const graph = new Map();
+  approvedAssignmentAliases(state, vehicleId).forEach(row => {
+    const names = [row.canonicalCustomer, row.aliasCustomer]
+      .concat(Array.isArray(row.aliases) ? row.aliases : [])
+      .map(normalizedIdentity)
+      .filter(Boolean);
+    names.forEach(name => {
+      if (!graph.has(name)) graph.set(name, new Set());
+      names.forEach(other => {
+        if (other !== name) graph.get(name).add(other);
+      });
+    });
+  });
+  if (!graph.has(first)) return false;
+  const seen = new Set([first]);
+  const queue = [first];
+  while (queue.length) {
+    const name = queue.shift();
+    if (name === second) return true;
+    (graph.get(name) || []).forEach(other => {
+      if (seen.has(other)) return;
+      seen.add(other);
+      queue.push(other);
+    });
+  }
+  return false;
+}
+
+function activeAssignmentCandidate(row = {}) {
+  const customer = String(row.customer || row.name || '').trim();
+  const vehicleId = String(row.vehicleId || '').trim();
+  if (!customer || !vehicleId) return null;
+  const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' '));
+  if (INACTIVE_ASSIGNMENT_PATTERN.test(status)) return null;
+  return { customer, vehicleId };
+}
+
+function activeAssignmentIndexRows(state = {}) {
+  const vehicles = Array.isArray(state.vehicles) ? state.vehicles : [];
+  const vehicleById = new Map();
+  vehicles.forEach((vehicle, index) => {
+    const id = String(vehicle && vehicle.id || '').trim();
+    if (!id) {
+      const error = new Error('Vehicle at index ' + index + ' has no stable id. Refusing to build the active-assignment index.');
+      error.code = 'woa_resource_identity_missing';
+      error.resourceType = 'vehicle';
+      throw error;
+    }
+    if (vehicleById.has(id)) {
+      const error = new Error('Vehicle id ' + id + ' appears more than once. Refusing an ambiguous active-assignment index.');
+      error.code = 'woa_resource_identity_conflict';
+      error.resourceType = 'vehicle';
+      error.resourceId = id;
+      throw error;
+    }
+    vehicleById.set(id, vehicle);
+  });
+  const claimsByVehicle = new Map();
+  const addClaims = (records, source) => {
+    (Array.isArray(records) ? records : []).forEach((record, index) => {
+      const candidate = activeAssignmentCandidate(record);
+      if (!candidate) return;
+      if (!vehicleById.has(candidate.vehicleId)) {
+        const error = new Error('Active ' + source + ' record points to missing vehicle ' + candidate.vehicleId + '. Refusing to save a broken customer assignment.');
+        error.code = 'woa_assignment_vehicle_missing';
+        error.vehicleId = candidate.vehicleId;
+        error.customer = candidate.customer;
+        error.source = source;
+        throw error;
+      }
+      const list = claimsByVehicle.get(candidate.vehicleId) || [];
+      list.push({
+        ...candidate,
+        source,
+        id: rowId(record, source + '-' + index),
+        status: String(record && (record.status || record.stage) || 'Active').trim().slice(0, 160)
+      });
+      claimsByVehicle.set(candidate.vehicleId, list);
+    });
+  };
+  addClaims(state.recurringPayments, 'recurring_payment');
+  addClaims((((state.integrations || {}).clover || {}).recurringPlanMembers), 'clover_recurring');
+  addClaims(state.contracts, 'customer_file');
+  addClaims(state.customers, 'customer');
+
+  const result = [];
+  vehicles.forEach(vehicle => {
+    const vehicleId = String(vehicle.id || '').trim();
+    let claims = claimsByVehicle.get(vehicleId) || [];
+    if (!claims.length) {
+      const currentCustomer = String(vehicle.currentCustomer || '').trim();
+      const status = String(vehicle.status || '').trim();
+      if (currentCustomer && !AVAILABLE_VEHICLE_PATTERN.test(status) && !INACTIVE_ASSIGNMENT_PATTERN.test(status)) {
+        claims = [{ customer: currentCustomer, vehicleId, source: 'vehicle', id: vehicleId, status: status || 'Assigned' }];
+      }
+    }
+    if (!claims.length) return;
+    const groups = [];
+    claims.forEach(claim => {
+      const group = groups.find(names => names.some(name => sameApprovedAssignmentCustomer(state, vehicleId, name, claim.customer)));
+      if (group) group.push(claim.customer);
+      else groups.push([claim.customer]);
+    });
+    if (groups.length !== 1) {
+      const customers = [...new Set(claims.map(claim => claim.customer).filter(Boolean))];
+      const error = new Error('Vehicle ' + vehicleId + ' has active records for multiple customers: ' + customers.join(' / ') + '. Refusing an ambiguous assignment write.');
+      error.code = 'woa_assignment_identity_conflict';
+      error.vehicleId = vehicleId;
+      error.customers = customers;
+      error.claims = claims.slice(0, 20);
+      throw error;
+    }
+    const savedCustomer = String(vehicle.currentCustomer || '').trim();
+    const customerName = savedCustomer && claims.some(claim => sameApprovedAssignmentCustomer(state, vehicleId, savedCustomer, claim.customer))
+      ? savedCustomer
+      : claims[0].customer;
+    result.push({
+      vehicleId,
+      customerKey: normalizedIdentity(customerName),
+      customerName,
+      sourceRefs: claims.map(claim => ({ source: claim.source, id: claim.id, status: claim.status }))
+    });
+  });
+  return result.sort((left, right) => left.vehicleId.localeCompare(right.vehicleId));
 }
 
 class JsonStateRepository {
@@ -839,9 +1058,35 @@ class PostgresStateRepository {
           processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           processed_at TIMESTAMPTZ,
           last_error TEXT NOT NULL DEFAULT '',
-          PRIMARY KEY (provider, event_id)
+          PRIMARY KEY (organization_id, provider, event_id)
         )`);
         await client.query('ALTER TABLE woa_webhook_events ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now()');
+        await client.query(`DO $webhook_tenant_primary_key$
+        DECLARE
+          primary_key_name TEXT;
+          primary_key_definition TEXT;
+        BEGIN
+          SELECT constraint_name, definition INTO primary_key_name, primary_key_definition
+          FROM (
+            SELECT constraint_row.conname AS constraint_name, pg_get_constraintdef(constraint_row.oid) AS definition
+            FROM pg_constraint AS constraint_row
+            JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+            JOIN pg_namespace AS namespace_row ON namespace_row.oid = table_row.relnamespace
+            WHERE table_row.relname = 'woa_webhook_events'
+              AND namespace_row.nspname = current_schema()
+              AND constraint_row.contype = 'p'
+            LIMIT 1
+          ) AS current_primary_key;
+          IF primary_key_name IS NOT NULL AND position('(organization_id, provider, event_id)' in primary_key_definition) = 0 THEN
+            EXECUTE format('ALTER TABLE woa_webhook_events DROP CONSTRAINT %I', primary_key_name);
+            primary_key_name := NULL;
+          END IF;
+          IF primary_key_name IS NULL THEN
+            ALTER TABLE woa_webhook_events
+              ADD CONSTRAINT woa_webhook_events_pkey PRIMARY KEY (organization_id, provider, event_id);
+          END IF;
+        END
+        $webhook_tenant_primary_key$`);
         await client.query('CREATE INDEX IF NOT EXISTS woa_webhook_events_org_status_idx ON woa_webhook_events (organization_id, status, received_at DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_idempotency_keys (
           organization_id TEXT NOT NULL,
@@ -874,6 +1119,28 @@ class PostgresStateRepository {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY (organization_id, kind, normalized_value)
         )`);
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_resource_index (
+          organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          resource_type TEXT NOT NULL,
+          resource_id TEXT NOT NULL,
+          customer_key TEXT NOT NULL DEFAULT '',
+          vehicle_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, resource_type, resource_id)
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS woa_resource_index_org_customer_idx ON woa_resource_index (organization_id, customer_key, resource_type)');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_resource_index_org_vehicle_idx ON woa_resource_index (organization_id, vehicle_id, resource_type) WHERE vehicle_id <> \'\'');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_active_assignments (
+          organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          vehicle_id TEXT NOT NULL,
+          customer_key TEXT NOT NULL,
+          customer_name TEXT NOT NULL,
+          source_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, vehicle_id)
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS woa_active_assignments_org_customer_idx ON woa_active_assignments (organization_id, customer_key)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_documents (
           id TEXT PRIMARY KEY,
           organization_id TEXT NOT NULL,
@@ -925,6 +1192,14 @@ class PostgresStateRepository {
           PRIMARY KEY (organization_id, period_type, period_key)
         )`);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [TRANSACTIONAL_INDEX_MIGRATION_ID]);
+        const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+        if (savedState.rowCount) {
+          assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
+          const state = this.repair(clone(savedState.rows[0].state));
+          await this.syncCriticalResourceIndex(client, state);
+          await this.syncActiveAssignmentIndex(client, state);
+        }
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
@@ -1030,6 +1305,26 @@ class PostgresStateRepository {
     }
   }
 
+  async syncCriticalResourceIndex(client, state) {
+    const rows = criticalResourceIndexRows(state);
+    await client.query('DELETE FROM woa_resource_index WHERE organization_id = $1', [this.organizationId]);
+    if (!rows.length) return;
+    await client.query(`INSERT INTO woa_resource_index (
+      organization_id, resource_type, resource_id, customer_key, vehicle_id, status, updated_at
+    ) SELECT $1, item->>'resourceType', item->>'resourceId', item->>'customerKey', item->>'vehicleId', item->>'status', now()
+      FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(rows)]);
+  }
+
+  async syncActiveAssignmentIndex(client, state) {
+    const rows = activeAssignmentIndexRows(state);
+    await client.query('DELETE FROM woa_active_assignments WHERE organization_id = $1', [this.organizationId]);
+    if (!rows.length) return;
+    await client.query(`INSERT INTO woa_active_assignments (
+      organization_id, vehicle_id, customer_key, customer_name, source_refs, updated_at
+    ) SELECT $1, item->>'vehicleId', item->>'customerKey', item->>'customerName', COALESCE(item->'sourceRefs', '[]'::jsonb), now()
+      FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(rows)]);
+  }
+
   async write(incomingState, options = {}) {
     await this.ensureSchema();
     const client = await this.pool.connect();
@@ -1049,6 +1344,8 @@ class PostgresStateRepository {
       ]);
       await this.refreshIdentityIndex(client, next);
       await this.syncDocumentMetadata(client, next);
+      await this.syncCriticalResourceIndex(client, next);
+      await this.syncActiveAssignmentIndex(client, next);
       await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)
         ON CONFLICT (organization_id, version) DO NOTHING`, [
@@ -1617,6 +1914,8 @@ class PostgresStateRepository {
         WHERE organization_id = $1`, [this.organizationId, JSON.stringify(next), nextVersion, nextChecksum]);
       await this.refreshIdentityIndex(client, next);
       await this.syncDocumentMetadata(client, next);
+      await this.syncCriticalResourceIndex(client, next);
+      await this.syncActiveAssignmentIndex(client, next);
       await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, [
         this.organizationId,
@@ -1684,7 +1983,9 @@ class PostgresStateRepository {
         recovery_drill.script_version AS recovery_drill_script_version,
         recovery_drill.actor AS recovery_drill_actor,
         recovery_drill.verified_at AS recovery_drill_verified_at,
-        (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count
+        (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count,
+        (SELECT COUNT(*)::int FROM woa_resource_index WHERE organization_id = $1) AS resource_index_count,
+        (SELECT COUNT(*)::int FROM woa_active_assignments WHERE organization_id = $1) AS assignment_index_count
         FROM woa_state AS state
         LEFT JOIN LATERAL (
           SELECT id, version, checksum, state, created_at
@@ -1716,6 +2017,12 @@ class PostgresStateRepository {
           snapshotRecoveryReady: false,
           recoveryDrill: recoveryDrillEvidence(null),
           recoveryDrillReady: false,
+          resourceIndexReady: false,
+          resourceIndexCount: 0,
+          expectedResourceIndexCount: 0,
+          assignmentIndexReady: false,
+          assignmentIndexCount: 0,
+          expectedAssignmentIndexCount: 0,
           version: 0,
           updatedAt: '',
           error: 'PostgreSQL is reachable but WheelsonAuto state has not been imported.'
@@ -1759,21 +2066,38 @@ class PostgresStateRepository {
         verifiedAt: row.recovery_drill_verified_at
       };
       const recoveryDrillEvidenceResult = recoveryDrillEvidence(recoveryDrill);
+      const checkedState = this.repair(clone(row.state));
+      const expectedResourceIndexCount = criticalResourceIndexRows(checkedState).length;
+      const expectedAssignmentIndexCount = activeAssignmentIndexRows(checkedState).length;
+      const resourceIndexCount = Number(row.resource_index_count || 0);
+      const assignmentIndexCount = Number(row.assignment_index_count || 0);
+      const resourceIndexReady = resourceIndexCount === expectedResourceIndexCount;
+      const assignmentIndexReady = assignmentIndexCount === expectedAssignmentIndexCount;
       return {
         backend: 'postgres',
         connected: true,
         transactional: true,
-        productionReady: integrity.matches,
+        productionReady: integrity.matches && resourceIndexReady && assignmentIndexReady,
         stateImported: true,
         integrity: integrity.matches ? 'verified' : 'failed',
         ...recovery,
         ...migrationProof,
         recoveryDrill: recoveryDrillEvidenceResult,
         recoveryDrillReady: recoveryDrillEvidenceResult.ready,
+        resourceIndexReady,
+        resourceIndexCount,
+        expectedResourceIndexCount,
+        assignmentIndexReady,
+        assignmentIndexCount,
+        expectedAssignmentIndexCount,
         version: Number(row.version || 0),
         updatedAt: row.updated_at,
         error: !integrity.matches
           ? 'PostgreSQL state checksum verification failed.'
+          : !resourceIndexReady
+            ? 'PostgreSQL critical-record index does not match the authoritative state. Refusing production readiness.'
+            : !assignmentIndexReady
+              ? 'PostgreSQL active-assignment index does not match the authoritative state. Refusing production readiness.'
           : !recovery.snapshotRecoveryReady
             ? recovery.snapshotIntegrity === 'missing'
               ? 'PostgreSQL state is healthy but no current transactional recovery snapshot exists.'
@@ -1806,6 +2130,7 @@ function createStateRepository(options = {}) {
 
 module.exports = {
   MIGRATION_ID,
+  TRANSACTIONAL_INDEX_MIGRATION_ID,
   DEFAULT_ORGANIZATION_ID,
   clone,
   stableJson,
@@ -1824,6 +2149,11 @@ module.exports = {
   identityConflicts,
   identityWarnings,
   privateDocumentRows,
+  criticalResourceIndexRows,
+  sameAssignmentCustomer,
+  sameApprovedAssignmentCustomer,
+  activeAssignmentCandidate,
+  activeAssignmentIndexRows,
   JsonStateRepository,
   PostgresStateRepository,
   createStateRepository

@@ -4,6 +4,7 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+const stateRepository = fs.readFileSync(path.join(root, 'state-repository.js'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -52,6 +53,7 @@ const tollClaim = finalFunctionSlice(server, 'prepareTollImport');
 const tollSave = finalFunctionSlice(server, 'importTollRows');
 const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
 const activeAssignmentRecord = finalFunctionSlice(server, 'activeAssignmentRecord');
+const activeAssignmentCandidate = finalFunctionSlice(stateRepository, 'activeAssignmentCandidate');
 const syncVehicleAssignmentsFromActiveRecords = finalFunctionSlice(server, 'syncVehicleAssignmentsFromActiveRecords');
 const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/update'", server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')")));
 const updateRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/remove'", server.indexOf("if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST')")));
@@ -203,6 +205,8 @@ requireText('Review modal navigation should target workspace links only', app, "
 requireText('Profile enrichment should run assignment truth repair', server, 'const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data)');
 requireText('Autopay schedule update should refresh linked truth layer before save', updateRecurringRoute, 'enrichLinkedProfiles(data)');
 requireText('Autopay removal should refresh linked truth layer before save', removeRecurringRoute, 'enrichLinkedProfiles(data)');
-requireText('Pending intake rows must not claim a live assignment', activeAssignmentRecord, 'pending application');
+requireText('Server assignment truth must use the shared transactional rule', activeAssignmentRecord, 'stateRepository.activeAssignmentCandidate');
+requireText('Pending intake rows must not claim a live assignment', activeAssignmentCandidate, 'INACTIVE_ASSIGNMENT_PATTERN');
+requireText('The shared assignment rule must exclude pending intake', stateRepository, 'pending application');
 
 console.log('Customer/fleet workflow check passed: searchable vehicle pickers, reassignment, return/end customer, and backend autopay assignment truth layer are wired.');
