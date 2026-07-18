@@ -203,6 +203,8 @@ async function main() {
     hydrateIncomingEmail,
     parseIncomingEmail,
     verifyResendWebhook,
+    providerWebhookEventId,
+    recoverTelnyxWebhookEvents,
     smsScamAssessment,
     smsSensitiveActionAssessment,
     smsBridgeCode,
@@ -559,6 +561,39 @@ async function main() {
     const resendSignature = crypto.createHmac('sha256', Buffer.from('direct-resend-webhook-key')).update(resendId + '.' + resendTimestamp + '.' + resendPayload).digest('base64');
     assert(verifyResendWebhook(resendPayload, { 'svix-id': resendId, 'svix-timestamp': resendTimestamp, 'svix-signature': 'v1,' + resendSignature }), 'Valid Resend webhook signature should pass.');
     assert(!verifyResendWebhook(resendPayload + 'x', { 'svix-id': resendId, 'svix-timestamp': resendTimestamp, 'svix-signature': 'v1,' + resendSignature }), 'Modified Resend webhook payload should fail signature verification.');
+    assert(providerWebhookEventId('resend', { 'svix-id': resendId }, JSON.parse(resendPayload), resendPayload) === 'resend:' + resendId, 'Resend durable idempotency must use the signed Svix event ID.');
+    assert(providerWebhookEventId('telnyx', {}, { data: { id: 'evt-direct-telnyx-delivery' } }, '{}') === 'telnyx:evt-direct-telnyx-delivery', 'Telnyx durable idempotency must use the provider event ID, not the mutable message status.');
+    const fallbackWebhookId = providerWebhookEventId('email', {}, { from: 'direct@example.com', subject: 'Stable event' }, 'same-body');
+    assert(fallbackWebhookId === providerWebhookEventId('email', {}, { from: 'direct@example.com', subject: 'Stable event' }, 'same-body'), 'Provider webhook fallback hashes must remain stable across retries.');
+    assert(fallbackWebhookId !== providerWebhookEventId('email', {}, { from: 'direct@example.com', subject: 'Changed event' }, 'changed-body'), 'Different provider webhook payloads must not share a fallback idempotency key.');
+    const recoveryLedgerCalls = [];
+    const recoveryEnvelope = { data: { id: 'evt-direct-telnyx-recovery', event_type: 'message.received', payload: { text: 'Recover this message' } } };
+    const recoveredTelnyx = await recoverTelnyxWebhookEvents({
+      force: true,
+      provider: 'telnyx',
+      status: {},
+      retryAfterMs: 0,
+      reportFailure: false,
+      repository: {
+        async listRecoverableWebhookEvents(provider) {
+          recoveryLedgerCalls.push(['list', provider]);
+          return [{ eventId: 'telnyx:evt-direct-telnyx-recovery', payload: { type: 'message.received', event: recoveryEnvelope }, status: 'failed', attempts: 1 }];
+        },
+        async claimWebhookEvent(provider, eventId) {
+          recoveryLedgerCalls.push(['claim', provider, eventId]);
+          return { accepted: true, eventId, attempts: 2 };
+        },
+        async completeWebhookEvent(provider, eventId) { recoveryLedgerCalls.push(['complete', provider, eventId]); },
+        async failWebhookEvent(provider, eventId) { recoveryLedgerCalls.push(['fail', provider, eventId]); }
+      },
+      async processEvent(provider, headers, payload) {
+        recoveryLedgerCalls.push(['process', provider, payload.data.id]);
+        return { ok: true };
+      }
+    });
+    assert(recoveredTelnyx.checked === 1 && recoveredTelnyx.recovered === 1 && recoveredTelnyx.failed === 0, 'The Telnyx durable inbox must reclaim and finish an interrupted provider event.');
+    assert(recoveryLedgerCalls.some(call => call[0] === 'process' && call[2] === 'evt-direct-telnyx-recovery'), 'Telnyx recovery must replay the exact stored provider envelope.');
+    assert(recoveryLedgerCalls.some(call => call[0] === 'complete') && !recoveryLedgerCalls.some(call => call[0] === 'fail'), 'Successful Telnyx recovery must complete, not fail, the durable event claim.');
     const originalFetch = global.fetch;
     global.fetch = async url => ({
       ok: String(url).includes('/emails/receiving/direct-resend-email'),
@@ -826,6 +861,7 @@ async function main() {
     const cloverAppEventState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const savedCloverAppEvents = (cloverAppEventState.json.integrations.clover.webhookEvents || []).filter(row => row.kind === 'Clover app event' && (row.objectIds || []).includes('P:pay-direct-app-event'));
     assert(savedCloverAppEvents.length === 1 && savedCloverAppEvents[0].authorization === 'X-Clover-Auth', 'Clover app event should be stored once with payment/customer object IDs and its verified authorization method.');
+    assert(/^clover:sha256:[a-f0-9]{64}$/.test(String(savedCloverAppEvents[0].durableEventId || '')), 'Clover payment/customer callbacks must retain their durable PostgreSQL idempotency identity.');
 
     const webhookDispute = await request(server, 'POST', '/api/webhooks/clover', {
       headers: { 'x-clover-webhook-secret': 'direct-clover-secret' },
@@ -4071,8 +4107,15 @@ async function main() {
     });
     assert(inboundSms.status === 200 && inboundSms.json.ok && inboundSms.json.received, 'Inbound SMS webhook with secret failed.');
     assert(inboundSms.json.ai && inboundSms.json.ai.actionType === 'send_account_statement' && inboundSms.json.ai.status === 'Needs approval', 'Inbound SMS should create a Star account-statement approval draft instead of silently stopping.');
+    const repeatedInboundSms = await request(server, 'POST', '/api/webhooks/messages', {
+      headers: { 'x-woa-webhook-secret': 'direct-message-secret' },
+      json: { MessageSid: 'direct-sms-001', From: '+13135550199', To: '+13135550000', Body: 'Can I get my account balance?' }
+    });
+    assert(repeatedInboundSms.status === 200 && repeatedInboundSms.json.duplicate && !repeatedInboundSms.json.received, 'A repeated SMS webhook must be stopped by the durable provider-event claim.');
     const inboundSmsState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((inboundSmsState.json.messages || []).some(message => message.aiSourceMessageId === 'direct-sms-001' && message.customer === 'Direct Customer' && message.phone === '+13135550199' && message.channel === 'Star AI'), 'Inbound SMS Star draft should stay linked to the customer and phone context.');
+    assert((inboundSmsState.json.messages || []).filter(message => message.externalId === 'direct-sms-001' && message.direction === 'Inbound').length === 1, 'A repeated SMS provider event must retain exactly one inbound customer message.');
+    assert((inboundSmsState.json.messages || []).filter(message => message.aiSourceMessageId === 'direct-sms-001' && message.channel === 'Star AI').length === 1, 'A repeated SMS provider event must retain exactly one Star draft.');
 
     const blockedInboundEmail = await request(server, 'POST', '/api/webhooks/email', {
       json: {
@@ -4096,8 +4139,21 @@ async function main() {
     });
     assert(inboundEmail.status === 200 && inboundEmail.json.ok && inboundEmail.json.received, 'Inbound email webhook failed.');
     assert(inboundEmail.json.ai && inboundEmail.json.ai.actionType === 'send_payment_link', 'Inbound email should create a Star payment-link draft from the customer email.');
+    const repeatedInboundEmail = await request(server, 'POST', '/api/webhooks/email', {
+      headers: { 'x-woa-webhook-secret': 'direct-message-secret' },
+      json: {
+        id: 'direct-email-001',
+        from: 'Direct Customer <direct-customer@example.com>',
+        to: 'office@wheelsonauto.com',
+        subject: 'Payment question',
+        text: 'Can you send me my payment link?'
+      }
+    });
+    assert(repeatedInboundEmail.status === 200 && repeatedInboundEmail.json.duplicate && !repeatedInboundEmail.json.received, 'A repeated email webhook must be stopped by the durable provider-event claim.');
     const inboundEmailState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert((inboundEmailState.json.messages || []).some(message => message.aiSourceMessageId === 'direct-email-001' && message.customer === 'Direct Customer' && message.email === 'direct-customer@example.com' && message.channel === 'Star AI' && message.deliveryChannel === 'Email'), 'Inbound email Star draft should stay linked to the customer, email, and Email delivery channel.');
+    assert((inboundEmailState.json.messages || []).filter(message => message.externalId === 'direct-email-001' && message.direction === 'Inbound').length === 1, 'A repeated email provider event must retain exactly one inbound customer message.');
+    assert((inboundEmailState.json.messages || []).filter(message => message.aiSourceMessageId === 'direct-email-001' && message.channel === 'Star AI').length === 1, 'A repeated email provider event must retain exactly one Star draft.');
 
     const starCardSetup = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,

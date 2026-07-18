@@ -660,6 +660,7 @@ class JsonStateRepository {
     this.idempotencyClaims = new Map();
     this.rateLimitBuckets = new Map();
     this.rateLimitSecret = String(options.rateLimitSecret || this.organizationId);
+    this.webhookProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.webhookProcessingLeaseMs || 10 * 60 * 1000)));
     this.idempotencyProcessingLeaseMs = Math.max(30 * 1000, Math.min(60 * 60 * 1000, Number(options.idempotencyProcessingLeaseMs || 10 * 60 * 1000)));
     this.idempotencyClaimLimit = Math.max(100, Math.min(5000, Number(options.idempotencyClaimLimit || 1000)));
     this.jobErrorFile = options.jobErrorFile || (this.dataFile ? this.dataFile + '.job-errors.json' : '');
@@ -769,13 +770,30 @@ class JsonStateRepository {
   async claimWebhookEvent(provider, eventId, payload = {}) {
     const normalizedEventId = String(eventId || '').trim();
     if (!normalizedEventId) return { accepted: true, duplicate: false, eventId: '' };
-    const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
+    const normalizedProvider = String(provider || '').trim();
+    const key = [this.organizationId, normalizedProvider, normalizedEventId].join('|');
     const existing = this.webhookEventClaims.get(key);
     if (existing && existing.status === 'processed') return { accepted: false, duplicate: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
-    if (existing && existing.status === 'processing') return { accepted: false, duplicate: true, inProgress: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
+    const processingStartedAt = Date.parse(existing && existing.processingStartedAt || 0);
+    const activelyProcessing = existing && existing.status === 'processing'
+      && Number.isFinite(processingStartedAt)
+      && Date.now() - processingStartedAt < this.webhookProcessingLeaseMs;
+    if (activelyProcessing) return { accepted: false, duplicate: true, inProgress: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
     const attempts = Number(existing && existing.attempts || 0) + 1;
-    this.webhookEventClaims.set(key, { status: 'processing', attempts, payload: clone(payload || {}) });
-    return { accepted: true, duplicate: false, eventId: normalizedEventId, attempts };
+    const now = new Date().toISOString();
+    this.webhookEventClaims.set(key, {
+      organizationId: this.organizationId,
+      provider: normalizedProvider,
+      eventId: normalizedEventId,
+      status: 'processing',
+      attempts,
+      payload: clone(payload || {}),
+      receivedAt: existing && existing.receivedAt || now,
+      processingStartedAt: now,
+      updatedAt: now,
+      lastError: ''
+    });
+    return { accepted: true, duplicate: false, reclaimed: !!(existing && existing.status === 'processing'), eventId: normalizedEventId, attempts };
   }
 
   async completeWebhookEvent(provider, eventId) {
@@ -783,7 +801,8 @@ class JsonStateRepository {
     if (!normalizedEventId) return;
     const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
     const existing = this.webhookEventClaims.get(key) || {};
-    this.webhookEventClaims.set(key, { ...existing, status: 'processed', attempts: Number(existing.attempts || 1) });
+    const now = new Date().toISOString();
+    this.webhookEventClaims.set(key, { ...existing, status: 'processed', attempts: Number(existing.attempts || 1), processedAt: now, updatedAt: now, lastError: '' });
   }
 
   async failWebhookEvent(provider, eventId, error) {
@@ -791,7 +810,27 @@ class JsonStateRepository {
     if (!normalizedEventId) return;
     const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
     const existing = this.webhookEventClaims.get(key) || {};
-    this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), lastError: String(error && error.message || error || '').slice(0, 3000) });
+    this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), updatedAt: new Date().toISOString(), lastError: String(error && error.message || error || '').slice(0, 3000) });
+  }
+
+  async listRecoverableWebhookEvents(provider, options = {}) {
+    const normalizedProvider = String(provider || '').trim();
+    const now = Number(options.now || Date.now());
+    const retryAfterMs = Math.max(0, Number(options.retryAfterMs == null ? 60 * 1000 : options.retryAfterMs));
+    const staleAfterMs = Math.max(30 * 1000, Number(options.staleAfterMs || this.webhookProcessingLeaseMs));
+    const maxAttempts = Math.max(1, Math.min(100, Number(options.maxAttempts || 8)));
+    const limit = Math.max(1, Math.min(100, Number(options.limit || 25)));
+    return [...this.webhookEventClaims.values()]
+      .filter(claim => {
+        if (!claim || claim.provider !== normalizedProvider || Number(claim.attempts || 0) >= maxAttempts) return false;
+        const processingStartedAt = Date.parse(claim.processingStartedAt || claim.receivedAt || 0);
+        const updatedAt = Date.parse(claim.updatedAt || claim.processingStartedAt || claim.receivedAt || 0);
+        if (claim.status === 'failed') return Number.isFinite(updatedAt) && now - updatedAt >= retryAfterMs;
+        return claim.status === 'processing' && Number.isFinite(processingStartedAt) && now - processingStartedAt >= staleAfterMs;
+      })
+      .sort((left, right) => Date.parse(left.processingStartedAt || left.receivedAt || 0) - Date.parse(right.processingStartedAt || right.receivedAt || 0))
+      .slice(0, limit)
+      .map(claim => clone(claim));
   }
 
   pruneIdempotencyClaims() {
@@ -1228,6 +1267,7 @@ class PostgresStateRepository {
         END
         $webhook_tenant_primary_key$`);
         await client.query('CREATE INDEX IF NOT EXISTS woa_webhook_events_org_status_idx ON woa_webhook_events (organization_id, status, received_at DESC)');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_webhook_events_recovery_idx ON woa_webhook_events (organization_id, provider, status, processing_started_at)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_idempotency_keys (
           organization_id TEXT NOT NULL,
           scope TEXT NOT NULL,
@@ -1650,6 +1690,47 @@ class PostgresStateRepository {
     await this.pool.query(`UPDATE woa_webhook_events
       SET status = 'failed', last_error = $4
       WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId, String(error && error.message || error || '').slice(0, 3000)]);
+  }
+
+  async listRecoverableWebhookEvents(provider, options = {}) {
+    const normalizedProvider = String(provider || '').trim();
+    if (!normalizedProvider) return [];
+    const now = Number(options.now || Date.now());
+    const retryAfterMs = Math.max(0, Number(options.retryAfterMs == null ? 60 * 1000 : options.retryAfterMs));
+    const staleAfterMs = Math.max(30 * 1000, Number(options.staleAfterMs || this.webhookProcessingLeaseMs));
+    const maxAttempts = Math.max(1, Math.min(100, Number(options.maxAttempts || 8)));
+    const limit = Math.max(1, Math.min(100, Number(options.limit || 25)));
+    await this.ensureSchema();
+    const result = await this.pool.query(`SELECT event_id, payload, status, attempts, received_at, processing_started_at, processed_at, last_error
+      FROM woa_webhook_events
+      WHERE organization_id = $1
+        AND provider = $2
+        AND attempts < $3
+        AND (
+          (status = 'failed' AND processing_started_at <= $4::timestamptz)
+          OR (status = 'processing' AND processing_started_at <= $5::timestamptz)
+        )
+      ORDER BY processing_started_at ASC
+      LIMIT $6`, [
+      this.organizationId,
+      normalizedProvider,
+      maxAttempts,
+      new Date(now - retryAfterMs).toISOString(),
+      new Date(now - staleAfterMs).toISOString(),
+      limit
+    ]);
+    return result.rows.map(row => ({
+      organizationId: this.organizationId,
+      provider: normalizedProvider,
+      eventId: row.event_id,
+      payload: clone(row.payload || {}),
+      status: row.status,
+      attempts: Number(row.attempts || 0),
+      receivedAt: row.received_at ? new Date(row.received_at).toISOString() : '',
+      processingStartedAt: row.processing_started_at ? new Date(row.processing_started_at).toISOString() : '',
+      processedAt: row.processed_at ? new Date(row.processed_at).toISOString() : '',
+      lastError: String(row.last_error || '')
+    }));
   }
 
   async claimIdempotencyKey(scope, key, request = {}, options = {}) {

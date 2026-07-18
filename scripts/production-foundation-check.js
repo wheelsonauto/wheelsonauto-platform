@@ -107,6 +107,11 @@ async function main() {
     assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical records and active vehicle assignments into transactionally synchronized indexes.');
     assert(stateRepositorySource.includes('pg_advisory_xact_lock') && stateRepositorySource.includes("advisoryLockKeys('wheelsonauto-platform', 'postgres-schema-migrations')"), 'PostgreSQL schema upgrades must be serialized across overlapping Render instances.');
     assert(stateRepositorySource.includes('PRIMARY KEY (organization_id, provider, event_id)') && stateRepositorySource.includes('$webhook_tenant_primary_key$'), 'Webhook uniqueness must be company-scoped for current and previously migrated PostgreSQL databases.');
+    assert(serverSource.includes("claimWebhookEvent('clover'") && serverSource.includes("completeWebhookEvent('clover'") && serverSource.includes("failWebhookEvent('clover'"), 'Clover payment/dispute callbacks must use the durable PostgreSQL webhook ledger.');
+    assert(serverSource.includes("claimWebhookEvent('messaging:'") && serverSource.includes("completeWebhookEvent('messaging:'") && serverSource.includes("failWebhookEvent('messaging:'"), 'SMS callbacks must use the durable PostgreSQL webhook ledger before creating messages or Star drafts.');
+    assert(serverSource.includes("claimWebhookEvent('email:'") && serverSource.includes("completeWebhookEvent('email:'") && serverSource.includes("failWebhookEvent('email:'"), 'Email callbacks must use the durable PostgreSQL webhook ledger before creating messages or Star drafts.');
+    assert(stateRepositorySource.includes('listRecoverableWebhookEvents') && stateRepositorySource.includes('woa_webhook_events_recovery_idx'), 'The durable webhook ledger must expose bounded failed/stale recovery with a company-and-provider-scoped PostgreSQL index.');
+    assert(serverSource.includes('async function recoverTelnyxWebhookEvents') && serverSource.includes('processClaimedTelnyxWebhookEvent') && serverSource.includes('event: payload'), 'Telnyx must durably retain its signed event body and recover failed or interrupted background processing.');
     assert(stateRepositorySource.includes('await this.syncCriticalResourceIndex(client, next)') && stateRepositorySource.includes('await this.syncActiveAssignmentIndex(client, next)'), 'Normal writes and controlled recovery must synchronize critical record and assignment indexes in the state transaction.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
@@ -120,6 +125,7 @@ async function main() {
       'telnyx-inbound-setup',
       'twilio-inbound-sync',
       'telnyx-delivery-sync',
+      'telnyx-webhook-recovery',
       'clover-auto-sync',
       'autopay-run',
       'verification-monitor',
@@ -200,6 +206,20 @@ async function main() {
     assert.strictEqual((await repository.claimWebhookEvent('stripe', 'evt-foundation-1', { type: 'payment_intent.succeeded' })).accepted, true, 'A failed development webhook event should be retryable.');
     await repository.completeWebhookEvent('stripe', 'evt-foundation-1');
     assert.strictEqual((await repository.claimWebhookEvent('stripe', 'evt-foundation-1')).accepted, false, 'A completed development webhook event must remain deduplicated.');
+    const recoverableTelnyxEvent = { data: { id: 'evt-foundation-telnyx-recovery', event_type: 'message.received', payload: { from: { phone_number: '+13135550199' }, to: [{ phone_number: '+13135550000' }], text: 'Recovery proof' } } };
+    await repository.claimWebhookEvent('messaging:telnyx', 'telnyx:evt-foundation-telnyx-recovery', { type: 'message.received', event: recoverableTelnyxEvent });
+    await repository.failWebhookEvent('messaging:telnyx', 'telnyx:evt-foundation-telnyx-recovery', new Error('controlled recovery test'));
+    const recoverableJsonWebhooks = await repository.listRecoverableWebhookEvents('messaging:telnyx', { retryAfterMs: 0, now: Date.now() + 1 });
+    assert.strictEqual(recoverableJsonWebhooks.length, 1, 'A failed local Telnyx webhook must remain discoverable for durable recovery.');
+    assert.strictEqual(recoverableJsonWebhooks[0].payload.event.data.id, 'evt-foundation-telnyx-recovery', 'Durable webhook recovery must retain the exact provider event envelope.');
+    const telnyxClaimKey = [repository.organizationId, 'messaging:telnyx', 'telnyx:evt-foundation-telnyx-recovery'].join('|');
+    repository.webhookEventClaims.get(telnyxClaimKey).processingStartedAt = new Date(Date.now() - 31 * 1000).toISOString();
+    repository.webhookEventClaims.get(telnyxClaimKey).status = 'processing';
+    repository.webhookProcessingLeaseMs = 30 * 1000;
+    const reclaimedJsonWebhook = await repository.claimWebhookEvent('messaging:telnyx', 'telnyx:evt-foundation-telnyx-recovery', { type: 'message.received', event: recoverableTelnyxEvent });
+    assert.strictEqual(reclaimedJsonWebhook.accepted, true, 'A stale local webhook processing lease must be reclaimable after a restart.');
+    assert.strictEqual(reclaimedJsonWebhook.reclaimed, true, 'A reclaimed local webhook lease must be identified for diagnostics.');
+    await repository.completeWebhookEvent('messaging:telnyx', 'telnyx:evt-foundation-telnyx-recovery');
     const idempotencyScope = 'stripe_recurring_charge';
     const idempotencyKey = 'period:rec-foundation-1:2026-07-24';
     const idempotencyRequest = { recurringPaymentId: 'rec-foundation-1', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };

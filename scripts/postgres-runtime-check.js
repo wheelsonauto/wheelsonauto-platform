@@ -273,10 +273,23 @@ async function main() {
     const staleWebhookEventId = 'evt-postgres-runtime-stale';
     assert.strictEqual((await repository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' })).accepted, true, 'A PostgreSQL webhook event should be claimable before stale-lease recovery is tested.');
     await repository.pool.query("UPDATE woa_webhook_events SET processing_started_at = now() - interval '15 minutes' WHERE organization_id = $1 AND provider = 'stripe' AND event_id = $2", [organizationId, staleWebhookEventId]);
+    const listedStaleWebhooks = await repository.listRecoverableWebhookEvents('stripe', { staleAfterMs: 30 * 1000, retryAfterMs: 0 });
+    assert(listedStaleWebhooks.some(event => event.eventId === staleWebhookEventId), 'The PostgreSQL recovery inbox must list a stale webhook lease before a worker reclaims it.');
     const reclaimedWebhookClaim = await competingRepository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' });
     assert.strictEqual(reclaimedWebhookClaim.accepted, true, 'A PostgreSQL webhook event with an expired processing lease must be recoverable.');
     assert.strictEqual(reclaimedWebhookClaim.reclaimed, true, 'Expired PostgreSQL webhook recovery should be recorded as a reclaimed claim.');
     await competingRepository.completeWebhookEvent('stripe', staleWebhookEventId);
+
+    const telnyxRecoveryEventId = 'telnyx:evt-postgres-runtime-recovery';
+    const telnyxRecoveryEnvelope = { data: { id: 'evt-postgres-runtime-recovery', event_type: 'message.received', payload: { text: 'Durable recovery proof' } } };
+    await repository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, { type: 'message.received', event: telnyxRecoveryEnvelope });
+    await repository.failWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, new Error('controlled Telnyx recovery'));
+    const listedFailedTelnyxWebhooks = await competingRepository.listRecoverableWebhookEvents('messaging:telnyx', { retryAfterMs: 0, now: Date.now() + 1000 });
+    const listedTelnyxRecovery = listedFailedTelnyxWebhooks.find(event => event.eventId === telnyxRecoveryEventId);
+    assert(listedTelnyxRecovery, 'A failed PostgreSQL Telnyx webhook must be discoverable by another server instance.');
+    assert.strictEqual(listedTelnyxRecovery.payload.event.data.id, 'evt-postgres-runtime-recovery', 'PostgreSQL must retain the exact Telnyx event envelope needed after a restart.');
+    assert.strictEqual((await competingRepository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, listedTelnyxRecovery.payload)).accepted, true, 'A recovery worker must atomically reclaim a failed Telnyx event.');
+    await competingRepository.completeWebhookEvent('messaging:telnyx', telnyxRecoveryEventId);
 
     const foreignWebhookEventId = 'evt-postgres-runtime-processing';
     await repository.pool.query(`INSERT INTO woa_webhook_events (

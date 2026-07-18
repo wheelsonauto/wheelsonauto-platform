@@ -534,6 +534,16 @@ Each check leaves an audit record and is tied to the current Render
 configuration, so changing a key, sender, webhook secret, or provider setting
 requires a new proof.
 
+Stripe, Clover, Telnyx, and Resend callbacks claim a company-scoped durable
+webhook identity before they change state. A completed replay is acknowledged
+without creating another payment, message, Star draft, receipt, or dispute;
+an event already being processed receives a retryable response, and a failed
+claim remains reviewable in the operational error ledger. Telnyx inbound
+events also retain their verified provider envelope in that ledger; a bounded
+worker reclaims failed events and processing leases interrupted by a server
+restart before they can be forgotten. Never bypass this ledger with an
+unsigned relay when testing a production provider.
+
 1. In **Settings -> System health**, use **Validate private storage**. It must
    complete an encrypted write/read/delete probe against the private bucket.
 2. In **Messages -> Setup**, connect the Telnyx inbox. Then use **API Roadmap

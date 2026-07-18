@@ -221,6 +221,9 @@ const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SY
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
 const TELNYX_DELIVERY_POLL_MS = Math.max(15000, Number(process.env.WOA_TELNYX_DELIVERY_POLL_MS || 30000));
 const TELNYX_DELIVERY_PENDING_REVIEW_MS = Math.max(60000, Number(process.env.WOA_TELNYX_DELIVERY_PENDING_REVIEW_MS || 5 * 60 * 1000));
+const TELNYX_WEBHOOK_RECOVERY_MS = Math.max(30000, Number(process.env.WOA_TELNYX_WEBHOOK_RECOVERY_MS || 60000));
+const TELNYX_WEBHOOK_RECOVERY_LIMIT = Math.max(1, Math.min(50, Number(process.env.WOA_TELNYX_WEBHOOK_RECOVERY_LIMIT || 20)));
+const TELNYX_WEBHOOK_MAX_ATTEMPTS = Math.max(2, Math.min(25, Number(process.env.WOA_TELNYX_WEBHOOK_MAX_ATTEMPTS || 8)));
 const WOA_AUTOPAY_MS = Math.max(60000, Number(process.env.WOA_AUTOPAY_MS || 300000));
 const WEBHOOK_AUTO_SYNC_DELAY_MS = Math.max(1000, Number(process.env.WOA_WEBHOOK_AUTO_SYNC_DELAY_MS || 5000));
 const WOA_TIME_ZONE = process.env.WOA_TIME_ZONE || 'America/New_York';
@@ -258,6 +261,17 @@ const telnyxDeliveryPollStatus = {
   inFlight: false,
   lastCheckedAt: '',
   lastUpdatedAt: '',
+  lastError: '',
+  lastResult: null,
+  lastLoggedAt: 0
+};
+const telnyxWebhookRecoveryStatus = {
+  enabled: MESSAGING_PROVIDER === 'telnyx',
+  intervalMs: TELNYX_WEBHOOK_RECOVERY_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
+  lastRecoveredAt: '',
   lastError: '',
   lastResult: null,
   lastLoggedAt: 0
@@ -2158,6 +2172,21 @@ function verifyTelnyxWebhook(rawBody, headers, publicKey = TELNYX_PUBLIC_KEY) {
   } catch {
     return false;
   }
+}
+function providerWebhookEventId(provider, headers = {}, payload = {}, rawBody = '') {
+  const normalizedProvider = String(provider || 'webhook').trim().toLowerCase() || 'webhook';
+  const telnyxData = payload && payload.data && typeof payload.data === 'object' ? payload.data : {};
+  const candidates = normalizedProvider === 'telnyx'
+    ? [telnyxData.id, payload.id, payload.event_id]
+    : normalizedProvider === 'resend'
+      ? [headers['svix-id'], payload.id, payload.event_id]
+      : normalizedProvider === 'twilio'
+        ? [payload.MessageSid, payload.SmsSid, payload.id]
+        : [payload.id, payload.event_id, headers['x-event-id'], headers['x-webhook-id']];
+  const providerId = candidates.map(value => String(value || '').trim()).find(Boolean);
+  if (providerId) return normalizedProvider + ':' + providerId.slice(0, 240);
+  const canonicalBody = String(rawBody || JSON.stringify(payload || {}));
+  return normalizedProvider + ':sha256:' + crypto.createHash('sha256').update(canonicalBody).digest('hex');
 }
 function messagingWebhookAuthorized(req, url, rawBody, payload, provider) {
   if (webhookSecretMatches(url, req.headers)) return true;
@@ -11867,47 +11896,67 @@ function applyHostedCheckoutWebhook(data, event = {}) {
   return { matched: true, approved: false, paymentRequestId: request.id, ...details };
 }
 async function recordCloverWebhookEvent(event = {}, options = {}) {
-  const data = await readData();
-  data.integrations = data.integrations || {};
-  data.integrations.clover = data.integrations.clover || {};
-  data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
   const authorization = options.authorization || 'Unknown';
   const fingerprint = cloverWebhookFingerprint(event, authorization);
-  const duplicate = data.integrations.clover.webhookEvents.find(row => row && row.fingerprint === fingerprint);
-  if (duplicate) return { ok: true, duplicate: true, webhookEventId: duplicate.id || '', hostedCheckout: { matched: false } };
-  const appDetails = options.verifiedCloverApp ? cloverAppWebhookDetails(event) : null;
-  const webhookEvent = {
-    id: 'clover-webhook-' + crypto.randomBytes(8).toString('hex'),
-    receivedAt: new Date().toISOString(),
+  const durableEventId = 'clover:sha256:' + crypto.createHash('sha256').update(fingerprint).digest('hex');
+  const claim = await STATE_REPOSITORY.claimWebhookEvent('clover', durableEventId, {
     authorization,
-    fingerprint,
-    kind: options.verifiedHostedCheckout ? 'Hosted Checkout' : (options.verifiedCloverApp ? 'Clover app event' : 'WheelsonAuto relay'),
-    merchantIds: appDetails ? appDetails.merchantIds : [],
-    objectIds: appDetails ? appDetails.updates.map(update => update.objectId).filter(Boolean) : [],
-    event
-  };
-  data.integrations.clover.webhookEvents.unshift(webhookEvent);
-  data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents.slice(0, 250);
-  const previous = JSON.parse(JSON.stringify(data));
-  const hostedCheckout = options.verifiedHostedCheckout ? applyHostedCheckoutWebhook(data, event) : { matched: false };
-  const disputeClaim = cloverWebhookDisputeClaim(event);
-  let createdClaimId = '';
-  if (disputeClaim) {
-    data.claims = Array.isArray(data.claims) ? data.claims : [];
-    const disputeTokens = claimIdentityTokens(disputeClaim);
-    const duplicate = data.claims.find(claim => claim.id === disputeClaim.id || claimIdentityTokens(claim).some(id => disputeTokens.includes(id)));
-    if (!duplicate) {
-      data.claims.unshift(disputeClaim);
-      createdClaimId = disputeClaim.id;
-    }
-    resolveClaimCustomerLinks(data);
-    await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
+    kind: options.verifiedHostedCheckout ? 'hosted_checkout' : (options.verifiedCloverApp ? 'clover_app' : 'relay'),
+    receivedAt: new Date().toISOString()
+  });
+  if (!claim.accepted) {
+    return { ok: !claim.inProgress, duplicate: true, retry: !!claim.inProgress, inProgress: !!claim.inProgress, webhookEventId: durableEventId, hostedCheckout: { matched: false } };
   }
-  await protectConcurrentLocalWrites(data, { preferIncoming: true });
-  await writeData(data);
-  const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => reportBackgroundTaskFailure('clover-webhook-auto-sync', err, { route: 'Clover webhook automatic sync', source: 'webhook' }, 'Webhook auto sync')), WEBHOOK_AUTO_SYNC_DELAY_MS);
-  if (webhookSyncTimer.unref) webhookSyncTimer.unref();
-  return { ok: true, duplicate: false, webhookEventId: webhookEvent.id, disputeClaimId: createdClaimId, hostedCheckout };
+  try {
+    const data = await readData();
+    data.integrations = data.integrations || {};
+    data.integrations.clover = data.integrations.clover || {};
+    data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
+    const duplicate = data.integrations.clover.webhookEvents.find(row => row && row.fingerprint === fingerprint);
+    if (duplicate) {
+      await STATE_REPOSITORY.completeWebhookEvent('clover', durableEventId);
+      return { ok: true, duplicate: true, webhookEventId: duplicate.id || durableEventId, hostedCheckout: { matched: false } };
+    }
+    const appDetails = options.verifiedCloverApp ? cloverAppWebhookDetails(event) : null;
+    const webhookEvent = {
+      id: 'clover-webhook-' + crypto.randomBytes(8).toString('hex'),
+      receivedAt: new Date().toISOString(),
+      authorization,
+      fingerprint,
+      durableEventId,
+      kind: options.verifiedHostedCheckout ? 'Hosted Checkout' : (options.verifiedCloverApp ? 'Clover app event' : 'WheelsonAuto relay'),
+      merchantIds: appDetails ? appDetails.merchantIds : [],
+      objectIds: appDetails ? appDetails.updates.map(update => update.objectId).filter(Boolean) : [],
+      event
+    };
+    data.integrations.clover.webhookEvents.unshift(webhookEvent);
+    data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents.slice(0, 250);
+    const previous = JSON.parse(JSON.stringify(data));
+    const hostedCheckout = options.verifiedHostedCheckout ? applyHostedCheckoutWebhook(data, event) : { matched: false };
+    const disputeClaim = cloverWebhookDisputeClaim(event);
+    let createdClaimId = '';
+    if (disputeClaim) {
+      data.claims = Array.isArray(data.claims) ? data.claims : [];
+      const disputeTokens = claimIdentityTokens(disputeClaim);
+      const duplicateDispute = data.claims.find(existing => existing.id === disputeClaim.id || claimIdentityTokens(existing).some(id => disputeTokens.includes(id)));
+      if (!duplicateDispute) {
+        data.claims.unshift(disputeClaim);
+        createdClaimId = disputeClaim.id;
+      }
+      resolveClaimCustomerLinks(data);
+      await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
+    }
+    await protectConcurrentLocalWrites(data, { preferIncoming: true });
+    await writeData(data);
+    await STATE_REPOSITORY.completeWebhookEvent('clover', durableEventId);
+    const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => reportBackgroundTaskFailure('clover-webhook-auto-sync', err, { route: 'Clover webhook automatic sync', source: 'webhook' }, 'Webhook auto sync')), WEBHOOK_AUTO_SYNC_DELAY_MS);
+    if (webhookSyncTimer.unref) webhookSyncTimer.unref();
+    return { ok: true, duplicate: false, webhookEventId: webhookEvent.id, durableEventId, disputeClaimId: createdClaimId, hostedCheckout };
+  } catch (error) {
+    await STATE_REPOSITORY.failWebhookEvent('clover', durableEventId, error).catch(() => {});
+    await recordOperationalFailure('clover-webhook', error, { route: '/api/webhooks/clover', source: authorization, eventId: durableEventId });
+    throw error;
+  }
 }
 function upsertById(list, incoming) {
   const next = Array.isArray(list) ? list.slice() : [];
@@ -16156,6 +16205,105 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
   };
 }
 
+function storedTelnyxWebhookPayload(record = {}) {
+  const envelope = record && record.payload && typeof record.payload === 'object' ? record.payload : {};
+  if (envelope.event && typeof envelope.event === 'object') return envelope.event;
+  if (envelope.data && typeof envelope.data === 'object') return envelope;
+  return null;
+}
+
+async function processClaimedTelnyxWebhookEvent(eventId, payload, options = {}) {
+  const repository = options.repository || STATE_REPOSITORY;
+  const processEvent = options.processEvent || processMessagingWebhookEvent;
+  const headers = options.headers || {};
+  try {
+    const result = await processEvent('telnyx', headers, payload);
+    await repository.completeWebhookEvent('messaging:telnyx', eventId);
+    return result;
+  } catch (err) {
+    await repository.failWebhookEvent('messaging:telnyx', eventId, err).catch(() => {});
+    if (options.reportFailure !== false) {
+      await reportBackgroundTaskFailure('telnyx-webhook-processing', err, {
+        route: '/api/webhooks/messages',
+        source: String(options.source || 'telnyx'),
+        eventId
+      }, 'Telnyx webhook processing').catch(() => {});
+    }
+    throw err;
+  }
+}
+
+async function recoverTelnyxWebhookEvents(options = {}) {
+  const repository = options.repository || STATE_REPOSITORY;
+  const status = options.status || telnyxWebhookRecoveryStatus;
+  const configuredProvider = String(options.provider || MESSAGING_PROVIDER || '').toLowerCase();
+  if (!options.force && configuredProvider !== 'telnyx') return { skipped: true, reason: 'Telnyx messaging is not configured' };
+  if (!repository || typeof repository.listRecoverableWebhookEvents !== 'function') return { skipped: true, reason: 'Webhook recovery ledger is unavailable' };
+  if (status.inFlight) return { skipped: true, reason: 'Telnyx webhook recovery is already running' };
+  status.inFlight = true;
+  status.lastStartedAt = new Date().toISOString();
+  const result = { checked: 0, recovered: 0, skipped: 0, failed: 0, errors: [] };
+  try {
+    const recoverable = await repository.listRecoverableWebhookEvents('messaging:telnyx', {
+      limit: Number(options.limit || TELNYX_WEBHOOK_RECOVERY_LIMIT),
+      maxAttempts: Number(options.maxAttempts || TELNYX_WEBHOOK_MAX_ATTEMPTS),
+      retryAfterMs: Number(options.retryAfterMs == null ? TELNYX_WEBHOOK_RECOVERY_MS : options.retryAfterMs),
+      staleAfterMs: options.staleAfterMs,
+      now: options.now
+    });
+    result.checked = recoverable.length;
+    for (const record of recoverable) {
+      const eventId = String(record && record.eventId || '').trim();
+      if (!eventId) {
+        result.skipped += 1;
+        continue;
+      }
+      const claim = await repository.claimWebhookEvent('messaging:telnyx', eventId, record.payload || {});
+      if (!claim.accepted) {
+        result.skipped += 1;
+        continue;
+      }
+      const payload = storedTelnyxWebhookPayload(record);
+      if (!payload) {
+        const missingPayload = new Error('Durable Telnyx webhook payload is missing; manual provider replay is required.');
+        await repository.failWebhookEvent('messaging:telnyx', eventId, missingPayload).catch(() => {});
+        if (options.reportFailure !== false) {
+          await reportBackgroundTaskFailure('telnyx-webhook-processing', missingPayload, {
+            route: '/api/webhooks/messages',
+            source: String(options.source || 'durable recovery'),
+            eventId
+          }, 'Telnyx webhook recovery').catch(() => {});
+        }
+        result.failed += 1;
+        result.errors.push({ eventId, error: missingPayload.message });
+        continue;
+      }
+      try {
+        await processClaimedTelnyxWebhookEvent(eventId, payload, {
+          repository,
+          processEvent: options.processEvent,
+          reportFailure: options.reportFailure,
+          source: options.source || 'durable recovery'
+        });
+        result.recovered += 1;
+      } catch (err) {
+        result.failed += 1;
+        result.errors.push({ eventId, error: String(err && err.message || err) });
+      }
+    }
+    status.lastError = result.errors.length ? result.errors[0].error : '';
+    status.lastResult = result;
+    if (result.recovered) status.lastRecoveredAt = new Date().toISOString();
+    return result;
+  } catch (err) {
+    status.lastError = String(err && err.message || err);
+    throw err;
+  } finally {
+    status.lastFinishedAt = new Date().toISOString();
+    status.inFlight = false;
+  }
+}
+
 const MIGRATION_MAINTENANCE_WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const MIGRATION_MAINTENANCE_SAFE_WRITE_PATHS = new Set(['/login']);
 
@@ -16912,11 +17060,36 @@ const server = http.createServer(async (req, res) => {
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
       const provider = String(url.searchParams.get('provider') || MESSAGING_PROVIDER || '').toLowerCase();
       if (!messagingWebhookAuthorized(req, url, rawBody, payload, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
-      if (provider === 'telnyx') {
-        setImmediate(() => processMessagingWebhookEvent(provider, req.headers, payload).catch(err => reportBackgroundTaskFailure('telnyx-webhook-processing', err, { route: '/api/webhooks/messages', source: 'telnyx' }, 'Telnyx webhook processing')));
-        return json(res, 200, { ok: true, queued: true });
+      const webhookEventId = providerWebhookEventId(provider || 'sms', req.headers, payload, rawBody);
+      const webhookType = provider === 'telnyx' ? telnyxWebhookEventType(payload) : String(payload.EventType || payload.event_type || payload.type || 'message');
+      const claim = await STATE_REPOSITORY.claimWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId, {
+        type: webhookType,
+        receivedAt: new Date().toISOString(),
+        event: payload
+      });
+      if (!claim.accepted) {
+        const result = { ok: !claim.inProgress, received: false, duplicate: true, retry: !!claim.inProgress, inProgress: !!claim.inProgress, eventId: webhookEventId };
+        return json(res, claim.inProgress ? 503 : 200, result, claim.inProgress ? { 'Retry-After': '2' } : {});
       }
-      return json(res, 200, await processMessagingWebhookEvent(provider, req.headers, payload));
+      if (provider === 'telnyx') {
+        setImmediate(() => {
+          void processClaimedTelnyxWebhookEvent(webhookEventId, payload, {
+            repository: STATE_REPOSITORY,
+            headers: req.headers,
+            source: 'live webhook'
+          }).catch(() => {});
+        });
+        return json(res, 200, { ok: true, queued: true, eventId: webhookEventId });
+      }
+      try {
+        const result = await processMessagingWebhookEvent(provider, req.headers, payload);
+        await STATE_REPOSITORY.completeWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId);
+        return json(res, 200, { ...result, eventId: webhookEventId });
+      } catch (err) {
+        await STATE_REPOSITORY.failWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId, err).catch(() => {});
+        await recordOperationalFailure('messaging-webhook', err, { route: '/api/webhooks/messages', source: provider || 'sms', eventId: webhookEventId });
+        throw err;
+      }
     }
     if (url.pathname === '/api/webhooks/email' && req.method === 'POST') {
       const rawBody = await readBody(req, 1024 * 1024);
@@ -16924,6 +17097,16 @@ const server = http.createServer(async (req, res) => {
       const payload = contentType.includes('application/x-www-form-urlencoded') ? Object.fromEntries(new URLSearchParams(rawBody)) : JSON.parse(rawBody || '{}');
       const provider = String(url.searchParams.get('provider') || WOA_EMAIL_PROVIDER || '').toLowerCase();
       if (!emailWebhookAuthorized(req, url, rawBody, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
+      const webhookEventId = providerWebhookEventId(provider || 'email', req.headers, payload, rawBody);
+      const claim = await STATE_REPOSITORY.claimWebhookEvent('email:' + (provider || 'email'), webhookEventId, {
+        type: String(payload.type || payload.event_type || 'email.received'),
+        receivedAt: new Date().toISOString()
+      });
+      if (!claim.accepted) {
+        const result = { ok: !claim.inProgress, received: false, duplicate: true, retry: !!claim.inProgress, inProgress: !!claim.inProgress, eventId: webhookEventId };
+        return json(res, claim.inProgress ? 503 : 200, result, claim.inProgress ? { 'Retry-After': '2' } : {});
+      }
+      try {
       const inbound = await hydrateIncomingEmail(provider, payload, parseIncomingEmail(provider, req.headers, payload));
       const data = await readData();
       const contact = findMessageContact(data, { email: inbound.from });
@@ -17007,7 +17190,13 @@ const server = http.createServer(async (req, res) => {
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundChannel: 'Email', lastInboundFrom: maskEmail(inbound.from), lastError: '' };
         await writeData(data);
       }
-      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null });
+      await STATE_REPOSITORY.completeWebhookEvent('email:' + (provider || 'email'), webhookEventId);
+      return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null, eventId: webhookEventId });
+      } catch (err) {
+        await STATE_REPOSITORY.failWebhookEvent('email:' + (provider || 'email'), webhookEventId, err).catch(() => {});
+        await recordOperationalFailure('email-webhook', err, { route: '/api/webhooks/email', source: provider || 'email', eventId: webhookEventId });
+        throw err;
+      }
     }
     if (url.pathname === '/api/webhooks/stripe' && req.method === 'POST') {
       if (!STRIPE_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'STRIPE_WEBHOOK_SECRET is not configured.' });
@@ -17047,11 +17236,12 @@ const server = http.createServer(async (req, res) => {
       if (appDetails && !appDetails.merchantMatched) {
         return json(res, 200, { ok: true, received: false, ignored: true, reason: 'Clover merchant ID mismatch.' });
       }
-      return json(res, 200, await recordCloverWebhookEvent(event, {
+      const result = await recordCloverWebhookEvent(event, {
         verifiedHostedCheckout: hostedSignatureValid,
         verifiedCloverApp: cloverAppAuthValid,
         authorization: hostedSignatureValid ? 'Clover-Signature' : (cloverAppAuthValid ? 'X-Clover-Auth' : 'WheelsonAuto shared secret')
-      }));
+      });
+      return json(res, result.retry ? 503 : 200, result, result.retry ? { 'Retry-After': '2' } : {});
     }
     if (url.pathname === '/api/webhooks/checkr' && req.method === 'POST') {
       if (!CHECKR_WEBHOOK_SECRET) return json(res, 503, { ok: false, error: 'Checkr webhook verification is not configured.' });
@@ -21059,7 +21249,7 @@ async function gracefulShutdown(signal) {
     if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
   });
   const backgroundDeadline = Date.now() + 45000;
-  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, passTimePollStatus, stateBackupStatus];
+  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, telnyxWebhookRecoveryStatus, passTimePollStatus, stateBackupStatus];
   while (backgroundStatuses.some(status => status.inFlight) && Date.now() < backgroundDeadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -21116,6 +21306,22 @@ if (require.main === module) {
         telnyxDeliveryPollStatus.lastLoggedAt = Date.now();
         return reportBackgroundTaskFailure('telnyx-delivery-sync', err, { route: 'Telnyx message delivery status sync', source: 'background' }, 'Telnyx delivery sync');
       }), TELNYX_DELIVERY_POLL_MS);
+    setTimeout(() => recoverTelnyxWebhookEvents({ source: 'startup' })
+      .then(result => {
+        if (!result || result.skipped || !result.checked) return;
+        console.log('Telnyx webhook recovery checked ' + result.checked + ', recovered ' + result.recovered + ', failed ' + result.failed + '.');
+      })
+      .catch(err => reportBackgroundTaskFailure('telnyx-webhook-recovery', err, { route: 'Durable Telnyx webhook recovery', source: 'startup' }, 'Telnyx webhook recovery')), 6500);
+    setInterval(() => recoverTelnyxWebhookEvents({ source: 'background' })
+      .then(result => {
+        if (!result || result.skipped || (!result.recovered && !result.failed)) return;
+        console.log('Telnyx webhook recovery checked ' + result.checked + ', recovered ' + result.recovered + ', failed ' + result.failed + '.');
+      })
+      .catch(err => {
+        if (Date.now() - telnyxWebhookRecoveryStatus.lastLoggedAt < 60 * 1000) return;
+        telnyxWebhookRecoveryStatus.lastLoggedAt = Date.now();
+        return reportBackgroundTaskFailure('telnyx-webhook-recovery', err, { route: 'Durable Telnyx webhook recovery', source: 'background' }, 'Telnyx webhook recovery');
+      }), TELNYX_WEBHOOK_RECOVERY_MS);
     setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => reportBackgroundTaskFailure('clover-auto-sync', err, { route: 'WheelsonAuto automatic Clover sync', source: 'startup' }, 'Startup auto sync')), AUTO_SYNC_STARTUP_DELAY_MS);
     setInterval(() => runAutoSync({ source: 'background' }).catch(err => reportBackgroundTaskFailure('clover-auto-sync', err, { route: 'WheelsonAuto automatic Clover sync', source: 'background' }, 'Background auto sync')), AUTO_SYNC_MS);
     setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto background autopay', source: 'startup' }, 'Startup WOA autopay')), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
@@ -21158,6 +21364,7 @@ module.exports = {
   verifyBillingWebhook,
   verifyTwilioWebhook,
   verifyTelnyxWebhook,
+  providerWebhookEventId,
   parseIncomingEmail,
   parseIncomingMessage,
   sendProviderSms,
@@ -21188,6 +21395,8 @@ module.exports = {
   reconcileTelnyxDeliveryRecords,
   syncTelnyxDeliveryStatuses,
   processMessagingWebhookEvent,
+  processClaimedTelnyxWebhookEvent,
+  recoverTelnyxWebhookEvents,
   listTwilioInboundMessages,
   deliverPolledTwilioMessage,
   syncTwilioInboundMessages,
