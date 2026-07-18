@@ -354,6 +354,13 @@ confirmation that Clover is stopped. The first successful Stripe charge is the
 only event that completes the customer migration. Do not bulk-cancel Clover
 plans based on name matching alone.
 
+Sending the Stripe setup link and saving the Stripe card are preparation only:
+they must never pause an existing Clover schedule. If a cutover is scheduled
+ahead of time, Clover remains eligible for billing periods before that date,
+then both providers are locked for the cutover period until the owner confirms
+the Clover schedule was stopped. This prevents both an accidental missed week
+and a same-period duplicate charge.
+
 The Clover recurring roster uses the documented `/recurring/v1/plans` and
 `/recurring/v1/plans/{planId}/subscriptions` endpoints with the merchant ID in
 the `X-Clover-Merchant-Id` header. If Clover returns `401`, `403`, or `404`

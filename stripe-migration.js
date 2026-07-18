@@ -150,12 +150,25 @@ function automaticChargeAllowed(row = {}, paymentProvider, dateKey) {
   const currentProvider = provider(row.paymentProvider || row.provider || 'clover');
   if (provider(paymentProvider) !== currentProvider) return false;
   const migration = migrationRecord(row);
-  if (migration.state === STATES.CUTOVER_SCHEDULED || migration.state === STATES.STRIPE_SETUP_SENT || migration.state === STATES.STRIPE_CARD_SAVED) return false;
+  if (migration.state === STATES.CLOVER_ACTIVE) return currentProvider === 'clover';
+  // Saving a Stripe card is preparation only. Clover remains responsible for
+  // every billing period before the protected cutover date.
+  if (migration.state === STATES.STRIPE_SETUP_SENT || migration.state === STATES.STRIPE_CARD_SAVED) {
+    return currentProvider === 'clover';
+  }
+  if (migration.state === STATES.CUTOVER_SCHEDULED) {
+    const cutoverDate = migration.cutoverDate;
+    return currentProvider === 'clover' && !!cutoverDate && !!validDateKey(dateKey) && validDateKey(dateKey) < cutoverDate;
+  }
   if (currentProvider === 'stripe' && hasCloverSource(row) && migration.state === STATES.FIRST_STRIPE_CHARGE_PENDING) {
     const cutoverDate = migration.cutoverDate || validDateKey(dateKey);
     return !!(migration.cloverStoppedConfirmedAt && (!cutoverDate || validDateKey(dateKey) >= cutoverDate));
   }
-  return true;
+  if (migration.state === STATES.FIRST_STRIPE_CHARGE_PENDING) return currentProvider === 'stripe' && !hasCloverSource(row);
+  if ([STATES.FIRST_STRIPE_CHARGE_PASSED, STATES.CLOVER_DISABLED, STATES.STRIPE_ACTIVE].includes(migration.state)) {
+    return currentProvider === 'stripe';
+  }
+  return false;
 }
 
 module.exports = {

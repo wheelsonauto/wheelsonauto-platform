@@ -401,11 +401,19 @@ async function main() {
       stripePaymentMethodId: 'pm-foundation'
     };
     let migration = stripeMigration.transition(recurring, stripeMigration.STATES.STRIPE_SETUP_SENT, { at: '2026-07-17T10:00:00.000Z' });
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-17'), true, 'Sending a Stripe setup link must not stop the existing Clover schedule.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'stripe', '2026-07-17'), false, 'Stripe must remain inactive while card setup is only pending.');
     migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.STRIPE_CARD_SAVED, { at: '2026-07-17T10:01:00.000Z' });
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-17'), true, 'Saving a Stripe card must not stop Clover before a protected cutover.');
     migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.CUTOVER_SCHEDULED, { at: '2026-07-17T10:02:00.000Z', cutoverDate: '2026-07-24' });
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-23'), true, 'Clover must remain chargeable for billing periods before the scheduled cutover.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-24'), false, 'A scheduled cutover must lock automatic Clover charging.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-25'), false, 'Clover must remain locked after the scheduled cutover date.');
     migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, { at: '2026-07-24T17:55:00.000Z', cutoverDate: '2026-07-24', cloverStoppedConfirmedAt: '2026-07-24T17:55:00.000Z' });
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, 'stripe', '2026-07-24'), true, 'A confirmed same-day cutover may allow the protected first Stripe charge.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { state: stripeMigration.STATES.CLOVER_ACTIVE } }, 'stripe', '2026-07-24'), false, 'An inconsistent Stripe-provider row that is still Clover-active must fail closed.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'clover', stripeMigration: { state: stripeMigration.STATES.CLOVER_DISABLED } }, 'clover', '2026-07-24'), false, 'An inconsistent Clover-provider row marked Clover-disabled must fail closed.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { state: stripeMigration.STATES.STRIPE_ACTIVE } }, 'stripe', '2026-07-24'), true, 'A consistent Stripe-active row may use Stripe autopay.');
 
     const periodState = { payments: [{ id: 'paid-clover-period', recurringPaymentId: recurring.id, paymentProvider: 'clover', billingPeriodKey: 'due:2026-07-24', status: 'Paid' }] };
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
