@@ -79,7 +79,10 @@ WOA_OBJECT_STORAGE_TIMEOUT_MS=15000
 The platform encrypts each document with AES-256-GCM before it is stored. The
 database receives metadata and encrypted-object references, not file bytes.
 IDs, insurance, contracts, signatures, receipts, and dispute evidence should
-only be downloaded through the authenticated application route.
+only be downloaded through the authenticated application route. Every read
+also verifies the original plaintext SHA-256 checksum and byte count after
+authenticated decryption. A mismatched record or incomplete object fails
+closed instead of returning questionable evidence.
 
 When rotating the active key, keep every historical version that still owns a
 stored document in `WOA_DOCUMENT_DECRYPTION_KEYS`. The active
@@ -125,7 +128,9 @@ POST /api/system/infrastructure/document-storage/validate
 
 It encrypts a random probe, writes it to the private bucket, reads and
 authenticates it, verifies that an anonymous request cannot read the object,
-then deletes it. Production readiness also rejects non-HTTPS endpoints. The
+then deletes it and proves an authenticated read returns not-found. A provider
+that acknowledges deletion while retaining the object fails the proof.
+Production readiness also rejects non-HTTPS endpoints. The
 launch gate requires this proof to match the current encryption key and
 object-storage configuration and refreshes it after 30 days by default. If the
 bucket, access key, endpoint, region, or encryption key changes, run the

@@ -86,8 +86,32 @@ async function main() {
     });
     assert((await store.read(migrated.documents[0])).equals(licenseBytes), 'Encrypted document bytes must round-trip after migration.');
     assert((await store.read(migrated.eSignatures[0])).equals(signatureBytes), 'Encrypted signature bytes must round-trip after migration.');
+    await assert.rejects(
+      () => store.read({ ...migrated.documents[0], sha256: '0'.repeat(64) }),
+      error => error && error.code === 'woa_private_document_integrity_failed',
+      'Encrypted document reads must fail closed when the persisted plaintext checksum is changed.'
+    );
+    await assert.rejects(
+      () => store.read({ ...migrated.documents[0], size: Number(migrated.documents[0].size || 0) + 1 }),
+      error => error && error.code === 'woa_private_document_integrity_failed',
+      'Encrypted document reads must fail closed when the persisted plaintext size is changed.'
+    );
     const encrypted = await fs.readFile(path.join(temp, migrated.documents[0].storagePath));
     assert(!encrypted.equals(licenseBytes), 'The encrypted storage object must not contain the original license bytes.');
+    const probe = await store.probe({ organizationId: 'org-private-migration-test' });
+    assert.strictEqual(probe.objectDeleted, true, 'The private storage probe must verify that its encrypted test object is gone after deletion.');
+    const undeletableStore = secureDocumentStore.createSecureDocumentStore({
+      provider: 'local',
+      localRoot: path.join(temp, 'private-documents-delete-failure'),
+      encryptionKey: key,
+      keyVersion: 'migration-test-v1'
+    });
+    undeletableStore.deleteObject = async () => {};
+    await assert.rejects(
+      () => undeletableStore.probe({ organizationId: 'org-private-migration-test' }),
+      /deleted object remained readable/i,
+      'A provider that acknowledges delete without removing the object must fail the live storage proof.'
+    );
 
     const beforeNoop = await fs.readFile(dataFile, 'utf8');
     const noop = runMigration(dataFile, {
@@ -147,7 +171,7 @@ async function main() {
     assert.strictEqual(JSON.parse(rotationNoop.stdout).changed, false, 'A repeated key/provider migration must report no state change.');
     assert.strictEqual(await fs.readFile(dataFile, 'utf8'), beforeRotationNoop, 'A repeated key/provider migration must not rewrite protected state.');
 
-    console.log('Private document migration check passed: maintenance guard, immutable backup, encrypted read-back proof, fail-closed key rotation, provider/key re-homing, source retention, and repeat-safe no-op are verified.');
+    console.log('Private document migration check passed: maintenance guard, immutable backup, encrypted read-back checksum/size proof, verified deletion, fail-closed key rotation, provider/key re-homing, source retention, and repeat-safe no-op are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

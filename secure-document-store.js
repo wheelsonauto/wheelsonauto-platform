@@ -214,7 +214,11 @@ class SecureDocumentStore {
     const url = s3ObjectUrl(this.s3, storageKey);
     const headers = signingHeaders('GET', url, Buffer.alloc(0), this.s3);
     const response = await this.fetchObject(url, { method: 'GET', headers });
-    if (!response.ok) throw new Error('Private object storage read failed (' + response.status + ').');
+    if (!response.ok) {
+      const error = new Error('Private object storage read failed (' + response.status + ').');
+      error.statusCode = response.status;
+      throw error;
+    }
     return Buffer.from(await response.arrayBuffer());
   }
 
@@ -257,6 +261,13 @@ class SecureDocumentStore {
         publicReadBlocked = true;
       }
       await this.deleteObject(stored.storageKey);
+      try {
+        await this.readObject(stored.storageKey);
+        throw new Error('Private object storage validation failed because the deleted object remained readable.');
+      } catch (error) {
+        const missing = error && (error.code === 'ENOENT' || error.statusCode === 404);
+        if (!missing) throw error;
+      }
       deleted = true;
       return {
         ok: true,
@@ -332,7 +343,23 @@ class SecureDocumentStore {
     const decipher = crypto.createDecipheriv('aes-256-gcm', decryptionKey, nonce);
     decipher.setAAD(aad);
     decipher.setAuthTag(authTag);
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    const expectedSize = Number(document.size || 0);
+    if (expectedSize > 0 && plaintext.length !== expectedSize) {
+      const error = new Error('Private document size verification failed. Refusing to return an incomplete or mismatched file.');
+      error.code = 'woa_private_document_integrity_failed';
+      throw error;
+    }
+    const expectedSha256 = String(document.sha256 || '').trim().toLowerCase();
+    if (expectedSha256) {
+      const actualSha256 = crypto.createHash('sha256').update(plaintext).digest('hex');
+      if (!/^[a-f0-9]{64}$/.test(expectedSha256) || actualSha256 !== expectedSha256) {
+        const error = new Error('Private document checksum verification failed. Refusing to return a corrupted or mismatched file.');
+        error.code = 'woa_private_document_integrity_failed';
+        throw error;
+      }
+    }
+    return plaintext;
   }
 }
 
