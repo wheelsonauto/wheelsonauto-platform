@@ -309,12 +309,25 @@ async function actionModalSmoke(context) {
   const maintenance = context.db.maintenance.find(row => row.id);
   const claim = context.db.claims.find(row => row.id);
   const contract = context.db.contracts.find(row => row.id);
-  const chargeModalFixture = context.db.recurringPayments.find(row => row.id && String(row.status || '').toLowerCase() === 'active')
-    || context.db.recurringPayments.find(row => row.id);
-  if (chargeModalFixture && !/^clv_/i.test(String(chargeModalFixture.cloverPaymentSource || ''))) {
-    chargeModalFixture.cloverPaymentSource = 'clv_frontend_smoke_saved_source';
+  const recurringSources = [
+    context.db.recurringPayments,
+    context.db.integrations && context.db.integrations.clover && context.db.integrations.clover.recurringPlanMembers
+  ].filter(Array.isArray);
+  const chargeModalFixture = recurringSources.flat().find(row => row.id && String(row.status || '').toLowerCase() === 'active')
+    || recurringSources.flat().find(row => row.id);
+  if (chargeModalFixture) {
+    // A real customer export can legitimately contain only setup-needed rows.
+    // The UI test needs one synthetic saved-card source so the positive charge
+    // confirmation modal stays covered without changing the source fixture.
+    Object.assign(chargeModalFixture, {
+      status: 'Active',
+      paymentProvider: 'clover',
+      paymentSetup: 'card saved',
+      cardSavedAt: '2026-07-17T00:00:00.000Z',
+      cloverPaymentSource: 'clv_frontend_smoke_saved_source'
+    });
   }
-  const recurring = context.recurringRoster().find(row => row.id && String(row.status || '').toLowerCase() === 'active')
+  const recurring = context.recurringRoster().find(row => row.id && context.canTrySavedCardCharge(row))
     || context.recurringRoster().find(row => row.id);
   const setupRecurring = context.recurringRoster().find(row => context.isCardSetupRow(row));
 
@@ -679,6 +692,49 @@ function publicSmoke() {
   assertHealthy('Public apply', html(context), ['Apply', 'WheelsonAuto', 'public']);
 }
 
+async function refreshCoordinationSmoke() {
+  const context = makeContext({ name: 'Owner Refresh', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  context.__woaLastDataVersion = 'same-version';
+  let versionCalls = 0;
+  let releaseVersion;
+  context.fetch = async url => {
+    if (url !== '/api/state/version') throw new Error('Unexpected refresh URL: ' + url);
+    versionCalls += 1;
+    await new Promise(resolve => { releaseVersion = resolve; });
+    return { ok: true, json: async () => ({ version: 'same-version' }) };
+  };
+
+  const first = context.refreshData(true);
+  const second = context.refreshData(true);
+  assert(versionCalls === 1, 'Concurrent silent refreshes must share one version request.');
+  releaseVersion();
+  await Promise.all([first, second]);
+
+  context.document.hidden = true;
+  context.localStorage.setItem('woa-runtime-lease:state-poll', JSON.stringify({ owner: 'another-tab', expiresAt: Date.now() + 30000 }));
+  assert((await context.refreshData(true)) === false, 'A background follower tab must not duplicate the current state poll.');
+  assert(versionCalls === 1, 'A blocked background refresh must not make a network request.');
+
+  const manager = makeContext({ name: 'Manager Refresh', role: 'Manager', homeView: 'Manager Portal', access: 'Manager access' });
+  let managerCalls = 0;
+  manager.fetch = async () => {
+    managerCalls += 1;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  assert((await manager.autoApiSync(false)) === false, 'A manager tab must not run owner provider auto-sync.');
+  assert(managerCalls === 0, 'A manager auto-sync attempt must not call a provider route.');
+
+  const owner = makeContext({ name: 'Owner Provider', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  owner.localStorage.setItem('woa-runtime-lease:provider-auto-sync', JSON.stringify({ owner: 'another-owner-tab', expiresAt: Date.now() + 30000 }));
+  let ownerCalls = 0;
+  owner.fetch = async () => {
+    ownerCalls += 1;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  assert((await owner.autoApiSync(false)) === false, 'A second owner tab must respect the provider sync lease.');
+  assert(ownerCalls === 0, 'A leased provider sync must not call an external sync route twice.');
+}
+
 function heavyMessagesReportsSmoke() {
   const context = makeContext({ name: 'Owner Heavy Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
   const customers = context.db.contracts || [];
@@ -737,6 +793,7 @@ async function main() {
   mechanicSmoke();
   await mechanicInteractionSmoke();
   publicSmoke();
+  await refreshCoordinationSmoke();
   heavyMessagesReportsSmoke();
   console.log('Frontend render smoke passed: owner, manager, mechanic, public, heavy Messages/Reports, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
 }

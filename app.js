@@ -2332,9 +2332,55 @@ openContract=function(id){
 var __woaStateSaveInFlight=false;
 var __woaLastDataVersion=window.__SERVER_DATA_VERSION__||'';
 var __woaRefreshOutsideSaveBase=refreshData;
+var __woaStateRefreshInFlight=null;
+var __woaRuntimeTabId='tab-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+var __woaRuntimeLeasePrefix='woa-runtime-lease:';
+var __woaStateBroadcastKey='woa-runtime-state-change';
+
+function __woaReadRuntimeJson(key){
+  try{return JSON.parse(localStorage.getItem(key)||'null')}catch(error){return null}
+}
+
+function __woaClaimRuntimeLease(name,ttl){
+  var key=__woaRuntimeLeasePrefix+name,nowMs=Date.now(),current=__woaReadRuntimeJson(key)||{};
+  if(current.owner&&current.owner!==__woaRuntimeTabId&&Number(current.expiresAt||0)>nowMs)return false;
+  var next={owner:__woaRuntimeTabId,expiresAt:nowMs+Math.max(1000,Number(ttl||0))};
+  try{
+    localStorage.setItem(key,JSON.stringify(next));
+    var confirmed=__woaReadRuntimeJson(key)||{};
+    return confirmed.owner===__woaRuntimeTabId
+  }catch(error){
+    // Storage can be unavailable in a privacy-restricted browser. The
+    // per-tab in-flight guard below still prevents overlapping refreshes.
+    return true
+  }
+}
+
+function __woaPublishStateChange(version){
+  if(!version)return;
+  try{localStorage.setItem(__woaStateBroadcastKey,JSON.stringify({owner:__woaRuntimeTabId,version:String(version),at:Date.now()}))}catch(error){}
+}
+
+window.addEventListener('storage',function(event){
+  if(isPublic||!event||event.key!==__woaStateBroadcastKey||!event.newValue)return;
+  var message;
+  try{message=JSON.parse(event.newValue)}catch(error){return}
+  if(!message||message.owner===__woaRuntimeTabId||!message.version||String(message.version)===String(__woaLastDataVersion||''))return;
+  // Hidden tabs wait for their normal focus refresh. The visible tab updates
+  // immediately, so another open WheelsonAuto tab never leaves stale data on screen.
+  if(document.hidden)return;
+  refreshData(true)
+});
+
 refreshData=async function(silent){
   if(__woaStateSaveInFlight)return false;
   if(isPublic)return false;
+  // A background tab must not make the same five-second request as every
+  // other open tab. One short lease keeps the normal five-second freshness
+  // while avoiding request storms when the owner keeps several tabs open.
+  if(silent&&document.hidden&&!__woaClaimRuntimeLease('state-poll',Math.max(LIVE_REFRESH_MS*3,15000)))return false;
+  if(__woaStateRefreshInFlight)return __woaStateRefreshInFlight;
+  var refreshTask=(async function(){
   try{
     if(silent){
       var versionResponse=await fetch('/api/state/version',{headers:{'Accept':'application/json'},cache:'no-store'});
@@ -2353,6 +2399,7 @@ refreshData=async function(silent){
     }
     db=fresh;
     lastDataFingerprint=fingerprint;
+    __woaPublishStateChange(__woaLastDataVersion);
     var active=document.activeElement,editing=active&&/INPUT|TEXTAREA|SELECT/.test(active.tagName);
     if(!silent){render();notify('Dashboard refreshed')}
     else if(!editing)queueRender();
@@ -2360,6 +2407,9 @@ refreshData=async function(silent){
   }catch(error){
     return false
   }
+  })();
+  __woaStateRefreshInFlight=refreshTask;
+  try{return await refreshTask}finally{if(__woaStateRefreshInFlight===refreshTask)__woaStateRefreshInFlight=null}
 };
 save=async function(){
   var payload='';
@@ -2369,7 +2419,7 @@ save=async function(){
     var response=await fetch('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:payload});
     if(response.ok){
       lastDataFingerprint=payload;
-      try{var result=await response.json();if(result.version)__woaLastDataVersion=String(result.version)}catch(ignore){}
+      try{var result=await response.json();if(result.version){__woaLastDataVersion=String(result.version);__woaPublishStateChange(__woaLastDataVersion)}}catch(ignore){}
     }
     return response.ok
   }catch(error){
@@ -2378,6 +2428,16 @@ save=async function(){
   }finally{
     __woaStateSaveInFlight=false
   }
+};
+
+var __woaAutoApiSyncBase=autoApiSync;
+autoApiSync=async function(force){
+  if(isPublic||!isOwner())return false;
+  // A successful automatic provider sync is shared state. Hold the lease for
+  // the normal sync interval so several owner tabs cannot all hit Clover,
+  // Stripe, Telnyx, or other provider adapters at once.
+  if(!force&&!__woaClaimRuntimeLease('provider-auto-sync',API_AUTO_SYNC_MS+5000))return false;
+  return __woaAutoApiSyncBase(force)
 };
 
 // Role home screens should show one primary queue. Full lists live in their
