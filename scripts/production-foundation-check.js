@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
+const encryptedStateBackup = require('../encrypted-state-backup');
 const stripeMigration = require('../stripe-migration');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
@@ -76,6 +77,8 @@ async function main() {
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
+    const encryptedBackupSource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-backup.js'), 'utf8');
+    const encryptedRecoverySource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-recovery.js'), 'utf8');
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
     const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
     const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
@@ -106,10 +109,13 @@ async function main() {
       'clover-auto-sync',
       'autopay-run',
       'verification-monitor',
-      'passtime-gps-sync'
+      'passtime-gps-sync',
+      'encrypted-state-backup'
     ].forEach(sourceName => {
       assert(serverSource.includes("reportBackgroundTaskFailure('" + sourceName + "'"), 'Scheduled worker ' + sourceName + ' must report failures through the durable monitor.');
     });
+    assert(encryptedBackupSource.includes("encryption: 'AES-256-GCM'") && encryptedBackupSource.includes('pointer.signature = pointerSignature') && encryptedBackupSource.includes('previousPointerBytes'), 'Offsite state backups must use authenticated encryption, a signed latest pointer, and rollback to the previous known-good pointer after failed read-back.');
+    assert(encryptedRecoverySource.includes('preserveAccessControlAcrossRecovery') && encryptedRecoverySource.includes('repository.write(restored') && encryptedRecoverySource.includes('verifiedChecksum'), 'Offsite recovery must preserve current access control, commit through PostgreSQL, and verify the recovered state through a second read.');
     const recoveryTargetGuard = spawnSync(process.execPath, ['scripts/postgres-runtime-check.js'], {
       cwd: path.resolve(__dirname, '..'),
       env: {
@@ -127,7 +133,7 @@ async function main() {
     assert.strictEqual(recoveryTargetGuard.status, 1, 'A recovery proof run must fail before opening a database when its test target matches the production proof target.');
     assert.match([recoveryTargetGuard.stdout, recoveryTargetGuard.stderr].filter(Boolean).join(''), /different dedicated test database/i, 'The recovery proof refusal must explain that the test database cannot be production.');
     assert(launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_RECORD=1') && launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL') && /same database as\n+the production proof target/i.test(launchRunbook), 'The production runbook must explain that recovery proof is recorded only after import from a separate test database.');
-    assert(launchRunbook.includes('Validate private storage') && launchRunbook.includes('connect the Telnyx inbox') && launchRunbook.includes('Test Star provider') && launchRunbook.includes('Test failure alerts') && launchRunbook.includes('Live launch preflight'), 'The production runbook must give the owner the exact in-app provider proof actions needed to clear the launch gate.');
+    assert(launchRunbook.includes('Validate private storage') && launchRunbook.includes('restore-encrypted-state-backup') && launchRunbook.includes('RESTORE LATEST ENCRYPTED STATE BACKUP') && launchRunbook.includes('connect the Telnyx inbox') && launchRunbook.includes('Test Star provider') && launchRunbook.includes('Test failure alerts') && launchRunbook.includes('Live launch preflight'), 'The production runbook must give the owner the exact backup, recovery, and provider proof actions needed to clear the launch gate.');
     const legacyPureStripe = { paymentProvider: 'stripe', stripeCustomerId: 'cus_foundation_pure', stripePaymentMethodId: 'pm_foundation_pure' };
     assert.strictEqual(stripeMigration.migrationRecord(legacyPureStripe).state, stripeMigration.STATES.STRIPE_ACTIVE, 'A legacy Stripe-only customer must remain Stripe-active without an unnecessary Clover cutover state.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed(legacyPureStripe, 'stripe', '2026-07-24'), true, 'A Stripe-only customer should remain eligible for its normal Stripe autopay run.');
@@ -462,6 +468,17 @@ async function main() {
     assert(privateS3Store.status().productionReady && privateS3Store.status().secureTransport, 'Production private storage must require a complete S3 configuration over HTTPS.');
     const privateS3Probe = await privateS3Store.probe({ organizationId: 'org-test-s3' });
     assert(privateS3Probe.ok && privateS3Probe.publicReadBlocked === true && privateS3Probe.objectDeleted, 'The production storage probe must prove anonymous reads are blocked before deleting its encrypted object.');
+    const privateS3Backups = encryptedStateBackup.createEncryptedStateBackupStore({
+      objectStore: privateS3Store,
+      organizationId: 'org-test-s3',
+      encryptionKey: Buffer.alloc(32, 13).toString('base64'),
+      keyVersion: 'backup-s3-v1'
+    });
+    assert(privateS3Backups.status().productionReady, 'Encrypted state backups must recognize the same private HTTPS S3-compatible transport as production-ready.');
+    const privateS3Backup = await privateS3Backups.create({ vehicles: [{ id: 's3-backup-vehicle' }], payments: [] }, { stateVersion: 3 });
+    assert(privateS3Backup.verified && (await privateS3Backups.verifyLatest()).stateChecksum === privateS3Backup.stateChecksum, 'The S3-compatible backup path must write, atomically publish, read, decrypt, and authenticate the captured state.');
+    await privateS3Store.deleteObject(privateS3Backup.storageKey);
+    await privateS3Store.deleteObject(privateS3Backups.latestPointerKey());
     const publicS3Store = secureDocumentStore.createSecureDocumentStore({
       provider: 's3',
       encryptionKey: Buffer.alloc(32, 11).toString('base64'),

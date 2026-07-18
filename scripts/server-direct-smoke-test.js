@@ -193,6 +193,8 @@ async function main() {
   process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = String(30 * 24 * 60 * 60 * 1000);
   process.env.WOA_DOCUMENT_STORAGE_PROVIDER = 'local';
   process.env.WOA_DOCUMENT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+  process.env.WOA_STATE_BACKUP_ENABLED = '1';
+  process.env.WOA_STATE_BACKUP_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
   delete require.cache[require.resolve('../server.js')];
   const {
     server,
@@ -1494,6 +1496,14 @@ async function main() {
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
     const managerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: managerCookie, json: {} });
     assert(managerStorageValidation.status === 403, 'Manager must not validate the private production document-storage provider.');
+    const managerStateBackup = await request(server, 'POST', '/api/system/infrastructure/state-backup/create', { cookie: managerCookie, json: {} });
+    assert(managerStateBackup.status === 403, 'Manager must not create or inspect owner recovery backups.');
+    const ownerStateBackup = await request(server, 'POST', '/api/system/infrastructure/state-backup/create', { cookie: ownerCookie, json: {} });
+    assert(ownerStateBackup.status === 200 && ownerStateBackup.json && ownerStateBackup.json.backup && ownerStateBackup.json.backup.verified === true, 'Owner encrypted state-backup creation must capture, encrypt, authenticate, and read back the current state.');
+    assert(!Object.prototype.hasOwnProperty.call(ownerStateBackup.json.backup, 'storageKey') && !Object.prototype.hasOwnProperty.call(ownerStateBackup.json.backup, 'backupSha256'), 'State-backup API responses must not expose internal object keys or ciphertext hashes.');
+    const ownerStateBackupVerify = await request(server, 'POST', '/api/system/infrastructure/state-backup/verify', { cookie: ownerCookie, json: {} });
+    assert(ownerStateBackupVerify.status === 200 && ownerStateBackupVerify.json && ownerStateBackupVerify.json.stateBackup && ownerStateBackupVerify.json.stateBackup.verified === true, 'Owner must be able to authenticate and verify the latest encrypted state backup without creating another object.');
+    assert(ownerStateBackupVerify.json.stateBackup.productionReady === false && ownerStateBackupVerify.json.stateBackup.live === false, 'Encrypted local storage may pass integrity tests but must never claim production offsite readiness.');
     const managerOperationalAlertValidation = await request(server, 'POST', '/api/system/infrastructure/operational-alerts/validate', { cookie: managerCookie, json: {} });
     assert(managerOperationalAlertValidation.status === 403, 'Manager must not validate operational failure alerts.');
     const managerStarProviderHealth = await request(server, 'POST', '/api/messages/ai-health', { cookie: managerCookie, json: {} });
@@ -1507,6 +1517,7 @@ async function main() {
     assert(Array.isArray(ownerLaunchPreflight.json.missing) && ownerLaunchPreflight.json.missing.includes('controlled PostgreSQL recovery drill'), 'The owner launch preflight must block Stripe launch until a fresh controlled PostgreSQL recovery drill is recorded.');
     assert(ownerLaunchPreflight.json.recoveryDrill && ownerLaunchPreflight.json.recoveryDrill.ready === false, 'The owner launch preflight must expose an unverified recovery-drill gate instead of treating JSON development state as production-ready.');
     assert(ownerLaunchPreflight.json.documentEncryptionKeys && ownerLaunchPreflight.json.documentEncryptionKeys.ready === true && Array.isArray(ownerLaunchPreflight.json.documentEncryptionKeys.availableKeyVersions), 'The owner launch preflight must expose safe key-version coverage without exposing any encryption key material.');
+    assert(ownerLaunchPreflight.json.stateBackup && ownerLaunchPreflight.json.stateBackup.verified === true && ownerLaunchPreflight.json.missing.includes('HTTPS offsite encrypted state-backup storage'), 'The launch preflight must recognize an authenticated backup while still rejecting local-only storage for production.');
     assert(!/BwcHBwcH|WOA_DOCUMENT_ENCRYPTION_KEY/i.test(JSON.stringify(ownerLaunchPreflight.json.documentEncryptionKeys)), 'The private-document key inventory must never expose key material or secret environment names.');
     assert(ownerLaunchPreflight.json.cloverRecurring && ownerLaunchPreflight.json.cloverRecurring.ready === false && ownerLaunchPreflight.json.missing.includes('fresh Clover recurring roster for controlled cutover'), 'The owner launch preflight must block cutover when active Clover recurring records do not have a fresh complete roster.');
     assert(!Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.recoveryDrill, 'configurationFingerprint'), 'Recovery drill fingerprints must remain server-only even in the owner launch preflight.');

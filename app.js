@@ -3218,11 +3218,12 @@ function liveLaunchJobErrorReview(jobErrors){
 }
 function liveLaunchPreflightModal(preflight){
   preflight=preflight||{};
-  var database=preflight.database||{},recoveryDrill=preflight.recoveryDrill||database.recoveryDrill||{},storage=preflight.documentStorage||{},storageValidation=preflight.documentStorageValidation||{},stripeWebhook=preflight.stripeWebhook||{},identityWebhook=preflight.stripeIdentityWebhook||{},alerts=preflight.operationalAlerts||{},telnyx=preflight.telnyxMessaging||{},resend=preflight.resendEmail||{},star=preflight.starAi||{},owner=preflight.ownerAuthentication||{},cloverRecurring=preflight.cloverRecurring||{};
-  var databaseReady=!!database.productionReady&&!!database.snapshotRecoveryReady&&!!database.migrationProofReady,recoveryDrillReady=!!recoveryDrill.ready,storageReady=!!storage.productionReady&&!!storageValidation.live,stripeReady=!!stripeWebhook.live,identityReady=!!identityWebhook.live,alertsReady=!!alerts.live,telnyxReady=!!telnyx.live,resendReady=!!resend.live,starReady=!!star.live,ownerReady=!!owner.passwordLoginConfigured&&!!owner.passwordLoginStrong&&!owner.pinFallbackAllowed,cloverRecurringReady=!!cloverRecurring.ready;
+  var database=preflight.database||{},recoveryDrill=preflight.recoveryDrill||database.recoveryDrill||{},stateBackup=preflight.stateBackup||{},storage=preflight.documentStorage||{},storageValidation=preflight.documentStorageValidation||{},stripeWebhook=preflight.stripeWebhook||{},identityWebhook=preflight.stripeIdentityWebhook||{},alerts=preflight.operationalAlerts||{},telnyx=preflight.telnyxMessaging||{},resend=preflight.resendEmail||{},star=preflight.starAi||{},owner=preflight.ownerAuthentication||{},cloverRecurring=preflight.cloverRecurring||{};
+  var databaseReady=!!database.productionReady&&!!database.snapshotRecoveryReady&&!!database.migrationProofReady,recoveryDrillReady=!!recoveryDrill.ready,stateBackupReady=!!stateBackup.live,storageReady=!!storage.productionReady&&!!storageValidation.live,stripeReady=!!stripeWebhook.live,identityReady=!!identityWebhook.live,alertsReady=!!alerts.live,telnyxReady=!!telnyx.live,resendReady=!!resend.live,starReady=!!star.live,ownerReady=!!owner.passwordLoginConfigured&&!!owner.passwordLoginStrong&&!owner.pinFallbackAllowed,cloverRecurringReady=!!cloverRecurring.ready;
   var rows=[
     liveLaunchGateRow('PostgreSQL state',databaseReady,liveLaunchGateDetail(database,databaseReady,'Transactional database, import proof, and recovery snapshot are required.')),
     liveLaunchGateRow('PostgreSQL recovery drill',recoveryDrillReady,liveLaunchGateDetail(recoveryDrill,recoveryDrillReady,'A fresh controlled restore and server-restart read must be recorded against the current database configuration.')),
+    liveLaunchGateRow('Encrypted offsite backup',stateBackupReady,liveLaunchGateDetail(stateBackup,stateBackupReady,'Enable scheduled backups, use HTTPS offsite storage, then create and authenticate a fresh state backup.')),
     liveLaunchGateRow('Private document storage',storageReady,liveLaunchGateDetail(storageValidation,storageReady,'Encrypted S3-compatible storage needs a current write/read/delete proof.')),
     liveLaunchGateRow('Stripe payments',stripeReady,liveLaunchGateDetail(stripeWebhook,stripeReady,'A signed live Stripe payment webhook must be recorded.')),
     liveLaunchGateRow('Stripe Identity',identityReady,liveLaunchGateDetail(identityWebhook,identityReady,'A signed live Stripe Identity verification is required.')),
@@ -3241,7 +3242,7 @@ function liveLaunchPreflightModal(preflight){
   if(identityWarnings.length)issues.push('Complete VIN review for '+identityWarnings.length+' vehicle'+(identityWarnings.length===1?'':'s')+' before cutover.');
   if(jobErrors.length)issues.push('Review '+jobErrors.length+' open job error'+(jobErrors.length===1?'':'s')+' before cutover.');
   var warningHtml=identityWarnings.length?'<ul class="list compact-list">'+identityWarnings.map(function(item){return '<li>'+esc(item.message||item.label||'Vehicle identity review required')+'</li>'}).join('')+'</ul>':'<div class="notice good">Vehicle VIN identity review is clear.</div>';
-  return summary+'<section class="section" style="padding:0;margin-top:12px"><h2>Launch evidence</h2>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Recent job failures</h2>'+liveLaunchJobErrorReview(jobErrors)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check never sends a charge, changes a customer, or turns on a provider. Marking a job failure reviewed only closes that durable monitoring record.</div>'
+  return summary+'<section class="section" style="padding:0;margin-top:12px"><div class="section-head"><h2>Launch evidence</h2><button class="btn" data-action="create-state-backup">Create &amp; verify backup</button></div>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Recent job failures</h2>'+liveLaunchJobErrorReview(jobErrors)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check never sends a charge, changes a customer, or turns on a provider. Marking a job failure reviewed only closes that durable monitoring record.</div>'
 }
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="open-live-launch-preflight"]');
@@ -3262,6 +3263,23 @@ document.addEventListener('click',async function(event){
     button.disabled=false;
     button.classList.remove('is-loading');
   }
+},true);
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="create-state-backup"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if(roleName()!=='owner'){notify('Only the owner can create recovery backups');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  try{
+    var result=await post('/api/system/infrastructure/state-backup/create',{});
+    if(!result||!result.ok){notify(result&&result.error||'Encrypted state backup failed');return}
+    var response=await fetch('/api/system/infrastructure/preflight',{headers:{Accept:'application/json'},cache:'no-store'}),fresh=await response.json();
+    openModal('Controlled Stripe launch preflight',liveLaunchPreflightModal(fresh));
+    notify(result.message||'Encrypted state backup created and verified');
+  }catch(error){notify('Encrypted state backup could not reach the server')}
+  finally{button.disabled=false;button.classList.remove('is-loading')}
 },true);
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="resolve-job-error"]');

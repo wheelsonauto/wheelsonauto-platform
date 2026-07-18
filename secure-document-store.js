@@ -203,6 +203,30 @@ class SecureDocumentStore {
     return { storageKey, storagePath: '' };
   }
 
+  async replaceObject(key, bytes) {
+    const storageKey = normalizeObjectKey(key);
+    if (this.provider === 'local') {
+      const target = path.resolve(this.localRoot, storageKey);
+      if (!target.startsWith(this.localRoot + path.sep)) throw new Error('Invalid encrypted document path.');
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      const temporary = target + '.tmp-' + process.pid + '-' + crypto.randomBytes(6).toString('hex');
+      try {
+        await fs.writeFile(temporary, bytes, { flag: 'wx' });
+        await fs.rename(temporary, target);
+      } finally {
+        await fs.rm(temporary, { force: true }).catch(() => {});
+      }
+      return { storageKey, storagePath: path.relative(path.dirname(this.localRoot), target) };
+    }
+    if (this.provider !== 's3') throw new Error('Unknown document storage provider.');
+    const url = s3ObjectUrl(this.s3, storageKey);
+    const headers = signingHeaders('PUT', url, bytes, this.s3);
+    headers['Content-Type'] = 'application/octet-stream';
+    const response = await this.fetchObject(url, { method: 'PUT', headers, body: bytes });
+    if (!response.ok) throw new Error('Private object storage replacement failed (' + response.status + ').');
+    return { storageKey, storagePath: '' };
+  }
+
   async readObject(key) {
     const storageKey = normalizeObjectKey(key);
     if (this.provider === 'local') {

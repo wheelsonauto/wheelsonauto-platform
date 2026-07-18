@@ -136,6 +136,59 @@ object-storage configuration and refreshes it after 30 days by default. If the
 bucket, access key, endpoint, region, or encryption key changes, run the
 validation again before enabling `WOA_PRODUCTION_HARDENING_REQUIRED=1`.
 
+## 2A. Configure Encrypted Offsite State Backups
+
+PostgreSQL snapshots protect normal application recovery inside the database.
+They do not replace an independent offsite copy. Use the same private HTTPS
+S3-compatible provider with a separate state-backup key:
+
+```text
+WOA_STATE_BACKUP_ENABLED=1
+WOA_STATE_BACKUP_ENCRYPTION_KEY=<separate base64 32-byte random key>
+WOA_STATE_BACKUP_KEY_VERSION=v1
+WOA_STATE_BACKUP_DECRYPTION_KEYS='{"v0":"<previous base64 32-byte key>"}' # only during rotation
+WOA_STATE_BACKUP_INTERVAL_MS=21600000        # optional; default is controlled by the app
+WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS=43200000
+```
+
+The backup worker waits for queued state writes, captures one consistent
+repository version, canonicalizes and compresses it, encrypts it with
+AES-256-GCM, writes an immutable object, atomically advances a signed latest
+pointer, then reads and authenticates the object again. Object names, hashes,
+and key material are not returned to the browser.
+
+After the production PostgreSQL import and private bucket validation, run the
+owner-only create and verify actions once:
+
+```text
+POST /api/system/infrastructure/state-backup/create
+POST /api/system/infrastructure/state-backup/verify
+```
+
+The launch gate requires a fresh, authenticated backup in HTTPS offsite
+storage. Local encrypted storage can test the format but can never satisfy
+production readiness. A changed key version, missing signed pointer, stale
+backup, altered ciphertext, or checksum mismatch fails closed.
+
+For disaster recovery, first deploy with
+`WOA_MIGRATION_MAINTENANCE_MODE=1`, verify `/healthz`, verify the database and
+bucket credentials, and keep every application instance frozen. Then run:
+
+```sh
+WOA_DATA_BACKEND=postgres \
+WOA_MIGRATION_MAINTENANCE_MODE=1 \
+WOA_ENCRYPTED_STATE_RESTORE_CONFIRM='RESTORE LATEST ENCRYPTED STATE BACKUP' \
+WOA_ENCRYPTED_STATE_RESTORE_ACTOR='Owner approved disaster recovery' \
+pnpm run restore-encrypted-state-backup
+```
+
+The command accepts only PostgreSQL and production-ready HTTPS object storage.
+It authenticates the backup before mutation, preserves the current owner,
+staff, and customer login records, revokes all signed sessions, creates a new
+PostgreSQL recovery snapshot, and verifies the committed checksum through a
+second read. Keep maintenance mode active until customer/vehicle identities,
+payment queues, provider webhooks, and owner login have been reviewed.
+
 ## 3. Migrate Platform State to PostgreSQL
 
 After the test database has passed, provision the production PostgreSQL

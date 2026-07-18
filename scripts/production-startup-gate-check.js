@@ -42,6 +42,8 @@ function cleanRuntimeEnvironment(dataDir) {
     WOA_STRIPE_WEBHOOK_SECRET: '',
     WOA_DOCUMENT_STORAGE_PROVIDER: 'local',
     WOA_DOCUMENT_ENCRYPTION_KEY: '',
+    WOA_STATE_BACKUP_ENABLED: '0',
+    WOA_STATE_BACKUP_ENCRYPTION_KEY: '',
     WOA_OBJECT_STORAGE_BUCKET: '',
     WOA_OBJECT_STORAGE_ENDPOINT: '',
     WOA_OBJECT_STORAGE_ACCESS_KEY_ID: '',
@@ -73,6 +75,10 @@ async function main() {
     assert.match(output, /WheelsonAuto refused to start with incomplete production safeguards/i, 'The startup failure must clearly identify the production guard.');
     assert.match(output, /PostgreSQL transactional state/i, 'The startup guard must require transactional PostgreSQL.');
     assert.match(output, /controlled PostgreSQL recovery drill/i, 'The startup guard must require a fresh controlled PostgreSQL restore and restart drill.');
+    assert.match(output, /WOA_STATE_BACKUP_ENABLED=1/i, 'The startup guard must require the scheduled encrypted state-backup worker.');
+    assert.match(output, /HTTPS offsite encrypted state-backup storage/i, 'The startup guard must require independent HTTPS offsite backup storage.');
+    assert.match(output, /dedicated WOA_STATE_BACKUP_ENCRYPTION_KEY/i, 'The startup guard must require a separate state-backup encryption key.');
+    assert.match(output, /verified encrypted offsite state backup/i, 'The startup guard must require an authenticated backup read-back before launch.');
     assert.match(output, /S3-compatible AES-256-GCM private document storage/i, 'The startup guard must require encrypted private object storage.');
     assert.match(output, /Stripe live secret key/i, 'The startup guard must require live Stripe credentials.');
     assert.match(output, /Stripe onboarding payment provider/i, 'The startup guard must reject a live Stripe launch that still creates new onboarding payments through Clover.');
@@ -97,7 +103,7 @@ async function main() {
     assert.match(identityRuntimeOutput, /signed live Stripe Identity verification/i, 'The startup guard must require a signed verified Stripe Identity event from a WheelsonAuto onboarding record.');
     assert(!/WheelsonAuto platform running/i.test(identityRuntimeOutput), 'The HTTP listener must never start while Stripe Identity proof is incomplete.');
 
-    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, a controlled recovery drill, encrypted private storage, Stripe onboarding and Identity proof, Telnyx, Resend, Star, signed live payment safeguards, and failure-alert delivery are ready.');
+    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, controlled recovery, a fresh encrypted offsite backup, encrypted private storage, Stripe onboarding and Identity proof, Telnyx, Resend, Star, signed live payment safeguards, and failure-alert delivery are ready.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

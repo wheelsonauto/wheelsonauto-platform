@@ -17,6 +17,7 @@ const stripeMigration = require('./stripe-migration');
 const authPolicy = require('./auth-policy');
 const stateMigrationLock = require('./state-migration-lock');
 const recoveryGuard = require('./recovery-guard');
+const encryptedStateBackup = require('./encrypted-state-backup');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -159,6 +160,10 @@ const WOA_EMAIL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.
 const WOA_AI_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_AI_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS = Math.max(5 * 60 * 1000, Number(process.env.WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS || 6 * 60 * 60 * 1000));
+const WOA_STATE_BACKUP_ENABLED = process.env.WOA_STATE_BACKUP_ENABLED === '1';
+const WOA_STATE_BACKUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STATE_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
+const WOA_STATE_BACKUP_STARTUP_DELAY_MS = Math.max(30 * 1000, Number(process.env.WOA_STATE_BACKUP_STARTUP_DELAY_MS || 2 * 60 * 1000));
+const WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS || 12 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
 const WOA_ERROR_RECORD_WINDOW_MS = Math.max(15 * 1000, Number(process.env.WOA_ERROR_RECORD_WINDOW_MS || 60 * 1000));
@@ -194,10 +199,18 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
   sessionToken: process.env.AWS_SESSION_TOKEN || '',
   pathStyle: process.env.WOA_OBJECT_STORAGE_PATH_STYLE === '1'
 });
+const STATE_BACKUP_STORE = encryptedStateBackup.createEncryptedStateBackupStore({
+  objectStore: PRIVATE_DOCUMENT_STORE,
+  organizationId: MAIN_ORG_ID,
+  encryptionKey: process.env.WOA_STATE_BACKUP_ENCRYPTION_KEY || process.env.WOA_DOCUMENT_ENCRYPTION_KEY || '',
+  keyVersion: process.env.WOA_STATE_BACKUP_KEY_VERSION || process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION || 'v1',
+  decryptionKeys: process.env.WOA_STATE_BACKUP_DECRYPTION_KEYS || process.env.WOA_DOCUMENT_DECRYPTION_KEYS || ''
+});
+const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BACKUP_ENCRYPTION_KEY || '').trim();
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-recovery-integrity-160';
+const ASSET_VERSION = 'platform-20260718-encrypted-backup-161';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -257,6 +270,17 @@ const passTimePollStatus = {
   lastError: '',
   lastResult: null,
   lastLoggedAt: 0
+};
+const stateBackupStatus = {
+  enabled: WOA_STATE_BACKUP_ENABLED,
+  intervalMs: WOA_STATE_BACKUP_INTERVAL_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
+  lastVerifiedAt: '',
+  lastSource: '',
+  lastError: '',
+  lastResult: null
 };
 const LOGIN_THROTTLE_LIMIT = Math.max(3, Number(process.env.WOA_LOGIN_THROTTLE_LIMIT || 6));
 const LOGIN_THROTTLE_WINDOW_MS = Math.max(60000, Number(process.env.WOA_LOGIN_THROTTLE_WINDOW_MS || 10 * 60 * 1000));
@@ -806,6 +830,123 @@ async function writeData(data) {
   const job = writeDataQueue.then(() => writeDataNow(data));
   writeDataQueue = job.catch(() => {});
   return job;
+}
+function safeStateBackupResult(result = {}) {
+  return {
+    organizationId: String(result.organizationId || ''),
+    createdAt: String(result.createdAt || ''),
+    stateVersion: String(result.stateVersion == null ? '' : result.stateVersion),
+    stateChecksum: String(result.stateChecksum || ''),
+    stateSize: Math.max(0, Number(result.stateSize || 0)),
+    keyVersion: String(result.keyVersion || ''),
+    verified: result.verified === true
+  };
+}
+async function captureStateBackupSnapshot() {
+  const capture = writeDataQueue.then(async () => {
+    const snapshot = await STATE_REPOSITORY.read();
+    const state = snapshot && snapshot.state && typeof snapshot.state === 'object' ? snapshot.state : emptyPlatformState();
+    const actualChecksum = stateRepository.checksum(state);
+    const repositoryChecksum = String(snapshot && snapshot.checksum || '');
+    if (repositoryChecksum && repositoryChecksum !== actualChecksum) {
+      const error = new Error('State backup capture checksum does not match the repository snapshot.');
+      error.code = 'woa_state_backup_source_checksum_mismatch';
+      throw error;
+    }
+    return {
+      state,
+      version: snapshot && snapshot.version,
+      checksum: actualChecksum
+    };
+  });
+  writeDataQueue = capture.then(() => undefined).catch(() => {});
+  return capture;
+}
+async function runEncryptedStateBackup(options = {}) {
+  const source = String(options.source || 'manual').slice(0, 80);
+  const force = options.force === true;
+  if (!force && !WOA_STATE_BACKUP_ENABLED) {
+    return { ok: true, skipped: true, reason: 'Encrypted state backups are disabled.' };
+  }
+  if (stateBackupStatus.inFlight) {
+    return { ok: true, skipped: true, reason: 'An encrypted state backup is already running.', status: { ...stateBackupStatus } };
+  }
+  const configured = STATE_BACKUP_STORE.status();
+  if (!configured.configured) {
+    const error = new Error(configured.message || 'Encrypted state backup storage is not configured.');
+    error.code = 'woa_state_backup_not_configured';
+    throw error;
+  }
+  stateBackupStatus.inFlight = true;
+  stateBackupStatus.lastStartedAt = new Date().toISOString();
+  stateBackupStatus.lastSource = source;
+  stateBackupStatus.lastError = '';
+  try {
+    const snapshot = await captureStateBackupSnapshot();
+    const created = await STATE_BACKUP_STORE.create(snapshot.state, { stateVersion: snapshot.version });
+    if (created.stateChecksum !== snapshot.checksum || created.verified !== true) {
+      throw new Error('Encrypted state backup read-back did not match the captured repository snapshot.');
+    }
+    const result = safeStateBackupResult(created);
+    stateBackupStatus.lastFinishedAt = new Date().toISOString();
+    stateBackupStatus.lastVerifiedAt = result.createdAt;
+    stateBackupStatus.lastResult = result;
+    return { ok: true, skipped: false, backup: result };
+  } catch (error) {
+    stateBackupStatus.lastFinishedAt = new Date().toISOString();
+    stateBackupStatus.lastError = String(error && error.message || error).slice(0, 500);
+    throw error;
+  } finally {
+    stateBackupStatus.inFlight = false;
+  }
+}
+async function encryptedStateBackupEvidence() {
+  const configured = STATE_BACKUP_STORE.status();
+  const base = {
+    enabled: WOA_STATE_BACKUP_ENABLED,
+    configured: configured.configured,
+    productionReady: configured.productionReady,
+    dedicatedKeyConfigured: STATE_BACKUP_DEDICATED_KEY_CONFIGURED,
+    provider: configured.storage && configured.storage.provider || '',
+    secureTransport: !!(configured.storage && configured.storage.secureTransport),
+    keyVersion: configured.encryptionConfigured ? configured.keyVersion : '',
+    intervalHours: Math.round(WOA_STATE_BACKUP_INTERVAL_MS / (60 * 60 * 1000) * 10) / 10,
+    maxAgeHours: Math.round(WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000) * 10) / 10,
+    verified: false,
+    fresh: false,
+    live: false,
+    lastError: stateBackupStatus.lastError || ''
+  };
+  if (!configured.configured) {
+    return { ...base, error: configured.message || 'Encrypted state backup storage is not configured.' };
+  }
+  try {
+    const verified = safeStateBackupResult(await STATE_BACKUP_STORE.verifyLatest());
+    const ageMs = Date.now() - Date.parse(verified.createdAt || '');
+    const fresh = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS;
+    const live = WOA_STATE_BACKUP_ENABLED && configured.productionReady && STATE_BACKUP_DEDICATED_KEY_CONFIGURED && verified.verified && fresh;
+    stateBackupStatus.lastVerifiedAt = verified.createdAt;
+    stateBackupStatus.lastResult = verified;
+    return {
+      ...base,
+      ...verified,
+      ageHours: Number.isFinite(ageMs) ? Math.round(ageMs / (60 * 60 * 1000) * 10) / 10 : null,
+      verified: verified.verified === true,
+      fresh,
+      live,
+      message: live
+        ? 'A fresh encrypted offsite state backup passed authenticated read-back verification.'
+        : !WOA_STATE_BACKUP_ENABLED
+          ? 'Set WOA_STATE_BACKUP_ENABLED=1 after configuring private offsite storage.'
+          : !configured.productionReady
+            ? 'Use HTTPS S3-compatible storage for production state backups.'
+            : !STATE_BACKUP_DEDICATED_KEY_CONFIGURED
+              ? 'Set a dedicated WOA_STATE_BACKUP_ENCRYPTION_KEY before production launch.'
+            : 'Create a fresh encrypted state backup before live Stripe cutover.'
+    };
+  } catch (error) {
+    return { ...base, error: String(error && error.message || error).slice(0, 500) };
+  }
 }
 function normKey(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -9135,6 +9276,7 @@ async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
   const recoveryDrill = currentRecoveryDrillEvidence(database);
   const databaseWithRecoveryDrill = { ...database, recoveryDrill, recoveryDrillReady: recoveryDrill.ready };
+  const stateBackup = await encryptedStateBackupEvidence();
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
   const state = data || await readData();
   const stripeWebhook = stripeLiveWebhookEvidence(state);
@@ -9153,6 +9295,11 @@ async function productionInfrastructurePreflight(data = null) {
   if (!databaseWithRecoveryDrill.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
   if (!databaseWithRecoveryDrill.migrationProofReady) missing.push('verified JSON-to-PostgreSQL import proof');
   if (!recoveryDrill.ready) missing.push('controlled PostgreSQL recovery drill');
+  if (!stateBackup.enabled) missing.push('WOA_STATE_BACKUP_ENABLED=1');
+  if (!stateBackup.productionReady) missing.push('HTTPS offsite encrypted state-backup storage');
+  if (!stateBackup.dedicatedKeyConfigured) missing.push('dedicated WOA_STATE_BACKUP_ENCRYPTION_KEY');
+  if (!stateBackup.verified) missing.push('verified encrypted offsite state backup');
+  else if (!stateBackup.fresh) missing.push('fresh encrypted offsite state backup');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
   if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
   if (!documentEncryptionKeys.ready) missing.push('decryption keys for every encrypted private document');
@@ -9180,6 +9327,7 @@ async function productionInfrastructurePreflight(data = null) {
   return {
     database: databaseWithRecoveryDrill,
     recoveryDrill,
+    stateBackup,
     documentStorage,
     documentStorageValidation,
     documentEncryptionKeys,
@@ -9197,7 +9345,7 @@ async function productionInfrastructurePreflight(data = null) {
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified import, recovery snapshot, and controlled recovery drill, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, a fresh Clover cutover roster, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import, recovery snapshot, controlled recovery drill, fresh encrypted offsite backup, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, a fresh Clover cutover roster, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -9227,6 +9375,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET ? 'Set' : 'Optional', 'Signed Stripe payment and dispute reconciliation'],
     ['WOA_DATA_BACKEND', STATE_REPOSITORY.kind === 'postgres' ? 'PostgreSQL enabled' : 'JSON development fallback', 'Set postgres only after the controlled migration preflight passes; production Stripe launch requires PostgreSQL'],
     ['DATABASE_URL', STATE_REPOSITORY.kind === 'postgres' ? 'Set' : 'Provider setup needed', 'Transactional PostgreSQL state, snapshots, webhook idempotency, recovery history, and uniqueness constraints'],
+    ['WOA_STATE_BACKUP_ENABLED', WOA_STATE_BACKUP_ENABLED ? 'Set' : 'Provider setup needed', 'Scheduled authenticated encrypted offsite state backup with a signed latest pointer and freshness gate'],
+    ['WOA_STATE_BACKUP_ENCRYPTION_KEY', STATE_BACKUP_DEDICATED_KEY_CONFIGURED ? 'Set' : STATE_BACKUP_STORE.status().encryptionConfigured ? 'Document-key fallback only' : 'Missing', 'Dedicated AES-256-GCM state-backup key required before production launch'],
     ['WOA_DOCUMENT_ENCRYPTION_KEY', PRIVATE_DOCUMENT_STORE.status().encryptionConfigured ? 'Set' : 'Missing', 'AES-256-GCM encryption for private IDs, insurance, signatures, contracts, receipts, and dispute evidence'],
     ['WOA_DOCUMENT_STORAGE_PROVIDER', PRIVATE_DOCUMENT_STORE.status().productionReady ? 'S3-compatible private storage ready' : PRIVATE_DOCUMENT_STORE.status().configured ? 'Development-only local encrypted storage' : 'Provider setup needed', 'Use S3-compatible private object storage before storing new production identity files'],
     ['WOA_PRODUCTION_HARDENING_REQUIRED', WOA_PRODUCTION_HARDENING_REQUIRED ? 'Set' : 'Recommended before live Stripe', 'Blocks production launch until database and private object-storage safeguards are configured'],
@@ -9294,6 +9444,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/tolls/receipt/send', 'Owner-approved E-ZPass reimbursement proof delivery'),
     route('GET', '/api/reports/deep.csv', 'Role-scoped deep CSV export'),
     route('GET', '/api/system/health', 'Role-scoped Star/system health snapshot'),
+    route('POST', '/api/system/infrastructure/state-backup/create', 'Owner creates and authenticates an encrypted offsite state backup'),
+    route('POST', '/api/system/infrastructure/state-backup/verify', 'Owner verifies the latest encrypted offsite state backup'),
     route('GET', '/api/system/recovery/snapshots', 'Owner PostgreSQL recovery snapshot list'),
     route('POST', '/api/system/recovery/restore', 'Owner-confirmed PostgreSQL snapshot recovery'),
     route('POST', '/api/system/launch-readiness/tasks', 'Launch readiness Dispatch task sync'),
@@ -19404,6 +19556,7 @@ const server = http.createServer(async (req, res) => {
         requiredBeforeLiveStripe: [
           'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL and verified JSON-to-PostgreSQL import proof',
           'Current PostgreSQL snapshot checksum/version verification plus a fresh controlled test-database recovery drill record',
+          'WOA_STATE_BACKUP_ENABLED=1 with a fresh authenticated encrypted backup in HTTPS offsite object storage',
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
           'A fresh, non-degraded Clover recurring roster before any controlled customer cutover',
@@ -19431,6 +19584,33 @@ const server = http.createServer(async (req, res) => {
       const resolved = await STATE_REPOSITORY.resolveJobError(errorId, { note, resolvedBy });
       if (!resolved) return json(res, 404, { ok: false, error: 'That open job error was not found or was already resolved.' });
       return json(res, 200, { ok: true, resolved });
+    }
+    if (url.pathname === '/api/system/infrastructure/state-backup/create' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can create encrypted state backups.' });
+      try {
+        const result = await runEncryptedStateBackup({ source: 'owner validation', force: true });
+        const evidence = await encryptedStateBackupEvidence();
+        return json(res, 200, {
+          ok: true,
+          backup: result.backup,
+          stateBackup: evidence,
+          message: evidence.live
+            ? 'Encrypted offsite state backup created, authenticated, read back, and accepted by the Stripe launch gate.'
+            : 'Encrypted state backup created and authenticated. Production readiness still requires WOA_STATE_BACKUP_ENABLED=1 and HTTPS S3-compatible offsite storage.'
+        });
+      } catch (error) {
+        const status = error && error.code === 'woa_state_backup_not_configured' ? 409 : 502;
+        return json(res, status, { ok: false, error: String(error && error.message || error), stateBackup: await encryptedStateBackupEvidence() });
+      }
+    }
+    if (url.pathname === '/api/system/infrastructure/state-backup/verify' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can verify encrypted state backups.' });
+      const evidence = await encryptedStateBackupEvidence();
+      return json(res, evidence.verified ? 200 : 409, {
+        ok: evidence.verified,
+        stateBackup: evidence,
+        message: evidence.message || evidence.error || 'Encrypted state backup verification is incomplete.'
+      });
     }
     if (url.pathname === '/api/system/infrastructure/document-storage/validate' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can validate private document storage.' });
@@ -20442,7 +20622,7 @@ async function gracefulShutdown(signal) {
     if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
   });
   const backgroundDeadline = Date.now() + 45000;
-  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, passTimePollStatus];
+  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, passTimePollStatus, stateBackupStatus];
   while (backgroundStatuses.some(status => status.inFlight) && Date.now() < backgroundDeadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -20463,6 +20643,13 @@ if (require.main === module) {
     if (WOA_MIGRATION_MAINTENANCE_MODE) {
       console.log('WheelsonAuto migration maintenance mode is active: business writes and every background writer are paused.');
       return;
+    }
+    if (WOA_STATE_BACKUP_ENABLED) {
+      setTimeout(() => runEncryptedStateBackup({ source: 'startup' })
+        .then(result => console.log(result && result.skipped ? 'Encrypted state backup skipped: ' + result.reason : 'Encrypted state backup created and authenticated.'))
+        .catch(err => reportBackgroundTaskFailure('encrypted-state-backup', err, { route: 'Encrypted offsite state backup', source: 'startup' }, 'Startup encrypted state backup')), WOA_STATE_BACKUP_STARTUP_DELAY_MS);
+      setInterval(() => runEncryptedStateBackup({ source: 'background' })
+        .catch(err => reportBackgroundTaskFailure('encrypted-state-backup', err, { route: 'Encrypted offsite state backup', source: 'background' }, 'Background encrypted state backup')), WOA_STATE_BACKUP_INTERVAL_MS);
     }
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
@@ -20595,6 +20782,8 @@ module.exports = {
   stripeWebhookConfigurationFingerprint,
   recoveryDrillConfigurationFingerprint,
   currentRecoveryDrillEvidence,
+  runEncryptedStateBackup,
+  encryptedStateBackupEvidence,
   documentStorageConfigurationFingerprint,
   privateDocumentStorageEvidence,
   privateDocumentKeyCoverage,
