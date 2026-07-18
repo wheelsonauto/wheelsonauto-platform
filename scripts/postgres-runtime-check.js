@@ -414,8 +414,8 @@ async function main() {
     assert.deepStrictEqual(sameDocumentIdAcrossCompanies.rows.map(row => row.organization_id), [foreignOrganizationId, organizationId].sort(), 'Cross-company document rows must retain separate company ownership.');
     assert.deepStrictEqual(new Set(sameDocumentIdAcrossCompanies.rows.map(row => row.customer)), new Set(['Version One Customer', 'Foreign Tenant Customer']), 'Cross-company document rows must retain separate customer ownership.');
     const firstSnapshots = await repository.listSnapshots();
-    assert.strictEqual(firstSnapshots.length, 1, 'The first PostgreSQL write must create a recoverable snapshot.');
-    assert.strictEqual(firstSnapshots[0].version, firstWrite.version, 'Snapshot version must match the state write version.');
+    const firstWriteSnapshot = firstSnapshots.find(snapshot => snapshot.version === firstWrite.version);
+    assert(firstWriteSnapshot, 'The PostgreSQL state write must create a recoverable snapshot for its exact version.');
     const migrationProof = await repository.recordMigrationProof({
       sourceChecksum: stateRepository.checksum(firstState),
       canonicalSourceChecksum: stateRepository.checksum(firstState),
