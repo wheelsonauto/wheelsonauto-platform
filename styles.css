@@ -7150,6 +7150,7 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   background:linear-gradient(145deg,rgba(231,236,240,.10),rgba(187,196,203,.025) 58%,rgba(213,177,95,.035)),#15181a;
   box-shadow:inset 0 1px 0 rgba(239,243,246,.11),inset -1px 0 0 rgba(213,177,95,.12),0 18px 42px rgba(0,0,0,.34);
 }
+.action-menu:not([open])>.action-menu-panel{display:none}
 .action-menu[open]{display:block;flex:1 1 100%;min-width:min(260px,100%)}
 .action-menu>summary:focus-visible{outline:2px solid rgba(240,217,147,.68);outline-offset:2px}
 .action-menu-panel .btn{width:100%;min-width:0;justify-content:flex-start;white-space:normal;text-align:left}

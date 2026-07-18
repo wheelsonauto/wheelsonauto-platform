@@ -51,6 +51,7 @@ requireText('Mobile quickbar safe-area padding', 'safe-area-inset-bottom');
 requireText('Mobile quickbar labels', '.quickbar button span');
 requireText('Mobile staff logo removal', '.admin-shell>.sidebar{display:none!important}');
 requireText('Progressive action menu', '.action-menu-panel{');
+requireText('Closed progressive action menu guard', '.action-menu:not([open])>.action-menu-panel{display:none}');
 requireText('Mobile tabs wrap guard', 'Mobile tab fit guard: section tabs wrap instead of clipping off-screen.');
 requireText('Mobile Operations tab grid', '.admin-shell .view-operations>.staff-tabs');
 requireText('Mobile manager tab grid', '.admin-shell .view-manager-portal>.staff-tabs');

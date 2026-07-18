@@ -143,7 +143,8 @@ for (const action of ['sync-all', 'reactivate-customer', 'new-autopay']) {
   "navButton=function(name){return __woaBusinessNavButtonBase(name)}",
   '.business-overview-grid{display:grid',
   '.payment-action-bar>div:first-child{display:none!important}',
-  '.action-menu-panel{'
+  '.action-menu-panel{',
+  '.action-menu:not([open])>.action-menu-panel{display:none}'
 ].forEach(text => {
   if (!(app + css).includes(text)) fail('action hierarchy/mobile shell guard is missing: ' + text);
 });
