@@ -193,7 +193,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-private-document-reload-145';
+const ASSET_VERSION = 'platform-20260718-stripe-webhook-order-146';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -14769,6 +14769,16 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
   if (existing && stripeMigration.paymentIsPaid(existing.status)) return { matched: true, ignored: true, reason: 'A later Stripe success is already recorded for this payment intent.', recurringPaymentId: recurring.id || '', paymentIntentId: intentId };
   const metadata = intent.metadata || {};
   const scheduledDueKey = validCalendarDateKey(metadata.scheduledDueDate || recurring.stripeChargeAttempt && recurring.stripeChargeAttempt.scheduledDueDate || recurringDateKey(recurring));
+  const paidBillingPeriod = stripeMigration.existingPaidPayment(data, recurring, scheduledDueKey);
+  if (paidBillingPeriod) return {
+    matched: true,
+    ignored: true,
+    billingPeriodAlreadyPaid: true,
+    reason: 'A successful payment is already recorded for this billing period. This late Stripe failure cannot downgrade it.',
+    recurringPaymentId: recurring.id || '',
+    paymentIntentId: intentId,
+    existingPaymentId: paidBillingPeriod.id || ''
+  };
   const providerError = String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe reported a failed saved-card payment.');
   if (isStripeAuthenticationRequired(intent)) {
     const payment = saveStripeAuthenticationRequiredResult(data, recurring, {

@@ -3391,6 +3391,21 @@ async function main() {
     const stripeFailureRecoveryPayment = (stripeFailureRecoveryRead.json.payments || []).find(payment => payment.stripePaymentIntentId === 'pi_direct_failure_recovery_001');
     assert(stripeFailureRecoveryPayment && stripeFailureRecoveryPayment.status === 'Paid' && stripeFailureRecoveryPayment.customer === 'Direct Stripe Failure Recovery' && stripeFailureRecoveryPayment.vin === 'DIRECTSTRIPERECOVERYVIN', 'Failure-to-success webhook recovery must leave one named paid transaction with vehicle evidence.');
     assert(stripeFailureRecoveryRow && stripeFailureRecoveryRow.status === 'Active' && stripeFailureRecoveryRow.retryCount === 0 && stripeFailureRecoveryRow.failedAttempts === 0 && stripeFailureRecoveryRow.nextRun > autopayTodayKey, 'Failure-to-success webhook recovery must reset retry state and advance the recurring schedule exactly once.');
+    const stripeLateDifferentIntentObject = {
+      ...stripeFailureRecoveryObject,
+      id: 'pi_direct_failure_recovery_stale_000',
+      status: 'requires_payment_method',
+      amount_received: 0,
+      last_payment_error: { message: 'Older retry failure delivered after the billing period was paid.' }
+    };
+    const stripeLateDifferentIntentBody = JSON.stringify({ id: 'evt_direct_stripe_failure_recovery_stale_other_intent', type: 'payment_intent.payment_failed', livemode: true, created: stripeFailureRecoveryCreated - 1, data: { object: stripeLateDifferentIntentObject } });
+    const stripeLateDifferentIntentSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeFailureRecoveryTimestamp + '.' + stripeLateDifferentIntentBody).digest('hex');
+    const stripeLateDifferentIntent = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeFailureRecoveryTimestamp + ',v1=' + stripeLateDifferentIntentSignature }, raw: stripeLateDifferentIntentBody });
+    assert(stripeLateDifferentIntent.status === 200 && stripeLateDifferentIntent.json.stripePaymentIntentResult && stripeLateDifferentIntent.json.stripePaymentIntentResult.ignored === true && stripeLateDifferentIntent.json.stripePaymentIntentResult.billingPeriodAlreadyPaid === true, 'A delayed failure for an older Stripe retry must not downgrade a billing period already paid by a different PaymentIntent.');
+    const stripeLateDifferentIntentRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeLateDifferentIntentRow = stripeLateDifferentIntentRead.json.recurringPayments.find(row => row.id === stripeFailureRecoveryRecurringId);
+    assert(stripeLateDifferentIntentRow && stripeLateDifferentIntentRow.status === 'Active' && stripeLateDifferentIntentRow.retryCount === 0 && stripeLateDifferentIntentRow.failedAttempts === 0 && stripeLateDifferentIntentRow.nextRun === stripeFailureRecoveryRow.nextRun, 'Ignoring an older retry failure must preserve the paid customer state and next weekly schedule.');
+    assert(!(stripeLateDifferentIntentRead.json.payments || []).some(payment => payment.stripePaymentIntentId === stripeLateDifferentIntentObject.id), 'An ignored older retry failure must not create a misleading failed transaction.');
 
     const stripeDuplicatePeriodRecurringId = 'direct-stripe-duplicate-period-review';
     const stripeDuplicatePeriodState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
