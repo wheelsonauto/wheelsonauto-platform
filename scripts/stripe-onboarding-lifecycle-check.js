@@ -392,7 +392,8 @@ async function main() {
       vin: '1HGCV1F30JA123456',
       licensePlate: 'WOA-918'
     };
-    const disputeEvent = { id: 'evt_test_dispute_created', type: 'charge.dispute.created', data: { object: { id: 'dp_test_first_week', object: 'dispute', amount: 22900, currency: 'usd', status: 'needs_response', reason: 'fraudulent', charge: 'ch_test_first_week', payment_intent: 'pi_test_first_week', created: Math.floor(Date.now() / 1000), evidence_details: { due_by: Math.floor(Date.now() / 1000) + 604800 }, metadata: fakeStripe.state.disputeMetadata } } };
+    const disputeEventCreated = Math.floor(Date.now() / 1000);
+    const disputeEvent = { id: 'evt_test_dispute_created', type: 'charge.dispute.created', created: disputeEventCreated, data: { object: { id: 'dp_test_first_week', object: 'dispute', amount: 22900, currency: 'usd', status: 'needs_response', reason: 'fraudulent', charge: 'ch_test_first_week', payment_intent: 'pi_test_first_week', created: disputeEventCreated, evidence_details: { due_by: disputeEventCreated + 604800 }, metadata: fakeStripe.state.disputeMetadata } } };
     const disputeRaw = JSON.stringify(disputeEvent);
     const disputed = await request(server, 'POST', '/api/webhooks/stripe', { raw: disputeRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, disputeRaw) } });
     assert(disputed.status === 200 && disputed.json.disputeClaimId, 'A signed Stripe dispute must create one exact matched claim.');
@@ -401,6 +402,19 @@ async function main() {
     assert(claim && claim.customer === 'Stripe Lifecycle' && claim.vehicleId === 'veh-stripe-life-1' && claim.vin === '1HGCV1F30JA123456' && claim.plate === 'WOA-918', 'The dispute must resolve to the correct customer and vehicle identity.');
     assert(claim.evidenceReadiness === 'Ready for owner review' && claim.evidencePacket.missing.length === 0, 'The completed lifecycle must produce a complete owner-review dispute packet. Missing: ' + (claim && claim.evidencePacket && claim.evidencePacket.missing || []).join(', '));
     assert(claim.evidencePacket.contractId && claim.evidencePacket.signatureId && claim.evidencePacket.pickupAppointmentId && claim.evidencePacket.priorPaymentIds.length === 1, 'Dispute evidence must include the agreement, e-signature, physical pickup, and prior deposit payment.');
+
+    const closedDisputeEvent = { id: 'evt_test_dispute_closed', type: 'charge.dispute.closed', created: disputeEventCreated + 120, data: { object: { ...disputeEvent.data.object, status: 'won' } } };
+    const closedDisputeRaw = JSON.stringify(closedDisputeEvent);
+    const closedDispute = await request(server, 'POST', '/api/webhooks/stripe', { raw: closedDisputeRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, closedDisputeRaw) } });
+    assert(closedDispute.status === 200 && closedDispute.json.stripeDisputeIgnored === false, 'A newer signed closed-dispute event must settle the existing claim.');
+    const staleDisputeEvent = { id: 'evt_test_dispute_stale', type: 'charge.dispute.updated', created: disputeEventCreated + 60, data: { object: { ...disputeEvent.data.object, status: 'under_review' } } };
+    const staleDisputeRaw = JSON.stringify(staleDisputeEvent);
+    const staleDispute = await request(server, 'POST', '/api/webhooks/stripe', { raw: staleDisputeRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, staleDisputeRaw) } });
+    assert(staleDispute.status === 200 && staleDispute.json.stripeDisputeIgnored === true, 'An older Stripe dispute event must be acknowledged without reopening a closed claim.');
+    saved = await readSaved(dataDir);
+    const settledClaim = saved.claims.find(row => row.stripeDisputeId === 'dp_test_first_week');
+    assert(settledClaim.status === 'Won' && settledClaim.disputeWorkflowStatus === 'Won', 'A delayed Stripe dispute update must never downgrade the final won status.');
+    assert(settledClaim.lastIgnoredStripeWebhookEventId === staleDisputeEvent.id && settledClaim.evidencePacket.missing.length === 0, 'Ignored dispute delivery must remain auditable without damaging the complete evidence packet.');
 
     const duplicateDispute = await request(server, 'POST', '/api/webhooks/stripe', { raw: disputeRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, disputeRaw) } });
     assert(duplicateDispute.status === 200 && duplicateDispute.json.duplicate === true, 'Repeated Stripe events must be idempotent.');

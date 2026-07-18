@@ -14580,7 +14580,19 @@ function stripeDisputeEvidencePacket(data, claim, payment, recurring) {
     guardrail: 'Owner must review reason-specific evidence and approve submission. Stripe and Star do not decide the outcome; the card issuer does.'
   };
 }
-async function stripeDisputeClaim(data, dispute = {}) {
+function stripeWebhookEventCreated(event = {}) {
+  const created = Number(event.created || 0);
+  return Number.isFinite(created) && created > 0 ? created : 0;
+}
+function stripeWebhookEventIsOlder(record = {}, event = {}) {
+  const incoming = stripeWebhookEventCreated(event);
+  const previous = Number(record.lastStripeWebhookCreated || 0);
+  return !!(incoming && Number.isFinite(previous) && previous > incoming);
+}
+function stripeDisputeTerminalStatus(value) {
+  return /^(won|lost)$/i.test(String(value || '').trim());
+}
+async function stripeDisputeClaim(data, dispute = {}, event = {}) {
   let charge = {};
   let intent = {};
   try {
@@ -14599,8 +14611,29 @@ async function stripeDisputeClaim(data, dispute = {}) {
   const customer = payment && payment.customer || recurring && recurring.customer || metadata.customerName || 'Unmatched Stripe dispute';
   const dueBy = Number(dispute.evidence_details && dispute.evidence_details.due_by || 0);
   const statusMap = { warning_needs_response: 'Early fraud warning', needs_response: 'Needs response', under_review: 'Under review', won: 'Won', lost: 'Lost' };
+  const incomingStatus = statusMap[dispute.status] || dispute.status || 'Needs response';
   const claimId = 'claim-stripe-dispute-' + String(dispute.id || crypto.randomBytes(8).toString('hex'));
   let claim = (data.claims || []).find(row => row.id === claimId || row.stripeDisputeId === dispute.id);
+  if (claim) {
+    const previousStatus = String(claim.disputeWorkflowStatus || claim.status || '').trim();
+    const olderEvent = stripeWebhookEventIsOlder(claim, event);
+    const terminalConflict = stripeDisputeTerminalStatus(previousStatus) && incomingStatus !== previousStatus;
+    if (olderEvent || terminalConflict) {
+      const ignoredAt = new Date().toISOString();
+      const eventId = String(event.id || '').trim();
+      claim.lastIgnoredStripeWebhookAt = ignoredAt;
+      claim.lastIgnoredStripeWebhookEventId = eventId;
+      claim.lastIgnoredStripeWebhookType = String(event.type || '').trim();
+      claim.lastIgnoredStripeWebhookReason = olderEvent
+        ? 'Older Stripe dispute event arrived after a newer state.'
+        : 'Closed Stripe dispute state cannot be changed by a later conflicting event.';
+      claim.stripeWebhookEventIds = Array.isArray(claim.stripeWebhookEventIds) ? claim.stripeWebhookEventIds : [];
+      if (eventId && !claim.stripeWebhookEventIds.includes(eventId)) claim.stripeWebhookEventIds = [eventId, ...claim.stripeWebhookEventIds].slice(0, 100);
+      return { ...claim, stripeEventIgnored: true, stripeEventIgnoreReason: claim.lastIgnoredStripeWebhookReason };
+    }
+  }
+  const eventCreated = stripeWebhookEventCreated(event);
+  const eventId = String(event.id || '').trim();
   const patch = {
     id: claimId,
     type: 'Stripe dispute',
@@ -14622,14 +14655,21 @@ async function stripeDisputeClaim(data, dispute = {}) {
     amount: Number(dispute.amount || 0) / 100,
     currency: String(dispute.currency || 'usd').toUpperCase(),
     reason: dispute.reason || '',
-    status: statusMap[dispute.status] || dispute.status || 'Needs response',
-    disputeWorkflowStatus: statusMap[dispute.status] || dispute.status || 'Needs response',
+    status: incomingStatus,
+    disputeWorkflowStatus: incomingStatus,
     deadline: dueBy ? new Date(dueBy * 1000).toISOString() : '',
     customerMatchStatus: payment && customer && !/^unmatched/i.test(customer) ? 'Matched to Stripe payment/customer' : 'Needs payment/customer match',
     reference: enriched.payment_intent || enriched.charge || dispute.id || '',
     notes: 'Created automatically from a signed Stripe dispute webhook. Star prepared linked evidence; owner approval is required before submission.',
     createdAt: claim && claim.createdAt || (Number(dispute.created || 0) ? new Date(Number(dispute.created) * 1000).toISOString() : new Date().toISOString()),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    lastStripeWebhookAt: new Date().toISOString(),
+    lastStripeWebhookCreated: eventCreated || claim && claim.lastStripeWebhookCreated || 0,
+    lastStripeWebhookEventId: eventId,
+    lastStripeWebhookType: String(event.type || '').trim(),
+    stripeWebhookEventIds: eventId
+      ? [eventId, ...(claim && Array.isArray(claim.stripeWebhookEventIds) ? claim.stripeWebhookEventIds : []).filter(id => id !== eventId)].slice(0, 100)
+      : (claim && claim.stripeWebhookEventIds || [])
   };
   if (claim) Object.assign(claim, patch);
   else {
@@ -14667,13 +14707,30 @@ function recordStripeRefundWebhookEvent(data, event = {}, object = {}) {
   if (eventId && request.stripeWebhookEventIds.includes(eventId)) return request.id;
   const now = new Date().toISOString();
   const providerStatus = String(object.status || (type === 'charge.refunded' ? 'succeeded' : 'pending')).toLowerCase();
+  const successful = /succeed|paid|complete|refund/.test(providerStatus);
+  const olderEvent = stripeWebhookEventIsOlder(request, event);
+  const completedConflict = String(request.status || '') === 'Refunded' && !successful;
+  if (olderEvent || completedConflict) {
+    request.lastIgnoredStripeWebhookAt = now;
+    request.lastIgnoredStripeWebhookEventId = eventId;
+    request.lastIgnoredStripeWebhookType = type;
+    request.lastIgnoredStripeWebhookReason = olderEvent
+      ? 'Older Stripe refund event arrived after a newer state.'
+      : 'Completed Stripe refund cannot be downgraded by a conflicting event.';
+    if (eventId) request.stripeWebhookEventIds = [eventId, ...request.stripeWebhookEventIds.filter(id => id !== eventId)].slice(0, 100);
+    appendRefundHistory(request, { at: now, action: 'Ignored stale Stripe refund webhook', status: request.status, by: 'Stripe webhook', eventId, reason: request.lastIgnoredStripeWebhookReason });
+    return request.id;
+  }
   const providerRefundId = type === 'charge.refunded'
     ? String(request.providerRefundId || '').trim()
     : String(object.id || request.providerRefundId || '').trim();
   request.providerRefundId = providerRefundId || request.providerRefundId || '';
   request.providerStatus = providerStatus;
   request.lastWebhookAt = now;
-  if (/succeed|paid|complete|refund/.test(providerStatus)) {
+  request.lastStripeWebhookCreated = stripeWebhookEventCreated(event) || request.lastStripeWebhookCreated || 0;
+  request.lastStripeWebhookEventId = eventId;
+  request.lastStripeWebhookType = type;
+  if (successful) {
     request.status = 'Refunded';
     request.completedAt = request.completedAt || now;
     request.completedBy = request.completedBy || 'Stripe webhook';
@@ -14709,6 +14766,8 @@ async function recordStripeWebhookEvent(event = {}) {
   let cardSetupRequestId = '';
   let paymentRequestId = '';
   let disputeClaimId = '';
+  let stripeDisputeIgnored = false;
+  let stripeDisputeIgnoreReason = '';
   let identitySessionId = '';
   let signedIdentityVerified = false;
   let refundRequestId = '';
@@ -14753,13 +14812,17 @@ async function recordStripeWebhookEvent(event = {}) {
     }
   }
   if (/^charge\.dispute\.(created|updated|closed)$/.test(type)) {
-    const claim = await stripeDisputeClaim(data, object);
+    const claim = await stripeDisputeClaim(data, object, event);
     disputeClaimId = claim.id;
-    await queueOwnerEmailNotification(data, 'claim_dispute', {
-      customer: claim.customer || 'Unmatched Stripe dispute',
-      subject: 'Stripe dispute ' + (claim.status || 'needs review') + ' - ' + (claim.customer || claim.disputeId),
-      body: ['Stripe dispute received.', 'Customer: ' + (claim.customer || 'Unmatched'), 'Amount: ' + moneyText(claim.amount || 0), 'Reason: ' + (claim.reason || 'Not provided'), 'Deadline: ' + (claim.deadline || 'Not provided'), 'Payment: ' + (claim.stripePaymentIntentId || claim.stripeChargeId || 'Not matched'), 'Evidence: ' + (claim.evidenceReadiness || 'Needs review')].join('\n')
-    });
+    stripeDisputeIgnored = claim.stripeEventIgnored === true;
+    stripeDisputeIgnoreReason = String(claim.stripeEventIgnoreReason || '');
+    if (!stripeDisputeIgnored) {
+      await queueOwnerEmailNotification(data, 'claim_dispute', {
+        customer: claim.customer || 'Unmatched Stripe dispute',
+        subject: 'Stripe dispute ' + (claim.status || 'needs review') + ' - ' + (claim.customer || claim.disputeId),
+        body: ['Stripe dispute received.', 'Customer: ' + (claim.customer || 'Unmatched'), 'Amount: ' + moneyText(claim.amount || 0), 'Reason: ' + (claim.reason || 'Not provided'), 'Deadline: ' + (claim.deadline || 'Not provided'), 'Payment: ' + (claim.stripePaymentIntentId || claim.stripeChargeId || 'Not matched'), 'Evidence: ' + (claim.evidenceReadiness || 'Needs review')].join('\n')
+      });
+    }
   }
   if (/^refund\.(created|updated|failed)$/.test(type) || type === 'charge.refunded') {
     refundRequestId = recordStripeRefundWebhookEvent(data, event, object);
@@ -14782,7 +14845,7 @@ async function recordStripeWebhookEvent(event = {}) {
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
   await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
-  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, identitySessionId, refundRequestId, stripePaymentIntentResult };
+  return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, stripeDisputeIgnored, stripeDisputeIgnoreReason, identitySessionId, refundRequestId, stripePaymentIntentResult };
   } catch (error) {
     await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error).catch(() => {});
     await recordOperationalFailure('stripe-webhook', error, { eventId: event.id || '', route: '/api/webhooks/stripe' });
