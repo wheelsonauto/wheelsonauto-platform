@@ -181,6 +181,16 @@ async function main() {
     applicationName: 'wheelsonauto-postgres-runtime-lock-check',
     seed: async () => ({ vehicles: [], customers: [], payments: [] })
   });
+  const foreignRepository = stateRepository.createStateRepository({
+    backend: 'postgres',
+    databaseUrl,
+    sslMode: databaseSslMode,
+    organizationId: foreignOrganizationId,
+    snapshotLimit: 12,
+    rateLimitSecret,
+    applicationName: 'wheelsonauto-postgres-runtime-foreign-tenant-check',
+    seed: async () => ({ vehicles: [], customers: [], payments: [] })
+  });
   try {
     const firstAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(firstAutopayLock.acquired, true, 'The first PostgreSQL autopay worker must acquire the durable job lock.');
@@ -310,6 +320,24 @@ async function main() {
     const firstDocumentMetadata = await repository.pool.query('SELECT organization_id, customer, object_key FROM woa_documents WHERE organization_id = $1 AND id = $2', [organizationId, 'document-runtime-1']);
     assert.strictEqual(firstDocumentMetadata.rowCount, 1, 'A PostgreSQL state write must transactionally synchronize private document metadata.');
     assert.strictEqual(firstDocumentMetadata.rows[0].customer, 'Version One Customer', 'Private document metadata must retain its customer owner.');
+    await foreignRepository.write({
+      vehicles: [],
+      customers: [{ id: 'customer-runtime-foreign', name: 'Foreign Tenant Customer', status: 'Active' }],
+      payments: [],
+      documents: [{
+        id: 'document-runtime-1',
+        customer: 'Foreign Tenant Customer',
+        storageProvider: 's3',
+        storageKey: 'documents/' + foreignOrganizationId + '/document-runtime-1.enc',
+        contentType: 'application/pdf',
+        sha256: 'b'.repeat(64),
+        encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' }
+      }]
+    }, { reason: 'runtime cross-company document identity test', actor: 'test' });
+    const sameDocumentIdAcrossCompanies = await repository.pool.query('SELECT organization_id, customer FROM woa_documents WHERE id = $1 ORDER BY organization_id', ['document-runtime-1']);
+    assert.strictEqual(sameDocumentIdAcrossCompanies.rowCount, 2, 'The same local document id must be independently usable by two franchise companies.');
+    assert.deepStrictEqual(sameDocumentIdAcrossCompanies.rows.map(row => row.organization_id), [foreignOrganizationId, organizationId].sort(), 'Cross-company document rows must retain separate company ownership.');
+    assert.deepStrictEqual(new Set(sameDocumentIdAcrossCompanies.rows.map(row => row.customer)), new Set(['Version One Customer', 'Foreign Tenant Customer']), 'Cross-company document rows must retain separate customer ownership.');
     const firstSnapshots = await repository.listSnapshots();
     assert.strictEqual(firstSnapshots.length, 1, 'The first PostgreSQL write must create a recoverable snapshot.');
     assert.strictEqual(firstSnapshots[0].version, firstWrite.version, 'Snapshot version must match the state write version.');
@@ -432,6 +460,7 @@ async function main() {
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await removeTestRows(repository, foreignOrganizationId).catch(() => {});
+    await foreignRepository.close();
     await competingRepository.close();
     await repository.close();
   }

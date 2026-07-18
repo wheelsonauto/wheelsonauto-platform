@@ -7,6 +7,7 @@ const path = require('path');
 const MIGRATION_ID = '20260717_production_state_foundation_v1';
 const TRANSACTIONAL_INDEX_MIGRATION_ID = '20260718_transactional_resource_assignment_indexes_v2';
 const DURABLE_RATE_LIMIT_MIGRATION_ID = '20260718_durable_security_rate_limits_v3';
+const DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID = '20260718_document_tenant_primary_key_v4';
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'durableJobLock',
@@ -1264,7 +1265,7 @@ class PostgresStateRepository {
         )`);
         await client.query('CREATE INDEX IF NOT EXISTS woa_active_assignments_org_customer_idx ON woa_active_assignments (organization_id, customer_key)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_documents (
-          id TEXT PRIMARY KEY,
+          id TEXT NOT NULL,
           organization_id TEXT NOT NULL,
           customer TEXT NOT NULL DEFAULT '',
           application_id TEXT NOT NULL DEFAULT '',
@@ -1277,8 +1278,35 @@ class PostgresStateRepository {
           encryption JSONB NOT NULL DEFAULT '{}'::jsonb,
           metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, id)
         )`);
+        await client.query(`DO $document_tenant_primary_key$
+        DECLARE
+          primary_key_name TEXT;
+          primary_key_definition TEXT;
+        BEGIN
+          SELECT constraint_name, definition INTO primary_key_name, primary_key_definition
+          FROM (
+            SELECT constraint_row.conname AS constraint_name, pg_get_constraintdef(constraint_row.oid) AS definition
+            FROM pg_constraint AS constraint_row
+            JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+            JOIN pg_namespace AS namespace_row ON namespace_row.oid = table_row.relnamespace
+            WHERE table_row.relname = 'woa_documents'
+              AND namespace_row.nspname = current_schema()
+              AND constraint_row.contype = 'p'
+            LIMIT 1
+          ) AS current_primary_key;
+          IF primary_key_name IS NOT NULL AND position('(organization_id, id)' in primary_key_definition) = 0 THEN
+            EXECUTE format('ALTER TABLE woa_documents DROP CONSTRAINT %I', primary_key_name);
+            primary_key_name := NULL;
+          END IF;
+          IF primary_key_name IS NULL THEN
+            ALTER TABLE woa_documents
+              ADD CONSTRAINT woa_documents_pkey PRIMARY KEY (organization_id, id);
+          END IF;
+        END
+        $document_tenant_primary_key$`);
         await client.query('CREATE UNIQUE INDEX IF NOT EXISTS woa_documents_provider_key_unique ON woa_documents (storage_provider, object_key) WHERE object_key <> \'\'');
         await client.query('CREATE INDEX IF NOT EXISTS woa_documents_org_customer_idx ON woa_documents (organization_id, customer, updated_at DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_job_errors (
@@ -1316,6 +1344,7 @@ class PostgresStateRepository {
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [TRANSACTIONAL_INDEX_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DURABLE_RATE_LIMIT_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID]);
         const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
@@ -1395,8 +1424,7 @@ class PostgresStateRepository {
         id, organization_id, customer, application_id, onboarding_session_id, storage_provider, object_key,
         content_type, size_bytes, sha256, encryption, metadata, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, COALESCE($13::timestamptz, now()), now())
-      ON CONFLICT (id) DO UPDATE SET
-        organization_id = EXCLUDED.organization_id,
+      ON CONFLICT (organization_id, id) DO UPDATE SET
         customer = EXCLUDED.customer,
         application_id = EXCLUDED.application_id,
         onboarding_session_id = EXCLUDED.onboarding_session_id,
@@ -1408,17 +1436,12 @@ class PostgresStateRepository {
         encryption = EXCLUDED.encryption,
         metadata = EXCLUDED.metadata,
         updated_at = now()
-      WHERE woa_documents.organization_id = EXCLUDED.organization_id
       RETURNING id`, [
         documentId, this.organizationId, String(document.customer || ''), String(document.applicationId || ''), String(document.onboardingSessionId || ''),
         String(document.storageProvider || document.storage || (document.storageKey ? 'encrypted' : 'legacy-local')), String(document.storageKey || document.storagePath || ''),
         String(document.contentType || ''), Number(document.size || 0), String(document.sha256 || ''), JSON.stringify(document.encryption || {}), JSON.stringify(metadata), document.createdAt || null
       ]);
-      if (!saved.rowCount) {
-        const error = new Error('Private document id ' + documentId + ' is already owned by another company. Refusing cross-company metadata overwrite.');
-        error.code = 'woa_document_tenant_conflict';
-        throw error;
-      }
+      if (!saved.rowCount) throw new Error('Private document metadata was not persisted for ' + documentId + '.');
     }
     if (retainedIds.length) {
       await client.query(`DELETE FROM woa_documents
@@ -2324,6 +2347,7 @@ module.exports = {
   MIGRATION_ID,
   TRANSACTIONAL_INDEX_MIGRATION_ID,
   DURABLE_RATE_LIMIT_MIGRATION_ID,
+  DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
   DEFAULT_ORGANIZATION_ID,
   clone,
   stableJson,

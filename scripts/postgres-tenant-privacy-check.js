@@ -33,21 +33,23 @@ async function verifyDocumentMetadataIsolation() {
   const upsert = calls.find(call => /INSERT INTO woa_documents/.test(call.sql));
   assert(upsert, 'Private document metadata must be written to the PostgreSQL metadata table.');
   assert.strictEqual(upsert.values[1], 'org-tenant-a', 'Private document metadata must be owned by the repository company.');
-  assert.match(upsert.sql, /WHERE woa_documents\.organization_id = EXCLUDED\.organization_id/, 'A document id collision must never overwrite another company metadata row.');
+  assert.match(upsert.sql, /ON CONFLICT \(organization_id, id\)/, 'A document upsert must use the company-scoped primary key.');
+  assert.doesNotMatch(upsert.sql, /ON CONFLICT \(id\)/, 'A local document id must not be globally unique across franchise companies.');
   const cleanup = calls.find(call => /DELETE FROM woa_documents/.test(call.sql));
   assert(cleanup, 'Document metadata synchronization must remove rows no longer present in authoritative state.');
   assert.strictEqual(cleanup.values[0], 'org-tenant-a', 'Document metadata cleanup must remain company-scoped.');
   assert.deepStrictEqual(cleanup.values[1], ['document-private-a'], 'Document metadata cleanup must retain only the current company document ids.');
 
-  await assert.rejects(
-    () => repository.syncDocumentMetadata({
-      async query(sql) {
-        return /INSERT INTO woa_documents/.test(String(sql)) ? { rowCount: 0, rows: [] } : { rowCount: 1, rows: [] };
-      }
-    }, { documents: [{ id: 'document-owned-elsewhere', storageKey: 'documents/org-tenant-a/conflict.enc' }] }),
-    error => error && error.code === 'woa_document_tenant_conflict',
-    'A private document id already owned by another company must fail the entire state transaction.'
-  );
+  const otherCompanyCalls = [];
+  await repositoryForUnitCheck('org-tenant-b').syncDocumentMetadata({
+    async query(sql, values = []) {
+      otherCompanyCalls.push({ sql: String(sql), values });
+      return { rowCount: 1, rows: [{ id: values[0] || '' }] };
+    }
+  }, { documents: [{ id: 'document-private-a', storageKey: 'documents/org-tenant-b/document-private-a.enc' }] });
+  const otherCompanyUpsert = otherCompanyCalls.find(call => /INSERT INTO woa_documents/.test(call.sql));
+  assert(otherCompanyUpsert, 'A second company must be able to persist its own local document id.');
+  assert.strictEqual(otherCompanyUpsert.values[1], 'org-tenant-b', 'The same local document id must remain owned by the second company row.');
   await assert.rejects(
     () => repository.syncDocumentMetadata(client, {
       documents: [
