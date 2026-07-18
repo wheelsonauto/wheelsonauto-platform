@@ -227,6 +227,9 @@ async function main() {
     mergeRecurringCustomerDetail,
     membersFromRecurringSubscriptions,
     syncCloverRecurringPlans,
+    recurringRosterKey,
+    reconcileCurrentRecurringRoster,
+    recurringMemberNameResolved,
     mapCloverPayment,
     cloverRecurringCountWarning,
     preserveCloverRecurringRosterAfterProviderError,
@@ -312,16 +315,27 @@ async function main() {
     assert(recurringPlanIdFromSubscription({ plan: { id: 'PLAN-DIRECT-229' } }) === 'PLAN-DIRECT-229', 'Merchant-wide Clover subscriptions must retain their nested plan identity.');
     assert(recurringPlansFromSubscriptions([{ id: 'SUB-1', plan: { id: 'PLAN-1', name: 'Weekly 1' } }, { id: 'SUB-2', plan: { id: 'PLAN-1', name: 'Weekly 1' } }]).length === 1, 'Merchant-wide subscriptions must derive one plan without duplicating it per customer.');
     assert(uniqueRecurringSubscriptions([{ id: 'SUB-MERGE', amount: 100 }], [{ id: 'SUB-MERGE', customerUuid: 'CUS-MERGE' }]).length === 1, 'Clover subscription fallbacks must merge the same subscription instead of double counting it.');
+    const reconciledRecurringRows = reconcileCurrentRecurringRoster([
+      { id: 'saved-current', cloverSubscriptionId: 'SUB-CURRENT', customer: 'Cailah Current', phone: '8565550101' },
+      { id: 'saved-stale', cloverSubscriptionId: 'SUB-STALE', customer: 'Stale Customer' }
+    ], [
+      { id: 'SUB-CURRENT', cloverSubscriptionId: 'SUB-CURRENT', customer: 'Clover recurring customer', amount: 229 }
+    ]);
+    assert(recurringRosterKey(reconciledRecurringRows[0]) === 'SUB-CURRENT', 'Recurring roster reconciliation must use the strong Clover subscription ID.');
+    assert(reconciledRecurringRows.length === 1 && reconciledRecurringRows[0].customer === 'Cailah Current', 'A complete provider roster must retain a saved customer name only for the same Clover subscription ID and remove stale saved rows.');
+    assert(recurringMemberNameResolved(reconciledRecurringRows[0]) === true && recurringMemberNameResolved({ cloverSubscriptionId: 'SUB-MISSING', customer: 'Clover recurring customer' }) === false, 'Roster coverage must distinguish a reconciled customer name from Clover placeholders.');
 
     cloverRecurringFixture = 'recover-from-plan-401';
     cloverRecurringRequests.length = 0;
-    const merchantWideRecoveryState = { recurringPayments: [], integrations: { clover: {} } };
+    const merchantWideRecoveryState = { recurringPayments: [], integrations: { clover: { recurringPlanMembers: [{ id: 'saved-stale-provider-row', cloverSubscriptionId: 'SUB-NOT-CURRENT', customer: 'Old recurring customer' }] } } };
     const merchantWideRecovery = await syncCloverRecurringPlans(merchantWideRecoveryState);
     assert(merchantWideRecovery.recurringPlans === 1 && merchantWideRecovery.summary.activeCustomers === 1, 'The merchant-wide subscriptions endpoint must recover a complete Clover roster when the plan-list endpoint returns 401.');
     assert(merchantWideRecoveryState.integrations.clover.recurringPlanMembers.length === 1 && merchantWideRecoveryState.integrations.clover.recurringPlanMembers[0].customer === 'Merchant Wide', 'Recovered merchant-wide subscriptions must retain the customer identity instead of becoming unmatched.');
     assert(/401/.test(merchantWideRecoveryState.integrations.clover.lastRecurringPlanFetchError) && merchantWideRecoveryState.integrations.clover.lastRecurringPlanSyncError === '', 'A recovered plan-list failure must remain diagnostic metadata without falsely marking the complete merchant-wide roster failed.');
     assert(merchantWideRecoveryState.integrations.clover.lastRecurringSubscriptionSyncSource === 'Merchant-wide subscriptions', 'The saved Clover evidence must identify the authoritative merchant-wide roster source.');
     assert(!cloverRecurringRequests.some(url => url.includes('/plans/PLAN-DIRECT-229/subscriptions')), 'A complete merchant-wide roster must not call the less reliable per-plan subscription endpoint.');
+    assert(merchantWideRecoveryState.integrations.clover.lastRecurringRosterCoverage.complete === true && merchantWideRecoveryState.integrations.clover.lastRecurringRosterCoverage.providerSubscriptionRows === 1 && merchantWideRecoveryState.integrations.clover.lastRecurringRosterCoverage.resolvedCustomerNames === 1, 'A complete merchant-wide roster must persist count-only coverage proof and clear the false incomplete warning.');
+    assert(merchantWideRecoveryState.integrations.clover.recurringPlanMembers.every(row => row.cloverSubscriptionId !== 'SUB-NOT-CURRENT'), 'A complete provider roster must not retain a stale saved subscription that Clover no longer returns.');
 
     cloverRecurringFixture = 'partial-plan-fallback';
     cloverRecurringRequests.length = 0;
@@ -330,6 +344,7 @@ async function main() {
     assert(cloverRecurringRequests.some(url => url.includes('/plans/PLAN-DIRECT-229/subscriptions')), 'A merchant-wide roster below Clover\'s advertised plan count must attempt the per-plan fallback.');
     assert(/reports 2 active subscription\(s\), but Clover returned 1/.test(partialRecurringState.integrations.clover.lastRecurringMemberSyncWarning), 'An incomplete merchant-wide and per-plan roster must fail closed with an explicit coverage warning.');
     assert(partialRecurringResult.warning === partialRecurringState.integrations.clover.lastRecurringMemberSyncWarning, 'The incomplete Clover roster warning must reach the automatic sync monitor.');
+    assert(partialRecurringState.integrations.clover.lastRecurringRosterCoverage.complete === false && partialRecurringState.integrations.clover.lastRecurringRosterCoverage.providerSubscriptionRows === 1 && partialRecurringState.integrations.clover.lastRecurringRosterCoverage.expectedActiveSubscriptions === 2, 'A real Clover row-count gap must remain visible and blocked after subscription-ID reconciliation.');
     cloverRecurringFixture = '';
     const currentDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-current-key', storageKey: 'documents/org-direct/doc-current-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' } }] });
     assert(currentDocumentKeyCoverage.ready === true && currentDocumentKeyCoverage.encryptedDocuments === 1 && currentDocumentKeyCoverage.requiredKeyVersions.includes('v1'), 'The launch gate must inventory encrypted documents covered by the active versioned key.');

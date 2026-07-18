@@ -195,7 +195,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-clover-roster-152';
+const ASSET_VERSION = 'platform-20260718-clover-reconcile-153';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9140,13 +9140,14 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const currentDegradedFailure = Number.isFinite(degradedAtMs) && (!Number.isFinite(checkedAtMs) || degradedAtMs >= checkedAtMs);
   const warning = String(clover.lastRecurringPlanSyncWarning || clover.lastRecurringMemberSyncWarning || '').trim();
   const providerError = String(clover.lastRecurringPlanSyncError || '').trim();
+  const coverage = clover.lastRecurringRosterCoverage && typeof clover.lastRecurringRosterCoverage === 'object' ? clover.lastRecurringRosterCoverage : {};
   const degraded = currentDegradedFailure || !!warning || !!providerError;
   const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
   const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS;
   const ready = !requiresFreshRoster || (fresh && !degraded);
   let error = '';
   if (requiresFreshRoster && currentDegradedFailure) error = 'Clover recurring refresh is degraded (HTTP ' + Number(clover.lastRecurringPlanSyncDegradedStatus || 0) + '). Keep the preserved roster read-only and correct the Clover merchant API token before scheduling Stripe cutovers.';
-  else if (requiresFreshRoster && warning) error = 'Clover returned an incomplete recurring roster. Reconcile the saved and provider totals before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && warning) error = 'Clover returned an incomplete recurring roster. ' + warning;
   else if (requiresFreshRoster && providerError) error = 'Clover recurring refresh has not recovered. Correct the provider connection before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && !checkedAt) error = 'Run a successful Clover recurring roster refresh before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && !fresh) error = 'The last successful Clover recurring roster is stale. Refresh it before scheduling Stripe cutovers.';
@@ -9163,6 +9164,14 @@ function cloverRecurringMigrationReadiness(data = {}) {
     activePlans,
     preservedPlans: Number(clover.lastRecurringPlanSyncPreservedPlans || 0),
     preservedMembers: Number(clover.lastRecurringPlanSyncPreservedMembers || 0),
+    providerSubscriptionRows: Number(coverage.providerSubscriptionRows || 0),
+    expectedActiveSubscriptions: Number(coverage.expectedActiveSubscriptions || activeCustomers || 0),
+    resolvedCustomerNames: Number(coverage.resolvedCustomerNames || 0),
+    unresolvedCustomerNames: Number(coverage.unresolvedCustomerNames || 0),
+    rosterCoverageComplete: coverage.complete === true,
+    subscriptionSource: String(clover.lastRecurringSubscriptionSyncSource || ''),
+    warning,
+    providerError,
     requiresFreshRoster,
     verified: !!checkedAt,
     fresh,
@@ -12568,23 +12577,27 @@ function cleanRecurringRosterImport(rows) {
     };
   }).filter(row => row.customer || row.phone || row.email || row.amount);
 }
+function recurringRosterKey(row = {}) {
+  return String(
+    row.cloverSubscriptionId || row.subscriptionId || row.id ||
+    ((row.customer || '').toLowerCase() + '|' + (row.phone || '') + '|' + (row.plan || row.amount || ''))
+  ).trim();
+}
 function mergeRecurringRoster(existing, imported) {
   const byKey = new Map();
-  const keyFor = row => String(row.cloverSubscriptionId || row.id || ((row.customer || '').toLowerCase() + '|' + (row.phone || '') + '|' + (row.plan || row.amount || ''))).trim();
-  (Array.isArray(existing) ? existing : []).forEach(row => byKey.set(keyFor(row), row));
+  (Array.isArray(existing) ? existing : []).forEach(row => byKey.set(recurringRosterKey(row), row));
   (Array.isArray(imported) ? imported : []).forEach(row => {
-    const key = keyFor(row);
+    const key = recurringRosterKey(row);
     const old = byKey.get(key) || {};
     byKey.set(key, { ...old, ...row, id: old.id || row.id });
   });
   return Array.from(byKey.values());
 }
 function enrichRecurringRoster(existing, imported) {
-  const keyFor = row => String(row.cloverSubscriptionId || row.id || ((row.customer || '').toLowerCase() + '|' + (row.phone || '') + '|' + (row.plan || row.amount || ''))).trim();
   const byKey = new Map();
-  (Array.isArray(existing) ? existing : []).forEach(row => byKey.set(keyFor(row), row));
+  (Array.isArray(existing) ? existing : []).forEach(row => byKey.set(recurringRosterKey(row), row));
   (Array.isArray(imported) ? imported : []).forEach(incoming => {
-    const key = keyFor(incoming);
+    const key = recurringRosterKey(incoming);
     const old = byKey.get(key);
     if (!old) {
       byKey.set(key, incoming);
@@ -12604,6 +12617,15 @@ function enrichRecurringRoster(existing, imported) {
     byKey.set(key, merged);
   });
   return Array.from(byKey.values());
+}
+function reconcileCurrentRecurringRoster(existing, imported) {
+  const currentKeys = new Set((Array.isArray(imported) ? imported : []).map(recurringRosterKey).filter(Boolean));
+  return enrichRecurringRoster(existing, imported).filter(row => currentKeys.has(recurringRosterKey(row)));
+}
+function recurringMemberNameResolved(row = {}) {
+  const name = String(row.customer || row.customerName || '').trim();
+  if (!name || /^clover recurring customer$/i.test(name)) return false;
+  return normKey(name) !== normKey(row.cloverSubscriptionId || row.subscriptionId || '');
 }
 function countFromRecurringPlan(plan) {
   const keys = [
@@ -12755,7 +12777,24 @@ async function syncCloverRecurringPlans(data) {
     lookupErrors: (hydrationContext.stats && hydrationContext.stats.lookupErrors || []).slice(0, 25)
   };
   const savedSummary = data.integrations.clover.recurringPlanSummary || {};
+  const savedMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
+  const reconciledMembers = reconcileCurrentRecurringRoster(savedMembers, importedMembers);
+  const expectedActiveSubscriptions = Number(summary.activeCustomers || 0);
+  const providerSubscriptionRows = importedMembers.length;
+  const reconciledNamedMembers = reconciledMembers.filter(recurringMemberNameResolved);
+  const providerCoverageIncomplete = subscriptionCoverageWarnings.length > 0 || providerSubscriptionRows < expectedActiveSubscriptions;
   const countWarning = cloverRecurringCountWarning(savedSummary, summary);
+  data.integrations.clover.lastRecurringRosterCoverage = {
+    checkedAt: new Date().toISOString(),
+    expectedActiveSubscriptions,
+    providerSubscriptionRows,
+    reconciledSubscriptionRows: reconciledMembers.length,
+    resolvedCustomerNames: reconciledNamedMembers.length,
+    unresolvedCustomerNames: Math.max(0, providerSubscriptionRows - reconciledNamedMembers.length),
+    savedRosterRows: savedMembers.length,
+    preservedSavedRoster: !!(countWarning || providerCoverageIncomplete),
+    complete: !countWarning && !providerCoverageIncomplete && reconciledNamedMembers.length === providerSubscriptionRows
+  };
   if (countWarning) {
     clearCloverRecurringDegradedStatus(data.integrations.clover);
     data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
@@ -12775,16 +12814,18 @@ async function syncCloverRecurringPlans(data) {
       preservedSavedTotals: true
     };
   }
-  const savedMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
-  const savedNamedMembers = savedMembers.filter(member => String(member.customer || '').trim() && member.customer !== 'Clover recurring customer');
-  const importedNamedMembers = importedMembers.filter(member => String(member.customer || '').trim() && member.customer !== 'Clover recurring customer');
-  const keepSavedMembers = savedNamedMembers.length > importedNamedMembers.length;
+  const preserveSavedMembers = providerCoverageIncomplete;
   const memberWarnings = [
     ...subscriptionCoverageWarnings,
-    keepSavedMembers ? ('Clover returned ' + importedNamedMembers.length + ' named recurring customers, less than saved roster ' + savedNamedMembers.length + '. Keeping saved recurring roster.') : ''
+    providerCoverageIncomplete && !subscriptionCoverageWarnings.length
+      ? ('Clover returned ' + providerSubscriptionRows + ' subscription rows for ' + expectedActiveSubscriptions + ' active subscriptions. Keeping the saved roster until the provider result is complete.')
+      : '',
+    reconciledNamedMembers.length < providerSubscriptionRows
+      ? (reconciledNamedMembers.length + ' of ' + providerSubscriptionRows + ' active Clover subscriptions have a verified customer name after subscription-ID reconciliation.')
+      : ''
   ].filter(Boolean);
   data.integrations.clover.recurringPlans = plans;
-  data.integrations.clover.recurringPlanMembers = keepSavedMembers ? enrichRecurringRoster(savedMembers, importedMembers) : importedMembers;
+  data.integrations.clover.recurringPlanMembers = preserveSavedMembers ? enrichRecurringRoster(savedMembers, importedMembers) : reconciledMembers;
   data.integrations.clover.recurringPlanSummary = summary;
   clearCloverRecurringDegradedStatus(data.integrations.clover);
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
@@ -20409,6 +20450,9 @@ module.exports = {
   mergeRecurringCustomerDetail,
   membersFromRecurringSubscriptions,
   syncCloverRecurringPlans,
+  recurringRosterKey,
+  reconcileCurrentRecurringRoster,
+  recurringMemberNameResolved,
   mapCloverPayment,
   cloverRecurringCountWarning,
   preserveCloverRecurringRosterAfterProviderError,
