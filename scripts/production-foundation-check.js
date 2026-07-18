@@ -327,6 +327,27 @@ async function main() {
     assert.strictEqual(stateRepository.identityConflicts(sharedEmail).length, 0, 'Repeated customer email aliases must not block migration when Clover or plan history contains multiple rows for one person.');
     const duplicatePortalUsername = { ...next, customerAccounts: next.customerAccounts.concat({ id: 'account-2', username: 'customer@example.com' }) };
     assert.strictEqual(stateRepository.identityConflicts(duplicatePortalUsername).length, 1, 'A duplicate portal username must still block migration because it can expose the wrong customer account.');
+    const distinctMultiPlanIdentities = {
+      recurringPayments: [
+        { id: 'recurring-plan-a', cloverCustomerId: 'clover-shared-customer', stripeCustomerId: 'stripe-shared-customer', cloverSubscriptionId: 'clover-sub-a', stripeSubscriptionId: 'stripe-sub-a' },
+        { id: 'recurring-plan-b', cloverCustomerId: 'clover-shared-customer', stripeCustomerId: 'stripe-shared-customer', cloverSubscriptionId: 'clover-sub-b', stripeSubscriptionId: 'stripe-sub-b' }
+      ]
+    };
+    assert.strictEqual(stateRepository.identityConflicts(distinctMultiPlanIdentities).length, 0, 'Shared provider customer IDs must remain valid when each plan has its own subscription IDs.');
+    const duplicateCloverSubscription = {
+      recurringPayments: [
+        distinctMultiPlanIdentities.recurringPayments[0],
+        { ...distinctMultiPlanIdentities.recurringPayments[1], cloverSubscriptionId: 'clover-sub-a' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateCloverSubscription).map(conflict => conflict.kind), ['clover_subscription'], 'A Clover subscription ID must never identify two local recurring plans.');
+    const duplicateStripeSubscription = {
+      recurringPayments: [
+        distinctMultiPlanIdentities.recurringPayments[0],
+        { ...distinctMultiPlanIdentities.recurringPayments[1], stripeSubscriptionId: 'stripe-sub-a' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeSubscription).map(conflict => conflict.kind), ['stripe_subscription'], 'A Stripe subscription ID must never identify two local recurring plans.');
     const missingVinWarnings = stateRepository.identityWarnings({ vehicles: [{ id: 'vehicle-missing-vin', year: 2013, make: 'BMW', model: '528XI' }] });
     assert.strictEqual(missingVinWarnings.length, 1, 'A vehicle without a VIN must remain visible for owner review before Stripe cutover.');
     assert.strictEqual(missingVinWarnings[0].kind, 'vehicle_missing_vin', 'A missing VIN warning must retain a stable review category.');

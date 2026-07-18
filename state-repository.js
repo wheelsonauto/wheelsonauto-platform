@@ -344,6 +344,14 @@ function identityEntries(state = {}) {
     const id = rowId(account, 'customer-account-' + index);
     pushIdentity(entries, 'portal_username', account && account.username, 'customer_account', id);
   });
+  // Provider customer ids are intentionally not unique because one customer
+  // can have multiple legitimate plans. Each provider subscription, however,
+  // must identify exactly one local recurring-payment row.
+  (state.recurringPayments || []).forEach((recurring, index) => {
+    const id = String(recurring && (recurring.id || recurring.recurringPaymentId) || 'recurring-payment-' + index).trim();
+    pushIdentity(entries, 'clover_subscription', recurring && recurring.cloverSubscriptionId, 'recurring_payment', id);
+    pushIdentity(entries, 'stripe_subscription', recurring && recurring.stripeSubscriptionId, 'recurring_payment', id);
+  });
   (state.payments || []).forEach((payment, index) => {
     const id = rowId(payment, 'payment-' + index);
     pushIdentity(entries, 'stripe_payment_intent', payment && payment.stripePaymentIntentId, 'payment', id);
@@ -1332,7 +1340,7 @@ class PostgresStateRepository {
   async refreshIdentityIndex(client, state) {
     const conflicts = identityConflicts(state);
     if (conflicts.length) {
-      const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, portal username, or payment IDs before enabling PostgreSQL.');
+      const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, portal username, provider subscription ID, or payment ID before enabling PostgreSQL.');
       error.code = 'woa_identity_conflict';
       error.conflicts = conflicts.slice(0, 20);
       throw error;
