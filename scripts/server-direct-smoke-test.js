@@ -1305,6 +1305,10 @@ async function main() {
     assert(managerStorageValidation.status === 403, 'Manager must not validate the private production document-storage provider.');
     const managerOperationalAlertValidation = await request(server, 'POST', '/api/system/infrastructure/operational-alerts/validate', { cookie: managerCookie, json: {} });
     assert(managerOperationalAlertValidation.status === 403, 'Manager must not validate operational failure alerts.');
+    const managerStarProviderHealth = await request(server, 'POST', '/api/messages/ai-health', { cookie: managerCookie, json: {} });
+    assert(managerStarProviderHealth.status === 403, 'Manager must not run the owner-only Star provider health test.');
+    const managerTelnyxReadiness = await request(server, 'POST', '/api/integrations/telnyx/readiness', { cookie: managerCookie, json: {} });
+    assert(managerTelnyxReadiness.status === 403, 'Manager must not inspect or mutate owner-only Telnyx carrier registration evidence.');
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
     const ownerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
