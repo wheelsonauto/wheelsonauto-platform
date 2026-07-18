@@ -3207,10 +3207,30 @@ document.addEventListener('click',function closeModalBeforeWorkspaceNavigation(e
 },true);
 
 var __woaSystemHealthStorageBase=systemHealthPanel;
+function clarifyCoreReadinessLanguage(html){
+  return String(html||'')
+    .replace('Live check for Clover keys, backend routes, saved records, auto sync, and autopay readiness.','Core operational check for environment keys, backend routes, saved records, auto sync, and autopay. Stripe cutover clearance is a separate owner preflight.')
+    .replace('<span>Overall</span><strong>Ready</strong>','<span>Core system</span><strong>Core ready</strong>')
+    .replace('<span>Overall</span><strong>Needs keys</strong>','<span>Core system</span><strong>Core blocked</strong>')
+    .replace('<span>Overall</span><strong>Not checked</strong>','<span>Core system</span><strong>Not checked</strong>')
+    .replace('<span>Overall</span><b>Ready</b>','<span>Core system</span><b>Core ready</b>')
+    .replace('<span>Overall</span><b>Needs keys</b>','<span>Core system</span><b>Core blocked</b>')
+    .replace('<span>Overall</span><b>Not checked</b>','<span>Core system</span><b>Not checked</b>')
+    .replace('All required environment keys returned present.','Core environment keys are present. This does not clear a Stripe launch; run Live launch preflight before any cutover.');
+}
 systemHealthPanel=function(){
-  var html=__woaSystemHealthStorageBase();
+  var html=clarifyCoreReadinessLanguage(__woaSystemHealthStorageBase());
   if(roleName()!=='owner')return html;
   return html.replace('<button class="btn gold" data-action="check-system-readiness">Check readiness</button>','<div class="actions"><button class="btn gold" data-action="check-system-readiness">Check readiness</button><button class="btn" data-action="open-live-launch-preflight">Live launch preflight</button><button class="btn" data-action="validate-document-storage">Validate private storage</button><button class="btn" data-action="validate-operational-alerts">Test failure alerts</button></div>');
+};
+var __woaOpenModalLaunchClarityBase=openModal;
+openModal=function(title,body){
+  var modalTitle=String(title||''),content=String(body||'');
+  if(modalTitle==='System readiness check'){
+    content=clarifyCoreReadinessLanguage(content);
+    content='<div class="notice launch-readiness-separation"><strong>Core check only</strong><br>This check does not authorize a Stripe cutover. The owner must open Controlled Stripe launch preflight and clear every live evidence gate while Clover remains active.</div>'+content;
+  }
+  return __woaOpenModalLaunchClarityBase(title,content);
 };
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="validate-document-storage"]');

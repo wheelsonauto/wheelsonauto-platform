@@ -232,6 +232,18 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Vehicle identity review',
   'VIN review'
 ]);
+assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
+  'clarifyCoreReadinessLanguage',
+  'Core operational check for environment keys',
+  '<span>Core system</span><strong>Core ready</strong>',
+  '<span>Core system</span><strong>Core blocked</strong>',
+  '<span>Core system</span><b>Core ready</b>',
+  '<span>Core system</span><b>Core blocked</b>',
+  'This does not clear a Stripe launch; run Live launch preflight before any cutover.',
+  '<strong>Core check only</strong>',
+  'This check does not authorize a Stripe cutover.',
+  'clear every live evidence gate while Clover remains active.'
+]);
 
 const staticActions = unique(app.matchAll(/data-action="([^"]+)"/g), match => {
   const value = match[1];
