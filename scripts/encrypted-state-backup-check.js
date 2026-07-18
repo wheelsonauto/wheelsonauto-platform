@@ -30,6 +30,11 @@ async function main() {
   try {
     assert.strictEqual(backups.status().configured, true, 'Encrypted offsite backups should use any configured object store in test mode.');
     assert.strictEqual(backups.status().productionReady, false, 'A local object store must never claim production backup readiness.');
+    await assert.rejects(
+      () => backups.verifyLatest(),
+      error => error && error.code === 'woa_state_backup_not_found' && error.message === 'No encrypted state backup has been created yet.' && !error.message.includes(temp),
+      'A missing backup must return an actionable public-safe status without exposing its private filesystem path.'
+    );
 
     const firstState = {
       vehicles: [{ id: 'vehicle-backup-1', vin: 'BACKUPVIN00000001', currentCustomer: 'Backup Customer' }],
@@ -140,7 +145,7 @@ async function main() {
     await objectStore.replaceObject(pointerKey, pointerBytes);
     assert.strictEqual((await backups.verifyLatest()).verified, true, 'The original encrypted backup must remain recoverable after fail-closed tamper checks.');
 
-    console.log('Encrypted state backup check passed: immutable backup objects, atomic latest pointer, canonical checksum, AES-GCM authentication, key isolation, tamper rejection, and read-back recovery verified.');
+    console.log('Encrypted state backup check passed: safe missing-backup status, immutable backup objects, atomic latest pointer, canonical checksum, AES-GCM authentication, key isolation, tamper rejection, and read-back recovery verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

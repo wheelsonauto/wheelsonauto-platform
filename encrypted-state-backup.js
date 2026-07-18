@@ -301,9 +301,29 @@ class EncryptedStateBackupStore {
 
   async readLatest() {
     this.assertConfigured();
-    const pointerBytes = await this.objectStore.readObject(this.latestPointerKey());
+    let pointerBytes;
+    try {
+      pointerBytes = await this.objectStore.readObject(this.latestPointerKey());
+    } catch (error) {
+      if (error && (error.code === 'ENOENT' || error.statusCode === 404)) {
+        const missing = new Error('No encrypted state backup has been created yet.');
+        missing.code = 'woa_state_backup_not_found';
+        throw missing;
+      }
+      throw error;
+    }
     const pointer = this.verifyPointer(parseJsonObject(pointerBytes, 'Encrypted state backup pointer', this.maxEnvelopeBytes));
-    const backupBytes = await this.objectStore.readObject(pointer.storageKey);
+    let backupBytes;
+    try {
+      backupBytes = await this.objectStore.readObject(pointer.storageKey);
+    } catch (error) {
+      if (error && (error.code === 'ENOENT' || error.statusCode === 404)) {
+        const missing = new Error('The encrypted state backup referenced by the signed pointer is missing. Restore the last verified backup before launch.');
+        missing.code = 'woa_state_backup_object_missing';
+        throw missing;
+      }
+      throw error;
+    }
     if (sha256(backupBytes) !== pointer.backupSha256) throw new Error('Encrypted state backup object checksum does not match the signed pointer.');
     const recovered = this.decryptEnvelope(backupBytes, pointer);
     return { ...recovered, pointer };
