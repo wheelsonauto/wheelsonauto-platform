@@ -193,7 +193,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-clover-cutover-gate-144';
+const ASSET_VERSION = 'platform-20260718-private-document-reload-145';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -7784,7 +7784,7 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
     kind: 'Document',
     date: row.date || row.createdAt || row.expires || row.due || '',
     title: row.title || row.type || 'Document',
-    portalDownloadUrl: row.storagePath && row.customerAccountId ? '/customer/documents/' + encodeURIComponent(row.id) : ''
+    portalDownloadUrl: privateDocumentAvailable(row) && row.customerAccountId ? '/customer/documents/' + encodeURIComponent(row.id) : ''
   }));
   const receipts = (payments || []).filter(row => {
     const status = String(row.status || '').toLowerCase();

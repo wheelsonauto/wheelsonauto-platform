@@ -2261,6 +2261,9 @@ async function main() {
     const encryptedCustomerUpload = !!(rawUploadedDocument && rawUploadedDocument.storageKey && rawUploadedDocument.encryption && rawUploadedDocument.encryption.algorithm === 'AES-256-GCM');
     const legacyCustomerUpload = !!(rawUploadedDocument && /^onboarding-uploads\//.test(rawUploadedDocument.storagePath || ''));
     assert(rawUploadedDocument && (encryptedCustomerUpload || legacyCustomerUpload), 'Secure customer upload should retain validated private-file metadata only in server state, using encryption whenever the private store is configured.');
+    const ownCustomerDocumentState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
+    const ownCustomerDocument = ownCustomerDocumentState.json && ownCustomerDocumentState.json.portal && (ownCustomerDocumentState.json.portal.documents || []).find(item => item.id === uploadedDocument.id);
+    assert(ownCustomerDocumentState.status === 200 && ownCustomerDocument && ownCustomerDocument.portalDownloadUrl === '/customer/documents/' + encodeURIComponent(uploadedDocument.id), 'An encrypted private upload must keep its authenticated customer download link after the portal reloads.');
     const ownDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: customerCookie });
     assert(ownDocumentDownload.status === 200 && String(ownDocumentDownload.headers['Content-Type'] || ownDocumentDownload.headers['content-type']).includes('image/png'), 'Customer should be able to reopen their own uploaded document through the authenticated route.');
     const unauthenticatedDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id));
