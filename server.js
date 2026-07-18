@@ -5118,6 +5118,98 @@ function sameAssignmentCustomer(a, b) {
   if (shorter.every(token => longer.includes(token))) return true;
   return at[0] === bt[0] && at[at.length - 1] === bt[bt.length - 1];
 }
+function assignmentAliasRows(data = {}, vehicleId = '') {
+  const id = String(vehicleId || '').trim();
+  if (!id) return [];
+  return (Array.isArray(data.assignmentCustomerAliases) ? data.assignmentCustomerAliases : []).filter(row => {
+    return row && row.active !== false && String(row.vehicleId || '').trim() === id;
+  });
+}
+function sameApprovedAssignmentCustomer(data = {}, vehicleId = '', a, b) {
+  if (sameAssignmentCustomer(a, b)) return true;
+  const first = normKey(a);
+  const second = normKey(b);
+  if (!first || !second) return false;
+  const graph = new Map();
+  assignmentAliasRows(data, vehicleId).forEach(row => {
+    const names = [row.canonicalCustomer, row.aliasCustomer]
+      .concat(Array.isArray(row.aliases) ? row.aliases : [])
+      .map(normKey)
+      .filter(Boolean);
+    names.forEach(name => {
+      if (!graph.has(name)) graph.set(name, new Set());
+      names.forEach(other => {
+        if (other !== name) graph.get(name).add(other);
+      });
+    });
+  });
+  if (!graph.has(first)) return false;
+  const seen = new Set([first]);
+  const queue = [first];
+  while (queue.length) {
+    const name = queue.shift();
+    if (name === second) return true;
+    (graph.get(name) || []).forEach(other => {
+      if (!seen.has(other)) {
+        seen.add(other);
+        queue.push(other);
+      }
+    });
+  }
+  return false;
+}
+function activeAssignmentClaimsForVehicle(data = {}, vehicleId = '') {
+  const id = String(vehicleId || '').trim();
+  if (!id) return [];
+  const claims = [];
+  const addRows = (rows, source) => {
+    (Array.isArray(rows) ? rows : []).forEach(row => {
+      const candidate = activeAssignmentRecord(row);
+      if (!candidate || candidate.vehicleId !== id) return;
+      claims.push({
+        id: String(row.id || ''),
+        source,
+        customer: candidate.customer,
+        status: String(row.status || row.stage || 'Active'),
+        amount: Number(row.amount || row.weeklyAmount || row.weekly || 0),
+        frequency: String(row.frequency || ''),
+        nextRun: String(row.nextRun || ''),
+        updatedAt: String(row.updatedAt || row.createdAt || '')
+      });
+    });
+  };
+  addRows(data.recurringPayments, 'WheelsonAuto autopay');
+  addRows((((data.integrations || {}).clover || {}).recurringPlanMembers), 'Clover recurring');
+  addRows(data.contracts, 'Customer file');
+  addRows(data.customers, 'Customer record');
+  return claims.sort((a, b) => String(a.customer).localeCompare(String(b.customer)) || String(a.source).localeCompare(String(b.source)) || String(a.id).localeCompare(String(b.id)));
+}
+function assignmentConflictReview(data = {}, vehicleId = '') {
+  const vehicle = (Array.isArray(data.vehicles) ? data.vehicles : []).find(row => String(row && row.id || '') === String(vehicleId || ''));
+  if (!vehicle) return null;
+  return {
+    vehicle: {
+      id: vehicle.id,
+      organizationId: vehicle.organizationId || MAIN_ORG_ID,
+      name: vehicleNameFromParts(vehicle),
+      vin: vehicle.vin || '',
+      plate: vehicle.plate || vehicle.stock || vehicle.licensePlate || '',
+      tracker: trackerName(vehicle),
+      currentCustomer: vehicle.currentCustomer || '',
+      conflict: vehicle.assignmentConflict || ''
+    },
+    claims: activeAssignmentClaimsForVehicle(data, vehicle.id),
+    aliases: assignmentAliasRows(data, vehicle.id).map(row => ({
+      id: row.id || '',
+      canonicalCustomer: row.canonicalCustomer || '',
+      aliasCustomer: row.aliasCustomer || '',
+      aliases: Array.isArray(row.aliases) ? row.aliases : [],
+      reason: row.reason || '',
+      createdAt: row.createdAt || '',
+      createdBy: row.createdBy || ''
+    }))
+  };
+}
 function weakValue(field, value) {
   const raw = String(value || '').trim();
   if (!raw) return true;
@@ -5196,13 +5288,13 @@ function activeAssignmentRecord(row = {}) {
   if (/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|pending application|pending approval|awaiting approval|awaiting pickup|pending pickup|\bdraft\b|\blead\b|\bprospect\b|\bnew\b)/.test(status)) return null;
   return { customer, vehicleId };
 }
-function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '') {
+function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '', sameCustomer = sameAssignmentCustomer) {
   let changed = 0;
   const vehicleName = vehicleNameFromParts(vehicle);
   const tag = vehicle.plate || vehicle.stock || vehicle.licensePlate || row.licensePlate || row.plate || '';
   const savedCustomer = row.customer || row.name || '';
   const patch = {
-    customer: savedCustomer && sameAssignmentCustomer(savedCustomer, customer) ? savedCustomer : (customer || savedCustomer),
+    customer: savedCustomer && sameCustomer(savedCustomer, customer) ? savedCustomer : (customer || savedCustomer),
     vehicleId: vehicle.id || row.vehicleId || '',
     vehicle: vehicleName,
     vin: vehicle.vin || row.vin || '',
@@ -5244,6 +5336,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
   let vehicleAssignmentsSynced = 0, linkedRowsSynced = 0, serviceRowsSynced = 0, conflicts = 0;
   data.vehicles.forEach(vehicle => {
     const list = byVehicle.get(String(vehicle.id || '')) || [];
+    const sameCustomer = (a, b) => sameApprovedAssignmentCustomer(data, vehicle.id, a, b);
     // A previous conflict must not remain forever after the records that caused
     // it have been ended, returned, or moved back to pending intake.
     if (!list.length) {
@@ -5252,7 +5345,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     }
     const identityGroups = [];
     list.map(item => item.customer).filter(Boolean).forEach(name => {
-      const group = identityGroups.find(names => names.some(saved => sameAssignmentCustomer(saved, name)));
+      const group = identityGroups.find(names => names.some(saved => sameCustomer(saved, name)));
       if (group) group.push(name);
       else identityGroups.push([name]);
     });
@@ -5262,7 +5355,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
       return;
     }
     const currentCustomer = String(vehicle.currentCustomer || '').trim();
-    const customer = currentCustomer && list.some(item => sameAssignmentCustomer(item.customer, currentCustomer)) ? currentCustomer : list[0].customer;
+    const customer = currentCustomer && list.some(item => sameCustomer(item.customer, currentCustomer)) ? currentCustomer : list[0].customer;
     if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
     const needsRentedStatus = /^(?:ready|available|in lot|fleet ready)?$/i.test(String(vehicle.status || '').trim());
     if (String(vehicle.currentCustomer || '') !== customer || needsRentedStatus) {
@@ -5273,7 +5366,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
       vehicleAssignmentsSynced += 1;
     }
     list.forEach(item => {
-      linkedRowsSynced += syncRowVehicleIdentity(item.row, vehicle, customer);
+      linkedRowsSynced += syncRowVehicleIdentity(item.row, vehicle, customer, sameCustomer);
     });
     data.maintenance.forEach(job => {
       const status = String(job.status || '').toLowerCase();
@@ -5283,7 +5376,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
         (job.plate && (vehicle.plate || vehicle.stock) && normKey(job.plate) === normKey(vehicle.plate || vehicle.stock));
       if (!matches) return;
       const beforeCustomer = String(job.customer || '').trim();
-      serviceRowsSynced += syncRowVehicleIdentity(job, vehicle, customer);
+      serviceRowsSynced += syncRowVehicleIdentity(job, vehicle, customer, sameCustomer);
       if (beforeCustomer && normKey(beforeCustomer) !== normKey(customer)) job.previousCustomer = beforeCustomer;
       if (beforeCustomer && normKey(beforeCustomer) !== normKey(customer)) job.customerSyncedAt = new Date().toISOString();
     });
@@ -17948,6 +18041,93 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, id: contract.id, notes, bytes: Buffer.byteLength(notes, 'utf8'), source: source === customer ? 'customer' : source === vehicle ? 'vehicle' : 'customer file' });
     }
     if (url.pathname === '/api/state/version' && req.method === 'GET') return json(res, 200, { ok: true, version: await dataVersion() });
+    if (url.pathname.startsWith('/api/vehicles/')) {
+      const assignmentReviewMatch = /^\/api\/vehicles\/([^/]+)\/assignment-conflict$/.exec(url.pathname);
+      if (assignmentReviewMatch && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can review customer-name assignment conflicts.' });
+      const data = await readData();
+      const review = assignmentConflictReview(data, decodeURIComponent(assignmentReviewMatch[1] || ''));
+      if (!review) return json(res, 404, { ok: false, error: 'Vehicle not found.' });
+      return json(res, 200, { ok: true, review });
+      }
+      const assignmentAliasMatch = /^\/api\/vehicles\/([^/]+)\/assignment-alias$/.exec(url.pathname);
+      if (assignmentAliasMatch && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can confirm that two active names are the same customer.' });
+      const payload = await readJsonBody(req);
+      if (String(payload.confirmation || '') !== 'SAME_CUSTOMER_FOR_THIS_VEHICLE') {
+        return json(res, 400, { ok: false, error: 'Confirm that these names are the same customer for this vehicle before saving.' });
+      }
+      const data = await readData();
+      const vehicleId = decodeURIComponent(assignmentAliasMatch[1] || '');
+      const review = assignmentConflictReview(data, vehicleId);
+      if (!review) return json(res, 404, { ok: false, error: 'Vehicle not found.' });
+      const canonicalKey = normKey(payload.canonicalCustomer);
+      const aliasKey = normKey(payload.aliasCustomer);
+      if (!canonicalKey || !aliasKey || canonicalKey === aliasKey) return json(res, 400, { ok: false, error: 'Choose two different names from this vehicle assignment review.' });
+      const canonicalClaim = review.claims.find(row => normKey(row.customer) === canonicalKey);
+      const aliasClaim = review.claims.find(row => normKey(row.customer) === aliasKey);
+      if (!canonicalClaim || !aliasClaim) return json(res, 400, { ok: false, error: 'Both names must be active claims for this exact vehicle.' });
+      if (sameApprovedAssignmentCustomer(data, vehicleId, canonicalClaim.customer, aliasClaim.customer)) {
+        return json(res, 409, { ok: false, error: 'Those names are already treated as the same customer for this vehicle.' });
+      }
+      const now = new Date().toISOString();
+      data.assignmentCustomerAliases = Array.isArray(data.assignmentCustomerAliases) ? data.assignmentCustomerAliases : [];
+      data.assignmentCustomerAliases.unshift({
+        id: 'assignment-alias-' + crypto.randomBytes(8).toString('hex'),
+        organizationId: review.vehicle.organizationId || MAIN_ORG_ID,
+        vehicleId,
+        canonicalCustomer: canonicalClaim.customer,
+        aliasCustomer: aliasClaim.customer,
+        aliases: [canonicalClaim.customer, aliasClaim.customer],
+        reason: String(payload.reason || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 500),
+        active: true,
+        createdAt: now,
+        createdBy: user.name || user.username || 'Owner'
+      });
+      const synced = syncVehicleAssignmentsFromActiveRecords(data);
+      syncOnlineInventoryFromFleetAssignments(data);
+      appendAuditLog(data, user, 'Vehicle assignment names confirmed as same customer', [
+        review.vehicle.name,
+        review.vehicle.vin ? 'VIN ' + review.vehicle.vin : '',
+        canonicalClaim.customer + ' = ' + aliasClaim.customer,
+        'No customer, card, payment, or recurring record was merged or charged.'
+      ].filter(Boolean));
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, review: assignmentConflictReview(data, vehicleId), synced });
+      }
+      const assignmentAliasRevokeMatch = /^\/api\/vehicles\/([^/]+)\/assignment-alias\/([^/]+)\/revoke$/.exec(url.pathname);
+      if (assignmentAliasRevokeMatch && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can remove a confirmed same-customer name link.' });
+      const payload = await readJsonBody(req);
+      if (String(payload.confirmation || '') !== 'REMOVE_ASSIGNMENT_ALIAS') {
+        return json(res, 400, { ok: false, error: 'Confirm removal of the same-customer name link before saving.' });
+      }
+      const data = await readData();
+      const vehicleId = decodeURIComponent(assignmentAliasRevokeMatch[1] || '');
+      const aliasId = decodeURIComponent(assignmentAliasRevokeMatch[2] || '');
+      const review = assignmentConflictReview(data, vehicleId);
+      if (!review) return json(res, 404, { ok: false, error: 'Vehicle not found.' });
+      const alias = (Array.isArray(data.assignmentCustomerAliases) ? data.assignmentCustomerAliases : []).find(row => {
+        return row && row.active !== false && String(row.id || '') === aliasId && String(row.vehicleId || '') === vehicleId;
+      });
+      if (!alias) return json(res, 404, { ok: false, error: 'Confirmed same-customer name link not found.' });
+      alias.active = false;
+      alias.revokedAt = new Date().toISOString();
+      alias.revokedBy = user.name || user.username || 'Owner';
+      const synced = syncVehicleAssignmentsFromActiveRecords(data);
+      syncOnlineInventoryFromFleetAssignments(data);
+      appendAuditLog(data, user, 'Vehicle assignment same-customer link removed', [
+        review.vehicle.name,
+        review.vehicle.vin ? 'VIN ' + review.vehicle.vin : '',
+        alias.canonicalCustomer + ' / ' + alias.aliasCustomer,
+        'Original records remain unchanged; any live conflict is surfaced again for review.'
+      ].filter(Boolean));
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+        return json(res, 200, { ok: true, review: assignmentConflictReview(data, vehicleId), synced });
+      }
+    }
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = await readJsonBody(req, 32 * 1024 * 1024);
