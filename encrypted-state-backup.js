@@ -25,9 +25,9 @@ function validSha256(value) {
   return /^[a-f0-9]{64}$/i.test(String(value || ''));
 }
 
-function parseJsonObject(bytes, label) {
+function parseJsonObject(bytes, label, maxBytes = MAX_ENVELOPE_BYTES) {
   if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error(label + ' is empty.');
-  if (bytes.length > MAX_ENVELOPE_BYTES) throw new Error(label + ' exceeds the maximum supported size.');
+  if (bytes.length > maxBytes) throw new Error(label + ' exceeds the maximum supported size.');
   let parsed;
   try {
     parsed = JSON.parse(bytes.toString('utf8'));
@@ -36,6 +36,21 @@ function parseJsonObject(bytes, label) {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(label + ' is invalid.');
   return parsed;
+}
+
+function byteLimit(value, fallback, maximum) {
+  if (value == null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1024 || parsed > maximum) throw new Error('State backup byte limit is invalid.');
+  return parsed;
+}
+
+function decodeCanonicalBase64(value, label) {
+  const encoded = String(value || '');
+  if (!encoded || encoded.length % 4 !== 0 || !/^[a-zA-Z0-9+/]+={0,2}$/.test(encoded)) throw new Error(label + ' is invalid.');
+  const bytes = Buffer.from(encoded, 'base64');
+  if (!bytes.length || bytes.toString('base64') !== encoded) throw new Error(label + ' is invalid.');
+  return bytes;
 }
 
 function pointerSigningValue(pointer = {}) {
@@ -74,6 +89,8 @@ class EncryptedStateBackupStore {
     this.keyVersion = String(options.keyVersion || process.env.WOA_STATE_BACKUP_KEY_VERSION || process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION || 'v1').trim() || 'v1';
     if (!/^[a-zA-Z0-9._-]{1,80}$/.test(this.keyVersion)) throw new Error('WOA_STATE_BACKUP_KEY_VERSION contains unsupported characters.');
     this.decryptionKeys = secureDocumentStore.parseDecryptionKeys(options.decryptionKeys || process.env.WOA_STATE_BACKUP_DECRYPTION_KEYS || process.env.WOA_DOCUMENT_DECRYPTION_KEYS || '');
+    this.maxEnvelopeBytes = byteLimit(options.maxEnvelopeBytes, MAX_ENVELOPE_BYTES, MAX_ENVELOPE_BYTES);
+    this.maxStateBytes = byteLimit(options.maxStateBytes, MAX_STATE_BYTES, MAX_STATE_BYTES);
     if (this.key) {
       const configured = this.decryptionKeys.get(this.keyVersion);
       if (configured && !configured.equals(this.key)) throw new Error('The active state-backup key conflicts with the configured decryption key for ' + this.keyVersion + '.');
@@ -128,7 +145,7 @@ class EncryptedStateBackupStore {
     const stateVersion = String(options.stateVersion == null ? '' : options.stateVersion).slice(0, 80);
     const stateChecksum = stateRepository.checksum(state);
     const plaintext = Buffer.from(stateRepository.stableJson(state), 'utf8');
-    if (!plaintext.length || plaintext.length > MAX_STATE_BYTES) throw new Error('State backup data exceeds the maximum supported size.');
+    if (!plaintext.length || plaintext.length > this.maxStateBytes) throw new Error('State backup data exceeds the maximum supported size.');
     const compressed = zlib.gzipSync(plaintext, { level: 9 });
     const metadata = {
       format: BACKUP_FORMAT,
@@ -155,21 +172,30 @@ class EncryptedStateBackupStore {
       ciphertext: ciphertext.toString('base64')
     };
     const bytes = Buffer.from(stateRepository.stableJson(envelope), 'utf8');
-    if (bytes.length > MAX_ENVELOPE_BYTES) throw new Error('Encrypted state backup exceeds the maximum supported size.');
+    if (bytes.length > this.maxEnvelopeBytes) throw new Error('Encrypted state backup exceeds the maximum supported size.');
     return { envelope, bytes, stateChecksum, stateSize: plaintext.length };
   }
 
   decryptEnvelope(bytes, expected = {}) {
-    const envelope = parseJsonObject(bytes, 'Encrypted state backup');
+    const envelope = parseJsonObject(bytes, 'Encrypted state backup', this.maxEnvelopeBytes);
     if (envelope.format !== BACKUP_FORMAT || Number(envelope.version) !== BACKUP_VERSION) throw new Error('Encrypted state backup format is unsupported.');
     if (envelope.organizationId !== this.organizationId || expected.organizationId && envelope.organizationId !== expected.organizationId) throw new Error('Encrypted state backup belongs to a different organization.');
     if (!validSha256(envelope.stateChecksum) || expected.stateChecksum && envelope.stateChecksum !== expected.stateChecksum) throw new Error('Encrypted state backup checksum metadata does not match the signed pointer.');
+    if (!Number.isFinite(Date.parse(String(envelope.createdAt || '')))) throw new Error('Encrypted state backup timestamp is invalid.');
     if (expected.createdAt && envelope.createdAt !== expected.createdAt) throw new Error('Encrypted state backup timestamp does not match the signed pointer.');
+    if (String(envelope.stateVersion == null ? '' : envelope.stateVersion).length > 80) throw new Error('Encrypted state backup version is invalid.');
     if (expected.stateVersion != null && String(envelope.stateVersion) !== String(expected.stateVersion)) throw new Error('Encrypted state backup version does not match the signed pointer.');
-    const nonce = Buffer.from(String(envelope.nonce || ''), 'base64');
-    const authTag = Buffer.from(String(envelope.authTag || ''), 'base64');
-    const ciphertext = Buffer.from(String(envelope.ciphertext || ''), 'base64');
-    if (nonce.length !== 12 || authTag.length !== 16 || !ciphertext.length || sha256(ciphertext) !== envelope.ciphertextSha256) throw new Error('Encrypted state backup payload integrity failed.');
+    const stateSize = Number(envelope.stateSize);
+    if (!Number.isSafeInteger(stateSize) || stateSize < 2 || stateSize > this.maxStateBytes) throw new Error('Encrypted state backup size metadata is invalid.');
+    if (expected.stateSize != null && stateSize !== Number(expected.stateSize)) throw new Error('Encrypted state backup size does not match the signed pointer.');
+    if (envelope.compression !== 'gzip' || envelope.encryption !== 'AES-256-GCM') throw new Error('Encrypted state backup encoding is unsupported.');
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(String(envelope.keyVersion || ''))) throw new Error('Encrypted state backup key version is invalid.');
+    if (expected.keyVersion && envelope.keyVersion !== expected.keyVersion) throw new Error('Encrypted state backup key version does not match the signed pointer.');
+    if (!validSha256(envelope.ciphertextSha256)) throw new Error('Encrypted state backup payload checksum is invalid.');
+    const nonce = decodeCanonicalBase64(envelope.nonce, 'Encrypted state backup nonce');
+    const authTag = decodeCanonicalBase64(envelope.authTag, 'Encrypted state backup authentication tag');
+    const ciphertext = decodeCanonicalBase64(envelope.ciphertext, 'Encrypted state backup ciphertext');
+    if (nonce.length !== 12 || authTag.length !== 16 || sha256(ciphertext) !== envelope.ciphertextSha256) throw new Error('Encrypted state backup payload integrity failed.');
     const key = this.keyForVersion(envelope.keyVersion);
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
     decipher.setAAD(backupAad(envelope));
@@ -182,12 +208,12 @@ class EncryptedStateBackupStore {
     }
     let plaintext;
     try {
-      plaintext = zlib.gunzipSync(compressed, { maxOutputLength: MAX_STATE_BYTES });
+      plaintext = zlib.gunzipSync(compressed, { maxOutputLength: this.maxStateBytes });
     } catch {
       throw new Error('Encrypted state backup decompression failed.');
     }
     if (plaintext.length !== Number(envelope.stateSize || 0)) throw new Error('Encrypted state backup size verification failed.');
-    const state = parseJsonObject(plaintext, 'Decrypted state backup');
+    const state = parseJsonObject(plaintext, 'Decrypted state backup', this.maxStateBytes);
     const actualChecksum = stateRepository.checksum(state);
     if (actualChecksum !== envelope.stateChecksum) throw new Error('Encrypted state backup state checksum verification failed.');
     return {
@@ -207,8 +233,13 @@ class EncryptedStateBackupStore {
     if (!pointer || pointer.format !== POINTER_FORMAT || Number(pointer.version) !== BACKUP_VERSION) throw new Error('Encrypted state backup pointer is invalid.');
     if (pointer.organizationId !== this.organizationId) throw new Error('Encrypted state backup pointer belongs to a different organization.');
     if (!validSha256(pointer.backupSha256) || !validSha256(pointer.stateChecksum)) throw new Error('Encrypted state backup pointer checksums are invalid.');
+    if (!Number.isFinite(Date.parse(String(pointer.createdAt || '')))) throw new Error('Encrypted state backup pointer timestamp is invalid.');
+    if (String(pointer.stateVersion == null ? '' : pointer.stateVersion).length > 80) throw new Error('Encrypted state backup pointer version is invalid.');
+    const stateSize = Number(pointer.stateSize);
+    if (!Number.isSafeInteger(stateSize) || stateSize < 2 || stateSize > this.maxStateBytes) throw new Error('Encrypted state backup pointer size is invalid.');
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(String(pointer.keyVersion || ''))) throw new Error('Encrypted state backup pointer key version is invalid.');
     const prefix = this.backupPrefix();
-    if (!String(pointer.storageKey || '').startsWith(prefix) || pointer.storageKey === this.latestPointerKey()) throw new Error('Encrypted state backup pointer contains an invalid object key.');
+    if (String(pointer.storageKey || '').length > 512 || !String(pointer.storageKey || '').startsWith(prefix) || pointer.storageKey === this.latestPointerKey()) throw new Error('Encrypted state backup pointer contains an invalid object key.');
     const key = this.keyForVersion(pointer.keyVersion);
     if (!timingSafeHexEqual(pointer.signature, pointerSignature(pointer, key))) throw new Error('Encrypted state backup pointer signature verification failed.');
     return pointer;
@@ -271,7 +302,7 @@ class EncryptedStateBackupStore {
   async readLatest() {
     this.assertConfigured();
     const pointerBytes = await this.objectStore.readObject(this.latestPointerKey());
-    const pointer = this.verifyPointer(parseJsonObject(pointerBytes, 'Encrypted state backup pointer'));
+    const pointer = this.verifyPointer(parseJsonObject(pointerBytes, 'Encrypted state backup pointer', this.maxEnvelopeBytes));
     const backupBytes = await this.objectStore.readObject(pointer.storageKey);
     if (sha256(backupBytes) !== pointer.backupSha256) throw new Error('Encrypted state backup object checksum does not match the signed pointer.');
     const recovered = this.decryptEnvelope(backupBytes, pointer);

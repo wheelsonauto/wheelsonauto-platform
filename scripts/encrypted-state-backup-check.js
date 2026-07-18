@@ -44,6 +44,19 @@ async function main() {
     assert.strictEqual(stateRepository.stableJson(firstRead.state), stateRepository.stableJson(firstState), 'The latest backup must decrypt to the exact canonical state.');
     assert.strictEqual(firstRead.metadata.stateVersion, '7', 'The backup must retain its source database version.');
 
+    const compactLimits = encryptedStateBackup.createEncryptedStateBackupStore({
+      objectStore,
+      organizationId: 'org-backup-size-check',
+      encryptionKey: key,
+      keyVersion: 'v1',
+      maxEnvelopeBytes: 4096,
+      maxStateBytes: 128 * 1024
+    });
+    const compressibleLargeState = { payload: 'state-data-'.repeat(7000) };
+    assert(Buffer.byteLength(stateRepository.stableJson(compressibleLargeState), 'utf8') > 4096, 'The scale regression fixture must be larger than the encrypted-envelope limit.');
+    await compactLimits.create(compressibleLargeState, { stateVersion: 1, createdAt: '2026-07-18T12:30:00.000Z' });
+    assert.strictEqual((await compactLimits.readLatest()).state.payload, compressibleLargeState.payload, 'A valid compressed state larger than the envelope limit must still restore under the independent state-size limit.');
+
     const secondState = { ...firstState, payments: firstState.payments.concat({ id: 'payment-backup-2', customer: 'Backup Customer', amount: 15, status: 'Paid' }) };
     const second = await backups.create(secondState, { stateVersion: 8, createdAt: '2026-07-18T13:00:00.000Z' });
     assert.notStrictEqual(second.storageKey, first.storageKey, 'Each encrypted backup must be immutable and use a unique object key.');
@@ -84,6 +97,7 @@ async function main() {
     const pointerBytes = await objectStore.readObject(pointerKey);
     const pointer = JSON.parse(pointerBytes.toString('utf8'));
     const backupBytes = await objectStore.readObject(pointer.storageKey);
+    const signingKey = secureDocumentStore.decodeEncryptionKey(key);
 
     const wrongKeyStore = encryptedStateBackup.createEncryptedStateBackupStore({
       objectStore,
@@ -96,6 +110,12 @@ async function main() {
     const tamperedPointer = { ...pointer, stateVersion: '999' };
     await objectStore.replaceObject(pointerKey, Buffer.from(stateRepository.stableJson(tamperedPointer), 'utf8'));
     await assert.rejects(() => backups.readLatest(), /signature verification failed/i, 'A modified latest pointer must fail closed before object retrieval.');
+    await objectStore.replaceObject(pointerKey, pointerBytes);
+
+    const sizeTamperedPointer = { ...pointer, stateSize: pointer.stateSize + 1 };
+    sizeTamperedPointer.signature = crypto.createHmac('sha256', signingKey).update(encryptedStateBackup.pointerSigningValue(sizeTamperedPointer), 'utf8').digest('hex');
+    await objectStore.replaceObject(pointerKey, Buffer.from(stateRepository.stableJson(sizeTamperedPointer), 'utf8'));
+    await assert.rejects(() => backups.readLatest(), /size does not match/i, 'A signed pointer with inconsistent state-size metadata must fail closed.');
     await objectStore.replaceObject(pointerKey, pointerBytes);
 
     const tamperedBackup = Buffer.from(backupBytes);
@@ -111,7 +131,6 @@ async function main() {
     envelope.ciphertextSha256 = crypto.createHash('sha256').update(ciphertext).digest('hex');
     const forgedBytes = Buffer.from(stateRepository.stableJson(envelope), 'utf8');
     const forgedPointer = { ...pointer, backupSha256: crypto.createHash('sha256').update(forgedBytes).digest('hex') };
-    const signingKey = secureDocumentStore.decodeEncryptionKey(key);
     forgedPointer.signature = crypto.createHmac('sha256', signingKey).update(encryptedStateBackup.pointerSigningValue(forgedPointer), 'utf8').digest('hex');
     await objectStore.replaceObject(pointer.storageKey, forgedBytes);
     await objectStore.replaceObject(pointerKey, Buffer.from(stateRepository.stableJson(forgedPointer), 'utf8'));
