@@ -147,6 +147,7 @@ const WOA_PUBLIC_SITE_ENABLED = process.env.WOA_PUBLIC_SITE_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
 const WOA_DATA_BACKEND = String(process.env.WOA_DATA_BACKEND || 'json').trim().toLowerCase();
 const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.env.WOA_POSTGRES_SNAPSHOT_LIMIT || 180)));
+const WOA_DEPLOY_COMMIT = String(process.env.RENDER_GIT_COMMIT || process.env.WOA_DEPLOY_COMMIT || '').trim().slice(0, 12);
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
@@ -15300,7 +15301,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, ready ? 200 : 503, {
         ok: ready,
         service: 'wheelsonauto-platform',
-        release: ASSET_VERSION
+        release: ASSET_VERSION,
+        commit: WOA_DEPLOY_COMMIT
       }, headers);
     }
     if (await staticFile(req, res, url.pathname, url.searchParams)) return;

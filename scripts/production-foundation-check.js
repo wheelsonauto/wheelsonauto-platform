@@ -79,6 +79,7 @@ async function main() {
     const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
     const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
     assert(serverSource.includes("url.pathname === '/healthz'") && serverSource.includes("release: ASSET_VERSION"), 'Production must expose a minimal unauthenticated health route without loading the staff workspace.');
+    assert(serverSource.includes('process.env.RENDER_GIT_COMMIT') && serverSource.includes('commit: WOA_DEPLOY_COMMIT'), 'Production health must expose the short Render commit SHA for exact deploy verification.');
     assert(/healthCheckPath:\s*\/healthz/.test(renderBlueprint), 'Render must probe the dedicated health route instead of treating an open port as application readiness.');
     assert(/autoDeployTrigger:\s*checksPass/.test(renderBlueprint), 'Render must wait for the repository production gate before deploying main.');
     assert(/branches:\s*\[main\]/.test(productionWorkflow) && /npm run check/.test(productionWorkflow) && /timeout-minutes:\s*20/.test(productionWorkflow), 'The main production gate must run the complete regression suite with a bounded timeout.');
