@@ -2,16 +2,72 @@
 
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const stateRepository = require('../state-repository');
 
-const databaseUrl = String(process.env.WOA_TEST_DATABASE_URL || '').trim();
-const confirmed = process.env.WOA_POSTGRES_RUNTIME_TEST_CONFIRM === '1';
+let databaseUrl = String(process.env.WOA_TEST_DATABASE_URL || '').trim();
+let databaseSslMode = String(process.env.WOA_TEST_DATABASE_SSL_MODE || '').trim().toLowerCase();
+let confirmed = process.env.WOA_POSTGRES_RUNTIME_TEST_CONFIRM === '1';
+let ciPostgresContainer = '';
 const recoveryProofRequested = process.env.WOA_POSTGRES_RUNTIME_PROOF_RECORD === '1';
 const recoveryProofConfirmed = process.env.WOA_POSTGRES_RUNTIME_PROOF_CONFIRM === '1';
 const recoveryProofDatabaseUrl = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL || process.env.DATABASE_URL || '').trim();
 const recoveryProofOrganizationId = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID || stateRepository.DEFAULT_ORGANIZATION_ID).trim() || stateRepository.DEFAULT_ORGANIZATION_ID;
 const recoveryProofSecret = String(process.env.WOA_RECOVERY_DRILL_CONFIGURATION_SECRET || process.env.WOA_SESSION_SECRET || '').trim();
 const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v3';
+
+function dockerCommand(args, options = {}) {
+  const result = spawnSync('docker', args, {
+    encoding: 'utf8',
+    timeout: Number(options.timeout || 120000),
+    stdio: options.quiet ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe']
+  });
+  if (result.error) throw new Error('GitHub PostgreSQL runtime check could not run Docker: ' + result.error.message);
+  return result;
+}
+
+function stopCiPostgres() {
+  if (!ciPostgresContainer) return;
+  dockerCommand(['rm', '--force', ciPostgresContainer], { timeout: 30000, quiet: true });
+  ciPostgresContainer = '';
+}
+
+async function startGitHubPostgres() {
+  const container = 'wheelsonauto-postgres-ci-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+  const started = dockerCommand([
+    'run', '--detach', '--rm', '--name', container,
+    '--publish', '127.0.0.1::5432',
+    '--env', 'POSTGRES_DB=wheelsonauto_ci',
+    '--env', 'POSTGRES_USER=wheelsonauto_ci',
+    '--env', 'POSTGRES_PASSWORD=wheelsonauto_ci',
+    'postgres:16-alpine'
+  ]);
+  if (started.status !== 0) throw new Error('GitHub PostgreSQL runtime container failed to start: ' + String(started.stderr || started.stdout || '').trim());
+  ciPostgresContainer = container;
+  try {
+    const portResult = dockerCommand(['port', container, '5432/tcp'], { timeout: 30000, quiet: true });
+    if (portResult.status !== 0) throw new Error('GitHub PostgreSQL runtime container did not publish its test port.');
+    const match = String(portResult.stdout || '').match(/127\.0\.0\.1:(\d+)/);
+    if (!match) throw new Error('GitHub PostgreSQL runtime container returned an invalid test port.');
+    let ready = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const probe = dockerCommand(['exec', container, 'pg_isready', '-U', 'wheelsonauto_ci', '-d', 'wheelsonauto_ci'], { timeout: 10000, quiet: true });
+      if (probe.status === 0) {
+        ready = true;
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    if (!ready) throw new Error('GitHub PostgreSQL runtime container did not become healthy within 20 seconds.');
+    databaseUrl = 'postgresql://wheelsonauto_ci:wheelsonauto_ci@127.0.0.1:' + match[1] + '/wheelsonauto_ci';
+    databaseSslMode = 'disable';
+    confirmed = true;
+    console.log('GitHub PostgreSQL 16 runtime container is ready for transactional recovery checks.');
+  } catch (error) {
+    stopCiPostgres();
+    throw error;
+  }
+}
 
 function databaseTargetIdentity(value) {
   const raw = String(value || '').trim();
@@ -91,6 +147,10 @@ async function recordRecoveryDrillProof(testOrganizationId, checks) {
 }
 
 async function main() {
+  if (!databaseUrl && process.env.GITHUB_ACTIONS === 'true') await startGitHubPostgres();
+  if (databaseUrl && !confirmed && process.env.GITHUB_ACTIONS === 'true') {
+    throw new Error('GitHub PostgreSQL runtime check received WOA_TEST_DATABASE_URL without WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1.');
+  }
   if (!databaseUrl || !confirmed) {
     console.log('PostgreSQL runtime recovery check skipped. Set WOA_TEST_DATABASE_URL and WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1 to run it against a dedicated test database.');
     return;
@@ -104,6 +164,7 @@ async function main() {
   const repository = stateRepository.createStateRepository({
     backend: 'postgres',
     databaseUrl,
+    sslMode: databaseSslMode,
     organizationId,
     snapshotLimit: 12,
     rateLimitSecret,
@@ -113,6 +174,7 @@ async function main() {
   const competingRepository = stateRepository.createStateRepository({
     backend: 'postgres',
     databaseUrl,
+    sslMode: databaseSslMode,
     organizationId,
     snapshotLimit: 12,
     rateLimitSecret,
@@ -142,6 +204,7 @@ async function main() {
     const rateLimitRestartRepository = stateRepository.createStateRepository({
       backend: 'postgres',
       databaseUrl,
+      sslMode: databaseSslMode,
       organizationId,
       snapshotLimit: 12,
       rateLimitSecret,
@@ -326,6 +389,7 @@ async function main() {
     const restartedRepository = stateRepository.createStateRepository({
       backend: 'postgres',
       databaseUrl,
+      sslMode: databaseSslMode,
       organizationId,
       snapshotLimit: 12,
       applicationName: 'wheelsonauto-postgres-runtime-restart-check',
@@ -373,7 +437,9 @@ async function main() {
   }
 }
 
-main().catch(error => {
+main().finally(() => {
+  stopCiPostgres();
+}).catch(error => {
   console.error(error.stack || error);
   process.exit(1);
 });

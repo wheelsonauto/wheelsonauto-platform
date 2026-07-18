@@ -77,6 +77,7 @@ async function main() {
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
+    const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
     const encryptedBackupSource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-backup.js'), 'utf8');
     const encryptedRecoverySource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-recovery.js'), 'utf8');
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
@@ -87,6 +88,11 @@ async function main() {
     assert(/healthCheckPath:\s*\/healthz/.test(renderBlueprint), 'Render must probe the dedicated health route instead of treating an open port as application readiness.');
     assert(/autoDeployTrigger:\s*checksPass/.test(renderBlueprint), 'Render must wait for the repository production gate before deploying main.');
     assert(/branches:\s*\[main\]/.test(productionWorkflow) && /npm run check/.test(productionWorkflow) && /timeout-minutes:\s*20/.test(productionWorkflow), 'The main production gate must run the complete regression suite with a bounded timeout.');
+    assert(postgresRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
+      && postgresRuntimeCheckSource.includes("'postgres:16-alpine'")
+      && postgresRuntimeCheckSource.includes("'pg_isready'")
+      && postgresRuntimeCheckSource.includes('startGitHubPostgres()'), 'The main production gate must start and test against an isolated real PostgreSQL container instead of silently skipping transactional recovery checks.');
+    assert(postgresRuntimeCheckSource.includes('WOA_TEST_DATABASE_SSL_MODE') && postgresRuntimeCheckSource.includes('sslMode: databaseSslMode'), 'The PostgreSQL runtime check must support the isolated CI database without weakening production TLS defaults.');
     assert(/maxShutdownDelaySeconds:\s*60/.test(renderBlueprint), 'Render must allow enough time for active money actions and state writes to drain.');
     assert(serverSource.includes('async function gracefulShutdown') && serverSource.includes("process.once('SIGTERM'") && serverSource.includes('await writeDataQueue.catch'), 'Production shutdown must stop accepting requests and drain queued state writes before exit.');
     await verifyGracefulShutdown(path.resolve(__dirname, '..'), path.join(temp, 'graceful-runtime'));
