@@ -348,6 +348,24 @@ async function main() {
       ]
     };
     assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeSubscription).map(conflict => conflict.kind), ['stripe_subscription'], 'A Stripe subscription ID must never identify two local recurring plans.');
+    const providerScopedVerificationIds = {
+      verificationCases: [
+        { id: 'verification-stripe-a', provider: 'Stripe Identity', externalCaseId: 'vs_shared_provider_value' },
+        { id: 'verification-checkr-b', provider: 'Checkr', externalCaseId: 'vs_shared_provider_value' }
+      ]
+    };
+    assert.strictEqual(stateRepository.identityConflicts(providerScopedVerificationIds).length, 0, 'Different verification providers may legitimately issue the same external identifier value.');
+    const duplicateVerificationProviderId = {
+      verificationCases: [
+        providerScopedVerificationIds.verificationCases[0],
+        { ...providerScopedVerificationIds.verificationCases[1], provider: 'stripe identity' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateVerificationProviderId).map(conflict => conflict.kind), ['verification_provider_case:stripe_identity'], 'One verification provider case ID must never resolve to two local customer cases.');
+    const repeatedVerificationAliasOnOneCase = {
+      verificationCases: [{ id: 'verification-alias-one', provider: 'Canopy', externalCaseId: 'pull-one', providerPullId: 'pull-one' }]
+    };
+    assert.strictEqual(stateRepository.identityEntries(repeatedVerificationAliasOnOneCase).filter(entry => entry.kind === 'verification_provider_case:canopy').length, 1, 'The same provider identifier stored in two fields on one case must produce one database identity row.');
     const missingVinWarnings = stateRepository.identityWarnings({ vehicles: [{ id: 'vehicle-missing-vin', year: 2013, make: 'BMW', model: '528XI' }] });
     assert.strictEqual(missingVinWarnings.length, 1, 'A vehicle without a VIN must remain visible for owner review before Stripe cutover.');
     assert.strictEqual(missingVinWarnings[0].kind, 'vehicle_missing_vin', 'A missing VIN warning must retain a stable review category.');

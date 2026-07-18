@@ -352,6 +352,21 @@ function identityEntries(state = {}) {
     pushIdentity(entries, 'clover_subscription', recurring && recurring.cloverSubscriptionId, 'recurring_payment', id);
     pushIdentity(entries, 'stripe_subscription', recurring && recurring.stripeSubscriptionId, 'recurring_payment', id);
   });
+  // A signed verification webhook resolves an external provider id back to one
+  // customer case. Keep ids provider-scoped so different providers may reuse a
+  // value, while preventing one provider event from matching two local cases.
+  (state.verificationCases || []).forEach((verification, index) => {
+    const id = String(verification && verification.id || 'verification-case-' + index).trim();
+    const provider = normalizedIdentity(verification && verification.provider || 'unknown').replace(/[^a-z0-9]+/g, '_') || 'unknown';
+    const externalIds = [...new Set([
+      verification && verification.externalCaseId,
+      verification && verification.providerCaseId,
+      verification && verification.providerPullId,
+      verification && verification.providerReportId,
+      verification && verification.providerInvitationId
+    ].map(normalizedIdentity).filter(Boolean))];
+    externalIds.forEach(externalId => pushIdentity(entries, 'verification_provider_case:' + provider, externalId, 'verification_case', id));
+  });
   (state.payments || []).forEach((payment, index) => {
     const id = rowId(payment, 'payment-' + index);
     pushIdentity(entries, 'stripe_payment_intent', payment && payment.stripePaymentIntentId, 'payment', id);
@@ -1340,7 +1355,7 @@ class PostgresStateRepository {
   async refreshIdentityIndex(client, state) {
     const conflicts = identityConflicts(state);
     if (conflicts.length) {
-      const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, portal username, provider subscription ID, or payment ID before enabling PostgreSQL.');
+      const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, portal username, provider subscription ID, verification case ID, or payment ID before enabling PostgreSQL.');
       error.code = 'woa_identity_conflict';
       error.conflicts = conflicts.slice(0, 20);
       throw error;
