@@ -446,7 +446,7 @@ class JsonStateRepository {
   async claimWebhookEvent(provider, eventId, payload = {}) {
     const normalizedEventId = String(eventId || '').trim();
     if (!normalizedEventId) return { accepted: true, duplicate: false, eventId: '' };
-    const key = String(provider || '') + '|' + normalizedEventId;
+    const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
     const existing = this.webhookEventClaims.get(key);
     if (existing && existing.status === 'processed') return { accepted: false, duplicate: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
     if (existing && existing.status === 'processing') return { accepted: false, duplicate: true, inProgress: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
@@ -458,7 +458,7 @@ class JsonStateRepository {
   async completeWebhookEvent(provider, eventId) {
     const normalizedEventId = String(eventId || '').trim();
     if (!normalizedEventId) return;
-    const key = String(provider || '') + '|' + normalizedEventId;
+    const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
     const existing = this.webhookEventClaims.get(key) || {};
     this.webhookEventClaims.set(key, { ...existing, status: 'processed', attempts: Number(existing.attempts || 1) });
   }
@@ -466,7 +466,7 @@ class JsonStateRepository {
   async failWebhookEvent(provider, eventId, error) {
     const normalizedEventId = String(eventId || '').trim();
     if (!normalizedEventId) return;
-    const key = String(provider || '') + '|' + normalizedEventId;
+    const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
     const existing = this.webhookEventClaims.get(key) || {};
     this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), lastError: String(error && error.message || error || '').slice(0, 3000) });
   }
@@ -972,7 +972,17 @@ class PostgresStateRepository {
 
   async syncDocumentMetadata(client, state) {
     const rows = privateDocumentRows(state);
+    const retainedIds = [];
+    const seenIds = new Set();
     for (const document of rows) {
+      const documentId = String(document.id || '').trim();
+      if (seenIds.has(documentId)) {
+        const error = new Error('Private document metadata contains duplicate document id ' + documentId + '. Refusing an ambiguous database write.');
+        error.code = 'woa_document_identity_conflict';
+        throw error;
+      }
+      seenIds.add(documentId);
+      retainedIds.push(documentId);
       const metadata = {
         type: document.type || document.documentType || '',
         kind: document.kind || document.documentKind || '',
@@ -983,7 +993,7 @@ class PostgresStateRepository {
         vin: document.vin || '',
         licensePlate: document.licensePlate || document.plate || ''
       };
-      await client.query(`INSERT INTO woa_documents (
+      const saved = await client.query(`INSERT INTO woa_documents (
         id, organization_id, customer, application_id, onboarding_session_id, storage_provider, object_key,
         content_type, size_bytes, sha256, encryption, metadata, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, COALESCE($13::timestamptz, now()), now())
@@ -999,11 +1009,24 @@ class PostgresStateRepository {
         sha256 = EXCLUDED.sha256,
         encryption = EXCLUDED.encryption,
         metadata = EXCLUDED.metadata,
-        updated_at = now()`, [
-        String(document.id), this.organizationId, String(document.customer || ''), String(document.applicationId || ''), String(document.onboardingSessionId || ''),
+        updated_at = now()
+      WHERE woa_documents.organization_id = EXCLUDED.organization_id
+      RETURNING id`, [
+        documentId, this.organizationId, String(document.customer || ''), String(document.applicationId || ''), String(document.onboardingSessionId || ''),
         String(document.storageProvider || document.storage || (document.storageKey ? 'encrypted' : 'legacy-local')), String(document.storageKey || document.storagePath || ''),
         String(document.contentType || ''), Number(document.size || 0), String(document.sha256 || ''), JSON.stringify(document.encryption || {}), JSON.stringify(metadata), document.createdAt || null
       ]);
+      if (!saved.rowCount) {
+        const error = new Error('Private document id ' + documentId + ' is already owned by another company. Refusing cross-company metadata overwrite.');
+        error.code = 'woa_document_tenant_conflict';
+        throw error;
+      }
+    }
+    if (retainedIds.length) {
+      await client.query(`DELETE FROM woa_documents
+        WHERE organization_id = $1 AND NOT (id = ANY($2::text[]))`, [this.organizationId, retainedIds]);
+    } else {
+      await client.query('DELETE FROM woa_documents WHERE organization_id = $1', [this.organizationId]);
     }
   }
 
@@ -1051,7 +1074,10 @@ class PostgresStateRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const existing = await client.query('SELECT status, attempts, processing_started_at FROM woa_webhook_events WHERE provider = $1 AND event_id = $2 FOR UPDATE', [provider, eventId]);
+      const existing = await client.query(`SELECT status, attempts, processing_started_at
+        FROM woa_webhook_events
+        WHERE organization_id = $1 AND provider = $2 AND event_id = $3
+        FOR UPDATE`, [this.organizationId, provider, eventId]);
       if (existing.rowCount) {
         const row = existing.rows[0];
         if (row.status === 'processed') {
@@ -1067,8 +1093,8 @@ class PostgresStateRepository {
           return { accepted: false, duplicate: true, inProgress: true, eventId, attempts: Number(row.attempts || 1) };
         }
         await client.query(`UPDATE woa_webhook_events
-          SET status = 'processing', attempts = attempts + 1, payload = $3::jsonb, last_error = '', processing_started_at = now()
-          WHERE provider = $1 AND event_id = $2`, [provider, eventId, JSON.stringify(payload || {})]);
+          SET status = 'processing', attempts = attempts + 1, payload = $4::jsonb, last_error = '', processing_started_at = now()
+          WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId, JSON.stringify(payload || {})]);
         await client.query('COMMIT');
         return { accepted: true, duplicate: false, reclaimed: row.status === 'processing', eventId, attempts: Number(row.attempts || 0) + 1 };
       } else {
@@ -1089,14 +1115,16 @@ class PostgresStateRepository {
     if (!eventId) return;
     await this.ensureSchema();
     await this.pool.query(`UPDATE woa_webhook_events
-      SET status = 'processed', processed_at = now(), last_error = '' WHERE provider = $1 AND event_id = $2`, [provider, eventId]);
+      SET status = 'processed', processed_at = now(), last_error = ''
+      WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId]);
   }
 
   async failWebhookEvent(provider, eventId, error) {
     if (!eventId) return;
     await this.ensureSchema();
     await this.pool.query(`UPDATE woa_webhook_events
-      SET status = 'failed', last_error = $3 WHERE provider = $1 AND event_id = $2`, [provider, eventId, String(error && error.message || error || '').slice(0, 3000)]);
+      SET status = 'failed', last_error = $4
+      WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId, String(error && error.message || error || '').slice(0, 3000)]);
   }
 
   async claimIdempotencyKey(scope, key, request = {}, options = {}) {

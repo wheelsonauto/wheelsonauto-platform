@@ -96,6 +96,7 @@ async function main() {
     throw new Error('WOA_TEST_DATABASE_URL must point to a different dedicated test database than WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL. Refusing a recovery drill that could touch production data.');
   }
   const organizationId = 'org-postgres-runtime-test-' + crypto.randomBytes(6).toString('hex');
+  const foreignOrganizationId = 'org-postgres-runtime-foreign-' + crypto.randomBytes(6).toString('hex');
   const repository = stateRepository.createStateRepository({
     backend: 'postgres',
     databaseUrl,
@@ -137,11 +138,21 @@ async function main() {
 
     const staleWebhookEventId = 'evt-postgres-runtime-stale';
     assert.strictEqual((await repository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' })).accepted, true, 'A PostgreSQL webhook event should be claimable before stale-lease recovery is tested.');
-    await repository.pool.query("UPDATE woa_webhook_events SET processing_started_at = now() - interval '15 minutes' WHERE provider = 'stripe' AND event_id = $1", [staleWebhookEventId]);
+    await repository.pool.query("UPDATE woa_webhook_events SET processing_started_at = now() - interval '15 minutes' WHERE organization_id = $1 AND provider = 'stripe' AND event_id = $2", [organizationId, staleWebhookEventId]);
     const reclaimedWebhookClaim = await competingRepository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' });
     assert.strictEqual(reclaimedWebhookClaim.accepted, true, 'A PostgreSQL webhook event with an expired processing lease must be recoverable.');
     assert.strictEqual(reclaimedWebhookClaim.reclaimed, true, 'Expired PostgreSQL webhook recovery should be recorded as a reclaimed claim.');
     await competingRepository.completeWebhookEvent('stripe', staleWebhookEventId);
+
+    const foreignWebhookEventId = 'evt-postgres-runtime-foreign-' + crypto.randomBytes(5).toString('hex');
+    await repository.pool.query(`INSERT INTO woa_webhook_events (
+      provider, event_id, organization_id, status, payload, attempts, processing_started_at
+    ) VALUES ('stripe', $1, $2, 'processing', '{}'::jsonb, 1, now())`, [foreignWebhookEventId, foreignOrganizationId]);
+    await repository.completeWebhookEvent('stripe', foreignWebhookEventId);
+    await repository.failWebhookEvent('stripe', foreignWebhookEventId, new Error('must not cross tenant boundary'));
+    const foreignWebhook = await repository.pool.query('SELECT status, last_error FROM woa_webhook_events WHERE organization_id = $1 AND provider = $2 AND event_id = $3', [foreignOrganizationId, 'stripe', foreignWebhookEventId]);
+    assert.strictEqual(foreignWebhook.rows[0].status, 'processing', 'One company repository must not complete another company webhook event.');
+    assert.strictEqual(foreignWebhook.rows[0].last_error, '', 'One company repository must not write an error into another company webhook event.');
 
     const idempotencyScope = 'stripe_recurring_charge';
     const idempotencyKey = 'period:rec-postgres-runtime:2026-07-24';
@@ -180,9 +191,21 @@ async function main() {
       vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1' }],
       customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com' }],
       payments: [],
+      documents: [{
+        id: 'document-runtime-1',
+        customer: 'Version One Customer',
+        storageProvider: 's3',
+        storageKey: 'documents/' + organizationId + '/document-runtime-1.enc',
+        contentType: 'application/pdf',
+        sha256: 'a'.repeat(64),
+        encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' }
+      }],
       auditLogs: []
     };
     const firstWrite = await repository.write(firstState, { reason: 'runtime test first state', actor: 'test' });
+    const firstDocumentMetadata = await repository.pool.query('SELECT organization_id, customer, object_key FROM woa_documents WHERE organization_id = $1 AND id = $2', [organizationId, 'document-runtime-1']);
+    assert.strictEqual(firstDocumentMetadata.rowCount, 1, 'A PostgreSQL state write must transactionally synchronize private document metadata.');
+    assert.strictEqual(firstDocumentMetadata.rows[0].customer, 'Version One Customer', 'Private document metadata must retain its customer owner.');
     const firstSnapshots = await repository.listSnapshots();
     assert.strictEqual(firstSnapshots.length, 1, 'The first PostgreSQL write must create a recoverable snapshot.');
     assert.strictEqual(firstSnapshots[0].version, firstWrite.version, 'Snapshot version must match the state write version.');
@@ -200,10 +223,13 @@ async function main() {
     const secondState = {
       ...firstState,
       customers: [{ ...firstState.customers[0], name: 'Version Two Customer' }],
-      payments: [{ id: 'payment-runtime-1', status: 'Paid', stripePaymentIntentId: 'pi_runtime_check_1' }]
+      payments: [{ id: 'payment-runtime-1', status: 'Paid', stripePaymentIntentId: 'pi_runtime_check_1' }],
+      documents: []
     };
     const secondWrite = await repository.write(secondState, { reason: 'runtime test changed state', actor: 'test' });
     assert(secondWrite.version > firstWrite.version, 'The second PostgreSQL write must advance the version.');
+    const removedDocumentMetadata = await repository.pool.query('SELECT id FROM woa_documents WHERE organization_id = $1 AND id = $2', [organizationId, 'document-runtime-1']);
+    assert.strictEqual(removedDocumentMetadata.rowCount, 0, 'Removing a private document from authoritative state must purge its metadata in the same transaction.');
 
     await repository.recordJobError('postgres-runtime-monitor', new Error('Controlled runtime job failure'), { route: 'runtime check', source: 'startup' });
     await repository.recordJobError('postgres-runtime-monitor', new Error('Controlled runtime job failure'), { route: 'runtime check', source: 'background' });
@@ -236,8 +262,11 @@ async function main() {
     assert(restored.version > secondWrite.version, 'A restore must create a newer state version instead of rewinding history.');
     assert.strictEqual(restored.state.customers[0].name, 'Version One Customer', 'Recovery must restore the selected snapshot state.');
     assert.strictEqual(restored.state.payments.length, 0, 'Recovery must remove records introduced after the selected snapshot.');
+    assert.strictEqual(restored.state.documents.length, 1, 'Recovery must restore the selected snapshot private-document record.');
     assert(restored.state.auditLogs.some(row => row.action === 'Runtime recovery verification'), 'Recovery must allow an audit entry in the new restored snapshot.');
     assert.strictEqual(stateRepository.checksum(restored.state), restored.checksum, 'Recovered state checksum must verify after the transaction commits.');
+    const restoredDocumentMetadata = await repository.pool.query('SELECT id FROM woa_documents WHERE organization_id = $1 AND id = $2', [organizationId, 'document-runtime-1']);
+    assert.strictEqual(restoredDocumentMetadata.rowCount, 1, 'Controlled snapshot recovery must transactionally restore private-document metadata.');
     const restartedRepository = stateRepository.createStateRepository({
       backend: 'postgres',
       databaseUrl,
@@ -279,6 +308,7 @@ async function main() {
     console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, reviewable job errors, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
+    await removeTestRows(repository, foreignOrganizationId).catch(() => {});
     await competingRepository.close();
     await repository.close();
   }
