@@ -162,7 +162,9 @@ requireText('SMS bridge coded reply', resolveOwnerSmsBridge, '6-character conver
 requireText('Actual owner SMS mirror send', sendOwnerSmsMirror, 'sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER');
 requireText('Owner phone replies route to customer', handleOwnerSmsBridge, 'sendProviderSms(thread.phone');
 requireText('Owner phone money actions blocked', handleOwnerSmsBridge, 'Blocked for app review');
-requireText('Potential scam inbox status', server, "status: scam.suspicious ? 'Potential scam'");
+requireText('Potential scam inbox status', server, "scam.suspicious ? 'Potential scam' : 'Received'");
+requireText('SMS opt-out inbox status', server, "consentCommand.action === 'opt_out' ? 'Opted out' : 'Opted in'");
+requireText('SMS consent blocks Star response after opt-out', server, 'consentStatus !== messagingConsent.STATUS.OPTED_OUT');
 requireText('Potential scam blocks Star auto draft', server, '!scam.suspicious && settings.aiEnabled');
 requireText('Owner phone webhook branch', server, 'phoneKey(inbound.from) === phoneKey(MESSAGING_OWNER_NOTIFY_NUMBER)');
 requireText('Internal mirror records hidden from inbox', app, '!m.hiddenFromInbox');

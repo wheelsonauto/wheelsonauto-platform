@@ -123,6 +123,7 @@
       payload.phone = normalizePhone(payload.phone);
       payload.name = [payload.firstName, payload.lastName].filter(Boolean).join(' ').trim();
       payload.applicationConsent = !!payload.applicationConsent;
+      payload.smsConsent = !!payload.smsConsent;
       if(payload.phone.length !== 10){ message('Enter a valid 10-digit mobile phone number.', true); return; }
       if(payload.password !== payload.confirmPassword){ message('The two passwords do not match.', true); return; }
       if(!passwordValid(payload.password)){ message('Password must contain at least eight characters, including a letter and number.', true); return; }

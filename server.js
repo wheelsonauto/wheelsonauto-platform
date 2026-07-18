@@ -18,6 +18,7 @@ const authPolicy = require('./auth-policy');
 const stateMigrationLock = require('./state-migration-lock');
 const recoveryGuard = require('./recovery-guard');
 const encryptedStateBackup = require('./encrypted-state-backup');
+const messagingConsent = require('./messaging-consent');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -2142,6 +2143,23 @@ async function sendProviderSms(to, body, meta = {}) {
   const provider = MESSAGING_PROVIDER;
   if (!body) throw new Error('Message needs a message body.');
   if (!to) return { sent: false, status: 'Needs phone', provider: provider || 'not_configured', message: 'Add the customer phone number before sending.' };
+  if (meta.customerMessage) {
+    const permission = messagingConsent.outboundPermission(meta.consentData || {}, {
+      phone: to,
+      customer: meta.customer || '',
+      customerId: meta.customerId || '',
+      organizationId: meta.organizationId || MAIN_ORG_ID
+    });
+    if (!permission.allowed) {
+      return {
+        sent: false,
+        status: permission.status === messagingConsent.STATUS.OPTED_OUT ? 'Opted out' : 'Consent needed',
+        provider: provider || 'not_configured',
+        message: permission.reason,
+        consentStatus: permission.status
+      };
+    }
+  }
   const settings = meta.messagingSettings || { enabled: WOA_MESSAGING_ENABLED };
   if (!settings.enabled) return { sent: false, status: 'Messaging off', provider: provider || 'not_configured', message: 'Messaging is turned off in WheelsonAuto settings or Render.' };
   if (!MESSAGING_FROM_NUMBER) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Add the hosted SMS number in Render first.' };
@@ -2822,7 +2840,15 @@ async function handleOwnerSmsBridge(data, inbound) {
   const thread = resolved.thread;
   let result;
   try {
-    result = await sendProviderSms(thread.phone, resolved.body, { customer: thread.customer, ownerPhoneBridge: true, messagingSettings: messageSettings(data) });
+    result = await sendProviderSms(thread.phone, resolved.body, {
+      customer: thread.customer,
+      customerId: thread.customerId || '',
+      organizationId: thread.organizationId || MAIN_ORG_ID,
+      customerMessage: true,
+      consentData: data,
+      ownerPhoneBridge: true,
+      messagingSettings: messageSettings(data)
+    });
   } catch (err) {
     result = { sent: false, status: 'Failed', provider: MESSAGING_PROVIDER || 'not_configured', message: String(err && err.message || err) };
   }
@@ -5179,7 +5205,15 @@ async function approveAiMessage(data, payload = {}) {
   const settings = messageSettings(data);
   const result = deliveryChannel === 'email'
     ? await sendProviderEmail(draft.email, draft.subject || 'WheelsonAuto message', draft.body, { customer: draft.customer, ai: true, messagingSettings: settings })
-    : await sendProviderSms(draft.phone, draft.body, { customer: draft.customer, ai: true, messagingSettings: settings });
+    : await sendProviderSms(draft.phone, draft.body, {
+      customer: draft.customer,
+      customerId: draft.customerId || '',
+      organizationId: draft.organizationId || MAIN_ORG_ID,
+      customerMessage: true,
+      consentData: data,
+      ai: true,
+      messagingSettings: settings
+    });
   const channel = result.channel || (deliveryChannel === 'email' ? 'Email' : 'SMS');
   const sent = {
     id: 'msg-ai-sent-' + Date.now(),
@@ -7156,7 +7190,7 @@ function stateForUserWrite(current, incoming, user) {
   const allowed = role === 'mechanic'
     ? ['maintenance', 'vehicles']
     : role === 'manager'
-      ? ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'websiteLeads']
+      ? ['vehicles', 'applications', 'customers', 'contracts', 'maintenance', 'claims', 'messages', 'messagingConsents', 'messagingConsentEvents', 'tasks', 'documents', 'websiteLeads']
       : ['messages'];
   const next = { ...current };
   allowed.forEach(key => {
@@ -7171,7 +7205,7 @@ function stateForUserWrite(current, incoming, user) {
   return inheritStateReadMeta(next, current);
 }
 function auditChangedSections(current = {}, next = {}) {
-  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'websiteLeads', 'staffAccounts', 'customerAccounts', 'organizations', 'subscriptions', 'billingInvoices', 'billingEvents', 'dailyCloseouts'];
+  const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'messagingConsents', 'messagingConsentEvents', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'websiteLeads', 'staffAccounts', 'customerAccounts', 'organizations', 'subscriptions', 'billingInvoices', 'billingEvents', 'dailyCloseouts'];
   const details = [];
   keys.forEach(key => {
     const beforeRows = Array.isArray(current[key]) ? auditComparableRows(current[key]) : [];
@@ -8415,10 +8449,10 @@ async function nativePolicyHtml(data, baseUrl, kind, options = {}) {
   const settings = nativeSite.publicSettings(data);
   const titles = { privacy: 'Privacy policy', terms: 'Terms of service', cancellation: 'Cancellation policy' };
   const content = kind === 'privacy'
-    ? '<p>WheelsonAuto collects application, identity, insurance, payment-reference, vehicle, service, and communication information to review applications and operate customer accounts. Card numbers and CVV values are entered in Clover secure fields and are not stored by WheelsonAuto.</p><p>Driver-license and insurance documents are private and limited to authorized staff review. Contact WheelsonAuto to request access or correction.</p>'
+    ? '<p>WheelsonAuto collects application, identity, insurance, payment-reference, vehicle, service, and communication information to review applications and operate customer accounts. Full card numbers and CVV values are entered in the selected payment provider\'s secure fields and are not stored by WheelsonAuto.</p><p>Driver-license and insurance documents are private and limited to authorized staff review. Contact WheelsonAuto to request access or correction.</p><h2>Mobile messaging privacy</h2><p>Mobile information will not be sold or shared with third parties for promotional or marketing purposes. SMS consent is not shared with third parties or affiliates for marketing. WheelsonAuto may provide the minimum information needed to telecommunications providers and service vendors that deliver requested customer-care and account messages on our behalf.</p><p>You may opt out at any time by replying STOP. Reply HELP for help, or contact wheelsonauto@gmail.com or (856) 839-1385. Message frequency varies and message and data rates may apply.</p>'
     : kind === 'cancellation'
       ? '<p>The rental agreement requires a minimum thirty-day commitment. After that period, cancellation and vehicle return are governed by the signed agreement. A nonrefundable down payment, when required for a vehicle, is identified before signing.</p><p>Contact the office before returning a vehicle so mileage, condition, keys, payments, and insurance can be closed correctly.</p>'
-      : '<p>Vehicle availability, weekly payment, down payment, mileage terms, optional purchase terms, insurance requirements, and pickup date are governed by the agreement created for the selected vehicle.</p><p>Submitting an application does not guarantee approval or reserve a vehicle. Customers must maintain full-coverage insurance and complete staff verification before payment and pickup.</p>';
+      : '<p>Vehicle availability, weekly payment, down payment, mileage terms, optional purchase terms, insurance requirements, and pickup date are governed by the agreement created for the selected vehicle.</p><p>Submitting an application does not guarantee approval or reserve a vehicle. Customers must maintain full-coverage insurance and complete staff verification before payment and pickup.</p><h2>Customer-care text messages</h2><p>If you choose to opt in, Wheels On Auto may send account, application, payment, pickup, service, toll, document, and customer-support text messages to the mobile number you provide. Message frequency varies. Message and data rates may apply. Consent to text messages is not a condition of purchase or service.</p><p>Reply STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, or QUIT to opt out. Reply START, YES, or UNSTOP to opt back in. Reply HELP for help, email wheelsonauto@gmail.com, or call (856) 839-1385. We will honor the most recent valid consent instruction associated with your mobile number.</p>';
   return nativeSite.layout({ title: titles[kind], description: titles[kind] + ' for WheelsonAuto.', canonical: baseUrl + '/' + kind, active: '', settings, body: '<section class="page-intro"><span class="eyebrow">WheelsonAuto policies</span><h1>' + titles[kind] + '</h1></section><section class="site-band"><article class="contract-paper" style="max-height:none">' + content + '<p>Business: Wheels On Auto INC.<br>Office: 329 Linden Ave, Woodlynne, NJ 08107<br>Pickup: 5150 NJ-42, Blackwood, NJ 08012<br>Email: wheelsonauto@gmail.com<br>Phone: (856) 839-1385</p></article></section>', homePath: options.homePath || '/', noIndex: !!options.noIndex });
 }
 function publicApplicationSummary(application = {}) {
@@ -10907,7 +10941,14 @@ async function sendTollReceipt(data, claim, channel, user) {
   try {
     result = selectedChannel === 'Email'
       ? await sendProviderEmail(to, 'WheelsonAuto E-ZPass toll reimbursement proof', body, { customer: claim.customer, messagingSettings: settings })
-      : await sendProviderSms(to, body, { customer: claim.customer, messagingSettings: settings });
+      : await sendProviderSms(to, body, {
+        customer: claim.customer,
+        customerId: claim.customerId || '',
+        organizationId: claim.organizationId || MAIN_ORG_ID,
+        customerMessage: true,
+        consentData: data,
+        messagingSettings: settings
+      });
   } catch (err) {
     result = { sent: false, status: selectedChannel + ' draft', provider: selectedChannel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER, message: String(err && err.message || err) };
   }
@@ -15959,6 +16000,36 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
   const contact = findMessageContact(data, { phone: inbound.from });
   let aiResult = null;
   let ownerMirror = null;
+  const consentCommand = messagingConsent.classifyInboundKeyword(inbound.body);
+  const consentBefore = messagingConsent.currentConsent(data, {
+    phone: inbound.from,
+    customer: contact.name || '',
+    organizationId: MAIN_ORG_ID
+  });
+  let consentUpdate = null;
+  if (consentCommand) {
+    consentUpdate = messagingConsent.recordConsent(data, {
+      phone: inbound.from,
+      customer: contact.name || '',
+      organizationId: MAIN_ORG_ID,
+      status: consentCommand.action === 'opt_out' ? messagingConsent.STATUS.OPTED_OUT : messagingConsent.STATUS.OPTED_IN,
+      source: 'inbound_keyword',
+      keyword: consentCommand.keyword,
+      eventId: inbound.externalId || '',
+      recordedBy: 'Customer via ' + inbound.provider
+    });
+  } else if (inbound.body && consentBefore.status === messagingConsent.STATUS.UNKNOWN) {
+    consentUpdate = messagingConsent.recordConsent(data, {
+      phone: inbound.from,
+      customer: contact.name || '',
+      organizationId: MAIN_ORG_ID,
+      status: messagingConsent.STATUS.OPTED_IN,
+      source: 'customer_initiated_inbound',
+      eventId: inbound.externalId || '',
+      recordedBy: 'Customer via ' + inbound.provider
+    });
+  }
+  const consentStatus = (consentUpdate && consentUpdate.consent && consentUpdate.consent.status) || consentBefore.status;
   const scam = smsScamAssessment(inbound.body);
   const context = aiFindCustomerContext(data, { customer: contact.name, phone: inbound.from }, { role: 'Owner', organizationId: MAIN_ORG_ID });
   const messageFields = messageContextFields(context, { customer: contact.name, phone: inbound.from });
@@ -15973,16 +16044,18 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
     to: inbound.to,
     direction: 'Inbound',
     channel: 'SMS',
-    template: scam.suspicious ? 'Potential scam' : 'Customer reply',
-    subject: 'Incoming text',
-    status: scam.suspicious ? 'Potential scam' : 'Received',
-    tone: scam.suspicious ? 'bad' : 'blue',
+    template: consentCommand ? (consentCommand.action === 'opt_out' ? 'SMS opt-out' : 'SMS opt-in') : (scam.suspicious ? 'Potential scam' : 'Customer reply'),
+    subject: consentCommand ? (consentCommand.action === 'opt_out' ? 'Customer stopped texts' : 'Customer started texts') : 'Incoming text',
+    status: consentCommand ? (consentCommand.action === 'opt_out' ? 'Opted out' : 'Opted in') : (scam.suspicious ? 'Potential scam' : 'Received'),
+    tone: consentCommand ? (consentCommand.action === 'opt_out' ? 'warn' : 'good') : (scam.suspicious ? 'bad' : 'blue'),
     body: inbound.body,
     provider: inbound.provider,
     source: 'SMS webhook',
     contactSource: contact.source || '',
     needsHuman: scam.suspicious,
     scamReasons: scam.reasons,
+    smsConsentStatus: consentStatus,
+    smsConsentEventId: consentUpdate && consentUpdate.event && consentUpdate.event.id || '',
     customerId: messageFields.customerId,
     contractId: messageFields.contractId,
     recurringPaymentId: messageFields.recurringPaymentId,
@@ -15996,7 +16069,7 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
   data.messages.unshift(inboundRecord);
   const settings = messageSettings(data);
   rememberSmsBridgeThread(data, { ...inboundRecord, direction: 'Inbound' });
-  if (!scam.suspicious && settings.aiEnabled && settings.aiDrafts && inbound.body) {
+  if (!consentCommand && consentStatus !== messagingConsent.STATUS.OPTED_OUT && !scam.suspicious && settings.aiEnabled && settings.aiDrafts && inbound.body) {
     aiResult = await createAiMessageDraft(data, {
       messageId: inboundRecord.id,
       externalId: inbound.externalId || inboundRecord.id,
@@ -16045,7 +16118,8 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
     customer: contact.name || '',
     scam: scam.suspicious ? { status: 'Potential scam', reasons: scam.reasons } : null,
     ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null,
-    ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null
+    ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null,
+    smsConsent: { status: consentStatus, command: consentCommand && consentCommand.action || '' }
   };
 }
 
@@ -16299,6 +16373,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 409, { ok: false, error: 'A customer portal account already uses this email or phone. Sign in with the existing password or use password help before applying again.' });
       }
       if (payload.applicationConsent !== true) return json(res, 400, { ok: false, error: 'Application authorization is required.' });
+      const smsConsentGranted = payload.smsConsent === true;
       const required = ['address', 'city', 'state', 'postalCode', 'dateOfBirth', 'driverLicenseId', 'driverLicenseExpires', 'employer'];
       if (required.some(field => !onboarding.text(payload[field], 300))) return json(res, 400, { ok: false, error: 'Complete every required application field.' });
       const duplicateCutoff = Date.now() - PUBLIC_APPLICATION_DUPLICATE_MS;
@@ -16308,6 +16383,7 @@ const server = http.createServer(async (req, res) => {
       });
       if (duplicateApplication) {
         let duplicateAccount = (data.customerAccounts || []).find(account => account.applicationId === duplicateApplication.id);
+        let duplicateChanged = false;
         if (!duplicateAccount) {
           duplicateAccount = onboarding.createPendingCustomerAccount(data, duplicateApplication, {
             vehicleId: duplicateApplication.vehicleId || selectedVehicle.platformVehicleId || '',
@@ -16315,6 +16391,24 @@ const server = http.createServer(async (req, res) => {
             portalStage: 'Application under review',
             status: 'Active'
           });
+          duplicateChanged = true;
+        }
+        if (smsConsentGranted) {
+          messagingConsent.recordConsent(data, {
+            phone,
+            customer: duplicateApplication.name || name,
+            customerId: duplicateAccount && duplicateAccount.id || '',
+            applicationId: duplicateApplication.id,
+            organizationId: duplicateApplication.organizationId || MAIN_ORG_ID,
+            status: messagingConsent.STATUS.OPTED_IN,
+            source: 'website_application_checkbox',
+            recordedBy: 'Customer',
+            ip: requestIp(req),
+            userAgent: onboarding.text(req.headers['user-agent'], 400)
+          });
+          duplicateChanged = true;
+        }
+        if (duplicateChanged) {
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }
@@ -16354,6 +16448,9 @@ const server = http.createServer(async (req, res) => {
         applicationConsentAt: submittedAt,
         applicationConsentIp: requestIp(req),
         applicationConsentUserAgent: onboarding.text(req.headers['user-agent'], 400),
+        smsConsentStatus: smsConsentGranted ? messagingConsent.STATUS.OPTED_IN : messagingConsent.STATUS.UNKNOWN,
+        smsConsentAt: smsConsentGranted ? submittedAt : '',
+        smsConsentSource: smsConsentGranted ? 'website_application_checkbox' : '',
         pendingPasswordHash: password.passwordHash,
         pendingPasswordSalt: password.passwordSalt,
         pendingPasswordUpdatedAt: password.passwordUpdatedAt
@@ -16368,6 +16465,21 @@ const server = http.createServer(async (req, res) => {
         portalStage: 'Application under review',
         status: 'Active'
       });
+      if (smsConsentGranted) {
+        messagingConsent.recordConsent(data, {
+          phone,
+          customer: app.name,
+          customerId: customerAccount && customerAccount.id || '',
+          applicationId: app.id,
+          organizationId: app.organizationId,
+          status: messagingConsent.STATUS.OPTED_IN,
+          source: 'website_application_checkbox',
+          recordedAt: submittedAt,
+          recordedBy: 'Customer',
+          ip: requestIp(req),
+          userAgent: onboarding.text(req.headers['user-agent'], 400)
+        });
+      }
       data.websiteLeads.unshift({ id: 'lead-native-' + crypto.randomBytes(7).toString('hex'), applicationId: app.id, organizationId: app.organizationId, source: 'wheelsonauto.com native application', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, onlineVehicleId: app.onlineVehicleId, created: 'Just now', createdAt: submittedAt, status: 'Submitted' });
       await queueOwnerEmailNotification(data, 'application_submitted', {
         customer: app.name || 'New applicant',
@@ -19451,7 +19563,14 @@ const server = http.createServer(async (req, res) => {
         const settings = messageSettings(data);
         result = channel === 'Email'
           ? await sendProviderEmail(to, payload.subject || payload.template || 'WheelsonAuto message', body, { customer, messagingSettings: settings })
-          : await sendProviderSms(to, body, { customer, messagingSettings: settings });
+          : await sendProviderSms(to, body, {
+            customer,
+            customerId: messageFields.customerId,
+            organizationId: messageFields.organizationId || userOrganizationId(user),
+            customerMessage: true,
+            consentData: data,
+            messagingSettings: settings
+          });
         const record = {
           id: 'msg-out-' + Date.now(),
           externalId: result.externalId || '',
