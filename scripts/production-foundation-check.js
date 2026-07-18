@@ -78,6 +78,7 @@ async function main() {
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
+    const objectStorageRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'object-storage-runtime-check.js'), 'utf8');
     const encryptedBackupSource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-backup.js'), 'utf8');
     const encryptedRecoverySource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-recovery.js'), 'utf8');
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
@@ -93,6 +94,12 @@ async function main() {
       && postgresRuntimeCheckSource.includes("'pg_isready'")
       && postgresRuntimeCheckSource.includes('startGitHubPostgres()'), 'The main production gate must start and test against an isolated real PostgreSQL container instead of silently skipping transactional recovery checks.');
     assert(postgresRuntimeCheckSource.includes('WOA_TEST_DATABASE_SSL_MODE') && postgresRuntimeCheckSource.includes('sslMode: databaseSslMode'), 'The PostgreSQL runtime check must support the isolated CI database without weakening production TLS defaults.');
+    assert(objectStorageRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
+      && objectStorageRuntimeCheckSource.includes("'minio/minio:RELEASE.2025-09-07T16-13-09Z'")
+      && objectStorageRuntimeCheckSource.includes("'minio/mc:RELEASE.2025-08-13T08-35-41Z'")
+      && objectStorageRuntimeCheckSource.includes('startGitHubMinio()')
+      && objectStorageRuntimeCheckSource.includes('publicReadBlocked === true')
+      && objectStorageRuntimeCheckSource.includes('private_object_already_exists'), 'The main production gate must test encryption, privacy, and immutable writes against an isolated real S3-compatible server instead of trusting only a fetch mock.');
     assert(/maxShutdownDelaySeconds:\s*60/.test(renderBlueprint), 'Render must allow enough time for active money actions and state writes to drain.');
     assert(serverSource.includes('async function gracefulShutdown') && serverSource.includes("process.once('SIGTERM'") && serverSource.includes('await writeDataQueue.catch'), 'Production shutdown must stop accepting requests and drain queued state writes before exit.');
     await verifyGracefulShutdown(path.resolve(__dirname, '..'), path.join(temp, 'graceful-runtime'));
