@@ -219,10 +219,14 @@ async function main() {
     nextFutureRecurringDate,
     successfulRecurringPaymentEvidence,
     retryDelayPassed,
+    recurringPlanIdFromSubscription,
+    recurringPlansFromSubscriptions,
+    uniqueRecurringSubscriptions,
     recurringCustomerId,
     mergeRecurringSubscriptionDetail,
     mergeRecurringCustomerDetail,
     membersFromRecurringSubscriptions,
+    syncCloverRecurringPlans,
     mapCloverPayment,
     cloverRecurringCountWarning,
     preserveCloverRecurringRosterAfterProviderError,
@@ -242,7 +246,37 @@ async function main() {
   } = require('../server.js');
   const providerEmailFetch = global.fetch;
   let providerEmailSequence = 0;
+  let cloverRecurringFixture = '';
+  const cloverRecurringRequests = [];
+  const providerResponse = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    async json() { return body; },
+    async text() { return JSON.stringify(body); }
+  });
   global.fetch = async (url, options = {}) => {
+    const requestUrl = String(url);
+    if (cloverRecurringFixture && requestUrl.includes('/recurring/v1/')) {
+      cloverRecurringRequests.push(requestUrl);
+      if (requestUrl.includes('/recurring/v1/plans?')) {
+        if (cloverRecurringFixture === 'recover-from-plan-401') return providerResponse(401, { message: 'Unauthorized plan listing' });
+        return providerResponse(200, [{ id: 'PLAN-DIRECT-229', name: 'Weekly 229', amount: 22900, interval: 'WEEK', active: true, activeSubscriptionCount: cloverRecurringFixture === 'partial-plan-fallback' ? 2 : 1 }]);
+      }
+      if (requestUrl.includes('/recurring/v1/subscriptions?')) {
+        return providerResponse(200, [{
+          id: 'SUB-DIRECT-229',
+          customerUuid: 'ECOM-DIRECT-229',
+          active: true,
+          amount: 22900,
+          plan: { id: 'PLAN-DIRECT-229', name: 'Weekly 229', amount: 22900, interval: 'WEEK', active: true },
+          customer: { id: 'ECOM-DIRECT-229', firstName: 'Merchant', lastName: 'Wide', email: 'merchant-wide@example.com' }
+        }]);
+      }
+      if (requestUrl.includes('/recurring/v1/plans/PLAN-DIRECT-229/subscriptions')) {
+        return providerResponse(404, { message: 'Per-plan route unavailable' });
+      }
+      return providerResponse(404, { message: 'Unexpected recurring fixture request' });
+    }
     if (String(url).includes('api.resend.com/emails')) {
       providerEmailSequence += 1;
       const id = 'direct-resend-outbound-' + providerEmailSequence;
@@ -275,6 +309,28 @@ async function main() {
     assert(recurringDegraded.ready === false && recurringDegraded.degraded === true && /read-only/.test(recurringDegraded.error), 'A preserved roster after a current provider failure must block controlled Stripe cutovers.');
     const recurringNotApplicable = cloverRecurringMigrationReadiness({ recurringPayments: [{ id: 'rec-stripe-only', status: 'Active', paymentProvider: 'stripe', stripeCustomerId: 'cus_only', stripePaymentMethodId: 'pm_only' }], integrations: { clover: {} } });
     assert(recurringNotApplicable.ready === true && recurringNotApplicable.requiresFreshRoster === false, 'A Stripe-only roster must not require an irrelevant Clover refresh.');
+    assert(recurringPlanIdFromSubscription({ plan: { id: 'PLAN-DIRECT-229' } }) === 'PLAN-DIRECT-229', 'Merchant-wide Clover subscriptions must retain their nested plan identity.');
+    assert(recurringPlansFromSubscriptions([{ id: 'SUB-1', plan: { id: 'PLAN-1', name: 'Weekly 1' } }, { id: 'SUB-2', plan: { id: 'PLAN-1', name: 'Weekly 1' } }]).length === 1, 'Merchant-wide subscriptions must derive one plan without duplicating it per customer.');
+    assert(uniqueRecurringSubscriptions([{ id: 'SUB-MERGE', amount: 100 }], [{ id: 'SUB-MERGE', customerUuid: 'CUS-MERGE' }]).length === 1, 'Clover subscription fallbacks must merge the same subscription instead of double counting it.');
+
+    cloverRecurringFixture = 'recover-from-plan-401';
+    cloverRecurringRequests.length = 0;
+    const merchantWideRecoveryState = { recurringPayments: [], integrations: { clover: {} } };
+    const merchantWideRecovery = await syncCloverRecurringPlans(merchantWideRecoveryState);
+    assert(merchantWideRecovery.recurringPlans === 1 && merchantWideRecovery.summary.activeCustomers === 1, 'The merchant-wide subscriptions endpoint must recover a complete Clover roster when the plan-list endpoint returns 401.');
+    assert(merchantWideRecoveryState.integrations.clover.recurringPlanMembers.length === 1 && merchantWideRecoveryState.integrations.clover.recurringPlanMembers[0].customer === 'Merchant Wide', 'Recovered merchant-wide subscriptions must retain the customer identity instead of becoming unmatched.');
+    assert(/401/.test(merchantWideRecoveryState.integrations.clover.lastRecurringPlanFetchError) && merchantWideRecoveryState.integrations.clover.lastRecurringPlanSyncError === '', 'A recovered plan-list failure must remain diagnostic metadata without falsely marking the complete merchant-wide roster failed.');
+    assert(merchantWideRecoveryState.integrations.clover.lastRecurringSubscriptionSyncSource === 'Merchant-wide subscriptions', 'The saved Clover evidence must identify the authoritative merchant-wide roster source.');
+    assert(!cloverRecurringRequests.some(url => url.includes('/plans/PLAN-DIRECT-229/subscriptions')), 'A complete merchant-wide roster must not call the less reliable per-plan subscription endpoint.');
+
+    cloverRecurringFixture = 'partial-plan-fallback';
+    cloverRecurringRequests.length = 0;
+    const partialRecurringState = { recurringPayments: [], integrations: { clover: {} } };
+    const partialRecurringResult = await syncCloverRecurringPlans(partialRecurringState);
+    assert(cloverRecurringRequests.some(url => url.includes('/plans/PLAN-DIRECT-229/subscriptions')), 'A merchant-wide roster below Clover\'s advertised plan count must attempt the per-plan fallback.');
+    assert(/reports 2 active subscription\(s\), but Clover returned 1/.test(partialRecurringState.integrations.clover.lastRecurringMemberSyncWarning), 'An incomplete merchant-wide and per-plan roster must fail closed with an explicit coverage warning.');
+    assert(partialRecurringResult.warning === partialRecurringState.integrations.clover.lastRecurringMemberSyncWarning, 'The incomplete Clover roster warning must reach the automatic sync monitor.');
+    cloverRecurringFixture = '';
     const currentDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-current-key', storageKey: 'documents/org-direct/doc-current-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' } }] });
     assert(currentDocumentKeyCoverage.ready === true && currentDocumentKeyCoverage.encryptedDocuments === 1 && currentDocumentKeyCoverage.requiredKeyVersions.includes('v1'), 'The launch gate must inventory encrypted documents covered by the active versioned key.');
     const missingDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-retired-key', storageKey: 'documents/org-direct/doc-retired-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'retired-v0' } }] });
