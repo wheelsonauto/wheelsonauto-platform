@@ -58,6 +58,12 @@ async function main() {
     assert.match([recoveryTargetGuard.stdout, recoveryTargetGuard.stderr].filter(Boolean).join(''), /different dedicated test database/i, 'The recovery proof refusal must explain that the test database cannot be production.');
     assert(launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_RECORD=1') && launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL') && /same database as\n+the production proof target/i.test(launchRunbook), 'The production runbook must explain that recovery proof is recorded only after import from a separate test database.');
     assert(launchRunbook.includes('Validate private storage') && launchRunbook.includes('connect the Telnyx inbox') && launchRunbook.includes('Test Star provider') && launchRunbook.includes('Test failure alerts') && launchRunbook.includes('Live launch preflight'), 'The production runbook must give the owner the exact in-app provider proof actions needed to clear the launch gate.');
+    const legacyPureStripe = { paymentProvider: 'stripe', stripeCustomerId: 'cus_foundation_pure', stripePaymentMethodId: 'pm_foundation_pure' };
+    assert.strictEqual(stripeMigration.migrationRecord(legacyPureStripe).state, stripeMigration.STATES.STRIPE_ACTIVE, 'A legacy Stripe-only customer must remain Stripe-active without an unnecessary Clover cutover state.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed(legacyPureStripe, 'stripe', '2026-07-24'), true, 'A Stripe-only customer should remain eligible for its normal Stripe autopay run.');
+    const ambiguousLegacyStripe = { ...legacyPureStripe, cloverCustomerId: 'clover-foundation-legacy', cloverPaymentSource: 'clover-foundation-source' };
+    assert.strictEqual(stripeMigration.migrationRecord(ambiguousLegacyStripe).state, stripeMigration.STATES.STRIPE_CARD_SAVED, 'A legacy Stripe row that still has a Clover source must fail closed into the protected cutover state.');
+    assert.strictEqual(stripeMigration.automaticChargeAllowed(ambiguousLegacyStripe, 'stripe', '2026-07-24'), false, 'An ambiguous legacy Stripe/Clover row must not autocharge until the owner completes the controlled cutover.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');

@@ -47,7 +47,11 @@ function migrationRecord(row = {}) {
     else if (/first stripe charge/.test(legacy)) state = STATES.FIRST_STRIPE_CHARGE_PASSED;
     else if (/clover disabled/.test(legacy)) state = STATES.CLOVER_DISABLED;
     else if (/stripe card ready|owner switch required|clover remains active/.test(legacy)) state = STATES.STRIPE_CARD_SAVED;
-    else if (provider(row.paymentProvider || row.provider) === 'stripe') state = hasCloverSource(row) ? STATES.STRIPE_ACTIVE : STATES.CLOVER_DISABLED;
+    // A legacy row that says Stripe while still carrying a Clover vault or
+    // subscription identifier is ambiguous. Treat it as card-ready but
+    // cutover-blocked until an owner explicitly confirms Clover is stopped.
+    // Pure Stripe rows without a Clover source can remain Stripe-active.
+    else if (provider(row.paymentProvider || row.provider) === 'stripe') state = hasCloverSource(row) ? STATES.STRIPE_CARD_SAVED : STATES.STRIPE_ACTIVE;
     else state = STATES.CLOVER_ACTIVE;
   }
   return {
