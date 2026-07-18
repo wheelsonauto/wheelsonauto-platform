@@ -1190,7 +1190,9 @@ function emailAddressFromSender(value) {
 function usesVerifiedWheelsonAutoSendingDomain(value) {
   const email = emailAddressFromSender(value);
   const at = email.lastIndexOf('@');
-  return at > 0 && email.slice(at + 1) === 'wheelsonauto.com';
+  if (at <= 0) return false;
+  const domain = email.slice(at + 1).replace(/\.$/, '');
+  return domain === 'wheelsonauto.com' || domain.endsWith('.wheelsonauto.com');
 }
 function telnyxLiveLaunchEvidence(data = {}) {
   const saved = (((data.integrations || {}).messaging) || {});
@@ -1261,7 +1263,7 @@ function resendLiveLaunchEvidence(data = {}) {
   if (WOA_EMAIL_PROVIDER !== 'resend') error = 'Set WOA_EMAIL_PROVIDER=resend before the Stripe launch.';
   else if (!settings.emailEnabled || !WOA_EMAIL_ENABLED) error = 'Turn on email messaging in WheelsonAuto and Render before the Stripe launch.';
   else if (!RESEND_API_KEY || !RESEND_WEBHOOK_SECRET) error = 'Configure the Resend API key and signed inbound webhook secret in Render.';
-  else if (!usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM)) error = 'Use a Resend-verified sender at wheelsonauto.com before the Stripe launch.';
+  else if (!usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM)) error = 'Use a Resend-verified sender under wheelsonauto.com before the Stripe launch.';
   else if (!readiness.emailOutboundVerified || !matchingOutbound) error = 'Send a fresh Resend email accepted by the provider after the current Render email configuration is deployed.';
   else if (!readiness.emailInboundVerified || !matchingInbound) error = 'Send a reply into the signed Resend inbound webhook after the current Render email configuration is deployed.';
   return {
@@ -19917,6 +19919,7 @@ module.exports = {
   openAiProviderReadiness,
   messagingLaunchConfigurationFingerprint,
   emailLaunchConfigurationFingerprint,
+  usesVerifiedWheelsonAutoSendingDomain,
   starAiLaunchConfigurationFingerprint,
   telnyxLiveLaunchEvidence,
   resendLiveLaunchEvidence,

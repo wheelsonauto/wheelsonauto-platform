@@ -10,7 +10,7 @@ process.env.TELNYX_API_KEY = 'KEY-provider-launch-proof';
 process.env.TELNYX_PUBLIC_KEY = 'provider-launch-proof-public-key';
 process.env.TELNYX_MESSAGING_PROFILE_ID = 'profile-provider-launch-proof';
 process.env.WOA_EMAIL_PROVIDER = 'resend';
-process.env.WOA_EMAIL_FROM = 'WheelsonAuto <notifications@wheelsonauto.com>';
+process.env.WOA_EMAIL_FROM = 'WheelsonAuto <notifications@notify.wheelsonauto.com>';
 process.env.RESEND_API_KEY = 're_provider_launch_proof';
 process.env.RESEND_WEBHOOK_SECRET = 'whsec_provider_launch_proof';
 process.env.OPENAI_API_KEY = 'test-openai-provider-launch-proof';
@@ -21,6 +21,7 @@ process.env.WOA_AI_MAX_REQUESTS_PER_MONTH = '500';
 const {
   messagingLaunchConfigurationFingerprint,
   emailLaunchConfigurationFingerprint,
+  usesVerifiedWheelsonAutoSendingDomain,
   starAiLaunchConfigurationFingerprint,
   telnyxLiveLaunchEvidence,
   resendLiveLaunchEvidence,
@@ -104,6 +105,13 @@ function readyState() {
 }
 
 const data = readyState();
+
+assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('WheelsonAuto <notifications@wheelsonauto.com>'), true, 'The verified root sending domain must remain valid.');
+assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('WheelsonAuto <notifications@notify.wheelsonauto.com>'), true, 'A verified WheelsonAuto sending subdomain must satisfy the launch gate.');
+assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('notifications@alerts.notify.wheelsonauto.com.'), true, 'Nested WheelsonAuto subdomains and a normalized terminal dot should remain valid.');
+assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('notifications@wheelsonauto.com.example.test'), false, 'A lookalike domain containing wheelsonauto.com must fail closed.');
+assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('notifications@fakewheelsonauto.com'), false, 'A suffix lookalike domain must fail closed.');
+assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('wheelsonauto@gmail.com'), false, 'An external mailbox must not masquerade as the verified sending domain.');
 
 const telnyx = telnyxLiveLaunchEvidence(data);
 assert.strictEqual(telnyx.live, true, 'Telnyx launch proof must require a connected profile, active 10DLC campaign, carrier delivery, and signed inbound evidence.');

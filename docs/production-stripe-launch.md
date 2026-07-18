@@ -368,7 +368,7 @@ by default.
 ```text
 WOA_EMAIL_PROVIDER=resend
 RESEND_API_KEY=<private key>
-WOA_EMAIL_FROM=WheelsonAuto <support@wheelsonauto.com>
+WOA_EMAIL_FROM=WheelsonAuto <notifications@notify.wheelsonauto.com>
 WOA_EMAIL_REPLY_TO=wheelsonauto@gmail.com
 RESEND_WEBHOOK_SECRET=<webhook signing secret>
 ```
