@@ -6227,8 +6227,46 @@ function contentSecurityPolicy() {
     'upgrade-insecure-requests'
   ].join('; ');
 }
+function hasHeader(headers, name) {
+  const target = String(name || '').toLowerCase();
+  return Object.keys(headers || {}).some(key => String(key).toLowerCase() === target);
+}
+function headerValue(headers, name) {
+  const target = String(name || '').toLowerCase();
+  const key = Object.keys(headers || {}).find(candidate => String(candidate).toLowerCase() === target);
+  return key ? headers[key] : '';
+}
+function appendVaryHeader(headers, value) {
+  const current = String(headerValue(headers, 'Vary') || '');
+  const values = current.split(',').map(item => item.trim()).filter(Boolean);
+  if (!values.some(item => item.toLowerCase() === String(value).toLowerCase())) values.push(value);
+  headers.Vary = values.join(', ');
+  if (Object.prototype.hasOwnProperty.call(headers, 'vary')) delete headers.vary;
+}
+function isCompressibleResponseType(type) {
+  return /^(?:text\/(?:html|plain|css|javascript|csv|calendar)|application\/(?:json|javascript|xml|xhtml\+xml))\b/i.test(String(type || ''));
+}
+function preferredContentEncoding(header) {
+  return [
+    { encoding: 'br', quality: acceptedEncodingQuality(header, 'br') },
+    { encoding: 'gzip', quality: acceptedEncodingQuality(header, 'gzip') }
+  ].filter(candidate => candidate.quality > 0).sort((left, right) => right.quality - left.quality || (left.encoding === 'br' ? -1 : 1))[0]?.encoding || '';
+}
+function compressedResponseBody(res, body, type, headers) {
+  const raw = Buffer.isBuffer(body) ? body : Buffer.from(String(body == null ? '' : body), 'utf8');
+  if (raw.length < 1024 || !isCompressibleResponseType(type) || headerValue(headers, 'Content-Encoding')) return { body: raw, encoding: '' };
+  const encoding = preferredContentEncoding(res && res.__woaAcceptEncoding);
+  let compressed = null;
+  if (encoding === 'br' && typeof zlib.brotliCompressSync === 'function') {
+    compressed = zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } });
+  } else if (encoding === 'gzip') {
+    compressed = zlib.gzipSync(raw, { level: zlib.constants.Z_BEST_SPEED });
+  }
+  if (!compressed || compressed.length >= raw.length) return { body: raw, encoding: '' };
+  return { body: compressed, encoding };
+}
 function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) {
-  res.writeHead(status, {
+  const headers = {
     'Content-Type': type,
     'Content-Security-Policy': contentSecurityPolicy(),
     'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
@@ -6240,8 +6278,15 @@ function send(res, status, body, type = 'text/html; charset=utf-8', extra = {}) 
     'X-Frame-Options': 'DENY',
     'X-Permitted-Cross-Domain-Policies': 'none',
     ...extra
-  });
-  res.end(body);
+  };
+  const response = compressedResponseBody(res, body, type, headers);
+  if (response.encoding) {
+    headers['Content-Encoding'] = response.encoding;
+    appendVaryHeader(headers, 'Accept-Encoding');
+  }
+  if (!hasHeader(headers, 'Content-Length')) headers['Content-Length'] = String(response.body.length);
+  res.writeHead(status, headers);
+  res.end(response.body);
 }
 function json(res, status, payload, extra = {}) { send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8', { 'Cache-Control': 'no-store', ...extra }); }
 function privateDocumentAvailable(record = {}) {
@@ -8549,11 +8594,7 @@ function acceptedEncodingQuality(header, encoding) {
   return wildcardQuality === null ? 0 : wildcardQuality;
 }
 function preferredStaticEncoding(req) {
-  const header = req && req.headers && req.headers['accept-encoding'];
-  return [
-    { encoding: 'br', quality: acceptedEncodingQuality(header, 'br') },
-    { encoding: 'gzip', quality: acceptedEncodingQuality(header, 'gzip') }
-  ].filter(candidate => candidate.quality > 0).sort((left, right) => right.quality - left.quality || (left.encoding === 'br' ? -1 : 1))[0]?.encoding || '';
+  return preferredContentEncoding(req && req.headers && req.headers['accept-encoding']);
 }
 async function cachedStaticAsset(clean) {
   let pending = staticAssetCache.get(clean);
@@ -14919,6 +14960,7 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    res.__woaAcceptEncoding = req.headers && req.headers['accept-encoding'] || '';
     const url = new URL(req.url, 'http://' + HOST + ':' + PORT);
     if (crossOriginSessionWrite(req)) {
       if (url.pathname.startsWith('/api/')) return json(res, 403, { ok: false, error: 'Cross-origin account changes are not allowed.' });

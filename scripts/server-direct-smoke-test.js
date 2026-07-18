@@ -437,6 +437,9 @@ async function main() {
     assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
     assert(loginPage.headers['X-Frame-Options'] === 'DENY' && loginPage.headers['X-Content-Type-Options'] === 'nosniff', 'Login responses must carry anti-framing and content-sniffing security headers.');
     assert(String(loginPage.headers['Content-Security-Policy'] || '').includes("frame-ancestors 'none'"), 'Login responses must prevent embedding by another site.');
+    const compressedLoginPage = await request(server, 'GET', '/login', { headers: { 'accept-encoding': 'br, gzip;q=0.8' } });
+    assert(compressedLoginPage.headers['Content-Encoding'] === 'br' && compressedLoginPage.headers.Vary === 'Accept-Encoding', 'Large HTML pages should use Brotli only when the browser accepts it.');
+    assert(zlib.brotliDecompressSync(compressedLoginPage.rawBody).toString('utf8').includes('WheelsonAuto Portal'), 'Compressed HTML must decompress to the complete login page.');
     const versionedAppAsset = await request(server, 'GET', '/app.js?v=platform-direct-cache-test');
     assert(versionedAppAsset.status === 200 && versionedAppAsset.headers['Cache-Control'] === 'public, max-age=31536000, immutable', 'Versioned app assets should be cached immutably instead of downloaded again after every login or refresh.');
     assert(versionedAppAsset.headers.Vary === 'Accept-Encoding' && !versionedAppAsset.headers['Content-Encoding'], 'Identity app assets should advertise encoding variation without forcing compression.');
@@ -515,6 +518,9 @@ async function main() {
     assert(tamperedOwnerRead.status === 401 && tamperedOwnerRead.json && tamperedOwnerRead.json.error === 'Authentication required.', 'Tampered staff session cookie should not authenticate API access.');
     const ownerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(ownerState.status === 200 && ownerState.json, 'Owner could not read state.');
+    const compressedOwnerState = await request(server, 'GET', '/api/state', { cookie: ownerCookie, headers: { 'accept-encoding': 'br, gzip;q=0.8' } });
+    const decodedOwnerState = JSON.parse(zlib.brotliDecompressSync(compressedOwnerState.rawBody).toString('utf8'));
+    assert(compressedOwnerState.headers['Content-Encoding'] === 'br' && compressedOwnerState.headers.Vary === 'Accept-Encoding' && decodedOwnerState.ok !== false && Array.isArray(decodedOwnerState.vehicles), 'Authenticated state should be Brotli-compressed without changing its JSON contract.');
     const initialStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
     assert(initialStateVersion.status === 200 && initialStateVersion.json && initialStateVersion.json.version, 'State version endpoint should return a lightweight authenticated version.');
     const unchangedStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
