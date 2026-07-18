@@ -1061,6 +1061,25 @@ async function main() {
     });
     assert(duplicateCustomerLogin.status === 409, 'Duplicate customer portal username should be blocked.');
 
+    const sameOrganizationCustomerLogin = await request(server, 'POST', '/api/customer-accounts', {
+      cookie: ownerCookie,
+      json: {
+        id: 'direct-same-org-other-customer',
+        organizationId: 'org-wheelsonauto',
+        name: 'Same Organization Test Customer',
+        customer: 'Same Organization Test Customer',
+        username: 'direct-same-org-other-customer',
+        password: 'DirectSameOrgCustomer123!',
+        phone: '(856) 555-0199',
+        email: 'same-org-other@example.com',
+        status: 'Active'
+      }
+    });
+    assert(sameOrganizationCustomerLogin.status === 200 && sameOrganizationCustomerLogin.json.ok, 'Owner could not create a second same-company customer login for the privacy test.');
+    const sameOrganizationCustomerSession = await request(server, 'POST', '/customer/login', { form: { username: 'direct-same-org-other-customer', password: 'DirectSameOrgCustomer123!' } });
+    assert(sameOrganizationCustomerSession.status === 302 && String(sameOrganizationCustomerSession.cookie || '').includes('woa_customer_session=v2.customer.'), 'Second same-company customer login did not set a signed customer session.');
+    const sameOrganizationCustomerCookie = cleanCookie(sameOrganizationCustomerSession.cookie);
+
     const franchise = await request(server, 'POST', '/api/organizations', {
       cookie: ownerCookie,
       json: {
@@ -2093,6 +2112,10 @@ async function main() {
     assert(ownDocumentDownload.status === 200 && String(ownDocumentDownload.headers['Content-Type'] || ownDocumentDownload.headers['content-type']).includes('image/png'), 'Customer should be able to reopen their own uploaded document through the authenticated route.');
     const unauthenticatedDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id));
     assert(unauthenticatedDocumentDownload.status === 302 && unauthenticatedDocumentDownload.location === '/customer/login', 'Private customer document download must require a customer login.');
+    const sameOrganizationCustomerDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: sameOrganizationCustomerCookie });
+    assert(sameOrganizationCustomerDocumentDownload.status === 404, 'A different customer in the same company must not be able to read another customer private upload.');
+    const sameOrganizationCustomerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: sameOrganizationCustomerCookie });
+    assert(sameOrganizationCustomerPortalState.status === 200 && sameOrganizationCustomerPortalState.json.ok && !JSON.stringify(sameOrganizationCustomerPortalState.json.portal).includes('DIRECT-SECURE-UPLOAD'), 'A different customer portal must not expose another customer private upload metadata.');
     const otherCustomerDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: cleanCookie(franchiseCustomerLogin.cookie) });
     assert(otherCustomerDocumentDownload.status === 404, 'A customer from another company must not be able to read another customer private upload.');
     const managerUploadedDocumentState = await request(server, 'GET', '/api/state', { cookie: managerCookie });

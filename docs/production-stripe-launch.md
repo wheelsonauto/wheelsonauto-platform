@@ -46,7 +46,8 @@ pnpm run postgres-runtime-check
 
 It creates a random test organization, proves write/snapshot/restore/checksum
 behavior, then removes only that generated test organization. Never point
-`WOA_TEST_DATABASE_URL` at the production database.
+`WOA_TEST_DATABASE_URL` at the production database. This first test proves the
+database behavior only; it does not record production launch evidence yet.
 
 ## 2. Configure Private Document Storage
 
@@ -157,6 +158,28 @@ reachable-but-empty database, a missing import proof, and any state or
 recovery snapshot whose checksum no longer matches; recover from a verified
 snapshot instead of manually editing production rows.
 
+After the production import and verifier pass, run the controlled recovery
+drill one more time. It runs all writes, snapshot restores, lease recovery,
+and simulated restart reads in the **separate test database**. It then writes
+only a small signed proof record into the already-imported production database;
+it does not run the test organization against production state:
+
+```sh
+WOA_TEST_DATABASE_URL='postgresql://...dedicated-test-database...' \
+WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1 \
+WOA_POSTGRES_RUNTIME_PROOF_RECORD=1 \
+WOA_POSTGRES_RUNTIME_PROOF_CONFIRM=1 \
+WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL='postgresql://...production-database...' \
+WOA_SESSION_SECRET='<the same stable secret configured for Render>' \
+pnpm run postgres-runtime-check
+```
+
+The command refuses to run if the test target resolves to the same database as
+the production proof target. Do not bypass that refusal. The proof expires
+after 30 days by default and also becomes invalid if the production database
+URL, organization, or signing secret changes. Run the drill again after any of
+those changes.
+
 Then configure Render:
 
 ```text
@@ -175,9 +198,11 @@ Restart once and visit the owner-only endpoint:
 GET /api/system/infrastructure/preflight
 ```
 
-It must show PostgreSQL as transactional/healthy, private document storage as
-production-ready with a current write/read/delete validation, no identity
-conflicts, and no unresolved launch blockers.
+It must show PostgreSQL as transactional/healthy, a current import proof,
+current recovery snapshot, and a fresh controlled recovery drill. It must also
+show private document storage as production-ready with a current
+write/read/delete validation, no identity conflicts, and no unresolved launch
+blockers.
 
 PostgreSQL also gives the background autopay worker an organization-scoped
 advisory lock. A second app process will skip the same run instead of starting

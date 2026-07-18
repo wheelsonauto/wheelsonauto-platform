@@ -19,6 +19,7 @@ async function main() {
     await fs.writeFile(seedFile, JSON.stringify({ vehicles: [], customers: [], payments: [], documents: [], eSignatures: [] }), 'utf8');
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+    const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
     assert(serverSource.includes('function reportBackgroundTaskFailure') && serverSource.includes("recordOperationalFailure(source, error, context, { alert: true })"), 'Every scheduled worker failure must use the shared durable monitor and owner-alert path.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
@@ -55,6 +56,7 @@ async function main() {
     });
     assert.strictEqual(recoveryTargetGuard.status, 1, 'A recovery proof run must fail before opening a database when its test target matches the production proof target.');
     assert.match([recoveryTargetGuard.stdout, recoveryTargetGuard.stderr].filter(Boolean).join(''), /different dedicated test database/i, 'The recovery proof refusal must explain that the test database cannot be production.');
+    assert(launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_RECORD=1') && launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL') && /same database as\n+the production proof target/i.test(launchRunbook), 'The production runbook must explain that recovery proof is recorded only after import from a separate test database.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
