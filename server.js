@@ -3075,6 +3075,7 @@ function closeoutRecurringState(row = {}, dateKeyValue = localDateKey()) {
   const text = String([recurringLifecycleText(row), row.tone, row.lastAutoChargeResult, row.lastAutoChargeError].filter(Boolean).join(' ')).toLowerCase();
   const failedAttempts = Math.max(Number(row.retryCount || 0), Number(row.failedAttempts || 0));
   if (text.includes('removed') || text.includes('history') || text.includes('returned')) return 'History / removed';
+  if (text.includes('duplicate billing') || text.includes('duplicate payment')) return 'Duplicate payment review';
   if (String(row.lastAutoChargeDate || '') === dateKeyValue) return 'Paid';
   if (text.includes('not found')) return 'Payment not found';
   if (failedAttempts >= 2 || text.includes('2x') || text.includes('contact')) return 'Failed twice';
@@ -9109,6 +9110,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const setupNeeded = recurring.filter(row => closeoutRecurringState(row) === 'Setup needed');
   const staleAutopay = staleAutopayScheduleRows(scoped, today);
   const unmatchedPayments = payments.filter(payment => closeoutPaymentCustomerName(scoped, payment, recurring) === 'Unmatched payment');
+  const duplicateBillingPeriodReviews = payments.filter(payment => payment && (payment.duplicateBillingPeriod === true || /duplicate billing period|duplicate payment/.test(String([payment.status, payment.notes].filter(Boolean).join(' ')).toLowerCase())));
   const missingVehicle = recurringVehicleGapRows(scoped, recurring);
   const openPaymentRequests = (scoped.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
   const brokenPaymentRequests = openPaymentRequests.filter(request => {
@@ -9154,6 +9156,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const truthChecks = [
     truthCheck('failed_twice', 'Failed twice', failedTwice.length, 'critical', 'Customers that failed twice should be contacted before closeout.', 'Payments', 'Today'),
     truthCheck('payment_not_found', 'Payment not found', paymentNotFound.length, 'critical', 'Saved-card/payment records need Clover review before they can be trusted.', 'Payments', 'Today'),
+    truthCheck('duplicate_billing_period', 'Duplicate billing-period review', duplicateBillingPeriodReviews.length, 'critical', 'A provider reported a paid charge after another payment was already recorded for the same billing period. Autopay is paused on the affected file; review the two receipts, refund/dispute decision, and migration state before any new charge.', 'Payments', 'Transactions'),
     truthCheck('unmatched_payments', 'Unmatched payments', unmatchedPayments.length, 'critical', 'Transactions must have a customer name before receipts, disputes, and reports are reliable.', 'Payments', 'Transactions'),
     truthCheck('payment_request_truth', 'Payment request truth', brokenPaymentRequests.length, 'critical', 'Open payment links need customer, amount, vehicle, VIN/tag context before closeout or Star follow-up.', 'Payments', 'Today'),
     truthCheck('stale_autopay_schedule', 'Stale autopay schedules', staleAutopay.length, 'warning', 'Active autopay rows have past next-run dates with no paid, failed, setup, or removed state. Review before closeout so no customer silently misses a charge.', 'Payments', 'Active'),
@@ -14185,6 +14188,16 @@ function recordStripePaymentReceipt(data, payment = {}) {
     source: 'Stripe signed payment webhook'
   });
 }
+function stripePaymentIntentMatchesRecord(payment = {}, intentId = '') {
+  const target = String(intentId || '').trim();
+  if (!target) return false;
+  return [payment.stripePaymentIntentId, payment.providerPaymentId].some(value => String(value || '').trim() === target);
+}
+function duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, intentId) {
+  if (!scheduledDueKey) return null;
+  const existing = stripeMigration.existingPaidPayment(data, recurring, scheduledDueKey);
+  return existing && !stripePaymentIntentMatchesRecord(existing, intentId) ? existing : null;
+}
 function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const intentId = stripeObjectId(intent);
   if (!intentId) return { matched: false, reason: 'Stripe payment intent ID is missing.' };
@@ -14202,8 +14215,15 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const receivedCents = Number(intent.amount_received || intent.amount || 0);
   const amount = receivedCents > 0 ? receivedCents / 100 : Number(recurring.amount || 0);
   data.payments = Array.isArray(data.payments) ? data.payments : [];
-  const existing = data.payments.find(row => String(row && row.stripePaymentIntentId || '') === intentId);
+  const existing = data.payments.find(row => stripePaymentIntentMatchesRecord(row, intentId));
   const alreadyPaid = !!(existing && stripeMigration.paymentIsPaid(existing.status));
+  const duplicateBillingPeriodPayment = alreadyPaid ? null : duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, intentId);
+  const duplicateBillingPeriod = !!duplicateBillingPeriodPayment;
+  const duplicatePaymentReference = duplicateBillingPeriodPayment && (duplicateBillingPeriodPayment.stripePaymentIntentId || duplicateBillingPeriodPayment.providerPaymentId || duplicateBillingPeriodPayment.id) || '';
+  const duplicatePaymentProvider = duplicateBillingPeriodPayment && (duplicateBillingPeriodPayment.paymentProvider || duplicateBillingPeriodPayment.provider || 'another provider payment') || '';
+  const duplicateNote = duplicateBillingPeriod
+    ? 'Stripe succeeded after ' + duplicatePaymentProvider + ' payment ' + duplicatePaymentReference + ' was already recorded for billing date ' + scheduledDueKey + '. Autopay is paused for owner review; do not charge again or mark cutover complete until the duplicate is resolved.'
+    : '';
   const payment = {
     ...(existing || { id: 'stripe-charge-' + intentId }),
     paymentProvider: 'stripe',
@@ -14224,16 +14244,20 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     tracker: identity.tracker || recurring.tracker || '',
     method: 'Stripe saved card',
     amount,
-    status: 'Paid',
-    tone: 'good',
+    status: duplicateBillingPeriod ? 'Paid - duplicate billing period review' : 'Paid',
+    tone: duplicateBillingPeriod ? 'bad' : 'good',
     source: 'Stripe signed payment webhook',
-    notes: appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'),
+    notes: appendUniqueNote(appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'), duplicateNote),
     scheduledDueDate: scheduledDueKey,
     billingPeriodKey,
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: stripeObjectId(intent.customer) || recurring.stripeCustomerId || '',
     stripePaymentMethodId: stripeObjectId(intent.payment_method) || recurring.stripePaymentMethodId || '',
-    stripeIdempotencyKey: currentAttempt.idempotencyKey || ''
+    stripeIdempotencyKey: currentAttempt.idempotencyKey || '',
+    duplicateBillingPeriod,
+    duplicatePaymentId: duplicateBillingPeriod ? String(duplicateBillingPeriodPayment.id || '') : '',
+    duplicatePaymentReference: duplicateBillingPeriod ? String(duplicatePaymentReference) : '',
+    duplicatePaymentProvider: duplicateBillingPeriod ? String(duplicatePaymentProvider) : ''
   };
   if (existing) Object.assign(existing, payment);
   else data.payments.unshift(payment);
@@ -14243,7 +14267,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     date: payment.date,
     customer: payment.customer,
     amount,
-    result: 'Paid',
+    result: payment.status,
     method: payment.method,
     notes: payment.notes,
     vehicle: payment.vehicle,
@@ -14256,7 +14280,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     recurringPaymentId: payment.recurringPaymentId
   });
   const priorNextRun = String(recurring.nextRun || '').trim();
-  const resolvedNextRun = alreadyPaid
+  const resolvedNextRun = alreadyPaid || duplicateBillingPeriod
     ? priorNextRun
     : String(scheduledDueKey && scheduledDueKey <= paymentDateKey
       ? (nextFutureRecurringDate(recurring, paymentDateKey, scheduledDueKey) || priorNextRun)
@@ -14280,27 +14304,37 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const patch = {
     paymentProvider: 'stripe',
     provider: 'Stripe',
-    status: 'Active',
-    tone: 'good',
+    status: duplicateBillingPeriod ? 'Payment review - duplicate billing period' : 'Active',
+    tone: duplicateBillingPeriod ? 'bad' : 'good',
     retryCount: 0,
     failedAttempts: 0,
     nextRun: resolvedNextRun,
     lastPaymentAt: paymentAtIso,
     lastStripePaymentIntentId: intentId,
     lastStripeChargeId: chargeId,
-    lastPaymentResult: 'Paid',
+    lastPaymentResult: payment.status,
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts,
-    autopayManagedBy: 'WheelsonAuto / Stripe',
+    autopayManagedBy: duplicateBillingPeriod ? 'WheelsonAuto / Stripe (paused for duplicate review)' : 'WheelsonAuto / Stripe',
     stripeChargeAttempt: settledAttempt,
-    lastStripeChargeIdempotencyKey: settledAttempt.idempotencyKey || currentAttempt.idempotencyKey || ''
+    lastStripeChargeIdempotencyKey: settledAttempt.idempotencyKey || currentAttempt.idempotencyKey || '',
+    autoChargeEnabled: !duplicateBillingPeriod,
+    duplicateBillingPeriodReview: duplicateBillingPeriod ? {
+      detectedAt: paymentAtIso,
+      scheduledDueDate: scheduledDueKey,
+      existingPaymentId: String(duplicateBillingPeriodPayment.id || ''),
+      existingPaymentReference: String(duplicatePaymentReference),
+      existingPaymentProvider: String(duplicatePaymentProvider),
+      stripePaymentIntentId: intentId,
+      status: 'Owner review required'
+    } : null
   };
   if (String(metadata.flow || '').toLowerCase() === 'autopay') Object.assign(patch, {
     lastAutoChargeDate: paymentDateKey,
     lastAutoChargeAt: paymentAtIso,
     lastAutoChargeResult: 'Paid'
   });
-  if (!alreadyPaid) Object.assign(patch, finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso));
+  if (!alreadyPaid && !duplicateBillingPeriod) Object.assign(patch, finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso));
   if (resolvedNextRun && resolvedNextRun !== priorNextRun) Object.assign(patch, {
     paymentDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.paymentDay,
     chargeDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.chargeDay,
@@ -14310,7 +14344,21 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   });
   updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
   recordStripePaymentReceipt(data, payment);
-  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id, alreadyPaid, advanced: resolvedNextRun !== priorNextRun };
+  if (duplicateBillingPeriod) {
+    appendAuditLog(data, {
+      name: 'Stripe webhook',
+      role: 'System',
+      organizationId: recurring.organizationId || MAIN_ORG_ID,
+      companyName: companyNameById(data, recurring.organizationId || MAIN_ORG_ID)
+    }, 'Duplicate Stripe billing period needs review', [
+      recurring.customer || 'Unknown customer',
+      scheduledDueKey || 'No billing date',
+      'Existing ' + duplicatePaymentProvider + ' ' + duplicatePaymentReference,
+      'New Stripe ' + intentId,
+      'Autopay paused'
+    ]);
+  }
+  return { matched: true, recurringPaymentId: recurring.id || '', paymentIntentId: intentId, paymentId: payment.id, alreadyPaid, duplicateBillingPeriod, duplicatePayment: duplicateBillingPeriodPayment || null, advanced: resolvedNextRun !== priorNextRun };
 }
 function applyStripePaymentIntentFailed(data, intent = {}) {
   const intentId = stripeObjectId(intent);

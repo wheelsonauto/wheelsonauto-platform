@@ -804,7 +804,7 @@ async function main() {
     assert(titleOnlyCleanupWrite.status === 200 && titleOnlyCleanupWrite.json.ok, 'Title-only assignment regression data should clean up after the test.');
     const titleOnlyCleanupRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const readinessBeforeAssignment = await request(server, 'POST', '/api/system/readiness', { cookie: ownerCookie });
-    assert(readinessBeforeAssignment.status === 200 && readinessBeforeAssignment.json, 'System readiness should return JSON before assignment regression scenarios.');
+    assert(readinessBeforeAssignment.status === 200 && readinessBeforeAssignment.json, 'System readiness should return JSON before assignment regression scenarios. Got ' + readinessBeforeAssignment.status + ': ' + String(readinessBeforeAssignment.text || '').slice(0, 500));
     const autopayVehicleCountBefore = Number((readinessBeforeAssignment.json.truthChecks.find(row => row.key === 'autopay_vehicle_link') || {}).count || 0);
     const serviceIdentityCountBefore = Number((readinessBeforeAssignment.json.truthChecks.find(row => row.key === 'service_identity') || {}).count || 0);
     const assignmentConflictState = JSON.parse(JSON.stringify(titleOnlyCleanupRead.json));
@@ -3152,6 +3152,87 @@ async function main() {
     });
     assert(stripeDuplicateAfterWebhook.status === 409 && stripeDuplicateAfterWebhook.json.duplicateBlocked, 'A reconciled timed-out Stripe payment must block a second charge for the same billing period.');
 
+    const stripeDuplicatePeriodRecurringId = 'direct-stripe-duplicate-period-review';
+    const stripeDuplicatePeriodState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    stripeDuplicatePeriodState.json.recurringPayments.unshift({
+      id: stripeDuplicatePeriodRecurringId,
+      customer: 'Direct Stripe Duplicate Review Customer',
+      phone: '3135550779',
+      email: 'stripe-duplicate-review@example.com',
+      vehicle: '2024 Stripe Duplicate Review Car',
+      vehicleId: 'veh-direct-stripe-duplicate-review',
+      vin: 'DIRECTSTRIPEDUPLICATEVIN',
+      plate: 'DIR-STRIPE-DUP',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      cloverCustomerId: 'direct-clover-duplicate-review',
+      cloverPaymentSource: 'direct-clover-duplicate-review-source',
+      stripeCustomerId: 'cus_direct_duplicate_review',
+      stripePaymentMethodId: 'pm_direct_duplicate_review',
+      stripeCardSavedAt: new Date().toISOString(),
+      cardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Stripe card saved and chargeable - first protected charge pending',
+      autopayManagedBy: 'WheelsonAuto / Stripe',
+      stripeMigration: {
+        state: 'first_stripe_charge_pending',
+        cutoverDate: autopayTodayKey,
+        cloverStoppedConfirmedAt: new Date().toISOString(),
+        cloverStoppedConfirmedBy: 'Owner'
+      }
+    });
+    stripeDuplicatePeriodState.json.payments.unshift({
+      id: 'direct-duplicate-period-clover-paid',
+      recurringPaymentId: stripeDuplicatePeriodRecurringId,
+      customer: 'Direct Stripe Duplicate Review Customer',
+      amount: 229,
+      status: 'Paid',
+      paymentProvider: 'clover',
+      providerPaymentId: 'clover-duplicate-period-paid',
+      billingPeriodKey: 'due:' + autopayTodayKey,
+      scheduledDueDate: autopayTodayKey,
+      createdAt: new Date().toISOString()
+    });
+    const stripeDuplicatePeriodSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeDuplicatePeriodState.json });
+    assert(stripeDuplicatePeriodSeed.status === 200 && stripeDuplicatePeriodSeed.json.ok, 'Stripe duplicate billing-period webhook setup failed.');
+    const stripeDuplicatePeriodObject = {
+      object: 'payment_intent',
+      id: 'pi_direct_duplicate_period_001',
+      status: 'succeeded',
+      amount: 22900,
+      amount_received: 22900,
+      currency: 'usd',
+      customer: 'cus_direct_duplicate_review',
+      payment_method: 'pm_direct_duplicate_review',
+      latest_charge: 'ch_direct_duplicate_period_001',
+      created: Math.floor(Date.now() / 1000),
+      metadata: {
+        recurringPaymentId: stripeDuplicatePeriodRecurringId,
+        flow: 'autopay',
+        scheduledDueDate: autopayTodayKey,
+        billingPeriodKey: 'due:' + autopayTodayKey,
+        amount: '22900'
+      }
+    };
+    const stripeDuplicatePeriodBody = JSON.stringify({ id: 'evt_direct_duplicate_period_succeeded', type: 'payment_intent.succeeded', livemode: true, created: Math.floor(Date.now() / 1000), data: { object: stripeDuplicatePeriodObject } });
+    const stripeDuplicatePeriodTimestamp = String(Math.floor(Date.now() / 1000));
+    const stripeDuplicatePeriodSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeDuplicatePeriodTimestamp + '.' + stripeDuplicatePeriodBody).digest('hex');
+    const stripeDuplicatePeriodWebhook = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeDuplicatePeriodTimestamp + ',v1=' + stripeDuplicatePeriodSignature }, raw: stripeDuplicatePeriodBody });
+    assert(stripeDuplicatePeriodWebhook.status === 200 && stripeDuplicatePeriodWebhook.json.stripePaymentIntentResult && stripeDuplicatePeriodWebhook.json.stripePaymentIntentResult.duplicateBillingPeriod === true, 'A late Stripe success after a paid Clover billing period must be marked for owner review instead of quietly completing migration.');
+    const stripeDuplicatePeriodResolved = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeDuplicatePeriodRow = stripeDuplicatePeriodResolved.json.recurringPayments.find(row => row.id === stripeDuplicatePeriodRecurringId);
+    const stripeDuplicatePeriodPayment = (stripeDuplicatePeriodResolved.json.payments || []).find(payment => payment.stripePaymentIntentId === 'pi_direct_duplicate_period_001');
+    assert(stripeDuplicatePeriodPayment && stripeDuplicatePeriodPayment.status === 'Paid - duplicate billing period review' && stripeDuplicatePeriodPayment.duplicatePaymentId === 'direct-duplicate-period-clover-paid', 'A delayed Stripe success must retain both payment references for an owner refund/dispute review.');
+    assert(stripeDuplicatePeriodRow && stripeDuplicatePeriodRow.status === 'Payment review - duplicate billing period' && stripeDuplicatePeriodRow.autoChargeEnabled === false && stripeDuplicatePeriodRow.nextRun === autopayTodayKey && stripeDuplicatePeriodRow.stripeMigration && stripeDuplicatePeriodRow.stripeMigration.state === 'first_stripe_charge_pending', 'A duplicate billing-period webhook must pause future autopay and must not advance schedule or complete the Clover-to-Stripe migration.');
+    assert((stripeDuplicatePeriodResolved.json.auditLogs || []).some(row => row.action === 'Duplicate Stripe billing period needs review' && /Direct Stripe Duplicate Review Customer/.test(String(row.details || ''))), 'A duplicate billing-period webhook must create an owner-visible audit trail.');
+
     const stripeAuthenticationRecurringId = 'direct-stripe-authentication-required';
     const stripeAuthenticationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     stripeAuthenticationState.json.recurringPayments.unshift({
@@ -3592,7 +3673,10 @@ async function main() {
   } finally {
     global.fetch = providerEmailFetch;
     try { server.close(); } catch (_) {}
-    await fs.rm(dataDir, { recursive: true, force: true });
+    // A deliberately failed provider scenario can finish recording its protected
+    // job-error file one tick after the request assertion completes.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await fs.rm(dataDir, { recursive: true, force: true, maxRetries: 4, retryDelay: 75 });
   }
 }
 
