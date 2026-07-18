@@ -8889,6 +8889,7 @@ function stripeIdentityLiveWebhookEvidence(data = {}) {
 function documentStorageConfigurationFingerprint() {
   const storage = PRIVATE_DOCUMENT_STORE;
   const material = [
+    'document-storage-proof-v2-private-and-https',
     storage.provider,
     storage.key ? storage.key.toString('base64') : '',
     storage.keyVersion,
@@ -8921,15 +8922,18 @@ function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STO
   const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
   const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS;
   const verified = storageState.lastValidationSuccess === true;
-  const live = !!status.productionReady && verified && configurationMatched && fresh;
+  const publicReadBlocked = storageState.lastValidationPublicReadBlocked === true;
+  const live = !!status.productionReady && verified && publicReadBlocked && configurationMatched && fresh;
   let error = '';
   if (!status.productionReady) error = status.message;
   else if (!verified) error = String(storageState.lastValidationError || 'Run the owner-only private storage validation after configuring the bucket.');
+  else if (!publicReadBlocked) error = 'Run the current private-storage validation to prove anonymous object reads are blocked.';
   else if (!configurationMatched) error = 'The recorded private-storage validation belongs to an older or unknown storage configuration. Run a new validation after the current Render settings are deployed.';
   else if (!fresh) error = 'The private-storage validation is stale. Run a new owner validation before the controlled Stripe launch.';
   return {
     checkedAt,
     verified,
+    publicReadBlocked,
     configurationMatched,
     fresh,
     maxAgeHours: Math.round(WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000)),
@@ -18928,10 +18932,12 @@ const server = http.createServer(async (req, res) => {
           lastValidationAt: result.checkedAt,
           lastValidationSuccess: true,
           lastValidationProvider: result.provider,
+          lastValidationPublicReadBlocked: result.publicReadBlocked === true,
+          lastValidationProofVersion: 'v2-private-and-https',
           lastValidationConfigurationFingerprint: documentStorageConfigurationFingerprint(),
           lastValidationError: ''
         });
-        appendAuditLog(data, user, 'Private document storage validated', [result.provider, 'Encrypted write/read/delete proof passed']);
+        appendAuditLog(data, user, 'Private document storage validated', [result.provider, result.publicReadBlocked === true ? 'Encrypted write/read/private/delete proof passed' : 'Encrypted local write/read/delete proof passed']);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
         const preflight = await productionInfrastructurePreflight(data);
@@ -18941,7 +18947,7 @@ const server = http.createServer(async (req, res) => {
           result,
           documentStorageValidation: preflight.documentStorageValidation,
           message: liveReady
-            ? 'Private document storage write/read/delete validation passed and is ready for the launch gate.'
+            ? 'Private document storage write/read/private/delete validation passed and is ready for the launch gate.'
             : 'Private document storage I/O passed, but the Stripe launch gate remains blocked until S3-compatible production storage and the rest of the infrastructure preflight are complete.'
         });
       } catch (error) {
@@ -18950,6 +18956,8 @@ const server = http.createServer(async (req, res) => {
           lastValidationAt: new Date().toISOString(),
           lastValidationSuccess: false,
           lastValidationProvider: PRIVATE_DOCUMENT_STORE.status().provider,
+          lastValidationPublicReadBlocked: false,
+          lastValidationProofVersion: 'v2-private-and-https',
           lastValidationConfigurationFingerprint: documentStorageConfigurationFingerprint(),
           lastValidationError: message.slice(0, 500)
         });

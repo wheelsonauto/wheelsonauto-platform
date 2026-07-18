@@ -72,6 +72,7 @@ WOA_OBJECT_STORAGE_REGION=<region>
 WOA_OBJECT_STORAGE_ACCESS_KEY_ID=<private key id>
 WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY=<private secret>
 WOA_OBJECT_STORAGE_PATH_STYLE=1   # only when the provider requires it
+WOA_OBJECT_STORAGE_TIMEOUT_MS=15000
 ```
 
 The platform encrypts each document with AES-256-GCM before it is stored. The
@@ -113,11 +114,12 @@ POST /api/system/infrastructure/document-storage/validate
 ```
 
 It encrypts a random probe, writes it to the private bucket, reads and
-authenticates it, then deletes it. The launch gate requires this proof to match
-the current encryption key and object-storage configuration and refreshes it
-after 30 days by default. If the bucket, access key, endpoint, region, or
-encryption key changes, run the validation again before enabling
-`WOA_PRODUCTION_HARDENING_REQUIRED=1`.
+authenticates it, verifies that an anonymous request cannot read the object,
+then deletes it. Production readiness also rejects non-HTTPS endpoints. The
+launch gate requires this proof to match the current encryption key and
+object-storage configuration and refreshes it after 30 days by default. If the
+bucket, access key, endpoint, region, or encryption key changes, run the
+validation again before enabling `WOA_PRODUCTION_HARDENING_REQUIRED=1`.
 
 ## 3. Migrate Platform State to PostgreSQL
 

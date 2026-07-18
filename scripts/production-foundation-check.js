@@ -294,6 +294,80 @@ async function main() {
     const storageProbe = await store.probe({ organizationId: 'org-test' });
     assert(storageProbe.ok && storageProbe.encrypted && storageProbe.objectDeleted, 'Private document storage validation must prove encrypted write, read, and cleanup.');
 
+    const s3Objects = new Map();
+    const storageResponse = (status, bytes = Buffer.alloc(0)) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      async arrayBuffer() {
+        const body = Buffer.from(bytes);
+        return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
+      }
+    });
+    const privateS3Fetch = async (url, options = {}) => {
+      const method = String(options.method || 'GET').toUpperCase();
+      const headers = options.headers || {};
+      const authorized = Object.keys(headers).some(key => key.toLowerCase() === 'authorization');
+      const objectKey = new URL(url).pathname;
+      if (!authorized) return storageResponse(403);
+      if (method === 'PUT') {
+        s3Objects.set(objectKey, Buffer.from(options.body || Buffer.alloc(0)));
+        return storageResponse(200);
+      }
+      if (method === 'GET') return s3Objects.has(objectKey) ? storageResponse(200, s3Objects.get(objectKey)) : storageResponse(404);
+      if (method === 'DELETE') {
+        s3Objects.delete(objectKey);
+        return storageResponse(204);
+      }
+      return storageResponse(405);
+    };
+    const privateS3Store = secureDocumentStore.createSecureDocumentStore({
+      provider: 's3',
+      encryptionKey: Buffer.alloc(32, 10).toString('base64'),
+      keyVersion: 'test-s3-v1',
+      bucket: 'wheelsonauto-private-test',
+      endpoint: 'https://objects.example.test',
+      region: 'auto',
+      accessKeyId: 'test-access-key',
+      secretAccessKey: 'test-secret-key',
+      pathStyle: true,
+      fetch: privateS3Fetch
+    });
+    assert(privateS3Store.status().productionReady && privateS3Store.status().secureTransport, 'Production private storage must require a complete S3 configuration over HTTPS.');
+    const privateS3Probe = await privateS3Store.probe({ organizationId: 'org-test-s3' });
+    assert(privateS3Probe.ok && privateS3Probe.publicReadBlocked === true && privateS3Probe.objectDeleted, 'The production storage probe must prove anonymous reads are blocked before deleting its encrypted object.');
+    const publicS3Store = secureDocumentStore.createSecureDocumentStore({
+      provider: 's3',
+      encryptionKey: Buffer.alloc(32, 11).toString('base64'),
+      keyVersion: 'test-s3-public-v1',
+      bucket: 'wheelsonauto-public-test',
+      endpoint: 'https://objects.example.test',
+      region: 'auto',
+      accessKeyId: 'test-access-key',
+      secretAccessKey: 'test-secret-key',
+      pathStyle: true,
+      fetch: async (url, options = {}) => {
+        const headers = options.headers || {};
+        const authorized = Object.keys(headers).some(key => key.toLowerCase() === 'authorization');
+        if (!authorized && String(options.method || 'GET').toUpperCase() === 'GET') return storageResponse(200, Buffer.from('public encrypted object'));
+        return privateS3Fetch(url, options);
+      }
+    });
+    await assert.rejects(() => publicS3Store.probe({ organizationId: 'org-test-public-s3' }), /publicly readable/i, 'A bucket that permits anonymous reads must fail the launch proof and clean up its probe object.');
+    assert.strictEqual(s3Objects.size, 0, 'Both successful and rejected storage probes must remove their temporary objects.');
+    const insecureS3Store = secureDocumentStore.createSecureDocumentStore({
+      provider: 's3',
+      encryptionKey: Buffer.alloc(32, 12).toString('base64'),
+      bucket: 'wheelsonauto-insecure-test',
+      endpoint: 'http://objects.example.test',
+      region: 'auto',
+      accessKeyId: 'test-access-key',
+      secretAccessKey: 'test-secret-key',
+      pathStyle: true,
+      fetch: privateS3Fetch
+    });
+    assert.strictEqual(insecureS3Store.status().productionReady, false, 'An HTTP object-storage endpoint must never report production-ready.');
+    assert.match(insecureS3Store.status().message, /HTTPS endpoint/i, 'The storage readiness message must explain the secure-transport requirement.');
+
     const recurring = {
       id: 'rec-foundation-1',
       paymentProvider: 'clover',

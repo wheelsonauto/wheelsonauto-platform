@@ -1520,16 +1520,28 @@ async function main() {
         documentStorage: {
           lastValidationAt: new Date().toISOString(),
           lastValidationSuccess: true,
+          lastValidationPublicReadBlocked: true,
           lastValidationConfigurationFingerprint: documentStorageFingerprint
         }
       }
     }, { productionReady: true, message: '' });
     assert(currentDocumentStorageEvidence.live === true, 'A current validation bound to the active production object-storage configuration must satisfy the private-storage launch gate.');
+    const legacyDocumentStorageEvidence = privateDocumentStorageEvidence({
+      integrations: {
+        documentStorage: {
+          lastValidationAt: new Date().toISOString(),
+          lastValidationSuccess: true,
+          lastValidationConfigurationFingerprint: documentStorageFingerprint
+        }
+      }
+    }, { productionReady: true, message: '' });
+    assert(legacyDocumentStorageEvidence.live === false && legacyDocumentStorageEvidence.publicReadBlocked === false && /anonymous object reads/i.test(legacyDocumentStorageEvidence.error), 'Legacy storage evidence without an anonymous-read denial proof must fail closed.');
     const staleDocumentStorageEvidence = privateDocumentStorageEvidence({
       integrations: {
         documentStorage: {
           lastValidationAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
           lastValidationSuccess: true,
+          lastValidationPublicReadBlocked: true,
           lastValidationConfigurationFingerprint: documentStorageFingerprint
         }
       }
@@ -1540,6 +1552,7 @@ async function main() {
         documentStorage: {
           lastValidationAt: new Date().toISOString(),
           lastValidationSuccess: true,
+          lastValidationPublicReadBlocked: true,
           lastValidationConfigurationFingerprint: 'old-object-storage-configuration'
         }
       }

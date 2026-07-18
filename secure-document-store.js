@@ -82,23 +82,34 @@ class SecureDocumentStore {
     this.keyVersion = String(options.keyVersion || process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION || 'v1').trim() || 'v1';
     this.s3 = buildS3Config(options);
     this.fetch = options.fetch || global.fetch;
+    this.timeoutMs = Math.max(3000, Math.min(60000, Number(options.timeoutMs || process.env.WOA_OBJECT_STORAGE_TIMEOUT_MS || 15000)));
   }
 
   status() {
     const encryptionConfigured = !!this.key;
-    const s3Configured = !!(this.s3.bucket && this.s3.accessKeyId && this.s3.secretAccessKey && this.s3.endpoint);
+    let endpointValid = false;
+    let secureTransport = false;
+    try {
+      const endpoint = new URL(this.s3.endpoint);
+      endpointValid = endpoint.protocol === 'https:' || endpoint.protocol === 'http:';
+      secureTransport = endpoint.protocol === 'https:';
+    } catch {}
+    const s3Configured = !!(this.s3.bucket && this.s3.accessKeyId && this.s3.secretAccessKey && this.s3.endpoint && endpointValid);
     const providerConfigured = this.provider === 's3' ? s3Configured : this.provider === 'local';
     return {
       provider: this.provider === 's3' ? 'S3-compatible private object storage' : 'Encrypted local development store',
       encryptionConfigured,
       providerConfigured,
       configured: encryptionConfigured && providerConfigured,
-      productionReady: encryptionConfigured && this.provider === 's3' && s3Configured,
+      productionReady: encryptionConfigured && this.provider === 's3' && s3Configured && secureTransport,
+      secureTransport: this.provider === 's3' ? secureTransport : false,
       keyVersion: encryptionConfigured ? this.keyVersion : '',
       message: !encryptionConfigured
         ? 'Set WOA_DOCUMENT_ENCRYPTION_KEY before storing new identity or insurance documents.'
         : this.provider === 's3' && !s3Configured
           ? 'Complete WOA_OBJECT_STORAGE_BUCKET, endpoint, region, and access keys before enabling private object storage.'
+          : this.provider === 's3' && !secureTransport
+            ? 'Private object storage must use an HTTPS endpoint before production launch.'
           : this.provider === 'local'
             ? 'Encrypted locally for development only. Use S3-compatible object storage before production launch.'
             : 'Encrypted private object storage is ready.'
@@ -111,6 +122,20 @@ class SecureDocumentStore {
 
   isEncryptedDocument(document = {}) {
     return !!(document && document.storageKey && document.encryption && document.encryption.algorithm === 'AES-256-GCM');
+  }
+
+  async fetchObject(url, options = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    try {
+      return await this.fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('Private object storage request timed out.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async writeObject(key, bytes) {
@@ -126,7 +151,7 @@ class SecureDocumentStore {
     const url = s3ObjectUrl(this.s3, storageKey);
     const headers = signingHeaders('PUT', url, bytes, this.s3);
     headers['Content-Type'] = 'application/octet-stream';
-    const response = await this.fetch(url, { method: 'PUT', headers, body: bytes });
+    const response = await this.fetchObject(url, { method: 'PUT', headers, body: bytes });
     if (!response.ok) throw new Error('Private object storage upload failed (' + response.status + ').');
     return { storageKey, storagePath: '' };
   }
@@ -141,7 +166,7 @@ class SecureDocumentStore {
     if (this.provider !== 's3') throw new Error('Unknown document storage provider.');
     const url = s3ObjectUrl(this.s3, storageKey);
     const headers = signingHeaders('GET', url, Buffer.alloc(0), this.s3);
-    const response = await this.fetch(url, { method: 'GET', headers });
+    const response = await this.fetchObject(url, { method: 'GET', headers });
     if (!response.ok) throw new Error('Private object storage read failed (' + response.status + ').');
     return Buffer.from(await response.arrayBuffer());
   }
@@ -157,7 +182,7 @@ class SecureDocumentStore {
     if (this.provider !== 's3') throw new Error('Unknown document storage provider.');
     const url = s3ObjectUrl(this.s3, storageKey);
     const headers = signingHeaders('DELETE', url, Buffer.alloc(0), this.s3);
-    const response = await this.fetch(url, { method: 'DELETE', headers });
+    const response = await this.fetchObject(url, { method: 'DELETE', headers });
     if (!response.ok && response.status !== 404) throw new Error('Private object storage delete failed (' + response.status + ').');
   }
 
@@ -178,6 +203,12 @@ class SecureDocumentStore {
       });
       const recovered = await this.read(stored);
       if (!recovered.equals(expected)) throw new Error('Private object storage validation read did not match the encrypted write.');
+      let publicReadBlocked = null;
+      if (this.provider === 's3') {
+        const publicResponse = await this.fetchObject(s3ObjectUrl(this.s3, stored.storageKey), { method: 'GET', redirect: 'follow' });
+        if (publicResponse.ok) throw new Error('Private object storage validation failed because the encrypted object was publicly readable without credentials. Block anonymous object reads before launch.');
+        publicReadBlocked = true;
+      }
       await this.deleteObject(stored.storageKey);
       deleted = true;
       return {
@@ -185,6 +216,7 @@ class SecureDocumentStore {
         checkedAt: new Date().toISOString(),
         provider: this.provider,
         encrypted: true,
+        publicReadBlocked,
         objectDeleted: true
       };
     } catch (error) {
