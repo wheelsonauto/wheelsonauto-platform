@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const source = require('../postgres-migration-source');
+const stateMigrationLock = require('../state-migration-lock');
 
 const importer = path.join(__dirname, 'migrate-json-to-postgres.js');
 const verifier = path.join(__dirname, 'verify-json-to-postgres.js');
@@ -29,6 +30,15 @@ async function main() {
     await assert.rejects(() => source.assertSourceUnchanged(dataFile, snapshot.sourceFileChecksum), /changed while the migration was running/i, 'A changed JSON source must block migration proof/import before cutover.');
     assert.throws(() => source.assertExpectedChecksum('f'.repeat(64), snapshot.sourceFileChecksum), /does not match/i, 'A source checksum mismatch must fail closed.');
 
+    await stateMigrationLock.assertWritesAllowed({ dataFile });
+    const lock = await stateMigrationLock.acquire({ dataFile, sourceFileChecksum: snapshot.sourceFileChecksum });
+    await assert.rejects(() => stateMigrationLock.assertWritesAllowed({ dataFile }), error => error && error.code === 'woa_postgres_migration_write_lock' && error.statusCode === 503, 'The running app must reject every state write while the cutover lock exists.');
+    await assert.rejects(() => stateMigrationLock.acquire({ dataFile }), /already exists/i, 'A second PostgreSQL import must not start while the first cutover lock exists.');
+    await assert.rejects(() => stateMigrationLock.release({ ...lock, token: 'wrong-owner-token' }), /another or unknown process/i, 'One process must not release another migration process lock.');
+    assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, true, 'An ownership mismatch must leave the migration lock active.');
+    assert.strictEqual((await stateMigrationLock.release(lock)).released, true, 'The process that acquired the cutover lock must be able to restore writes.');
+    await stateMigrationLock.assertWritesAllowed({ dataFile });
+
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
     const exact = (await source.readSource(dataFile)).sourceFileChecksum;
     const base = { ...process.env, WOA_POSTGRES_MIGRATION_CONFIRM: '1', WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM: '1' };
@@ -49,7 +59,12 @@ async function main() {
     const validProofWithoutDatabase = run(verifier, dataFile, { ...proofBase, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact });
     assert.notStrictEqual(validProofWithoutDatabase.status, 0, 'A proof verification with a valid source still needs an explicit PostgreSQL database URL.');
     assert.match(validProofWithoutDatabase.stderr, /DATABASE_URL/, 'The verifier must not connect without a database URL.');
-    console.log('PostgreSQL protected-source check passed: exact preflight checksum, immutable source guard, and changed-source rejection are verified.');
+    const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+    const importerSource = await fs.readFile(importer, 'utf8');
+    assert.match(serverSource, /stateMigrationLock\.assertWritesAllowed/, 'The production write path must enforce the shared PostgreSQL cutover lock.');
+    assert.match(importerSource, /stateMigrationLock\.acquire/, 'The controlled PostgreSQL importer must acquire the shared cutover lock.');
+    assert.match(importerSource, /stateMigrationLock\.release/, 'The controlled PostgreSQL importer must release its lock after success or failure.');
+    console.log('PostgreSQL protected-source check passed: exact preflight checksum, immutable source guard, enforced application write lock, single-import ownership, and changed-source rejection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

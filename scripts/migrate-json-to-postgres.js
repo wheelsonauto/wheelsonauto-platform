@@ -3,6 +3,7 @@
 const path = require('node:path');
 const stateRepository = require('../state-repository');
 const migrationSource = require('../postgres-migration-source');
+const stateMigrationLock = require('../state-migration-lock');
 const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
@@ -27,16 +28,22 @@ async function main() {
     error.conflicts = conflicts;
     throw error;
   }
-  const repository = stateRepository.createStateRepository({
-    backend: 'postgres',
+  const maintenanceLock = await stateMigrationLock.acquire({
     dataFile,
-    seedFile,
-    organizationId: process.env.WOA_ORGANIZATION_ID || 'org-wheelsonauto',
-    databaseUrl: process.env.DATABASE_URL,
-    sslMode: process.env.WOA_POSTGRES_SSL_MODE || '',
-    snapshotLimit: Number(process.env.WOA_POSTGRES_SNAPSHOT_LIMIT || 180)
+    sourceFileChecksum: source.sourceFileChecksum,
+    reason: 'controlled JSON-to-PostgreSQL production cutover'
   });
+  let repository = null;
   try {
+    repository = stateRepository.createStateRepository({
+      backend: 'postgres',
+      dataFile,
+      seedFile,
+      organizationId: process.env.WOA_ORGANIZATION_ID || 'org-wheelsonauto',
+      databaseUrl: process.env.DATABASE_URL,
+      sslMode: process.env.WOA_POSTGRES_SSL_MODE || '',
+      snapshotLimit: Number(process.env.WOA_POSTGRES_SNAPSHOT_LIMIT || 180)
+    });
     const before = await repository.read();
     if (before.exists && process.env.WOA_POSTGRES_MIGRATION_REPLACE !== '1') {
       throw new Error('PostgreSQL already contains WheelsonAuto state. Refusing to replace it. Review the database and use WOA_POSTGRES_MIGRATION_REPLACE=1 only for an intentional recovery import.');
@@ -73,10 +80,15 @@ async function main() {
       databaseVersion: verified.version,
       checksum: verified.checksum,
       migrationProof,
+      maintenanceLock: { acquiredAt: maintenanceLock.acquiredAt, sourceFileChecksum: maintenanceLock.sourceFileChecksum },
       message: 'PostgreSQL import and checksum/count evidence verified against the preflight-confirmed protected source. Keep the JSON rollback snapshot until the dedicated recovery test is complete.'
     }, null, 2));
   } finally {
-    await repository.close();
+    try {
+      if (repository) await repository.close();
+    } finally {
+      await stateMigrationLock.release(maintenanceLock);
+    }
   }
 }
 

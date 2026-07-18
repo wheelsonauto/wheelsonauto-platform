@@ -15,6 +15,7 @@ const stateRepository = require('./state-repository');
 const secureDocumentStore = require('./secure-document-store');
 const stripeMigration = require('./stripe-migration');
 const authPolicy = require('./auth-policy');
+const stateMigrationLock = require('./state-migration-lock');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -775,6 +776,7 @@ async function dataVersion() {
 }
 let writeDataQueue = Promise.resolve();
 async function writeDataNow(data) {
+  await stateMigrationLock.assertWritesAllowed({ dataDir: DATA_DIR, dataFile: DATA_FILE });
   repairDataIds(data);
   const meta = data && data[STATE_WRITE_META] || {};
   const readMeta = data && data[STATE_READ_META] || {};
