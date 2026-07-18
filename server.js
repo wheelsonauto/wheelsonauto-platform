@@ -156,6 +156,7 @@ const WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number
 const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_MESSAGING_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_EMAIL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_EMAIL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_AI_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_AI_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS = Math.max(5 * 60 * 1000, Number(process.env.WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS || 6 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
 const WOA_ERROR_RECORD_WINDOW_MS = Math.max(15 * 1000, Number(process.env.WOA_ERROR_RECORD_WINDOW_MS || 60 * 1000));
@@ -192,7 +193,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-tablet-api-cards-143';
+const ASSET_VERSION = 'platform-20260718-clover-cutover-gate-144';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9072,6 +9073,62 @@ function operationalAlertEvidence(data = {}) {
     error
   };
 }
+function cloverRecurringMigrationReadiness(data = {}) {
+  const clover = data.integrations && data.integrations.clover || {};
+  const inactiveStatus = /removed|returned|history|archived|ended|inactive|cancelled|canceled|expired|disabled/;
+  const rows = allRecurringRows(data).filter(row => {
+    if (!row || inactiveStatus.test(String(row.status || '').toLowerCase())) return false;
+    const migration = stripeMigration.migrationRecord(row);
+    if ([stripeMigration.STATES.CLOVER_DISABLED, stripeMigration.STATES.STRIPE_ACTIVE, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED].includes(migration.state)) return false;
+    const provider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
+    return provider === 'clover' && stripeMigration.hasCloverSource(row);
+  });
+  const identities = new Set(rows.map((row, index) => String(row.cloverSubscriptionId || row.cloverCustomerId || row.id || ('row-' + index))));
+  const summary = clover.recurringPlanSummary || {};
+  const activeCustomers = Math.max(identities.size, Number(summary.activeCustomers || 0));
+  const activePlans = Math.max(Number(summary.activePlans || 0), (clover.recurringPlans || []).filter(plan => !inactiveStatus.test(String(plan && plan.status || 'active').toLowerCase())).length);
+  const requiresFreshRoster = activeCustomers > 0 || activePlans > 0;
+  const checkedAt = String(clover.lastRecurringPlanSyncAt || '');
+  const checkedAtMs = Date.parse(checkedAt);
+  const degradedAt = String(clover.lastRecurringPlanSyncDegradedAt || '');
+  const degradedAtMs = Date.parse(degradedAt);
+  const currentDegradedFailure = Number.isFinite(degradedAtMs) && (!Number.isFinite(checkedAtMs) || degradedAtMs >= checkedAtMs);
+  const warning = String(clover.lastRecurringPlanSyncWarning || clover.lastRecurringMemberSyncWarning || '').trim();
+  const providerError = String(clover.lastRecurringPlanSyncError || '').trim();
+  const degraded = currentDegradedFailure || !!warning || !!providerError;
+  const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
+  const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS;
+  const ready = !requiresFreshRoster || (fresh && !degraded);
+  let error = '';
+  if (requiresFreshRoster && currentDegradedFailure) error = 'Clover recurring refresh is degraded (HTTP ' + Number(clover.lastRecurringPlanSyncDegradedStatus || 0) + '). Keep the preserved roster read-only and correct the Clover merchant API token before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && warning) error = 'Clover returned an incomplete recurring roster. Reconcile the saved and provider totals before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && providerError) error = 'Clover recurring refresh has not recovered. Correct the provider connection before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && !checkedAt) error = 'Run a successful Clover recurring roster refresh before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && !fresh) error = 'The last successful Clover recurring roster is stale. Refresh it before scheduling Stripe cutovers.';
+  const message = ready
+    ? (requiresFreshRoster
+      ? 'Fresh Clover recurring roster verified for ' + activeCustomers + ' active customer record(s).'
+      : 'No active Clover recurring records currently require a Stripe cutover.')
+    : '';
+  return {
+    checkedAt,
+    degradedAt,
+    degradedStatus: Number(clover.lastRecurringPlanSyncDegradedStatus || 0),
+    activeCustomers,
+    activePlans,
+    preservedPlans: Number(clover.lastRecurringPlanSyncPreservedPlans || 0),
+    preservedMembers: Number(clover.lastRecurringPlanSyncPreservedMembers || 0),
+    requiresFreshRoster,
+    verified: !!checkedAt,
+    fresh,
+    degraded,
+    maxAgeHours: Math.round(WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000) * 10) / 10,
+    ready,
+    live: ready,
+    message,
+    error
+  };
+}
 async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
   const recoveryDrill = currentRecoveryDrillEvidence(database);
@@ -9086,6 +9143,7 @@ async function productionInfrastructurePreflight(data = null) {
   const resendEmail = resendLiveLaunchEvidence(state);
   const starAi = starAiLiveLaunchEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
+  const cloverRecurring = cloverRecurringMigrationReadiness(state);
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
@@ -9108,6 +9166,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!telnyxMessaging.live) missing.push('Telnyx signed SMS delivery and inbound reply proof');
   if (!resendEmail.live) missing.push('Resend wheelsonauto.com two-way email proof');
   if (!starAi.live) missing.push('OpenAI Star Responses API health proof with active safety limits');
+  if (!cloverRecurring.ready) missing.push('fresh Clover recurring roster for controlled cutover');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
@@ -9126,13 +9185,14 @@ async function productionInfrastructurePreflight(data = null) {
     resendEmail,
     starAi,
     ownerAuthentication,
+    cloverRecurring,
     identityWarnings,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified import, recovery snapshot, and controlled recovery drill, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import, recovery snapshot, and controlled recovery drill, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, a fresh Clover cutover roster, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -12100,6 +12160,12 @@ function preserveCloverRecurringRosterAfterProviderError(data = {}, error = {}) 
     preservedSavedRoster: true
   };
 }
+function clearCloverRecurringDegradedStatus(clover = {}) {
+  clover.lastRecurringPlanSyncDegradedAt = '';
+  clover.lastRecurringPlanSyncDegradedStatus = 0;
+  clover.lastRecurringPlanSyncPreservedPlans = 0;
+  clover.lastRecurringPlanSyncPreservedMembers = 0;
+}
 function amountFromRecurringValue(value) {
   if (value == null) return 0;
   if (typeof value === 'number') return value > 999 ? value / 100 : value;
@@ -12571,6 +12637,7 @@ async function syncCloverRecurringPlans(data) {
   const savedSummary = data.integrations.clover.recurringPlanSummary || {};
   const countWarning = cloverRecurringCountWarning(savedSummary, summary);
   if (countWarning) {
+    clearCloverRecurringDegradedStatus(data.integrations.clover);
     data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
     data.integrations.clover.lastRecurringPlanSyncError = '';
     data.integrations.clover.lastRecurringPlanSyncWarning = countWarning;
@@ -12591,6 +12658,7 @@ async function syncCloverRecurringPlans(data) {
   data.integrations.clover.recurringPlans = plans;
   data.integrations.clover.recurringPlanMembers = keepSavedMembers ? enrichRecurringRoster(savedMembers, importedMembers) : importedMembers;
   data.integrations.clover.recurringPlanSummary = summary;
+  clearCloverRecurringDegradedStatus(data.integrations.clover);
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
   data.integrations.clover.lastRecurringPlanSyncError = '';
   data.integrations.clover.lastRecurringPlanSyncWarning = '';
@@ -19009,6 +19077,7 @@ const server = http.createServer(async (req, res) => {
           'Current PostgreSQL snapshot checksum/version verification plus a fresh controlled test-database recovery drill record',
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
+          'A fresh, non-degraded Clover recurring roster before any controlled customer cutover',
           'Telnyx 10DLC approval plus fresh signed SMS delivery and inbound reply proof',
           'Resend with a verified wheelsonauto.com sender plus fresh outbound and signed inbound email proof',
           'OpenAI-backed Star with request caps and a fresh owner Responses API health proof',
@@ -20139,6 +20208,7 @@ module.exports = {
   mapCloverPayment,
   cloverRecurringCountWarning,
   preserveCloverRecurringRosterAfterProviderError,
+  cloverRecurringMigrationReadiness,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,
   activeHostedCheckoutHref,

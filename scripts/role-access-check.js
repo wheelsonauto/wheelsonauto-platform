@@ -179,6 +179,9 @@ if (!/ownerPinLoginAllowed\(\)/.test(ownerLoginMatches) || !/ownerPinLoginAllowe
 if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginStrong/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
   fail('The production Stripe launch gate must require password-backed owner access with owner PIN fallback disabled.');
 }
+if (!/cloverRecurringMigrationReadiness/.test(productionInfrastructurePreflight) || !/fresh Clover recurring roster for controlled cutover/.test(productionInfrastructurePreflight)) {
+  fail('The production Stripe launch gate must require a fresh complete Clover recurring roster before cutover.');
+}
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
 if (!/Customer password help requested/.test(server) || !/Staff password help requested/.test(server)) {
   fail('Password help requests should be owner audit logged.');

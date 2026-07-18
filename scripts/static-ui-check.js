@@ -220,6 +220,7 @@ assertIncludes('Owner live launch preflight surface', app, [
   'open-live-launch-preflight',
   '/api/system/infrastructure/preflight',
   'Controlled Stripe launch preflight',
+  'Clover cutover roster',
   'PostgreSQL recovery drill',
   'Telnyx SMS',
   'Resend email',

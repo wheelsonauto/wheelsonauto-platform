@@ -226,6 +226,7 @@ async function main() {
     mapCloverPayment,
     cloverRecurringCountWarning,
     preserveCloverRecurringRosterAfterProviderError,
+    cloverRecurringMigrationReadiness,
     stripeLiveWebhookEvidence,
     stripeIdentityLiveWebhookEvidence,
     stripeWebhookConfigurationFingerprint,
@@ -265,6 +266,14 @@ async function main() {
     assert(/401/.test(recurringPreserved.warning) && /Review the Clover merchant API token/.test(recurringPreserved.warning), 'A preserved Clover recurring roster must remain an explicit token warning instead of being reported healthy.');
     assert(preserveCloverRecurringRosterAfterProviderError({ recurringPayments: [], integrations: { clover: {} } }, recurringUnauthorized) === null, 'An empty Clover recurring state must not hide an authorization failure behind a preservation warning.');
     assert(preserveCloverRecurringRosterAfterProviderError(recurringProviderFallbackState, Object.assign(new Error('Clover recurring API 500: failure'), { statusCode: 500 })) === null, 'Unexpected Clover server failures must remain hard sync errors.');
+    const recurringReadyState = { recurringPayments: [{ id: 'rec-cutover-ready', status: 'Active', paymentProvider: 'clover', cloverCustomerId: 'clover-cutover-ready' }], integrations: { clover: { lastRecurringPlanSyncAt: new Date().toISOString(), recurringPlanSummary: { activePlans: 1, activeCustomers: 1 } } } };
+    const recurringReady = cloverRecurringMigrationReadiness(recurringReadyState);
+    assert(recurringReady.ready === true && recurringReady.fresh === true && recurringReady.activeCustomers === 1, 'A fresh complete Clover recurring roster must clear the controlled cutover gate.');
+    preserveCloverRecurringRosterAfterProviderError(recurringReadyState, recurringUnauthorized);
+    const recurringDegraded = cloverRecurringMigrationReadiness(recurringReadyState);
+    assert(recurringDegraded.ready === false && recurringDegraded.degraded === true && /read-only/.test(recurringDegraded.error), 'A preserved roster after a current provider failure must block controlled Stripe cutovers.');
+    const recurringNotApplicable = cloverRecurringMigrationReadiness({ recurringPayments: [{ id: 'rec-stripe-only', status: 'Active', paymentProvider: 'stripe', stripeCustomerId: 'cus_only', stripePaymentMethodId: 'pm_only' }], integrations: { clover: {} } });
+    assert(recurringNotApplicable.ready === true && recurringNotApplicable.requiresFreshRoster === false, 'A Stripe-only roster must not require an irrelevant Clover refresh.');
     const health = await request(server, 'GET', '/healthz');
     assert(health.status === 200 && health.json && health.json.ok === true && health.json.service === 'wheelsonauto-platform' && /^platform-/.test(health.json.release || ''), 'The unauthenticated deployment health check must prove the server and state repository are responsive.');
     assert(Object.prototype.hasOwnProperty.call(health.json, 'commit'), 'The deployment health check must include its short deploy-commit verification field.');
@@ -1415,6 +1424,7 @@ async function main() {
     assert(ownerLaunchPreflight.status === 200 && ownerLaunchPreflight.json, 'Owner must be able to read the controlled Stripe launch preflight.');
     assert(Array.isArray(ownerLaunchPreflight.json.missing) && ownerLaunchPreflight.json.missing.includes('controlled PostgreSQL recovery drill'), 'The owner launch preflight must block Stripe launch until a fresh controlled PostgreSQL recovery drill is recorded.');
     assert(ownerLaunchPreflight.json.recoveryDrill && ownerLaunchPreflight.json.recoveryDrill.ready === false, 'The owner launch preflight must expose an unverified recovery-drill gate instead of treating JSON development state as production-ready.');
+    assert(ownerLaunchPreflight.json.cloverRecurring && ownerLaunchPreflight.json.cloverRecurring.ready === false && ownerLaunchPreflight.json.missing.includes('fresh Clover recurring roster for controlled cutover'), 'The owner launch preflight must block cutover when active Clover recurring records do not have a fresh complete roster.');
     assert(!Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.recoveryDrill, 'configurationFingerprint'), 'Recovery drill fingerprints must remain server-only even in the owner launch preflight.');
     assert(typeof reportBackgroundTaskFailure === 'function', 'Background worker failures must share the durable operational-monitor path.');
     const monitoredFailure = new Error('Direct monitored background failure');

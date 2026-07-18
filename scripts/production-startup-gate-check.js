@@ -81,6 +81,7 @@ async function main() {
     assert.match(output, /Telnyx signed SMS delivery and inbound reply proof/i, 'The startup guard must require fresh Telnyx delivery and signed inbound evidence.');
     assert.match(output, /Resend wheelsonauto\.com two-way email proof/i, 'The startup guard must require a verified WheelsonAuto sender and signed two-way Resend proof.');
     assert.match(output, /OpenAI Star Responses API health proof with active safety limits/i, 'The startup guard must require a fresh Star provider proof with configured request caps.');
+    assert.match(output, /fresh Clover recurring roster for controlled cutover/i, 'The startup guard must reject a Stripe launch that relies on a missing or degraded Clover recurring roster.');
     assert(!/WheelsonAuto platform running/i.test(output), 'The HTTP listener must never start when required safeguards are incomplete.');
 
     const identityRuntimeResult = spawnSync(process.execPath, ['server.js'], {

@@ -353,6 +353,12 @@ warning. Treat the preserved roster as read-only evidence until the Clover
 merchant API token is corrected; do not schedule a customer cutover from a
 stale roster alone.
 
+The owner **Live launch preflight** enforces this rule as a separate Clover
+cutover-roster gate. A current `401`, `403`, `404`, incomplete-count warning,
+or roster older than six hours keeps that gate blocked even if older job
+errors are marked reviewed. `WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS` may
+make the window stricter, but it must not be used to bypass a degraded sync.
+
 ## 6. Provider Settings
 
 ### Star AI
