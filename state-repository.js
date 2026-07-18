@@ -1136,6 +1136,8 @@ class PostgresStateRepository {
       try {
         client = await this.connect();
         await client.query('BEGIN');
+        const [schemaLockKeyOne, schemaLockKeyTwo] = advisoryLockKeys('wheelsonauto-platform', 'postgres-schema-migrations');
+        await client.query('SELECT pg_advisory_xact_lock($1::integer, $2::integer)', [schemaLockKeyOne, schemaLockKeyTwo]);
         await client.query(`CREATE TABLE IF NOT EXISTS woa_schema_migrations (
           id TEXT PRIMARY KEY,
           applied_at TIMESTAMPTZ NOT NULL DEFAULT now()

@@ -212,6 +212,14 @@ async function main() {
     seed: async () => ({ vehicles: [], customers: [], payments: [] })
   });
   try {
+    await Promise.all([
+      repository.ensureSchema(),
+      competingRepository.ensureSchema(),
+      foreignRepository.ensureSchema()
+    ]);
+    const schemaMigrationRows = await repository.pool.query('SELECT id FROM woa_schema_migrations ORDER BY id');
+    assert(schemaMigrationRows.rowCount >= 4, 'Concurrent PostgreSQL startups must complete one serialized schema upgrade with every required migration recorded.');
+
     const firstAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(firstAutopayLock.acquired, true, 'The first PostgreSQL autopay worker must acquire the durable job lock.');
     const blockedAutopayLock = await competingRepository.acquireJobLock('wheelsonauto-autopay');

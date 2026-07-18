@@ -92,6 +92,11 @@ async function verifyTransientSchemaConnectionRecovery() {
   await repository.ensureSchema();
   assert.strictEqual(connectionAttempts, 2, 'PostgreSQL schema startup must retry a transient pre-transaction connection failure.');
   assert.strictEqual(releases, 1, 'The recovered PostgreSQL schema connection must be released exactly once.');
+  const beginIndex = calls.findIndex(call => /^BEGIN$/.test(call.sql));
+  const schemaLockIndex = calls.findIndex(call => /pg_advisory_xact_lock/.test(call.sql));
+  const firstCreateIndex = calls.findIndex(call => /CREATE TABLE IF NOT EXISTS woa_schema_migrations/.test(call.sql));
+  assert(beginIndex >= 0 && schemaLockIndex > beginIndex && firstCreateIndex > schemaLockIndex, 'PostgreSQL schema upgrades must take a database-wide transaction lock before running any DDL.');
+  assert.strictEqual(calls[schemaLockIndex].values.length, 2, 'The schema migration lock must use the stable two-key PostgreSQL advisory lock contract.');
   assert(calls.some(call => /PRIMARY KEY \(organization_id, id\)/.test(call.sql)), 'Schema recovery must still apply the company-scoped private document key.');
   assert(calls.some(call => call.values.includes('20260718_document_tenant_primary_key_v4')), 'Schema recovery must record the private-document tenant migration.');
 }
