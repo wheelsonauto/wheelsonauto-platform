@@ -198,6 +198,15 @@ Restart once and visit the owner-only endpoint:
 GET /api/system/infrastructure/preflight
 ```
 
+Render should use `/healthz` as the web-service health check. The endpoint
+performs a lightweight state-availability/database-connectivity query and does
+not return customer records, provider settings, or database details. Deploys
+also receive a 60-second shutdown window so active HTTP money actions and
+queued state writes can drain before the old instance exits. Keep Render's
+automatic deploy trigger set to `checksPass`; `.github/workflows/production-gate.yml`
+runs the complete `npm run check` suite for `main` before Render accepts a new
+release.
+
 It must show PostgreSQL as transactional/healthy, a current import proof,
 current recovery snapshot, and a fresh controlled recovery drill. It must also
 show private document storage as production-ready with a current

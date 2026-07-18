@@ -5,6 +5,9 @@ services:
     plan: starter
     buildCommand: ""
     startCommand: "node server.js"
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 60
     disk:
       name: wheelsonauto-data
       mountPath: /var/data
