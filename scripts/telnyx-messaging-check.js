@@ -258,6 +258,23 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     }
   });
   assert(unverifiedBrandRegistration.registrationStage === 'brand_verification' && !unverifiedBrandRegistration.brandVerified && /history only/.test(unverifiedBrandRegistration.summary), 'An unverified brand must be the current blocker while its rejected campaign remains history.');
+  const mixedBrandRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Not found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [
+        { brandId: 'brand-older', identityStatus: 'UNVERIFIED' },
+        { brandId: 'brand-current', identityStatus: 'VERIFIED' }
+      ] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-older')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-old', campaignStatus: 'TCR_FAILED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-current')) return { ok: true, status: 200, async json() { return { records: [] }; } };
+      throw new Error('Unexpected mixed-brand readiness URL: ' + url);
+    }
+  });
+  assert(mixedBrandRegistration.brandVerified && mixedBrandRegistration.registrationStage === 'campaign_creation', 'A verified current brand must take precedence over older unverified brand records.');
   const assignmentCalls = [];
   const candidateRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',

@@ -2269,8 +2269,9 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     try {
       const brandsBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/brand?page=1&recordsPerPage=500');
       const brands = Array.isArray(brandsBody.records) ? brandsBody.records : Array.isArray(brandsBody.data) ? brandsBody.data : [];
-      const firstBrand = brands[0] || {};
-      brandStatus = String(firstBrand.identityStatus || firstBrand.identity_status || firstBrand.status || '').trim().toUpperCase();
+      const brandState = brand => String(brand && (brand.identityStatus || brand.identity_status || brand.status) || '').trim().toUpperCase();
+      const currentBrand = brands.find(brand => ['VERIFIED', 'VETTED_VERIFIED'].includes(brandState(brand))) || brands[0] || {};
+      brandStatus = brandState(currentBrand);
       for (const brand of brands) {
         const brandId = String(brand.brandId || brand.brand_id || brand.id || '').trim();
         if (!brandId) continue;
