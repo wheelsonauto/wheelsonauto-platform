@@ -7123,8 +7123,9 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   box-shadow:inset 0 1px 0 rgba(255,255,255,.075),0 30px 90px rgba(0,0,0,.44)!important;
 }
 .modal-head{
-  background:rgba(255,255,255,.025)!important;
+  background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.018)),#1b1e21!important;
   border-bottom-color:rgba(255,255,255,.10)!important;
+  box-shadow:0 8px 20px rgba(0,0,0,.18);
 }
 .modal .field input,.modal .field select,.modal .field textarea,.modal .clover-field{background:#111315!important;border-color:rgba(213,177,95,.28)!important;color:#f6f4ee!important}
 .modal .field input[readonly],.modal .field textarea[readonly]{background:#191c1f!important;color:#d9dcde!important}

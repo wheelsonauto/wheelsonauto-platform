@@ -100,6 +100,7 @@ for (const action of ['sync-all', 'reactivate-customer', 'new-autopay']) {
   'background:linear-gradient(145deg,rgba(226,91,82,.18),rgba(142,45,42,.08)),rgba(27,24,25,.96)!important',
   'background:linear-gradient(145deg,rgba(83,199,132,.16),rgba(42,117,78,.07))!important',
   'background:linear-gradient(145deg,rgba(106,172,238,.15),rgba(57,101,148,.06))!important',
+  'background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.018)),#1b1e21!important',
   'box-shadow:inset 0 1px 0 rgba(255,255,255,.11)'
 ].forEach(text => {
   if (!css.includes(text)) fail('responsive polish guard is missing: ' + text);
