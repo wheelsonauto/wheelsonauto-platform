@@ -291,6 +291,40 @@ async function main() {
     assert.strictEqual((await competingRepository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, listedTelnyxRecovery.payload)).accepted, true, 'A recovery worker must atomically reclaim a failed Telnyx event.');
     await competingRepository.completeWebhookEvent('messaging:telnyx', telnyxRecoveryEventId);
 
+    const atomicWebhookEventId = 'evt-postgres-runtime-atomic-state';
+    const atomicIdempotencyScope = 'stripe_recurring_charge';
+    const atomicIdempotencyKey = 'period:rec-postgres-runtime-atomic:2026-07-25';
+    await repository.claimWebhookEvent('stripe', atomicWebhookEventId, { type: 'payment_intent.succeeded' });
+    await repository.claimIdempotencyKey(atomicIdempotencyScope, atomicIdempotencyKey, { recurringPaymentId: 'rec-postgres-runtime-atomic', amountCents: 22900 });
+    const beforeAtomicWrite = await repository.read();
+    const atomicState = { ...beforeAtomicWrite.state, atomicProviderCommitProof: 'committed' };
+    await repository.write(atomicState, {
+      reason: 'PostgreSQL provider transaction proof',
+      transactionEffects: {
+        webhookCompletions: [{ provider: 'stripe', eventId: atomicWebhookEventId }],
+        idempotencySettlements: [{ action: 'complete', scope: atomicIdempotencyScope, key: atomicIdempotencyKey, providerAuthoritative: true, response: { paymentIntentId: 'pi-postgres-runtime-atomic' } }]
+      }
+    });
+    const atomicProviderRows = await repository.pool.query(`SELECT
+      (SELECT status FROM woa_webhook_events WHERE organization_id = $1 AND provider = 'stripe' AND event_id = $2) AS webhook_status,
+      (SELECT status FROM woa_idempotency_keys WHERE organization_id = $1 AND scope = $3 AND key = $4) AS idempotency_status`, [organizationId, atomicWebhookEventId, atomicIdempotencyScope, atomicIdempotencyKey]);
+    assert.strictEqual(atomicProviderRows.rows[0].webhook_status, 'processed', 'The PostgreSQL state transaction must complete its webhook claim.');
+    assert.strictEqual(atomicProviderRows.rows[0].idempotency_status, 'completed', 'The PostgreSQL state transaction must settle its Stripe billing-period claim.');
+    assert.strictEqual((await repository.read()).state.atomicProviderCommitProof, 'committed', 'The authoritative state must commit with its provider ledger effects.');
+
+    const beforeRejectedAtomicWrite = await repository.read();
+    await assert.rejects(
+      () => repository.write({ ...beforeRejectedAtomicWrite.state, atomicProviderRollbackProof: 'must-not-commit' }, {
+        reason: 'PostgreSQL provider rollback proof',
+        transactionEffects: { webhookCompletions: [{ provider: 'stripe', eventId: 'evt-postgres-runtime-missing-claim' }] }
+      }),
+      /durable webhook claim was missing/i,
+      'A state write must roll back when its claimed webhook cannot be completed in the same transaction.'
+    );
+    const afterRejectedAtomicWrite = await repository.read();
+    assert.strictEqual(afterRejectedAtomicWrite.version, beforeRejectedAtomicWrite.version, 'A failed provider ledger effect must roll back the state version and snapshot write.');
+    assert.strictEqual(afterRejectedAtomicWrite.state.atomicProviderRollbackProof, undefined, 'A failed provider ledger effect must not leak an uncommitted state mutation.');
+
     const foreignWebhookEventId = 'evt-postgres-runtime-processing';
     await repository.pool.query(`INSERT INTO woa_webhook_events (
       provider, event_id, organization_id, status, payload, attempts, processing_started_at

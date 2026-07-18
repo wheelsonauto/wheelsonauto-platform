@@ -112,6 +112,7 @@ async function main() {
     assert(serverSource.includes("claimWebhookEvent('email:'") && serverSource.includes("completeWebhookEvent('email:'") && serverSource.includes("failWebhookEvent('email:'"), 'Email callbacks must use the durable PostgreSQL webhook ledger before creating messages or Star drafts.');
     assert(stateRepositorySource.includes('listRecoverableWebhookEvents') && stateRepositorySource.includes('woa_webhook_events_recovery_idx'), 'The durable webhook ledger must expose bounded failed/stale recovery with a company-and-provider-scoped PostgreSQL index.');
     assert(serverSource.includes('async function recoverTelnyxWebhookEvents') && serverSource.includes('processClaimedTelnyxWebhookEvent') && serverSource.includes('event: payload'), 'Telnyx must durably retain its signed event body and recover failed or interrupted background processing.');
+    assert(stateRepositorySource.includes('applyStateTransactionEffects') && stateRepositorySource.includes('normalizedStateTransactionEffects') && serverSource.includes('stageStateTransactionEffects'), 'Provider webhook completion and Stripe billing-period settlement must be staged inside the same PostgreSQL transaction as the authoritative state write.');
     assert(stateRepositorySource.includes('await this.syncCriticalResourceIndex(client, next)') && stateRepositorySource.includes('await this.syncActiveAssignmentIndex(client, next)'), 'Normal writes and controlled recovery must synchronize critical record and assignment indexes in the state transaction.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
@@ -220,6 +221,22 @@ async function main() {
     assert.strictEqual(reclaimedJsonWebhook.accepted, true, 'A stale local webhook processing lease must be reclaimable after a restart.');
     assert.strictEqual(reclaimedJsonWebhook.reclaimed, true, 'A reclaimed local webhook lease must be identified for diagnostics.');
     await repository.completeWebhookEvent('messaging:telnyx', 'telnyx:evt-foundation-telnyx-recovery');
+    const atomicRepository = stateRepository.createStateRepository({ backend: 'json', dataFile: path.join(temp, 'atomic-provider-data.json'), seedFile });
+    const atomicWebhookEventId = 'evt-foundation-atomic-state';
+    const atomicIdempotencyScope = 'stripe_recurring_charge';
+    const atomicIdempotencyKey = 'period:rec-foundation-atomic:2026-07-25';
+    await atomicRepository.claimWebhookEvent('stripe', atomicWebhookEventId, { type: 'payment_intent.succeeded' });
+    await atomicRepository.claimIdempotencyKey(atomicIdempotencyScope, atomicIdempotencyKey, { recurringPaymentId: 'rec-foundation-atomic', amountCents: 22900 });
+    const jsonStateBeforeAtomicWrite = (await atomicRepository.read()).state;
+    await atomicRepository.write(jsonStateBeforeAtomicWrite, {
+      transactionEffects: {
+        webhookCompletions: [{ provider: 'stripe', eventId: atomicWebhookEventId }],
+        idempotencySettlements: [{ action: 'complete', scope: atomicIdempotencyScope, key: atomicIdempotencyKey, providerAuthoritative: true, response: { paymentIntentId: 'pi-foundation-atomic' } }]
+      }
+    });
+    assert.strictEqual((await atomicRepository.claimWebhookEvent('stripe', atomicWebhookEventId)).accepted, false, 'A state write with a staged webhook completion must leave the provider event deduplicated.');
+    const completedAtomicIdempotency = await atomicRepository.claimIdempotencyKey(atomicIdempotencyScope, atomicIdempotencyKey, { recurringPaymentId: 'rec-foundation-atomic', amountCents: 22900 });
+    assert.strictEqual(completedAtomicIdempotency.completed, true, 'A state write with a staged provider settlement must complete the matching billing-period claim.');
     const idempotencyScope = 'stripe_recurring_charge';
     const idempotencyKey = 'period:rec-foundation-1:2026-07-24';
     const idempotencyRequest = { recurringPaymentId: 'rec-foundation-1', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };

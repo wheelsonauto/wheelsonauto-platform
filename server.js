@@ -797,6 +797,23 @@ function inheritStateReadMeta(target, source) {
   Object.defineProperty(target, STATE_READ_META, { value: source[STATE_READ_META], configurable: true });
   return target;
 }
+function stageStateTransactionEffects(data, effects = {}) {
+  if (!data || typeof data !== 'object') return data;
+  const existing = data[STATE_WRITE_META] || {};
+  const currentEffects = existing.transactionEffects || {};
+  const nextEffects = {
+    webhookCompletions: [
+      ...(Array.isArray(currentEffects.webhookCompletions) ? currentEffects.webhookCompletions : []),
+      ...(Array.isArray(effects.webhookCompletions) ? effects.webhookCompletions : [])
+    ],
+    idempotencySettlements: [
+      ...(Array.isArray(currentEffects.idempotencySettlements) ? currentEffects.idempotencySettlements : []),
+      ...(Array.isArray(effects.idempotencySettlements) ? effects.idempotencySettlements : [])
+    ]
+  };
+  Object.defineProperty(data, STATE_WRITE_META, { value: { ...existing, transactionEffects: nextEffects }, configurable: true });
+  return data;
+}
 function inferredDeleteIds(data = {}) {
   const metadata = data && data[STATE_READ_META];
   const deletedIds = {};
@@ -836,10 +853,11 @@ async function writeDataNow(data) {
     return STATE_REPOSITORY.write(data, {
       reason: meta.reason || 'platform state mutation',
       actor: meta.actor || '',
+      transactionEffects: meta.transactionEffects || {},
       mergeState: latest => mergeConcurrentState(data, repairDataIds(latest || emptyPlatformState()), options)
     });
   }
-  return STATE_REPOSITORY.write(data, { reason: meta.reason || 'platform state mutation' });
+  return STATE_REPOSITORY.write(data, { reason: meta.reason || 'platform state mutation', transactionEffects: meta.transactionEffects || {} });
 }
 async function writeData(data) {
   const job = writeDataQueue.then(() => writeDataNow(data));
@@ -11947,8 +11965,8 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
       await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
     }
     await protectConcurrentLocalWrites(data, { preferIncoming: true });
+    stageStateTransactionEffects(data, { webhookCompletions: [{ provider: 'clover', eventId: durableEventId }] });
     await writeData(data);
-    await STATE_REPOSITORY.completeWebhookEvent('clover', durableEventId);
     const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => reportBackgroundTaskFailure('clover-webhook-auto-sync', err, { route: 'Clover webhook automatic sync', source: 'webhook' }, 'Webhook auto sync')), WEBHOOK_AUTO_SYNC_DELAY_MS);
     if (webhookSyncTimer.unref) webhookSyncTimer.unref();
     return { ok: true, duplicate: false, webhookEventId: webhookEvent.id, durableEventId, disputeClaimId: createdClaimId, hostedCheckout };
@@ -12069,7 +12087,8 @@ async function protectConcurrentLocalWrites(data, options = {}) {
   const readMeta = data && data[STATE_READ_META] || {};
   const mergedOptions = { ...options, deletedIds: { ...inferredDeleteIds(data), ...(options.deletedIds || {}) }, baseState: options.baseState || readMeta.baseState || {} };
   if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) {
-    Object.defineProperty(data, STATE_WRITE_META, { value: { options: mergedOptions, reason: options.reason || 'concurrent state merge' }, configurable: true });
+    const existing = data && data[STATE_WRITE_META] || {};
+    Object.defineProperty(data, STATE_WRITE_META, { value: { ...existing, options: mergedOptions, reason: options.reason || existing.reason || 'concurrent state merge' }, configurable: true });
     return data;
   }
   await writeDataQueue.catch(() => {});
@@ -15845,9 +15864,52 @@ async function recordStripeWebhookEvent(event = {}) {
     stripeState.lastIdentityWebhookError = '';
   }
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
-  await writeData(data);
-  if (stripePaymentIntentResult) await settleStripePaymentIntentClaimFromWebhook(type, stripePaymentIntentResult);
-  await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
+  const transactionEffects = {
+    webhookCompletions: [{ provider: 'stripe', eventId: event.id || '' }],
+    idempotencySettlements: []
+  };
+  if (stripePaymentIntentResult && stripePaymentIntentResult.matched === true && stripePaymentIntentResult.ignored !== true && stripePaymentIntentResult.alreadyPaid !== true) {
+    const scope = String(stripePaymentIntentResult.idempotencyClaimScope || '').trim();
+    const key = String(stripePaymentIntentResult.idempotencyClaimKey || '').trim();
+    if (scope && key && type === 'payment_intent.succeeded') {
+      transactionEffects.idempotencySettlements.push({
+        action: 'complete',
+        scope,
+        key,
+        providerAuthoritative: true,
+        response: {
+          paymentIntentId: stripePaymentIntentResult.paymentIntentId || '',
+          recurringPaymentId: stripePaymentIntentResult.recurringPaymentId || '',
+          paymentId: stripePaymentIntentResult.paymentId || '',
+          status: 'succeeded',
+          source: 'Stripe signed webhook'
+        }
+      });
+    } else if (scope && key && (type === 'payment_intent.payment_failed' || type === 'payment_intent.requires_action')) {
+      transactionEffects.idempotencySettlements.push({
+        action: 'fail',
+        scope,
+        key,
+        error: type === 'payment_intent.requires_action'
+          ? 'Stripe signed webhook requires customer authentication.'
+          : 'Stripe signed webhook confirmed the payment attempt failed.'
+      });
+    }
+  }
+  stageStateTransactionEffects(data, transactionEffects);
+  const persistedStripeState = await writeData(data);
+  const atomicSettlement = persistedStripeState && persistedStripeState.transactionEffects
+    && Array.isArray(persistedStripeState.transactionEffects.idempotencySettlements)
+    ? persistedStripeState.transactionEffects.idempotencySettlements[0]
+    : null;
+  if (stripePaymentIntentResult && atomicSettlement) {
+    stripePaymentIntentResult.idempotencyClaimSettled = atomicSettlement.applied === true;
+    stripePaymentIntentResult.idempotencyClaimAction = atomicSettlement.action === 'complete'
+      ? (atomicSettlement.applied ? 'completed' : 'not_found')
+      : (atomicSettlement.applied ? 'failed' : 'already_terminal_or_missing');
+  } else if (stripePaymentIntentResult) {
+    await settleStripePaymentIntentClaimFromWebhook(type, stripePaymentIntentResult);
+  }
   return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, stripeDisputeIgnored, stripeDisputeIgnoreReason, identitySessionId, refundRequestId, stripePaymentIntentResult };
   } catch (error) {
     await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error).catch(() => {});
@@ -15940,7 +16002,7 @@ function mergeTelnyxDeliveryUpdates(targetData, sourceData) {
   });
   return updated;
 }
-async function persistTelnyxDeliveryUpdates(sourceData, result = {}) {
+async function persistTelnyxDeliveryUpdates(sourceData, result = {}, options = {}) {
   const job = writeDataQueue.then(async () => {
     const latest = await readData();
     const updated = mergeTelnyxDeliveryUpdates(latest, sourceData);
@@ -15971,6 +16033,7 @@ async function persistTelnyxDeliveryUpdates(sourceData, result = {}) {
       deliveryErrors: Array.isArray(result.errors) ? result.errors.length : 0,
       deliveryLastError: nextError
     });
+    stageStateTransactionEffects(latest, options.transactionEffects || {});
     await writeDataNow(latest);
     return { updated, wrote: true };
   });
@@ -16045,7 +16108,7 @@ async function syncTelnyxDeliveryStatuses(options = {}) {
     telnyxDeliveryPollStatus.inFlight = false;
   }
 }
-async function processMessagingWebhookEvent(provider, headers, payload) {
+async function processMessagingWebhookEvent(provider, headers, payload, options = {}) {
   const data = await readData();
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   if (provider === 'telnyx' && telnyxWebhookEventType(payload) !== 'message.received') {
@@ -16063,7 +16126,7 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
       data.integrations.messaging.lastTelnyxDeliveryConfigurationFingerprint = messagingLaunchConfigurationFingerprint(data);
     }
     if (delivery.matched) {
-      const persistence = await persistTelnyxDeliveryUpdates(data, { checked: 1, updated: 1, errors: [] });
+      const persistence = await persistTelnyxDeliveryUpdates(data, { checked: 1, updated: 1, errors: [] }, { transactionEffects: options.transactionEffects || {} });
       delivery.persisted = persistence.updated;
     }
     return { ok: true, received: false, delivery };
@@ -16075,6 +16138,7 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
     const ownerBridge = await handleOwnerSmsBridge(data, inbound);
     data.integrations = data.integrations || {};
     data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOwnerPhoneReplyAt: new Date().toISOString(), lastError: ownerBridge.error || '' };
+    stageStateTransactionEffects(data, options.transactionEffects || {});
     await protectConcurrentLocalWrites(data);
     await writeData(data);
     return { ok: true, received: true, ownerBridge };
@@ -16192,6 +16256,7 @@ async function processMessagingWebhookEvent(provider, headers, payload) {
     data.integrations.messaging.lastTelnyxInboundEvidenceAt = new Date().toISOString();
     data.integrations.messaging.lastTelnyxInboundConfigurationFingerprint = messagingLaunchConfigurationFingerprint(data);
   }
+  stageStateTransactionEffects(data, options.transactionEffects || {});
   await protectConcurrentLocalWrites(data);
   await writeData(data);
   return {
@@ -16217,7 +16282,9 @@ async function processClaimedTelnyxWebhookEvent(eventId, payload, options = {}) 
   const processEvent = options.processEvent || processMessagingWebhookEvent;
   const headers = options.headers || {};
   try {
-    const result = await processEvent('telnyx', headers, payload);
+    const result = await processEvent('telnyx', headers, payload, {
+      transactionEffects: { webhookCompletions: [{ provider: 'messaging:telnyx', eventId }] }
+    });
     await repository.completeWebhookEvent('messaging:telnyx', eventId);
     return result;
   } catch (err) {
@@ -17082,7 +17149,9 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, queued: true, eventId: webhookEventId });
       }
       try {
-        const result = await processMessagingWebhookEvent(provider, req.headers, payload);
+        const result = await processMessagingWebhookEvent(provider, req.headers, payload, {
+          transactionEffects: { webhookCompletions: [{ provider: 'messaging:' + (provider || 'sms'), eventId: webhookEventId }] }
+        });
         await STATE_REPOSITORY.completeWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId);
         return json(res, 200, { ...result, eventId: webhookEventId });
       } catch (err) {
@@ -17188,6 +17257,7 @@ const server = http.createServer(async (req, res) => {
         }
         data.integrations = data.integrations || {};
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundChannel: 'Email', lastInboundFrom: maskEmail(inbound.from), lastError: '' };
+        stageStateTransactionEffects(data, { webhookCompletions: [{ provider: 'email:' + (provider || 'email'), eventId: webhookEventId }] });
         await writeData(data);
       }
       await STATE_REPOSITORY.completeWebhookEvent('email:' + (provider || 'email'), webhookEventId);

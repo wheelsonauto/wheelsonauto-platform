@@ -544,6 +544,12 @@ worker reclaims failed events and processing leases interrupted by a server
 restart before they can be forgotten. Never bypass this ledger with an
 unsigned relay when testing a production provider.
 
+With PostgreSQL enabled, the authoritative state mutation, normalized customer
+and assignment indexes, recovery snapshot, provider webhook completion, and any
+matching Stripe billing-period settlement share one database transaction. If
+the provider claim is missing or that transaction fails, none of those records
+commit. This is the required crash boundary for live payment cutover.
+
 1. In **Settings -> System health**, use **Validate private storage**. It must
    complete an encrypted write/read/delete probe against the private bucket.
 2. In **Messages -> Setup**, connect the Telnyx inbox. Then use **API Roadmap

@@ -25,6 +25,30 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value === undefined ? {} : value));
 }
 
+function normalizedStateTransactionEffects(options = {}) {
+  const effects = options && options.transactionEffects && typeof options.transactionEffects === 'object'
+    ? options.transactionEffects
+    : {};
+  const webhookCompletions = (Array.isArray(effects.webhookCompletions) ? effects.webhookCompletions : [])
+    .map(item => ({ provider: String(item && item.provider || '').trim(), eventId: String(item && item.eventId || '').trim() }))
+    .filter(item => item.provider && item.eventId);
+  const idempotencySettlements = (Array.isArray(effects.idempotencySettlements) ? effects.idempotencySettlements : [])
+    .map(item => ({
+      action: String(item && item.action || '').trim().toLowerCase(),
+      scope: String(item && item.scope || '').trim(),
+      key: String(item && item.key || '').trim(),
+      response: clone(item && item.response || {}),
+      error: String(item && item.error || '').slice(0, 3000),
+      claimToken: String(item && item.claimToken || '').trim(),
+      providerAuthoritative: item && item.providerAuthoritative === true
+    }))
+    .filter(item => ['complete', 'fail'].includes(item.action) && item.scope && item.key);
+  return {
+    webhookCompletions: [...new Map(webhookCompletions.map(item => [item.provider + '|' + item.eventId, item])).values()],
+    idempotencySettlements: [...new Map(idempotencySettlements.map(item => [item.action + '|' + item.scope + '|' + item.key, item])).values()]
+  };
+}
+
 function stableJson(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
@@ -695,14 +719,34 @@ class JsonStateRepository {
     }
   }
 
-  async write(state) {
+  async write(state, options = {}) {
     const next = this.repair(state);
     const directory = path.dirname(this.dataFile);
     await fs.mkdir(directory, { recursive: true });
     const temporary = this.dataFile + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
     await fs.writeFile(temporary, JSON.stringify(next, null, 2), 'utf8');
     await fs.rename(temporary, this.dataFile);
-    return { state: next, version: await this.version(), checksum: checksum(next) };
+    const effects = normalizedStateTransactionEffects(options);
+    const appliedEffects = { webhookCompletions: [], idempotencySettlements: [] };
+    for (const completion of effects.webhookCompletions) {
+      await this.completeWebhookEvent(completion.provider, completion.eventId);
+      appliedEffects.webhookCompletions.push({ ...completion, applied: true });
+    }
+    for (const settlement of effects.idempotencySettlements) {
+      let applied;
+      if (settlement.action === 'complete') {
+        applied = await this.completeIdempotencyKey(settlement.scope, settlement.key, settlement.response, {
+          claimToken: settlement.claimToken,
+          providerAuthoritative: settlement.providerAuthoritative
+        });
+      } else {
+        applied = await this.failIdempotencyKey(settlement.scope, settlement.key, new Error(settlement.error || 'Provider webhook confirmed the money action failed.'), {
+          claimToken: settlement.claimToken
+        });
+      }
+      appliedEffects.idempotencySettlements.push({ ...settlement, applied: applied === true });
+    }
+    return { state: next, version: await this.version(), checksum: checksum(next), transactionEffects: appliedEffects };
   }
 
   async readiness() {
@@ -1539,6 +1583,50 @@ class PostgresStateRepository {
       FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(rows)]);
   }
 
+  async applyStateTransactionEffects(client, options = {}) {
+    const effects = normalizedStateTransactionEffects(options);
+    const appliedEffects = { webhookCompletions: [], idempotencySettlements: [] };
+    for (const completion of effects.webhookCompletions) {
+      const completed = await client.query(`UPDATE woa_webhook_events
+        SET status = 'processed', processed_at = now(), last_error = ''
+        WHERE organization_id = $1 AND provider = $2 AND event_id = $3 AND status = 'processing'
+        RETURNING attempts`, [this.organizationId, completion.provider, completion.eventId]);
+      if (!completed.rowCount) {
+        throw new Error('The durable webhook claim was missing or no longer processing while committing state for ' + completion.provider + '.');
+      }
+      appliedEffects.webhookCompletions.push({ ...completion, applied: true });
+    }
+    for (const settlement of effects.idempotencySettlements) {
+      const identity = idempotencyScopeKey(settlement.scope, settlement.key);
+      if (settlement.action === 'complete') {
+        const tokenCondition = settlement.claimToken ? ' AND claim_token = $5' : '';
+        const statusCondition = settlement.providerAuthoritative ? "status IN ('claimed', 'failed', 'completed')" : "status = 'claimed'";
+        const responseExpression = settlement.providerAuthoritative ? "CASE WHEN status = 'completed' THEN response ELSE $4::jsonb END" : '$4::jsonb';
+        const completedAtExpression = settlement.providerAuthoritative ? 'COALESCE(completed_at, now())' : 'now()';
+        const params = [this.organizationId, identity.scope, identity.key, JSON.stringify(settlement.response || {})];
+        if (settlement.claimToken) params.push(settlement.claimToken);
+        const completed = await client.query(`UPDATE woa_idempotency_keys
+          SET status = 'completed', response = ${responseExpression}, completed_at = ${completedAtExpression}, updated_at = now(), last_error = ''
+          WHERE organization_id = $1 AND scope = $2 AND key = $3 AND ${statusCondition}${tokenCondition}
+          RETURNING attempts`, params);
+        if (!completed.rowCount && !settlement.providerAuthoritative) {
+          throw new Error('The durable idempotency claim was missing while committing provider-confirmed state.');
+        }
+        appliedEffects.idempotencySettlements.push({ ...settlement, applied: completed.rowCount > 0 });
+      } else {
+        const tokenCondition = settlement.claimToken ? ' AND claim_token = $5' : '';
+        const params = [this.organizationId, identity.scope, identity.key, settlement.error || 'Provider webhook confirmed the money action failed.'];
+        if (settlement.claimToken) params.push(settlement.claimToken);
+        const failed = await client.query(`UPDATE woa_idempotency_keys
+          SET status = 'failed', last_error = $4, updated_at = now()
+          WHERE organization_id = $1 AND scope = $2 AND key = $3 AND status = 'claimed'${tokenCondition}
+          RETURNING attempts`, params);
+        appliedEffects.idempotencySettlements.push({ ...settlement, applied: failed.rowCount > 0 });
+      }
+    }
+    return appliedEffects;
+  }
+
   async write(incomingState, options = {}) {
     await this.ensureSchema();
     const client = await this.connect();
@@ -1569,8 +1657,9 @@ class PostgresStateRepository {
         WHERE organization_id = $1 AND id IN (
           SELECT id FROM woa_state_snapshots WHERE organization_id = $1 ORDER BY version DESC OFFSET $2
         )`, [this.organizationId, this.snapshotLimit]);
+      const transactionEffects = await this.applyStateTransactionEffects(client, options);
       await client.query('COMMIT');
-      return { state: next, version: nextVersion, checksum: nextChecksum };
+      return { state: next, version: nextVersion, checksum: nextChecksum, transactionEffects };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
