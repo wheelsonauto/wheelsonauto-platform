@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 const onboarding = require('../onboarding-service.js');
 
 const root = path.resolve(__dirname, '..');
@@ -77,7 +78,7 @@ class MockResponse {
   constructor(done) {
     this.statusCode = 200;
     this.headers = {};
-    this.body = '';
+    this.bodyChunks = [];
     this._done = done;
   }
   writeHead(status, headers = {}) {
@@ -88,12 +89,15 @@ class MockResponse {
     this.headers[name] = value;
   }
   end(body = '') {
-    this.body += Buffer.isBuffer(body) ? body.toString('utf8') : String(body || '');
+    this.bodyChunks.push(Buffer.isBuffer(body) ? body : Buffer.from(String(body || ''), 'utf8'));
+    const rawBody = Buffer.concat(this.bodyChunks);
+    const text = rawBody.toString('utf8');
     this._done({
       status: this.statusCode,
       headers: this.headers,
-      text: this.body,
-      json: parseJson(this.body),
+      rawBody,
+      text,
+      json: parseJson(text),
       cookie: this.headers['Set-Cookie'] || this.headers['set-cookie'] || '',
       location: this.headers.Location || this.headers.location || ''
     });
@@ -435,6 +439,13 @@ async function main() {
     assert(String(loginPage.headers['Content-Security-Policy'] || '').includes("frame-ancestors 'none'"), 'Login responses must prevent embedding by another site.');
     const versionedAppAsset = await request(server, 'GET', '/app.js?v=platform-direct-cache-test');
     assert(versionedAppAsset.status === 200 && versionedAppAsset.headers['Cache-Control'] === 'public, max-age=31536000, immutable', 'Versioned app assets should be cached immutably instead of downloaded again after every login or refresh.');
+    assert(versionedAppAsset.headers.Vary === 'Accept-Encoding' && !versionedAppAsset.headers['Content-Encoding'], 'Identity app assets should advertise encoding variation without forcing compression.');
+    const compressedAppAsset = await request(server, 'GET', '/app.js?v=platform-direct-cache-test', { headers: { 'accept-encoding': 'br, gzip;q=0.8' } });
+    assert(compressedAppAsset.status === 200 && compressedAppAsset.headers['Content-Encoding'] === 'br', 'Modern browsers should receive Brotli-compressed versioned app assets.');
+    assert(Number(compressedAppAsset.headers['Content-Length']) === compressedAppAsset.rawBody.length && compressedAppAsset.rawBody.length < versionedAppAsset.rawBody.length, 'Compressed app asset length must be accurate and smaller than the identity response.');
+    assert(zlib.brotliDecompressSync(compressedAppAsset.rawBody).toString('utf8').includes('function action('), 'Brotli app assets must decompress to the complete client application.');
+    const gzipOnlyAppAsset = await request(server, 'GET', '/app.js?v=platform-direct-cache-test', { headers: { 'accept-encoding': 'br;q=0, gzip' } });
+    assert(gzipOnlyAppAsset.headers['Content-Encoding'] === 'gzip' && zlib.gunzipSync(gzipOnlyAppAsset.rawBody).toString('utf8').includes('function action('), 'Browsers that decline Brotli should receive a valid gzip app asset.');
     const unversionedAppAsset = await request(server, 'GET', '/app.js');
     assert(unversionedAppAsset.status === 200 && unversionedAppAsset.headers['Cache-Control'] === 'no-store', 'Unversioned app assets must remain uncached so a stale direct URL cannot survive a deploy.');
     const unauthenticatedState = await request(server, 'GET', '/api/state');

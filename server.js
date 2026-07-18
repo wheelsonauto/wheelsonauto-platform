@@ -3,6 +3,7 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const nativeSite = require('./native-site');
 const onboarding = require('./onboarding-service');
 const integrationEngine = require('./integration-engine');
@@ -188,8 +189,11 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
+const ASSET_VERSION = 'platform-20260717-static-performance-138';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
-const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=platform-20260717-production-foundation-137">';
+const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
+const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
+const staticAssetCache = new Map();
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
@@ -8525,15 +8529,65 @@ async function appHtml({ publicMode = false, user = null } = {}) {
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__SERVER_DATA_VERSION__=' + JSON.stringify(serverDataVersion) + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
-async function staticFile(res, pathname, searchParams) {
+function acceptedEncodingQuality(header, encoding) {
+  const target = String(encoding || '').trim().toLowerCase();
+  let wildcardQuality = null;
+  for (const rawEntry of String(header || '').toLowerCase().split(',')) {
+    const [rawName, ...rawParams] = rawEntry.trim().split(';');
+    const name = String(rawName || '').trim();
+    if (!name) continue;
+    let quality = 1;
+    for (const rawParam of rawParams) {
+      const [rawKey, rawValue] = rawParam.trim().split('=');
+      if (String(rawKey || '').trim() !== 'q') continue;
+      const parsed = Number(rawValue);
+      quality = Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : 0;
+    }
+    if (name === target) return quality;
+    if (name === '*') wildcardQuality = quality;
+  }
+  return wildcardQuality === null ? 0 : wildcardQuality;
+}
+function preferredStaticEncoding(req) {
+  const header = req && req.headers && req.headers['accept-encoding'];
+  return [
+    { encoding: 'br', quality: acceptedEncodingQuality(header, 'br') },
+    { encoding: 'gzip', quality: acceptedEncodingQuality(header, 'gzip') }
+  ].filter(candidate => candidate.quality > 0).sort((left, right) => right.quality - left.quality || (left.encoding === 'br' ? -1 : 1))[0]?.encoding || '';
+}
+async function cachedStaticAsset(clean) {
+  let pending = staticAssetCache.get(clean);
+  if (!pending) {
+    pending = fs.readFile(path.join(ROOT, clean)).then(raw => ({
+      raw,
+      gzip: zlib.gzipSync(raw, { level: zlib.constants.Z_BEST_SPEED }),
+      br: typeof zlib.brotliCompressSync === 'function'
+        ? zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } })
+        : null
+    }));
+    staticAssetCache.set(clean, pending);
+    pending.catch(() => staticAssetCache.delete(clean));
+  }
+  return pending;
+}
+async function staticFile(req, res, pathname, searchParams) {
   const clean = pathname.replace(/^\//, '');
-  if (!['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js'].includes(clean)) return false;
+  if (!STATIC_ASSET_NAMES.has(clean)) return false;
   const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : (clean.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8');
   const version = searchParams && String(searchParams.get('v') || '').trim();
   const cacheControl = version && /^[a-z0-9][a-z0-9._-]{2,100}$/i.test(version)
     ? 'public, max-age=31536000, immutable'
     : 'no-store';
-  send(res, 200, await fs.readFile(path.join(ROOT, clean), 'utf8'), type, { 'Cache-Control': cacheControl });
+  const assets = await cachedStaticAsset(clean);
+  const encoding = preferredStaticEncoding(req);
+  const body = encoding && assets[encoding] ? assets[encoding] : assets.raw;
+  const headers = {
+    'Cache-Control': cacheControl,
+    'Content-Length': String(body.length),
+    Vary: 'Accept-Encoding'
+  };
+  if (encoding && assets[encoding]) headers['Content-Encoding'] = encoding;
+  send(res, 200, body, type, headers);
   return true;
 }
 function scoreApplication(app) {
@@ -14870,7 +14924,7 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname.startsWith('/api/')) return json(res, 403, { ok: false, error: 'Cross-origin account changes are not allowed.' });
       return send(res, 403, 'Cross-origin account changes are not allowed.', 'text/plain; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
-    if (await staticFile(res, url.pathname, url.searchParams)) return;
+    if (await staticFile(req, res, url.pathname, url.searchParams)) return;
     if (url.pathname.startsWith('/native-media/') && req.method === 'GET') {
       const filename = String(url.pathname.split('/').pop() || '');
       if (!/^[a-f0-9]{20,64}\.(?:jpg|jpeg|png|webp|avif)$/i.test(filename)) return send(res, 404, 'Not found', 'text/plain; charset=utf-8');
