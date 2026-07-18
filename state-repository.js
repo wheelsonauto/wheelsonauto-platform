@@ -6,6 +6,16 @@ const path = require('path');
 
 const MIGRATION_ID = '20260717_production_state_foundation_v1';
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
+const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
+  'durableJobLock',
+  'webhookLeaseRecovery',
+  'idempotencyLeaseRecovery',
+  'snapshotRestore',
+  'serverRestartRead',
+  'stateChecksum',
+  'migrationProof'
+]);
+const DEFAULT_RECOVERY_DRILL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value === undefined ? {} : value));
@@ -131,6 +141,63 @@ function migrationProofEvidence(proof) {
     migrationRecordCountsMatch: countsMatch,
     migrationSnapshotMatchesTarget: snapshotChecksumMatchesTarget,
     migrationProofReady: ready
+  };
+}
+
+function recoveryDrillConfigurationFingerprint(secret, databaseUrl, organizationId = DEFAULT_ORGANIZATION_ID) {
+  const key = String(secret || '');
+  const database = String(databaseUrl || '');
+  const organization = String(organizationId || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
+  if (!key || !database) return '';
+  return crypto.createHmac('sha256', key)
+    .update(['wheelsonauto-recovery-drill-v1', database, organization].join('\u0000'), 'utf8')
+    .digest('hex');
+}
+
+function recoveryDrillEvidence(proof, options = {}) {
+  const row = proof || {};
+  const result = String(row.result || row.status || '').trim().toLowerCase();
+  const runId = String(row.runId || row.run_id || '').trim();
+  const testDatabaseFingerprint = String(row.testDatabaseFingerprint || row.test_database_fingerprint || '').trim();
+  const configurationFingerprint = String(row.configurationFingerprint || row.configuration_fingerprint || '').trim();
+  const scriptVersion = String(row.scriptVersion || row.script_version || '').trim();
+  const checks = row.checks && typeof row.checks === 'object' && !Array.isArray(row.checks) ? row.checks : {};
+  const requiredChecks = Array.isArray(options.requiredChecks) && options.requiredChecks.length
+    ? options.requiredChecks.map(value => String(value || '').trim()).filter(Boolean)
+    : RECOVERY_DRILL_REQUIRED_CHECKS;
+  const missingChecks = requiredChecks.filter(check => checks[check] !== true);
+  const verifiedAt = String(row.verifiedAt || row.verified_at || '');
+  const verifiedAtMs = Date.parse(verifiedAt);
+  const maxAgeMs = Math.max(60 * 60 * 1000, Number(options.maxAgeMs || DEFAULT_RECOVERY_DRILL_MAX_AGE_MS));
+  const fresh = Number.isFinite(verifiedAtMs) && verifiedAtMs <= Date.now() + 5 * 60 * 1000 && Math.max(0, Date.now() - verifiedAtMs) <= maxAgeMs;
+  const expectedFingerprint = String(options.configurationFingerprint || options.expectedConfigurationFingerprint || '').trim();
+  const configurationMatched = expectedFingerprint
+    ? !!configurationFingerprint && configurationFingerprint === expectedFingerprint
+    : !!configurationFingerprint;
+  const checksPassed = missingChecks.length === 0;
+  const passed = result === 'passed' && !!runId && !!testDatabaseFingerprint && !!scriptVersion && checksPassed;
+  const ready = passed && configurationMatched && fresh;
+  let error = '';
+  if (!runId || !testDatabaseFingerprint || !scriptVersion) error = 'No signed controlled PostgreSQL recovery drill record exists yet.';
+  else if (result !== 'passed') error = 'The latest controlled PostgreSQL recovery drill did not pass.';
+  else if (!checksPassed) error = 'The latest controlled PostgreSQL recovery drill is missing: ' + missingChecks.join(', ') + '.';
+  else if (!configurationMatched) error = 'The recorded recovery drill belongs to an older or unknown PostgreSQL configuration. Run a new controlled drill after the current Render settings are deployed.';
+  else if (!fresh) error = 'The controlled PostgreSQL recovery drill is stale. Run it again before the Stripe launch.';
+  return {
+    runId,
+    result,
+    verifiedAt,
+    testDatabaseConfigured: !!testDatabaseFingerprint,
+    scriptVersion,
+    checks,
+    requiredChecks,
+    missingChecks,
+    checksPassed,
+    configurationMatched,
+    fresh,
+    maxAgeHours: Math.round(maxAgeMs / (60 * 60 * 1000)),
+    ready,
+    error
   };
 }
 
@@ -302,6 +369,8 @@ class JsonStateRepository {
       migrationProofReady: false,
       snapshotIntegrity: 'not_supported',
       snapshotRecoveryReady: false,
+      recoveryDrill: recoveryDrillEvidence(null),
+      recoveryDrillReady: false,
       version: await this.version()
     };
   }
@@ -489,6 +558,12 @@ class JsonStateRepository {
     throw error;
   }
 
+  async recordRecoveryDrill() {
+    const error = new Error('JSON development storage cannot record a PostgreSQL recovery drill.');
+    error.code = 'recovery_drill_requires_postgres';
+    throw error;
+  }
+
   async reserveAiUsage(options = {}) {
     const dailyLimit = Math.max(0, Number(options.dailyLimit || 0));
     const monthlyLimit = Math.max(0, Number(options.monthlyLimit || 0));
@@ -606,6 +681,17 @@ class PostgresStateRepository {
           imported_version BIGINT NOT NULL,
           snapshot_id BIGINT NOT NULL,
           snapshot_checksum TEXT NOT NULL,
+          actor TEXT NOT NULL DEFAULT '',
+          verified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_recovery_drills (
+          organization_id TEXT PRIMARY KEY REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL,
+          result TEXT NOT NULL,
+          test_database_fingerprint TEXT NOT NULL,
+          configuration_fingerprint TEXT NOT NULL,
+          checks JSONB NOT NULL DEFAULT '{}'::jsonb,
+          script_version TEXT NOT NULL,
           actor TEXT NOT NULL DEFAULT '',
           verified_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )`);
@@ -1153,6 +1239,73 @@ class PostgresStateRepository {
     }
   }
 
+  async recordRecoveryDrill(proof = {}) {
+    await this.ensureSchema();
+    const runId = String(proof.runId || '').trim().slice(0, 160);
+    const result = String(proof.result || 'passed').trim().toLowerCase().slice(0, 32);
+    const testDatabaseFingerprint = String(proof.testDatabaseFingerprint || '').trim();
+    const configurationFingerprint = String(proof.configurationFingerprint || '').trim();
+    const checks = proof.checks && typeof proof.checks === 'object' && !Array.isArray(proof.checks) ? proof.checks : {};
+    const scriptVersion = String(proof.scriptVersion || '').trim().slice(0, 160);
+    const evidence = recoveryDrillEvidence({
+      runId,
+      result,
+      testDatabaseFingerprint,
+      configurationFingerprint,
+      checks,
+      scriptVersion,
+      verifiedAt: new Date().toISOString()
+    });
+    if (!evidence.ready || !configurationFingerprint) {
+      const error = new Error('PostgreSQL recovery drill proof needs a passed run ID, private test-database fingerprint, current configuration fingerprint, script version, and every required drill check.');
+      error.code = 'recovery_drill_invalid';
+      error.missingChecks = evidence.missingChecks;
+      throw error;
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query('SELECT version FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+      if (!current.rowCount) {
+        const error = new Error('PostgreSQL state must be imported before a production recovery drill record can be stored.');
+        error.code = 'recovery_drill_state_missing';
+        throw error;
+      }
+      await client.query(`INSERT INTO woa_recovery_drills (
+        organization_id, run_id, result, test_database_fingerprint,
+        configuration_fingerprint, checks, script_version, actor, verified_at
+      ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, now())
+      ON CONFLICT (organization_id) DO UPDATE SET
+        run_id = EXCLUDED.run_id,
+        result = EXCLUDED.result,
+        test_database_fingerprint = EXCLUDED.test_database_fingerprint,
+        configuration_fingerprint = EXCLUDED.configuration_fingerprint,
+        checks = EXCLUDED.checks,
+        script_version = EXCLUDED.script_version,
+        actor = EXCLUDED.actor,
+        verified_at = now()`, [
+        this.organizationId,
+        runId,
+        result,
+        testDatabaseFingerprint,
+        configurationFingerprint,
+        JSON.stringify(checks),
+        scriptVersion,
+        String(proof.actor || '').slice(0, 160)
+      ]);
+      const saved = await client.query(`SELECT run_id, result, test_database_fingerprint,
+        configuration_fingerprint, checks, script_version, actor, verified_at
+        FROM woa_recovery_drills WHERE organization_id = $1`, [this.organizationId]);
+      await client.query('COMMIT');
+      return recoveryDrillEvidence(saved.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async restoreSnapshot(snapshotId, options = {}) {
     const id = Number(snapshotId || 0);
     if (!Number.isInteger(id) || id < 1) {
@@ -1238,6 +1391,14 @@ class PostgresStateRepository {
         migration.snapshot_checksum AS migration_snapshot_checksum,
         migration.actor AS migration_actor,
         migration.verified_at AS migration_verified_at,
+        recovery_drill.run_id AS recovery_drill_run_id,
+        recovery_drill.result AS recovery_drill_result,
+        recovery_drill.test_database_fingerprint AS recovery_drill_test_database_fingerprint,
+        recovery_drill.configuration_fingerprint AS recovery_drill_configuration_fingerprint,
+        recovery_drill.checks AS recovery_drill_checks,
+        recovery_drill.script_version AS recovery_drill_script_version,
+        recovery_drill.actor AS recovery_drill_actor,
+        recovery_drill.verified_at AS recovery_drill_verified_at,
         (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count
         FROM woa_state AS state
         LEFT JOIN LATERAL (
@@ -1248,6 +1409,7 @@ class PostgresStateRepository {
           LIMIT 1
         ) AS snapshot ON true
         LEFT JOIN woa_state_migration_proofs AS migration ON migration.organization_id = state.organization_id
+        LEFT JOIN woa_recovery_drills AS recovery_drill ON recovery_drill.organization_id = state.organization_id
         WHERE state.organization_id = $1`, [this.organizationId]);
       if (!result.rowCount) {
         return {
@@ -1267,6 +1429,8 @@ class PostgresStateRepository {
           snapshotChecksumMatchesCurrent: false,
           snapshotVersionMatchesCurrent: false,
           snapshotRecoveryReady: false,
+          recoveryDrill: recoveryDrillEvidence(null),
+          recoveryDrillReady: false,
           version: 0,
           updatedAt: '',
           error: 'PostgreSQL is reachable but WheelsonAuto state has not been imported.'
@@ -1299,6 +1463,17 @@ class PostgresStateRepository {
         verifiedAt: row.migration_verified_at
       };
       const migrationProof = migrationProofEvidence(migration);
+      const recoveryDrill = row.recovery_drill_run_id === null || row.recovery_drill_run_id === undefined ? null : {
+        runId: row.recovery_drill_run_id,
+        result: row.recovery_drill_result,
+        testDatabaseFingerprint: row.recovery_drill_test_database_fingerprint,
+        configurationFingerprint: row.recovery_drill_configuration_fingerprint,
+        checks: row.recovery_drill_checks,
+        scriptVersion: row.recovery_drill_script_version,
+        actor: row.recovery_drill_actor,
+        verifiedAt: row.recovery_drill_verified_at
+      };
+      const recoveryDrillEvidenceResult = recoveryDrillEvidence(recoveryDrill);
       return {
         backend: 'postgres',
         connected: true,
@@ -1308,6 +1483,8 @@ class PostgresStateRepository {
         integrity: integrity.matches ? 'verified' : 'failed',
         ...recovery,
         ...migrationProof,
+        recoveryDrill: recoveryDrillEvidenceResult,
+        recoveryDrillReady: recoveryDrillEvidenceResult.ready,
         version: Number(row.version || 0),
         updatedAt: row.updated_at,
         error: !integrity.matches
@@ -1322,7 +1499,9 @@ class PostgresStateRepository {
               ? migrationProof.migrationProofIntegrity === 'missing'
                 ? 'PostgreSQL state is healthy but no verified JSON-to-PostgreSQL import proof exists.'
                 : 'The stored JSON-to-PostgreSQL import proof no longer matches its checksum or record-count evidence.'
-              : ''
+              : !recoveryDrillEvidenceResult.ready
+                ? recoveryDrillEvidenceResult.error
+                : ''
       };
     } catch (error) {
       return { backend: 'postgres', connected: false, transactional: true, productionReady: false, error: String(error && error.message || error) };
@@ -1350,6 +1529,9 @@ module.exports = {
   checksumEvidence,
   assertChecksum,
   recoverySnapshotEvidence,
+  recoveryDrillConfigurationFingerprint,
+  recoveryDrillEvidence,
+  RECOVERY_DRILL_REQUIRED_CHECKS,
   migrationRecordCounts,
   migrationProofEvidence,
   advisoryLockKeys,

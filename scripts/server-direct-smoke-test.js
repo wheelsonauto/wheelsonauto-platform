@@ -226,6 +226,8 @@ async function main() {
     privateDocumentStorageEvidence,
     operationalAlertConfigurationFingerprint,
     operationalAlertEvidence,
+    recordOperationalFailure,
+    reportBackgroundTaskFailure,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
@@ -1286,6 +1288,26 @@ async function main() {
     assert(managerOperationalAlertValidation.status === 403, 'Manager must not validate operational failure alerts.');
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
+    assert(typeof reportBackgroundTaskFailure === 'function', 'Background worker failures must share the durable operational-monitor path.');
+    const monitoredFailure = new Error('Direct monitored background failure');
+    const firstMonitoredFailure = await recordOperationalFailure('direct-background-monitor', monitoredFailure, {
+      route: 'Direct background worker',
+      source: 'background',
+      apiKey: 'must-not-be-persisted',
+      nestedSecret: { token: 'must-not-be-persisted' }
+    }, { alert: false });
+    const repeatedMonitoredFailure = await recordOperationalFailure('direct-background-monitor', new Error('Direct monitored background failure'), {
+      route: 'Direct background worker',
+      source: 'background',
+      apiKey: 'must-not-be-persisted'
+    }, { alert: false });
+    assert(firstMonitoredFailure.persisted === true && firstMonitoredFailure.deduplicated === false, 'The first background worker failure must be saved to the durable operational monitor.');
+    assert(repeatedMonitoredFailure.persisted === false && repeatedMonitoredFailure.deduplicated === true, 'Repeated identical background failures must be rate-limited instead of flooding the error ledger.');
+    assert(monitoredFailure.woaOperationalFailureRecorded === true, 'A recorded worker error must carry a marker so nested catch handlers cannot record it again.');
+    const monitoredFailureHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    const monitoredFailureRow = ((monitoredFailureHealth.json.infrastructure || {}).openJobErrors || []).find(row => row.source === 'direct-background-monitor');
+    assert(monitoredFailureRow && monitoredFailureRow.context && monitoredFailureRow.context.route === 'Direct background worker' && monitoredFailureRow.context.source === 'background', 'Owner health must expose the safe source and route for a monitored background failure.');
+    assert(!JSON.stringify(monitoredFailureRow.context).includes('must-not-be-persisted'), 'Operational failure records must whitelist safe context instead of storing arbitrary secrets.');
     const operationalAlertFetch = global.fetch;
     const operationalAlertCalls = [];
     global.fetch = async (url, options = {}) => {
@@ -3517,7 +3539,7 @@ async function main() {
     const revokedStaffRead = await request(server, 'GET', '/api/state', { cookie: revocableCookie });
     assert(revokedStaffRead.status === 401 && revokedStaffRead.json && revokedStaffRead.json.error === 'Authentication required.', 'Removing a staff account must revoke its already-issued session immediately.');
 
-    console.log('Direct server smoke passed: login, customer portal privacy/logout, company accounts, duplicate guards, dispute matching, state repair, public application, role filters, SMS/email messages, email notifications, autopay failure tracking, inbound email webhook, Star email approval, and staff permissions.');
+    console.log('Direct server smoke passed: login, customer portal privacy/logout, company accounts, duplicate guards, dispute matching, state repair, public application, role filters, SMS/email messages, durable background monitoring, email notifications, autopay failure tracking, inbound email webhook, Star email approval, and staff permissions.');
   } finally {
     global.fetch = providerEmailFetch;
     try { server.close(); } catch (_) {}

@@ -6,6 +6,38 @@ const stateRepository = require('../state-repository');
 
 const databaseUrl = String(process.env.WOA_TEST_DATABASE_URL || '').trim();
 const confirmed = process.env.WOA_POSTGRES_RUNTIME_TEST_CONFIRM === '1';
+const recoveryProofRequested = process.env.WOA_POSTGRES_RUNTIME_PROOF_RECORD === '1';
+const recoveryProofConfirmed = process.env.WOA_POSTGRES_RUNTIME_PROOF_CONFIRM === '1';
+const recoveryProofDatabaseUrl = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL || process.env.DATABASE_URL || '').trim();
+const recoveryProofOrganizationId = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID || stateRepository.DEFAULT_ORGANIZATION_ID).trim() || stateRepository.DEFAULT_ORGANIZATION_ID;
+const recoveryProofSecret = String(process.env.WOA_RECOVERY_DRILL_CONFIGURATION_SECRET || process.env.WOA_SESSION_SECRET || '').trim();
+const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v2';
+
+function databaseTargetIdentity(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return [
+      parsed.protocol.toLowerCase(),
+      parsed.hostname.toLowerCase(),
+      parsed.port,
+      decodeURIComponent(parsed.pathname || '/').replace(/\/+$/, '') || '/'
+    ].join('|');
+  } catch {
+    return raw
+      .replace(/\/\/[^@/]+@/, '//')
+      .replace(/[?#].*$/, '')
+      .replace(/\/+$/, '')
+      .toLowerCase();
+  }
+}
+
+function recoveryProofUsesTestDatabase() {
+  const testTarget = databaseTargetIdentity(databaseUrl);
+  const proofTarget = databaseTargetIdentity(recoveryProofDatabaseUrl);
+  return !!(testTarget && proofTarget && testTarget === proofTarget);
+}
 
 async function removeTestRows(repository, organizationId) {
   const pool = repository.pool;
@@ -18,10 +50,50 @@ async function removeTestRows(repository, organizationId) {
   await pool.query('DELETE FROM woa_state WHERE organization_id = $1', [organizationId]);
 }
 
+async function recordRecoveryDrillProof(testOrganizationId, checks) {
+  if (!recoveryProofRequested) return { recorded: false, reason: 'proof recording not requested' };
+  if (!recoveryProofConfirmed) throw new Error('Set WOA_POSTGRES_RUNTIME_PROOF_CONFIRM=1 before recording a passed recovery drill against the production PostgreSQL evidence table.');
+  if (!recoveryProofDatabaseUrl) throw new Error('Set WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL (or DATABASE_URL) to the production PostgreSQL database before recording recovery-drill evidence.');
+  if (!recoveryProofSecret) throw new Error('Set WOA_SESSION_SECRET or WOA_RECOVERY_DRILL_CONFIGURATION_SECRET before recording recovery-drill evidence.');
+  if (recoveryProofUsesTestDatabase()) throw new Error('WOA_TEST_DATABASE_URL must point to a different dedicated test database than WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL. Refusing a recovery drill that could touch production data.');
+  const configurationFingerprint = stateRepository.recoveryDrillConfigurationFingerprint(recoveryProofSecret, recoveryProofDatabaseUrl, recoveryProofOrganizationId);
+  const testDatabaseFingerprint = stateRepository.recoveryDrillConfigurationFingerprint(recoveryProofSecret, databaseUrl, testOrganizationId);
+  if (!configurationFingerprint || !testDatabaseFingerprint) throw new Error('Recovery drill proof fingerprints could not be created. Check the protected database URLs and session secret.');
+  const proofRepository = stateRepository.createStateRepository({
+    backend: 'postgres',
+    databaseUrl: recoveryProofDatabaseUrl,
+    organizationId: recoveryProofOrganizationId,
+    snapshotLimit: 12,
+    applicationName: 'wheelsonauto-postgres-recovery-proof',
+    seed: async () => ({})
+  });
+  try {
+    const saved = await proofRepository.recordRecoveryDrill({
+      runId: 'recovery-drill-' + new Date().toISOString().replace(/[^0-9]/g, '') + '-' + crypto.randomBytes(5).toString('hex'),
+      result: 'passed',
+      testDatabaseFingerprint,
+      configurationFingerprint,
+      checks,
+      scriptVersion: RECOVERY_DRILL_SCRIPT_VERSION,
+      actor: 'controlled PostgreSQL runtime recovery check'
+    });
+    const health = await proofRepository.health();
+    const evidence = stateRepository.recoveryDrillEvidence(health.recoveryDrill, { configurationFingerprint });
+    assert.strictEqual(saved.ready, true, 'The recorded PostgreSQL recovery drill must contain every successful test check.');
+    assert.strictEqual(evidence.ready, true, 'The production PostgreSQL recovery-drill record must be fresh and tied to the current protected database configuration.');
+    return { recorded: true, evidence };
+  } finally {
+    await proofRepository.close();
+  }
+}
+
 async function main() {
   if (!databaseUrl || !confirmed) {
     console.log('PostgreSQL runtime recovery check skipped. Set WOA_TEST_DATABASE_URL and WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1 to run it against a dedicated test database.');
     return;
+  }
+  if (recoveryProofRequested && recoveryProofUsesTestDatabase()) {
+    throw new Error('WOA_TEST_DATABASE_URL must point to a different dedicated test database than WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL. Refusing a recovery drill that could touch production data.');
   }
   const organizationId = 'org-postgres-runtime-test-' + crypto.randomBytes(6).toString('hex');
   const repository = stateRepository.createStateRepository({
@@ -153,6 +225,22 @@ async function main() {
     assert.strictEqual(restored.state.payments.length, 0, 'Recovery must remove records introduced after the selected snapshot.');
     assert(restored.state.auditLogs.some(row => row.action === 'Runtime recovery verification'), 'Recovery must allow an audit entry in the new restored snapshot.');
     assert.strictEqual(stateRepository.checksum(restored.state), restored.checksum, 'Recovered state checksum must verify after the transaction commits.');
+    const restartedRepository = stateRepository.createStateRepository({
+      backend: 'postgres',
+      databaseUrl,
+      organizationId,
+      snapshotLimit: 12,
+      applicationName: 'wheelsonauto-postgres-runtime-restart-check',
+      seed: async () => ({ vehicles: [], customers: [], payments: [] })
+    });
+    try {
+      const restarted = await restartedRepository.read();
+      assert.strictEqual(restarted.version, restored.version, 'A new PostgreSQL repository after a simulated server restart must read the restored version.');
+      assert.strictEqual(restarted.checksum, restored.checksum, 'A new PostgreSQL repository after a simulated server restart must verify the restored checksum.');
+      assert.strictEqual(restarted.state.customers[0].name, 'Version One Customer', 'A server restart must retain the restored customer state.');
+    } finally {
+      await restartedRepository.close();
+    }
     const health = await repository.health();
     assert.strictEqual(health.productionReady, true, 'A reachable PostgreSQL state repository must report production-ready.');
     assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
@@ -163,7 +251,16 @@ async function main() {
     assert.strictEqual(health.snapshotRecoveryReady, true, 'A production-ready PostgreSQL repository must expose a verified current recovery snapshot.');
     assert.strictEqual(health.migrationProofIntegrity, 'verified', 'The PostgreSQL import proof must retain the source-to-target checksum/count evidence.');
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
-    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, write, import proof, snapshot, restore, audit, checksum, current recovery proof, Star quota, and cleanup verified.');
+    const recoveryDrillProof = await recordRecoveryDrillProof(organizationId, {
+      durableJobLock: true,
+      webhookLeaseRecovery: true,
+      idempotencyLeaseRecovery: true,
+      snapshotRestore: true,
+      serverRestartRead: true,
+      stateChecksum: true,
+      migrationProof: true
+    });
+    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await competingRepository.close();

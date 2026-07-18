@@ -72,6 +72,7 @@ async function main() {
     assert.strictEqual(result.status, 1, 'Hardened mode with incomplete infrastructure must refuse to start the HTTP server.');
     assert.match(output, /WheelsonAuto refused to start with incomplete production safeguards/i, 'The startup failure must clearly identify the production guard.');
     assert.match(output, /PostgreSQL transactional state/i, 'The startup guard must require transactional PostgreSQL.');
+    assert.match(output, /controlled PostgreSQL recovery drill/i, 'The startup guard must require a fresh controlled PostgreSQL restore and restart drill.');
     assert.match(output, /S3-compatible AES-256-GCM private document storage/i, 'The startup guard must require encrypted private object storage.');
     assert.match(output, /Stripe live secret key/i, 'The startup guard must require live Stripe credentials.');
     assert.match(output, /Stripe onboarding payment provider/i, 'The startup guard must reject a live Stripe launch that still creates new onboarding payments through Clover.');
@@ -95,7 +96,7 @@ async function main() {
     assert.match(identityRuntimeOutput, /signed live Stripe Identity verification/i, 'The startup guard must require a signed verified Stripe Identity event from a WheelsonAuto onboarding record.');
     assert(!/WheelsonAuto platform running/i.test(identityRuntimeOutput), 'The HTTP listener must never start while Stripe Identity proof is incomplete.');
 
-    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, encrypted private storage, Stripe onboarding and Identity proof, Telnyx, Resend, Star, signed live payment safeguards, and failure-alert delivery are ready.');
+    console.log('Production startup gate check passed: hardened mode refuses to listen until transactional state, a controlled recovery drill, encrypted private storage, Stripe onboarding and Identity proof, Telnyx, Resend, Star, signed live payment safeguards, and failure-alert delivery are ready.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

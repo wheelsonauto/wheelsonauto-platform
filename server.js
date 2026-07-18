@@ -148,13 +148,17 @@ const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.e
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_MESSAGING_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_EMAIL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_EMAIL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_AI_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_AI_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
+const WOA_ERROR_RECORD_WINDOW_MS = Math.max(15 * 1000, Number(process.env.WOA_ERROR_RECORD_WINDOW_MS || 60 * 1000));
 const WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_OPERATIONAL_ERROR_CACHE_LIMIT = 1000;
 const operationalErrorAlerts = new Map();
+const operationalErrorRecords = new Map();
 const STATE_REPOSITORY = stateRepository.createStateRepository({
   backend: WOA_DATA_BACKEND,
   dataFile: DATA_FILE,
@@ -2778,36 +2782,53 @@ async function queueOwnerEmailNotification(data, event, payload = {}) {
   if (settings.events.length && !settings.events.includes(event)) return null;
   return queueEmailNotification(data, { ...payload, event });
 }
+function rememberOperationalErrorTimestamp(cache, key, timestamp, retentionMs) {
+  cache.set(key, timestamp);
+  if (cache.size <= WOA_OPERATIONAL_ERROR_CACHE_LIMIT) return;
+  const oldestAllowed = timestamp - Math.max(retentionMs, WOA_ERROR_RECORD_WINDOW_MS);
+  for (const [candidate, recordedAt] of cache) {
+    if (recordedAt < oldestAllowed || cache.size > WOA_OPERATIONAL_ERROR_CACHE_LIMIT) cache.delete(candidate);
+    if (cache.size <= WOA_OPERATIONAL_ERROR_CACHE_LIMIT) break;
+  }
+}
 async function recordOperationalFailure(source, error, context = {}, options = {}) {
   const message = String(error && error.message || error || 'Unknown operational failure').slice(0, 3000);
   const safeSource = String(source || 'server').slice(0, 120);
   const safeContext = {
-    ...context,
     route: String(context.route || '').slice(0, 180),
+    source: String(context.source || '').slice(0, 80),
     customer: String(context.customer || '').slice(0, 160),
     recurringPaymentId: String(context.recurringPaymentId || '').slice(0, 160),
-    eventId: String(context.eventId || '').slice(0, 160)
+    eventId: String(context.eventId || '').slice(0, 160),
+    dateKey: String(context.dateKey || '').slice(0, 32),
+    provider: String(context.provider || '').slice(0, 80)
   };
+  const incidentKey = [safeSource, safeContext.route, safeContext.source, safeContext.recurringPaymentId, safeContext.eventId, safeContext.dateKey, message.slice(0, 160)].join('|');
+  const now = Date.now();
   let persisted = false;
-  try {
-    await STATE_REPOSITORY.recordJobError(safeSource, message, safeContext, options.severity || 'error');
-    persisted = true;
-  } catch (recordError) {
-    console.error('WheelsonAuto error monitor could not persist:', recordError && recordError.message || recordError);
+  const lastRecordedAt = operationalErrorRecords.get(incidentKey) || 0;
+  const deduplicated = now - lastRecordedAt < WOA_ERROR_RECORD_WINDOW_MS;
+  if (!deduplicated) {
+    try {
+      await STATE_REPOSITORY.recordJobError(safeSource, message, safeContext, options.severity || 'error');
+      rememberOperationalErrorTimestamp(operationalErrorRecords, incidentKey, now, WOA_ERROR_RECORD_WINDOW_MS);
+      persisted = true;
+    } catch (recordError) {
+      console.error('WheelsonAuto error monitor could not persist:', recordError && recordError.message || recordError);
+    }
   }
   if (error && (typeof error === 'object' || typeof error === 'function')) {
     try {
-      Object.defineProperty(error, persisted ? 'woaOperationalFailureRecorded' : 'woaOperationalFailureRecordFailed', {
+      Object.defineProperty(error, (persisted || deduplicated) ? 'woaOperationalFailureRecorded' : 'woaOperationalFailureRecordFailed', {
         value: true,
         configurable: true
       });
     } catch {}
   }
-  if (!WOA_ERROR_ALERTS_ENABLED || options.alert === false) return;
-  const key = safeSource + '|' + message.slice(0, 160);
-  const previous = operationalErrorAlerts.get(key) || 0;
-  if (Date.now() - previous < WOA_ERROR_ALERT_WINDOW_MS) return;
-  operationalErrorAlerts.set(key, Date.now());
+  if (!WOA_ERROR_ALERTS_ENABLED || options.alert === false) return { persisted, deduplicated, alerted: false };
+  const previous = operationalErrorAlerts.get(incidentKey) || 0;
+  if (now - previous < WOA_ERROR_ALERT_WINDOW_MS) return { persisted, deduplicated, alerted: false };
+  rememberOperationalErrorTimestamp(operationalErrorAlerts, incidentKey, now, WOA_ERROR_ALERT_WINDOW_MS);
   try {
     const data = await readData();
     const notification = await queueEmailNotification(data, {
@@ -2826,9 +2847,20 @@ async function recordOperationalFailure(source, error, context = {}, options = {
       ].filter(Boolean).join('\n')
     });
     if (notification) await writeData(data);
+    return { persisted, deduplicated, alerted: !!(notification && notification.sent) };
   } catch (alertError) {
     console.error('WheelsonAuto error alert could not be queued:', alertError && alertError.message || alertError);
+    return { persisted, deduplicated, alerted: false };
   }
+}
+function reportBackgroundTaskFailure(source, error, context = {}, label = '') {
+  const prefix = label || String(source || 'WheelsonAuto background task');
+  console.error(prefix + ' failed:', error && error.message || error);
+  if (error && error.woaOperationalFailureRecorded) return Promise.resolve({ persisted: false, deduplicated: true, alerted: false });
+  return recordOperationalFailure(source, error, context, { alert: true }).catch(recordError => {
+    console.error('WheelsonAuto background failure monitor could not run:', recordError && recordError.message || recordError);
+    return { persisted: false, deduplicated: false, alerted: false };
+  });
 }
 function recordDateKey(value) {
   const raw = String(value || '').trim();
@@ -8651,6 +8683,15 @@ function documentStorageConfigurationFingerprint() {
   ].join('\u0000');
   return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(material).digest('hex');
 }
+function recoveryDrillConfigurationFingerprint() {
+  return stateRepository.recoveryDrillConfigurationFingerprint(SESSION_SIGNING_SECRET, process.env.DATABASE_URL || '', MAIN_ORG_ID);
+}
+function currentRecoveryDrillEvidence(database = {}) {
+  return stateRepository.recoveryDrillEvidence(database.recoveryDrill, {
+    configurationFingerprint: recoveryDrillConfigurationFingerprint(),
+    maxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
+  });
+}
 function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STORE.status()) {
   const storageState = data && data.integrations && data.integrations.documentStorage || {};
   const expectedFingerprint = documentStorageConfigurationFingerprint();
@@ -8730,6 +8771,8 @@ function operationalAlertEvidence(data = {}) {
 }
 async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
+  const recoveryDrill = currentRecoveryDrillEvidence(database);
+  const databaseWithRecoveryDrill = { ...database, recoveryDrill, recoveryDrillReady: recoveryDrill.ready };
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
   const state = data || await readData();
   const stripeWebhook = stripeLiveWebhookEvidence(state);
@@ -8742,9 +8785,10 @@ async function productionInfrastructurePreflight(data = null) {
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
-  if (!database.productionReady) missing.push('PostgreSQL transactional state');
-  if (!database.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
-  if (!database.migrationProofReady) missing.push('verified JSON-to-PostgreSQL import proof');
+  if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
+  if (!databaseWithRecoveryDrill.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
+  if (!databaseWithRecoveryDrill.migrationProofReady) missing.push('verified JSON-to-PostgreSQL import proof');
+  if (!recoveryDrill.ready) missing.push('controlled PostgreSQL recovery drill');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
   if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
@@ -8768,7 +8812,8 @@ async function productionInfrastructurePreflight(data = null) {
   if (identityWarnings.length) missing.push('complete vehicle VIN identity review');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   return {
-    database,
+    database: databaseWithRecoveryDrill,
+    recoveryDrill,
     documentStorage,
     documentStorageValidation,
     stripeWebhook,
@@ -8784,7 +8829,7 @@ async function productionInfrastructurePreflight(data = null) {
     readyForLiveStripe: missing.length === 0,
     message: missing.length
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
-      : 'Transactional database with a verified import and recovery snapshot, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
+      : 'Transactional database with a verified import, recovery snapshot, and controlled recovery drill, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
 }
 async function assertProductionInfrastructure() {
@@ -11167,7 +11212,7 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
   }
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
-  const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => console.error('Webhook auto sync failed:', err && err.message || err)), WEBHOOK_AUTO_SYNC_DELAY_MS);
+  const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => reportBackgroundTaskFailure('clover-webhook-auto-sync', err, { route: 'Clover webhook automatic sync', source: 'webhook' }, 'Webhook auto sync')), WEBHOOK_AUTO_SYNC_DELAY_MS);
   if (webhookSyncTimer.unref) webhookSyncTimer.unref();
   return { ok: true, duplicate: false, webhookEventId: webhookEvent.id, disputeClaimId: createdClaimId, hostedCheckout };
 }
@@ -15482,7 +15527,7 @@ const server = http.createServer(async (req, res) => {
       const provider = String(url.searchParams.get('provider') || MESSAGING_PROVIDER || '').toLowerCase();
       if (!messagingWebhookAuthorized(req, url, rawBody, payload, provider)) return json(res, 401, { ok: false, error: 'Unauthorized webhook.' });
       if (provider === 'telnyx') {
-        setImmediate(() => processMessagingWebhookEvent(provider, req.headers, payload).catch(err => console.error('Telnyx webhook processing failed:', err && err.message || err)));
+        setImmediate(() => processMessagingWebhookEvent(provider, req.headers, payload).catch(err => reportBackgroundTaskFailure('telnyx-webhook-processing', err, { route: '/api/webhooks/messages', source: 'telnyx' }, 'Telnyx webhook processing')));
         return json(res, 200, { ok: true, queued: true });
       }
       return json(res, 200, await processMessagingWebhookEvent(provider, req.headers, payload));
@@ -18297,7 +18342,7 @@ const server = http.createServer(async (req, res) => {
         openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
         requiredBeforeLiveStripe: [
           'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL and verified JSON-to-PostgreSQL import proof',
-          'Current PostgreSQL snapshot checksum/version verification plus a controlled test-database restore record',
+          'Current PostgreSQL snapshot checksum/version verification plus a fresh controlled test-database recovery drill record',
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
           'Telnyx 10DLC approval plus fresh signed SMS delivery and inbound reply proof',
@@ -19226,22 +19271,22 @@ if (require.main === module) {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
-      .catch(err => console.error('Twilio inbox auto-connect failed:', err && err.message || err)), 250);
+      .catch(err => reportBackgroundTaskFailure('twilio-inbound-setup', err, { route: 'Twilio inbound SMS webhook setup', source: 'startup' }, 'Twilio inbox auto-connect')), 250);
     setTimeout(() => autoConfigureTelnyxMessagingProfile()
       .then(result => console.log(result && result.skipped ? 'Telnyx inbox auto-connect skipped.' : 'Telnyx inbound SMS connected.'))
-      .catch(err => console.error('Telnyx inbox auto-connect failed:', err && err.message || err)), 500);
+      .catch(err => reportBackgroundTaskFailure('telnyx-inbound-setup', err, { route: 'Telnyx inbound SMS profile setup', source: 'startup' }, 'Telnyx inbox auto-connect')), 500);
     setTimeout(() => syncTwilioInboundMessages()
       .then(result => console.log(result && result.skipped ? 'Twilio inbound SMS secure sync skipped.' : 'Twilio inbound SMS secure sync active.'))
-      .catch(err => console.error('Twilio inbound SMS secure sync failed:', err && err.message || err)), 1500);
+      .catch(err => reportBackgroundTaskFailure('twilio-inbound-sync', err, { route: 'Twilio inbound SMS secure sync', source: 'startup' }, 'Twilio inbound SMS secure sync')), 1500);
     setInterval(() => syncTwilioInboundMessages()
       .catch(err => {
         if (Date.now() - twilioInboundPollStatus.lastLoggedAt < 60 * 1000) return;
         twilioInboundPollStatus.lastLoggedAt = Date.now();
-        console.error('Twilio inbound SMS secure sync failed:', err && err.message || err);
+        return reportBackgroundTaskFailure('twilio-inbound-sync', err, { route: 'Twilio inbound SMS secure sync', source: 'background' }, 'Twilio inbound SMS secure sync');
       }), TWILIO_INBOUND_POLL_MS);
     setTimeout(() => syncTelnyxDeliveryStatuses()
       .then(result => console.log(result && result.skipped ? 'Telnyx delivery sync skipped.' : 'Telnyx delivery sync checked ' + result.checked + ', updated ' + result.updated + ', persisted ' + result.persisted + ', errors ' + result.errors.length + '.'))
-      .catch(err => console.error('Telnyx delivery sync failed:', err && err.message || err)), 5000);
+      .catch(err => reportBackgroundTaskFailure('telnyx-delivery-sync', err, { route: 'Telnyx message delivery status sync', source: 'startup' }, 'Telnyx delivery sync')), 5000);
     setInterval(() => syncTelnyxDeliveryStatuses()
       .then(result => {
         if (!result || result.skipped || (!result.persisted && !(result.errors && result.errors.length))) return;
@@ -19250,26 +19295,26 @@ if (require.main === module) {
       .catch(err => {
         if (Date.now() - telnyxDeliveryPollStatus.lastLoggedAt < 60 * 1000) return;
         telnyxDeliveryPollStatus.lastLoggedAt = Date.now();
-        console.error('Telnyx delivery sync failed:', err && err.message || err);
+        return reportBackgroundTaskFailure('telnyx-delivery-sync', err, { route: 'Telnyx message delivery status sync', source: 'background' }, 'Telnyx delivery sync');
       }), TELNYX_DELIVERY_POLL_MS);
-    setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => console.error('Startup auto sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS);
-    setInterval(() => runAutoSync({ source: 'background' }).catch(err => console.error('Background auto sync failed:', err && err.message || err)), AUTO_SYNC_MS);
-    setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => console.error('Startup WOA autopay failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
-    setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => console.error('Background WOA autopay failed:', err && err.message || err)), WOA_AUTOPAY_MS);
-    setTimeout(() => runVerificationMonitor({ source: 'startup' }).catch(err => console.error('Startup verification monitor failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 8000);
-    setInterval(() => runVerificationMonitor({ source: 'background' }).catch(err => console.error('Background verification monitor failed:', err && err.message || err)), VERIFICATION_MONITOR_MS);
+    setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => reportBackgroundTaskFailure('clover-auto-sync', err, { route: 'WheelsonAuto automatic Clover sync', source: 'startup' }, 'Startup auto sync')), AUTO_SYNC_STARTUP_DELAY_MS);
+    setInterval(() => runAutoSync({ source: 'background' }).catch(err => reportBackgroundTaskFailure('clover-auto-sync', err, { route: 'WheelsonAuto automatic Clover sync', source: 'background' }, 'Background auto sync')), AUTO_SYNC_MS);
+    setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto background autopay', source: 'startup' }, 'Startup WOA autopay')), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
+    setInterval(() => runWheelsonAutoAutopay({ source: 'background' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto background autopay', source: 'background' }, 'Background WOA autopay')), WOA_AUTOPAY_MS);
+    setTimeout(() => runVerificationMonitor({ source: 'startup' }).catch(err => reportBackgroundTaskFailure('verification-monitor', err, { route: 'Automatic verification monitor', source: 'startup' }, 'Startup verification monitor')), AUTO_SYNC_STARTUP_DELAY_MS + 8000);
+    setInterval(() => runVerificationMonitor({ source: 'background' }).catch(err => reportBackgroundTaskFailure('verification-monitor', err, { route: 'Automatic verification monitor', source: 'background' }, 'Background verification monitor')), VERIFICATION_MONITOR_MS);
     if (TRACKER_PROVIDER === 'passtime' && passTime.readiness().configured) {
       setTimeout(() => runPassTimeGpsSync({ source: 'startup' })
         .then(result => console.log(result && result.ok ? 'PassTime GPS startup sync matched ' + result.matched + ' vehicle(s).' : 'PassTime GPS startup sync skipped: ' + (result.reason || result.error || 'not ready')))
-        .catch(err => console.error('PassTime GPS startup sync failed:', err && err.message || err)), AUTO_SYNC_STARTUP_DELAY_MS + 12000);
+        .catch(err => reportBackgroundTaskFailure('passtime-gps-sync', err, { route: 'PassTime read-only GPS sync', source: 'startup' }, 'PassTime GPS startup sync')), AUTO_SYNC_STARTUP_DELAY_MS + 12000);
       setInterval(() => runPassTimeGpsSync({ source: 'background' })
         .then(result => {
           if (!result || result.skipped || result.ok) return;
           if (Date.now() - passTimePollStatus.lastLoggedAt < 60 * 1000) return;
           passTimePollStatus.lastLoggedAt = Date.now();
-          console.error('PassTime GPS background sync failed:', result.error || result.reason || 'Unknown error');
+          return reportBackgroundTaskFailure('passtime-gps-sync', new Error(result.error || result.reason || 'Unknown error'), { route: 'PassTime read-only GPS sync', source: 'background' }, 'PassTime GPS background sync');
         })
-        .catch(err => console.error('PassTime GPS background sync failed:', err && err.message || err)), PASSTIME_SYNC_MS);
+        .catch(err => reportBackgroundTaskFailure('passtime-gps-sync', err, { route: 'PassTime read-only GPS sync', source: 'background' }, 'PassTime GPS background sync')), PASSTIME_SYNC_MS);
     }
     }))
     .catch(error => {
@@ -19350,10 +19395,14 @@ module.exports = {
   stripeLiveWebhookEvidence,
   stripeIdentityLiveWebhookEvidence,
   stripeWebhookConfigurationFingerprint,
+  recoveryDrillConfigurationFingerprint,
+  currentRecoveryDrillEvidence,
   documentStorageConfigurationFingerprint,
   privateDocumentStorageEvidence,
   operationalAlertConfigurationFingerprint,
   operationalAlertEvidence,
+  recordOperationalFailure,
+  reportBackgroundTaskFailure,
   validCalendarDateKey,
   calendarDayName,
   nextRecurringOccurrence,

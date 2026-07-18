@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -16,6 +17,44 @@ async function main() {
     const seedFile = path.join(temp, 'seed.json');
     const dataFile = path.join(temp, 'data.json');
     await fs.writeFile(seedFile, JSON.stringify({ vehicles: [], customers: [], payments: [], documents: [], eSignatures: [] }), 'utf8');
+
+    const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+    assert(serverSource.includes('function reportBackgroundTaskFailure') && serverSource.includes("recordOperationalFailure(source, error, context, { alert: true })"), 'Every scheduled worker failure must use the shared durable monitor and owner-alert path.');
+    assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
+    const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
+    const operationalFailureEnd = serverSource.indexOf('function reportBackgroundTaskFailure', operationalFailureStart);
+    const operationalFailureBody = serverSource.slice(operationalFailureStart, operationalFailureEnd);
+    assert(operationalFailureStart >= 0 && operationalFailureEnd > operationalFailureStart && !operationalFailureBody.includes('...context'), 'Operational monitoring must whitelist safe context instead of persisting arbitrary request or provider secrets.');
+    [
+      'clover-webhook-auto-sync',
+      'telnyx-webhook-processing',
+      'twilio-inbound-setup',
+      'telnyx-inbound-setup',
+      'twilio-inbound-sync',
+      'telnyx-delivery-sync',
+      'clover-auto-sync',
+      'autopay-run',
+      'verification-monitor',
+      'passtime-gps-sync'
+    ].forEach(sourceName => {
+      assert(serverSource.includes("reportBackgroundTaskFailure('" + sourceName + "'"), 'Scheduled worker ' + sourceName + ' must report failures through the durable monitor.');
+    });
+    const recoveryTargetGuard = spawnSync(process.execPath, ['scripts/postgres-runtime-check.js'], {
+      cwd: path.resolve(__dirname, '..'),
+      env: {
+        PATH: process.env.PATH || '',
+        HOME: process.env.HOME || '',
+        WOA_TEST_DATABASE_URL: 'postgres://test-user:test-password@localhost:5432/wheelsonauto',
+        WOA_POSTGRES_RUNTIME_TEST_CONFIRM: '1',
+        WOA_POSTGRES_RUNTIME_PROOF_RECORD: '1',
+        WOA_POSTGRES_RUNTIME_PROOF_CONFIRM: '1',
+        WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL: 'postgres://production-user:production-password@localhost:5432/wheelsonauto?sslmode=require',
+        WOA_SESSION_SECRET: 'foundation-recovery-session-secret'
+      },
+      encoding: 'utf8'
+    });
+    assert.strictEqual(recoveryTargetGuard.status, 1, 'A recovery proof run must fail before opening a database when its test target matches the production proof target.');
+    assert.match([recoveryTargetGuard.stdout, recoveryTargetGuard.stderr].filter(Boolean).join(''), /different dedicated test database/i, 'The recovery proof refusal must explain that the test database cannot be production.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
@@ -71,6 +110,26 @@ async function main() {
     assert.strictEqual(stateRepository.recoverySnapshotEvidence(null, { version: 4, checksum: intactChecksum }).snapshotIntegrity, 'missing', 'A PostgreSQL state without a retained snapshot must fail the recovery launch gate.');
     assert.strictEqual(stateRepository.recoverySnapshotEvidence({ id: 4, version: 3, checksum: intactChecksum, state: intactState }, { version: 4, checksum: intactChecksum }).snapshotIntegrity, 'stale', 'A previous PostgreSQL snapshot must not masquerade as the current recovery proof.');
     assert.strictEqual(stateRepository.recoverySnapshotEvidence({ id: 5, version: 4, checksum: intactChecksum, state: { records: [] } }, { version: 4, checksum: intactChecksum }).snapshotIntegrity, 'failed', 'A tampered recovery snapshot must fail checksum verification before live launch.');
+    const recoveryDrillFingerprint = stateRepository.recoveryDrillConfigurationFingerprint(
+      'foundation-recovery-secret',
+      'postgres://foundation-primary/wheelsonauto',
+      'org-foundation'
+    );
+    const recoveryDrillChecks = Object.fromEntries(stateRepository.RECOVERY_DRILL_REQUIRED_CHECKS.map(check => [check, true]));
+    const freshRecoveryDrill = {
+      runId: 'foundation-recovery-drill-1',
+      result: 'passed',
+      testDatabaseFingerprint: stateRepository.recoveryDrillConfigurationFingerprint('foundation-recovery-secret', 'postgres://foundation-test/wheelsonauto', 'org-foundation-test'),
+      configurationFingerprint: recoveryDrillFingerprint,
+      checks: recoveryDrillChecks,
+      scriptVersion: 'foundation-check-v1',
+      verifiedAt: new Date().toISOString()
+    };
+    assert.strictEqual(stateRepository.recoveryDrillEvidence(freshRecoveryDrill, { configurationFingerprint: recoveryDrillFingerprint }).ready, true, 'A fresh passed recovery drill with every required check must satisfy the controlled launch gate.');
+    assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, checks: { ...recoveryDrillChecks, serverRestartRead: false } }, { configurationFingerprint: recoveryDrillFingerprint }).ready, false, 'A recovery drill missing a server-restart read must fail closed before live launch.');
+    assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, configurationFingerprint: 'old-database-configuration' }, { configurationFingerprint: recoveryDrillFingerprint }).ready, false, 'A recovery drill from an older database configuration must not satisfy the current launch gate.');
+    assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, verifiedAt: '2020-01-01T00:00:00.000Z' }, { configurationFingerprint: recoveryDrillFingerprint, maxAgeMs: 60 * 60 * 1000 }).ready, false, 'A stale recovery drill must not satisfy the current launch gate.');
+    await assert.rejects(() => repository.recordRecoveryDrill(freshRecoveryDrill), /cannot record a PostgreSQL recovery drill/i, 'The JSON development fallback must never pretend it recorded a controlled PostgreSQL recovery drill.');
     const sourceCounts = stateRepository.migrationRecordCounts({ vehicles: [{}], customers: [{}], payments: [], auditLogs: [] });
     const migrationProofInput = {
       sourceChecksum: 'raw-json-checksum',
@@ -158,7 +217,7 @@ async function main() {
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
 
-    console.log('Production foundation check passed: atomic state fallback, durable money-action idempotency, migration-proof guard, checksum fail-closed behavior, immutable identity preflight, encrypted private storage, tamper rejection, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
+    console.log('Production foundation check passed: atomic state fallback, durable money-action idempotency, migration-proof guard, checksum fail-closed behavior, controlled recovery-drill evidence, immutable identity preflight, encrypted private storage, tamper rejection, rate-limited background monitoring, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }
