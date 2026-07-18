@@ -522,6 +522,14 @@ A restore requires both `confirmed: true` and the exact phrase
 `RESTORE SNAPSHOT <id>`. Restore creates a new audited version; it does not
 erase historical snapshots or the retained JSON rollback artifact.
 
+Recovery is serialized with the normal state-write queue. The transaction
+verifies the current-state checksum and the selected snapshot checksum before
+changing anything, preserves the current owner/staff/customer access-control
+records so an old password or removed account cannot be resurrected, and
+revokes every signed session. The owner must sign in again after recovery.
+Any background or browser update prepared from a pre-recovery read is rejected
+with `state_recovery_stale_write`; refresh it instead of replaying stale data.
+
 Set `WOA_ERROR_ALERTS_ENABLED=1` only after the owner notification email is
 verified. The server records durable PostgreSQL job errors for webhook, sync,
 autopay, and provider failures. Monitor these before and after every live

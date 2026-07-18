@@ -16,6 +16,7 @@ const secureDocumentStore = require('./secure-document-store');
 const stripeMigration = require('./stripe-migration');
 const authPolicy = require('./auth-policy');
 const stateMigrationLock = require('./state-migration-lock');
+const recoveryGuard = require('./recovery-guard');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -196,7 +197,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-stripe-transition-lock-159';
+const ASSET_VERSION = 'platform-20260718-recovery-integrity-160';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -726,6 +727,7 @@ function addVehicleImportIndexKeys(indexes, vehicle, index) {
 }
 const STATE_WRITE_META = Symbol('wheelsonauto.stateWriteMeta');
 const STATE_READ_META = Symbol('wheelsonauto.stateReadMeta');
+let stateRecoveryGeneration = 0;
 const CONCURRENT_COLLECTIONS = ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
 
 function emptyPlatformState() {
@@ -743,6 +745,7 @@ function attachStateReadMeta(data, snapshot = {}) {
   Object.defineProperty(data, STATE_READ_META, {
     value: {
       version: snapshot.version,
+      recoveryGeneration: stateRecoveryGeneration,
       baseIds: baseRecordIds(data),
       baseState: cloneConcurrentValue(data)
     },
@@ -781,6 +784,7 @@ async function dataVersion() {
 }
 let writeDataQueue = Promise.resolve();
 async function writeDataNow(data) {
+  recoveryGuard.assertCurrentRecoveryGeneration(data && data[STATE_READ_META] || {}, stateRecoveryGeneration);
   await stateMigrationLock.assertWritesAllowed({ dataDir: DATA_DIR, dataFile: DATA_FILE });
   repairDataIds(data);
   const meta = data && data[STATE_WRITE_META] || {};
@@ -19559,24 +19563,39 @@ const server = http.createServer(async (req, res) => {
       if (payload.confirmed !== true || String(payload.confirmationPhrase || '').trim() !== expectedConfirmation) {
         return json(res, 409, { ok: false, error: 'Type exactly "' + expectedConfirmation + '" and confirm before restoring a live snapshot.' });
       }
-      await writeDataQueue.catch(() => {});
       try {
         const actor = user.name || user.username || 'Owner';
-        const restored = await STATE_REPOSITORY.restoreSnapshot(snapshotId, {
-          actor,
-          reason: 'owner-confirmed snapshot recovery',
-          transform: state => {
-            appendAuditLog(state, user, 'PostgreSQL snapshot restored', ['Snapshot ' + snapshotId, 'Controlled owner recovery', 'A new recovery snapshot was created automatically']);
-            return state;
-          }
+        const recoveryJob = writeDataQueue.then(async () => {
+          const revokedAt = new Date().toISOString();
+          const result = await STATE_REPOSITORY.restoreSnapshot(snapshotId, {
+            actor,
+            reason: 'owner-confirmed snapshot recovery',
+            transform: (state, context = {}) => {
+              const safe = recoveryGuard.preserveAccessControlAcrossRecovery(context.currentState || {}, state, { revokedAt });
+              appendAuditLog(safe, user, 'PostgreSQL snapshot restored', [
+                'Snapshot ' + snapshotId,
+                'Controlled owner recovery',
+                'Current staff and customer access controls preserved',
+                'All signed sessions revoked',
+                'A new recovery snapshot was created automatically'
+              ]);
+              return safe;
+            }
+          });
+          stateRecoveryGeneration += 1;
+          activeStaffSessionCache.version = '';
+          return result;
         });
+        writeDataQueue = recoveryJob.catch(() => {});
+        const restored = await recoveryJob;
         return json(res, 200, {
           ok: true,
           restoredSnapshot: restored.restoredSnapshot,
           version: restored.version,
           checksum: restored.checksum,
-          message: 'Snapshot restored and audited. Refresh the workspace before continuing work.'
-        });
+          reauthenticate: true,
+          message: 'Snapshot restored and audited. Every signed session was revoked; sign in again before continuing work.'
+        }, { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }) });
       } catch (error) {
         const status = error.code === 'snapshot_not_found' ? 404 : 409;
         return json(res, status, { ok: false, error: String(error && error.message || error) });

@@ -2051,21 +2051,32 @@ class PostgresStateRepository {
         error.code = 'snapshot_not_found';
         throw error;
       }
-      const currentResult = await client.query('SELECT version FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+      const currentResult = await client.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
       if (!currentResult.rowCount) {
         const error = new Error('No current PostgreSQL state exists to restore. Complete the controlled JSON import first.');
         error.code = 'state_not_found';
         throw error;
       }
       const snapshot = snapshotResult.rows[0];
+      const current = currentResult.rows[0];
+      assertChecksum(current.state, current.checksum, 'Current PostgreSQL state before recovery');
       assertChecksum(snapshot.state, snapshot.checksum, 'Recovery snapshot');
       let restored = this.repair(clone(snapshot.state));
       if (typeof options.transform === 'function') {
-        const transformed = await options.transform(restored);
+        const transformed = await options.transform(restored, {
+          currentState: this.repair(clone(current.state)),
+          currentVersion: Number(current.version || 0),
+          currentChecksum: String(current.checksum || ''),
+          snapshot: {
+            id: Number(snapshot.id),
+            version: Number(snapshot.version || 0),
+            checksum: String(snapshot.checksum || '')
+          }
+        });
         if (transformed && typeof transformed === 'object') restored = transformed;
       }
       const next = this.repair(clone(restored));
-      const nextVersion = Number(currentResult.rows[0].version || 0) + 1;
+      const nextVersion = Number(current.version || 0) + 1;
       const nextChecksum = checksum(next);
       await client.query(`UPDATE woa_state
         SET state = $2::jsonb, version = $3, checksum = $4, updated_at = now()
