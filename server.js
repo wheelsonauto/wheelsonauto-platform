@@ -9289,6 +9289,7 @@ async function productionInfrastructurePreflight(data = null) {
   const starAi = starAiLiveLaunchEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const cloverRecurring = cloverRecurringMigrationReadiness(state);
+  const identityConflicts = stateRepository.identityConflicts(state);
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
@@ -9319,9 +9320,11 @@ async function productionInfrastructurePreflight(data = null) {
   if (!starAi.live) missing.push('OpenAI Star Responses API health proof with active safety limits');
   if (!cloverRecurring.ready) missing.push('fresh Clover recurring roster for controlled cutover');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
+  if (!WOA_PRODUCTION_HARDENING_REQUIRED) missing.push('WOA_PRODUCTION_HARDENING_REQUIRED=1');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
+  if (identityConflicts.length) missing.push('resolve customer and vehicle identity conflicts');
   if (identityWarnings.length) missing.push('complete vehicle VIN identity review');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   return {
@@ -9339,6 +9342,7 @@ async function productionInfrastructurePreflight(data = null) {
     starAi,
     ownerAuthentication,
     cloverRecurring,
+    identityConflictCount: identityConflicts.length,
     identityWarnings,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
@@ -9358,6 +9362,20 @@ async function assertProductionInfrastructure() {
     throw error;
   }
   return preflight;
+}
+async function assertStripeCutoverLaunchReady(data) {
+  const isolatedTestMode = stripeMigration.isolatedProviderTestMode(process.env);
+  if (isolatedTestMode) {
+    return stripeMigration.assertStripeCutoverLaunchReady({ isolatedTestMode: true });
+  }
+  if (!WOA_PRODUCTION_HARDENING_REQUIRED) {
+    return stripeMigration.assertStripeCutoverLaunchReady({ productionHardeningRequired: false });
+  }
+  const preflight = await productionInfrastructurePreflight(data);
+  return stripeMigration.assertStripeCutoverLaunchReady({
+    productionHardeningRequired: true,
+    preflight
+  });
 }
 function systemReadiness(data, user = { role: 'Owner' }) {
   const scopedSource = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
@@ -20383,6 +20401,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (target === current) return json(res, 200, { ok: true, unchanged: true, paymentProvider: target, recurring });
       if (target === 'stripe') {
+        await assertStripeCutoverLaunchReady(data);
         const cutoverEligibility = stripeMigration.cutoverEligibility(data, recurring);
         if (!cutoverEligibility.eligible) {
           return json(res, 409, {

@@ -209,6 +209,45 @@ function existingPaidPayment(data = {}, recurring = {}, dueDate) {
   return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentIsPaid(payment.status) && paymentPeriodKey(payment) === period) || null;
 }
 
+function isolatedProviderTestMode(environment = process.env) {
+  const env = environment && typeof environment === 'object' ? environment : {};
+  const deployedRuntime = String(env.RENDER || '').toLowerCase() === 'true'
+    || !!text(env.RENDER_SERVICE_ID)
+    || String(env.NODE_ENV || '').toLowerCase() === 'production';
+  return !deployedRuntime
+    && String(env.NODE_ENV || '').toLowerCase() === 'test'
+    && String(env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS || '') === '1';
+}
+
+function stripeCutoverLaunchError(message, code, missing = []) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = 409;
+  error.missing = Array.isArray(missing) ? missing.slice(0, 50) : [];
+  return error;
+}
+
+function assertStripeCutoverLaunchReady(options = {}) {
+  if (options.isolatedTestMode === true) return { ready: true, isolatedTestMode: true };
+  if (options.productionHardeningRequired !== true) {
+    throw stripeCutoverLaunchError(
+      'Stripe cutover is not armed. Keep Clover active until the owner enables production hardening after every live launch check is clear.',
+      'stripe_cutover_launch_not_armed',
+      ['WOA_PRODUCTION_HARDENING_REQUIRED=1']
+    );
+  }
+  const preflight = options.preflight && typeof options.preflight === 'object' ? options.preflight : {};
+  if (preflight.readyForLiveStripe !== true) {
+    const missing = Array.isArray(preflight.missing) ? preflight.missing.filter(Boolean) : [];
+    throw stripeCutoverLaunchError(
+      'Stripe cutover is blocked until the live launch preflight is clear' + (missing.length ? ': ' + missing.join(', ') : '.'),
+      'stripe_cutover_preflight_blocked',
+      missing
+    );
+  }
+  return { ready: true, isolatedTestMode: false };
+}
+
 function duplicateChargeError(existing, dueDate) {
   const error = new Error('A successful payment is already recorded for the ' + validDateKey(dueDate) + ' billing period. WheelsonAuto blocked a duplicate charge.');
   error.code = 'duplicate_billing_period';
@@ -356,6 +395,9 @@ module.exports = {
   paymentPeriodKey,
   paymentLinkedToRecurring,
   existingPaidPayment,
+  isolatedProviderTestMode,
+  stripeCutoverLaunchError,
+  assertStripeCutoverLaunchReady,
   duplicateChargeError,
   assertBillingPeriodOpen,
   migrationTransitionError,

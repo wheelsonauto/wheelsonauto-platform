@@ -162,6 +162,8 @@ async function login(server, form) {
 async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-direct-smoke-'));
   process.env.DATA_DIR = dataDir;
+  process.env.NODE_ENV = 'test';
+  process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
   process.env.WOA_ADMIN_PIN = adminPin;
   process.env.WOA_AUTO_SYNC_MS = '3600000';
   process.env.WOA_AUTOPAY_MS = '3600000';
@@ -3174,6 +3176,14 @@ async function main() {
     });
     const cutoverSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: cutoverState });
     assert(cutoverSeed.status === 200 && cutoverSeed.json.ok, 'Stripe cutover smoke setup failed.');
+    const isolatedProviderTestSetting = process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS;
+    process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '0';
+    const unarmedCutover = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
+    });
+    process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = isolatedProviderTestSetting;
+    assert(unarmedCutover.status === 409 && /cutover is not armed/i.test(unarmedCutover.json.error || ''), 'The live provider-switch route must keep Clover active until production hardening is armed.');
     const ambiguousCutover = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }

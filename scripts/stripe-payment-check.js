@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const stripeAdapter = require('../stripe-adapter');
+const stripeMigration = require('../stripe-migration');
 
 const root = path.join(__dirname, '..');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
@@ -26,6 +27,25 @@ async function run() {
   assert.strictEqual(stripeAdapter.verifyWebhook(body, 't=' + timestamp + ',v1=' + signature, secret, 300, timestamp).ok, true, 'Valid Stripe webhook signatures must pass.');
   assert.strictEqual(stripeAdapter.verifyWebhook(body, 't=' + timestamp + ',v1=' + '0'.repeat(64), secret, 300, timestamp).ok, false, 'Invalid Stripe webhook signatures must fail.');
   assert.strictEqual(stripeAdapter.verifyWebhook(body, 't=' + timestamp + ',v1=' + signature, secret, 300, timestamp + 301).ok, false, 'Expired Stripe webhook signatures must fail.');
+
+  assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'test', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1' }), true, 'Explicit isolated tests may exercise the cutover state machine without live providers.');
+  assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'test', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1', RENDER: 'true' }), false, 'A Render deployment must never enable the isolated provider-test path.');
+  assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'production', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1' }), false, 'Production must never enable the isolated provider-test path.');
+  assert.throws(
+    () => stripeMigration.assertStripeCutoverLaunchReady({ productionHardeningRequired: false }),
+    error => error && error.code === 'stripe_cutover_launch_not_armed' && error.statusCode === 409,
+    'Clover-to-Stripe cutover must stay locked while production hardening is off.'
+  );
+  assert.throws(
+    () => stripeMigration.assertStripeCutoverLaunchReady({ productionHardeningRequired: true, preflight: { readyForLiveStripe: false, missing: ['private object storage'] } }),
+    error => error && error.code === 'stripe_cutover_preflight_blocked' && error.missing.includes('private object storage'),
+    'Clover-to-Stripe cutover must preserve the exact failed launch gates for owner review.'
+  );
+  assert.deepStrictEqual(
+    stripeMigration.assertStripeCutoverLaunchReady({ productionHardeningRequired: true, preflight: { readyForLiveStripe: true, missing: [] } }),
+    { ready: true, isolatedTestMode: false },
+    'A fully hardened, green live preflight must arm controlled cutover.'
+  );
 
   let captured = null;
   const client = stripeAdapter.stripeClient({
@@ -103,6 +123,7 @@ async function run() {
     'completeStripeRecurringChargeClaim',
     'failStripeRecurringChargeClaim'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
+  assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
   ['claim_token', 'idempotencyClaimToken', 'claimIdempotencyKey', 'completeIdempotencyKey', 'failIdempotencyKey'].forEach(value => {
     assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);
   });

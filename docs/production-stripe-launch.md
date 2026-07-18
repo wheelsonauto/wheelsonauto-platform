@@ -305,6 +305,12 @@ deployment fails its health check, restore the protected JSON configuration
 with maintenance mode still enabled, investigate, and repeat the import from a
 new protected snapshot; never let both stores accept writes.
 
+The Clover-to-Stripe provider-switch endpoint is also fail-closed. It refuses
+to schedule or activate a live cutover while
+`WOA_PRODUCTION_HARDENING_REQUIRED` is off, or whenever any live preflight gate
+is incomplete. Saving a Stripe card before launch remains preparation only and
+does not stop or replace the customer's Clover schedule.
+
 Restart once and visit the owner-only endpoint:
 
 ```text
