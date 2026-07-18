@@ -304,9 +304,15 @@ async function main() {
     assert(/401/.test(recurringPreserved.warning) && /Review the Clover merchant API token/.test(recurringPreserved.warning), 'A preserved Clover recurring roster must remain an explicit token warning instead of being reported healthy.');
     assert(preserveCloverRecurringRosterAfterProviderError({ recurringPayments: [], integrations: { clover: {} } }, recurringUnauthorized) === null, 'An empty Clover recurring state must not hide an authorization failure behind a preservation warning.');
     assert(preserveCloverRecurringRosterAfterProviderError(recurringProviderFallbackState, Object.assign(new Error('Clover recurring API 500: failure'), { statusCode: 500 })) === null, 'Unexpected Clover server failures must remain hard sync errors.');
-    const recurringReadyState = { recurringPayments: [{ id: 'rec-cutover-ready', status: 'Active', paymentProvider: 'clover', cloverCustomerId: 'clover-cutover-ready' }], integrations: { clover: { lastRecurringPlanSyncAt: new Date().toISOString(), recurringPlanSummary: { activePlans: 1, activeCustomers: 1 } } } };
+    const recurringReadyState = { recurringPayments: [{ id: 'rec-cutover-ready', status: 'Active', paymentProvider: 'clover', customer: 'Cutover Ready', cloverCustomerId: 'clover-cutover-ready', cloverSubscriptionId: 'sub-cutover-ready' }], integrations: { clover: { lastRecurringPlanSyncAt: new Date().toISOString(), recurringPlanSummary: { activePlans: 1, activeCustomers: 1 } } } };
     const recurringReady = cloverRecurringMigrationReadiness(recurringReadyState);
     assert(recurringReady.ready === true && recurringReady.fresh === true && recurringReady.activeCustomers === 1, 'A fresh complete Clover recurring roster must clear the controlled cutover gate.');
+    const recurringReviewState = { recurringPayments: [{ id: 'rec-cutover-review', status: 'Active', paymentProvider: 'clover', customer: 'Cutover Review', cloverCustomerId: 'clover-cutover-review', cloverSubscriptionId: 'sub-cutover-review' }], integrations: { clover: { lastRecurringPlanSyncAt: new Date().toISOString(), lastRecurringPlanSyncWarning: 'Clover recurring API returned 1 active subscriptions, less than saved Plan Manager total 2. Keeping saved plan totals.', recurringPlanSummary: { activePlans: 2, activeCustomers: 2 }, lastRecurringRosterCoverage: { complete: false, providerSubscriptionRows: 1, expectedActiveSubscriptions: 2 } } } };
+    const recurringReview = cloverRecurringMigrationReadiness(recurringReviewState);
+    assert(recurringReview.ready === true && recurringReview.reviewRequired === true && recurringReview.fullRosterReady === false && recurringReview.eligibleRows === 1, 'A fresh count mismatch must quarantine unresolved plans while allowing the exact verified subscription to use an individual protected cutover.');
+    const recurringDuplicateState = { recurringPayments: [{ id: 'rec-cutover-duplicate-a', status: 'Active', paymentProvider: 'clover', customer: 'Duplicate A', cloverCustomerId: 'clover-duplicate-a', cloverSubscriptionId: 'sub-cutover-duplicate' }, { id: 'rec-cutover-duplicate-b', status: 'Active', paymentProvider: 'clover', customer: 'Duplicate B', cloverCustomerId: 'clover-duplicate-b', cloverSubscriptionId: 'sub-cutover-duplicate' }], integrations: { clover: { lastRecurringPlanSyncAt: new Date().toISOString(), recurringPlanSummary: { activePlans: 1, activeCustomers: 2 }, lastRecurringRosterCoverage: { complete: false, providerSubscriptionRows: 2, expectedActiveSubscriptions: 2 } } } };
+    const recurringDuplicate = cloverRecurringMigrationReadiness(recurringDuplicateState);
+    assert(recurringDuplicate.ready === false && recurringDuplicate.quarantinedRows === 2 && recurringDuplicate.eligibleRows === 0, 'A duplicated Clover subscription ID must quarantine every conflicting row and keep controlled cutover blocked.');
     preserveCloverRecurringRosterAfterProviderError(recurringReadyState, recurringUnauthorized);
     const recurringDegraded = cloverRecurringMigrationReadiness(recurringReadyState);
     assert(recurringDegraded.ready === false && recurringDegraded.degraded === true && /read-only/.test(recurringDegraded.error), 'A preserved roster after a current provider failure must block controlled Stripe cutovers.');
@@ -3157,6 +3163,16 @@ async function main() {
     });
     const cutoverSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: cutoverState });
     assert(cutoverSeed.status === 200 && cutoverSeed.json.ok, 'Stripe cutover smoke setup failed.');
+    const ambiguousCutover = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
+    });
+    assert(ambiguousCutover.status === 409 && ambiguousCutover.json.cutoverQuarantined === true && ambiguousCutover.json.cutoverEligibility.code === 'missing_clover_subscription_id', 'A Clover row without an exact subscription ID must stay quarantined before any provider change.');
+    const identifiedCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const identifiedCutoverRow = identifiedCutoverState.json.recurringPayments.find(row => row.id === cutoverRecurringId);
+    identifiedCutoverRow.cloverSubscriptionId = 'direct-clover-sub-cutover';
+    const identifiedCutoverWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: identifiedCutoverState.json });
+    assert(identifiedCutoverWrite.status === 200 && identifiedCutoverWrite.json.ok, 'Linking the exact Clover subscription ID for cutover failed.');
     const scheduledCutover = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
@@ -3190,6 +3206,7 @@ async function main() {
       email: 'stripe-cutover-clean@example.com',
       cloverCustomerId: 'direct-clover-cutover-clean-customer',
       cloverPaymentSource: 'direct-clover-cutover-clean-source',
+      cloverSubscriptionId: 'direct-clover-sub-cutover-clean',
       stripeCustomerId: 'cus_direct_cutover_clean',
       stripePaymentMethodId: 'pm_direct_cutover_clean',
       stripeMigration: undefined,

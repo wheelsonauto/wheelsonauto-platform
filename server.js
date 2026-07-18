@@ -195,7 +195,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-autopay-restart-156';
+const ASSET_VERSION = 'platform-20260718-cutover-quarantine-157';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9083,6 +9083,13 @@ function cloverRecurringMigrationReadiness(data = {}) {
     const provider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
     return provider === 'clover' && stripeMigration.hasCloverSource(row);
   });
+  const rowEligibility = rows.map(row => ({
+    recurringPaymentId: String(row.id || '').trim(),
+    customer: String(row.customer || row.customerName || '').trim(),
+    ...stripeMigration.cutoverEligibility(data, row)
+  }));
+  const eligibleRows = rowEligibility.filter(item => item.eligible);
+  const quarantinedRows = rowEligibility.filter(item => !item.eligible);
   const identities = new Set(rows.map((row, index) => String(row.cloverSubscriptionId || row.cloverCustomerId || row.id || ('row-' + index))));
   const summary = clover.recurringPlanSummary || {};
   const activeCustomers = Math.max(identities.size, Number(summary.activeCustomers || 0));
@@ -9096,19 +9103,23 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const warning = String(clover.lastRecurringPlanSyncWarning || clover.lastRecurringMemberSyncWarning || '').trim();
   const providerError = String(clover.lastRecurringPlanSyncError || '').trim();
   const coverage = clover.lastRecurringRosterCoverage && typeof clover.lastRecurringRosterCoverage === 'object' ? clover.lastRecurringRosterCoverage : {};
-  const degraded = currentDegradedFailure || !!warning || !!providerError;
+  const degraded = currentDegradedFailure || !!providerError;
   const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
   const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS;
-  const ready = !requiresFreshRoster || (fresh && !degraded);
+  const fullRosterReady = !requiresFreshRoster || (fresh && !degraded && !warning && coverage.complete !== false && quarantinedRows.length === 0);
+  const reviewRequired = requiresFreshRoster && (!!warning || coverage.complete === false || quarantinedRows.length > 0);
+  const ready = !requiresFreshRoster || (fresh && !degraded && eligibleRows.length > 0);
   let error = '';
   if (requiresFreshRoster && currentDegradedFailure) error = 'Clover recurring refresh is degraded (HTTP ' + Number(clover.lastRecurringPlanSyncDegradedStatus || 0) + '). Keep the preserved roster read-only and correct the Clover merchant API token before scheduling Stripe cutovers.';
-  else if (requiresFreshRoster && warning) error = 'Clover returned an incomplete recurring roster. ' + warning;
   else if (requiresFreshRoster && providerError) error = 'Clover recurring refresh has not recovered. Correct the provider connection before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && !checkedAt) error = 'Run a successful Clover recurring roster refresh before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && !fresh) error = 'The last successful Clover recurring roster is stale. Refresh it before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && !eligibleRows.length) error = 'No active Clover row has both an exact subscription ID and a verified customer identity. Resolve at least one individual row before scheduling a Stripe cutover.';
   const message = ready
     ? (requiresFreshRoster
-      ? 'Fresh Clover recurring roster verified for ' + activeCustomers + ' active customer record(s).'
+      ? (reviewRequired
+        ? eligibleRows.length + ' Clover subscription row(s) are individually verified for protected cutover. ' + quarantinedRows.length + ' ambiguous row(s) remain quarantined on Clover. Multiple plans for one customer are allowed only when every plan has a distinct subscription ID.'
+        : 'Fresh Clover recurring roster verified for ' + activeCustomers + ' active customer record(s).')
       : 'No active Clover recurring records currently require a Stripe cutover.')
     : '';
   return {
@@ -9127,6 +9138,11 @@ function cloverRecurringMigrationReadiness(data = {}) {
     subscriptionSource: String(clover.lastRecurringSubscriptionSyncSource || ''),
     warning,
     providerError,
+    eligibleRows: eligibleRows.length,
+    quarantinedRows: quarantinedRows.length,
+    quarantine: quarantinedRows.slice(0, 25),
+    reviewRequired,
+    fullRosterReady,
     requiresFreshRoster,
     verified: !!checkedAt,
     fresh,
@@ -20150,6 +20166,15 @@ const server = http.createServer(async (req, res) => {
       if (!['clover', 'stripe'].includes(target)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe.' });
       if (target === current) return json(res, 200, { ok: true, unchanged: true, paymentProvider: target, recurring });
       if (target === 'stripe') {
+        const cutoverEligibility = stripeMigration.cutoverEligibility(data, recurring);
+        if (!cutoverEligibility.eligible) {
+          return json(res, 409, {
+            ok: false,
+            error: cutoverEligibility.message,
+            cutoverQuarantined: true,
+            cutoverEligibility
+          });
+        }
         if (!recurring.stripeCustomerId || !recurring.stripePaymentMethodId) return json(res, 409, { ok: false, error: 'Stripe card setup is not complete for this customer.' });
         const action = String(payload.action || 'schedule').trim().toLowerCase();
         const actor = user.name || user.username || 'Owner';

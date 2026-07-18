@@ -3199,8 +3199,9 @@ document.addEventListener('click',async function(event){
   notify(result&&result.error||'Operational failure alert test failed');
 },true);
 
-function liveLaunchGateRow(label,ready,detail){
-  return [esc(label),badge(ready?'Verified':'Blocked',ready?'good':'warn'),esc(detail|| (ready?'Current proof is present.':'Current proof is missing or stale.'))]
+function liveLaunchGateRow(label,ready,detail,review){
+  var state=ready?(review?'Review':'Verified'):'Blocked',tone=ready?(review?'warn':'good'):'warn';
+  return [esc(label),badge(state,tone),esc(detail|| (ready?'Current proof is present.':'Current proof is missing or stale.'))]
 }
 function liveLaunchGateDetail(item,ready,fallback){
   if(ready)return item&&item.message||item&&item.summary||fallback||'Current proof is present.';
@@ -3225,7 +3226,7 @@ function liveLaunchPreflightModal(preflight){
     liveLaunchGateRow('Private document storage',storageReady,liveLaunchGateDetail(storageValidation,storageReady,'Encrypted S3-compatible storage needs a current write/read/delete proof.')),
     liveLaunchGateRow('Stripe payments',stripeReady,liveLaunchGateDetail(stripeWebhook,stripeReady,'A signed live Stripe payment webhook must be recorded.')),
     liveLaunchGateRow('Stripe Identity',identityReady,liveLaunchGateDetail(identityWebhook,identityReady,'A signed live Stripe Identity verification is required.')),
-    liveLaunchGateRow('Clover cutover roster',cloverRecurringReady,liveLaunchGateDetail(cloverRecurring,cloverRecurringReady,'A fresh, complete Clover recurring roster is required before any controlled Stripe cutover.')),
+    liveLaunchGateRow('Clover cutover roster',cloverRecurringReady,liveLaunchGateDetail(cloverRecurring,cloverRecurringReady,'A fresh Clover roster plus an exact subscription identity are required for each controlled cutover.'),cloverRecurringReady&&cloverRecurring.reviewRequired===true),
     liveLaunchGateRow('Telnyx SMS',telnyxReady,liveLaunchGateDetail(telnyx,telnyxReady,'10DLC approval plus fresh signed delivery and inbound reply proof are required.')),
     liveLaunchGateRow('Resend email',resendReady,liveLaunchGateDetail(resend,resendReady,'A verified wheelsonauto.com sender plus fresh outbound and signed inbound proof are required.')),
     liveLaunchGateRow('Star AI',starReady,liveLaunchGateDetail(star,starReady,'A fresh OpenAI Responses API health proof with active spend limits is required.')),

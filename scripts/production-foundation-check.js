@@ -134,6 +134,28 @@ async function main() {
     const ambiguousLegacyStripe = { ...legacyPureStripe, cloverCustomerId: 'clover-foundation-legacy', cloverPaymentSource: 'clover-foundation-source' };
     assert.strictEqual(stripeMigration.migrationRecord(ambiguousLegacyStripe).state, stripeMigration.STATES.STRIPE_CARD_SAVED, 'A legacy Stripe row that still has a Clover source must fail closed into the protected cutover state.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed(ambiguousLegacyStripe, 'stripe', '2026-07-24'), false, 'An ambiguous legacy Stripe/Clover row must not autocharge until the owner completes the controlled cutover.');
+    const multiPlanCustomer = {
+      recurringPayments: [
+        { id: 'rec-plan-a', status: 'Active', paymentProvider: 'clover', customer: 'Same Customer', cloverCustomerId: 'clover-same-customer', cloverPaymentSource: 'source-plan-a', cloverSubscriptionId: 'sub-plan-a' },
+        { id: 'rec-plan-b', status: 'Active', paymentProvider: 'clover', customer: 'Same Customer', cloverCustomerId: 'clover-same-customer', cloverPaymentSource: 'source-plan-b', cloverSubscriptionId: 'sub-plan-b' }
+      ]
+    };
+    const multiPlanEligibility = stripeMigration.cutoverEligibility(multiPlanCustomer, multiPlanCustomer.recurringPayments[0]);
+    assert.strictEqual(multiPlanEligibility.eligible, true, 'Separate plans for the same customer must remain eligible when each has its own Clover subscription ID.');
+    assert.strictEqual(multiPlanEligibility.code, 'verified_multi_plan_customer', 'A verified multi-plan customer must remain explicit in cutover evidence.');
+    assert.strictEqual(multiPlanEligibility.relatedPlanCount, 2, 'Cutover evidence must disclose the customer\'s other distinct Clover plans.');
+    const missingSubscriptionEligibility = stripeMigration.cutoverEligibility({ recurringPayments: [{ ...multiPlanCustomer.recurringPayments[0], cloverSubscriptionId: '' }] }, { ...multiPlanCustomer.recurringPayments[0], cloverSubscriptionId: '' });
+    assert.strictEqual(missingSubscriptionEligibility.eligible, false, 'A Clover row without an exact subscription ID must stay quarantined instead of relying on a customer-name guess.');
+    assert.strictEqual(missingSubscriptionEligibility.code, 'missing_clover_subscription_id', 'The missing-subscription quarantine must expose a stable reason code.');
+    const duplicatedSubscriptionState = {
+      recurringPayments: [
+        multiPlanCustomer.recurringPayments[0],
+        { ...multiPlanCustomer.recurringPayments[1], cloverSubscriptionId: 'sub-plan-a' }
+      ]
+    };
+    const duplicateSubscriptionEligibility = stripeMigration.cutoverEligibility(duplicatedSubscriptionState, duplicatedSubscriptionState.recurringPayments[0]);
+    assert.strictEqual(duplicateSubscriptionEligibility.eligible, false, 'Two active local rows must never cut over against the same Clover subscription ID.');
+    assert.strictEqual(duplicateSubscriptionEligibility.code, 'duplicate_clover_subscription_id', 'Duplicate-subscription quarantine must expose a stable reason code.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     const jsonReadiness = await repository.readiness();

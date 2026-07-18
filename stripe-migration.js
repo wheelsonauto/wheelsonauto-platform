@@ -38,6 +38,89 @@ function hasStripeCard(row = {}) {
   return !!(text(row.stripeCustomerId) && text(row.stripePaymentMethodId));
 }
 
+function activeCutoverRow(row = {}) {
+  return !/(removed|returned|history|archived|ended|inactive|cancelled|canceled|expired|disabled)/.test(text(row.status).toLowerCase());
+}
+
+function resolvedCustomerName(row = {}) {
+  const name = text(row.customer || row.customerName || row.fullName || row.name);
+  if (!name || /^(clover recurring customer|unknown customer|unmatched clover payment)$/i.test(name)) return '';
+  return name;
+}
+
+function cloverSubscriptionId(row = {}) {
+  return text(row.cloverSubscriptionId || row.subscriptionId);
+}
+
+function cutoverEligibility(data = {}, row = {}) {
+  const currentProvider = provider(row.paymentProvider || row.provider || 'clover');
+  if (currentProvider !== 'clover' || !hasCloverSource(row) || !activeCutoverRow(row)) {
+    return {
+      applicable: false,
+      eligible: true,
+      code: 'not_clover_cutover',
+      message: 'This record does not require a Clover-to-Stripe cutover.'
+    };
+  }
+
+  const subscriptionId = cloverSubscriptionId(row);
+  if (!subscriptionId) {
+    return {
+      applicable: true,
+      eligible: false,
+      code: 'missing_clover_subscription_id',
+      message: 'This customer stays on Clover until the exact Clover subscription ID is linked. WheelsonAuto will not guess which recurring plan to stop.'
+    };
+  }
+
+  const activeRows = (Array.isArray(data.recurringPayments) ? data.recurringPayments : [])
+    .filter(candidate => activeCutoverRow(candidate) && provider(candidate.paymentProvider || candidate.provider || 'clover') === 'clover' && hasCloverSource(candidate));
+  const duplicateRows = activeRows.filter(candidate => cloverSubscriptionId(candidate) === subscriptionId);
+  if (duplicateRows.length > 1) {
+    return {
+      applicable: true,
+      eligible: false,
+      code: 'duplicate_clover_subscription_id',
+      subscriptionId,
+      duplicateRows: duplicateRows.length,
+      message: 'More than one active WheelsonAuto record uses this Clover subscription ID. Resolve the duplicate before scheduling a Stripe cutover.'
+    };
+  }
+
+  const customerName = resolvedCustomerName(row);
+  const customerIdentity = text(row.cloverCustomerId || row.customerId || row.contractId) || customerName;
+  if (!customerIdentity) {
+    return {
+      applicable: true,
+      eligible: false,
+      code: 'missing_customer_identity',
+      subscriptionId,
+      message: 'This Clover subscription has no verified customer identity. Link the customer file before scheduling a Stripe cutover.'
+    };
+  }
+
+  const normalizedName = customerName.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const siblingPlans = activeRows.filter(candidate => {
+    if (candidate === row || cloverSubscriptionId(candidate) === subscriptionId) return false;
+    const sameCloverCustomer = text(row.cloverCustomerId) && text(candidate.cloverCustomerId) === text(row.cloverCustomerId);
+    const sameCustomerFile = text(row.customerId) && text(candidate.customerId) === text(row.customerId);
+    const candidateName = resolvedCustomerName(candidate).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    return !!(sameCloverCustomer || sameCustomerFile || (normalizedName && candidateName === normalizedName));
+  });
+
+  return {
+    applicable: true,
+    eligible: true,
+    code: siblingPlans.length ? 'verified_multi_plan_customer' : 'verified_clover_subscription',
+    subscriptionId,
+    customerIdentity: text(row.cloverCustomerId || row.customerId || row.contractId) ? 'linked customer ID' : 'resolved customer name',
+    relatedPlanCount: siblingPlans.length + 1,
+    message: siblingPlans.length
+      ? 'This customer has ' + (siblingPlans.length + 1) + ' distinct Clover subscriptions. This exact plan is eligible for an individual protected cutover; the other plans remain unchanged.'
+      : 'The exact Clover subscription and customer identity are verified for an individual protected cutover.'
+  };
+}
+
 function migrationRecord(row = {}) {
   const source = row && typeof row.stripeMigration === 'object' && row.stripeMigration ? row.stripeMigration : {};
   let state = text(source.state).toLowerCase();
@@ -179,6 +262,10 @@ module.exports = {
   paymentIsPaid,
   hasCloverSource,
   hasStripeCard,
+  activeCutoverRow,
+  resolvedCustomerName,
+  cloverSubscriptionId,
+  cutoverEligibility,
   migrationRecord,
   stateLabel,
   billingPeriodKey,
