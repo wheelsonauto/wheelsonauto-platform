@@ -62,6 +62,40 @@ async function verifyDocumentMetadataIsolation() {
   );
 }
 
+async function verifyTransientSchemaConnectionRecovery() {
+  const repository = repositoryForUnitCheck();
+  delete repository.ensureSchema;
+  repository.schemaReady = null;
+  repository.repair = value => value;
+  repository.seed = async () => ({});
+  let connectionAttempts = 0;
+  let releases = 0;
+  const calls = [];
+  const client = {
+    async query(sql, values = []) {
+      calls.push({ sql: String(sql), values });
+      return { rowCount: 0, rows: [] };
+    },
+    release() { releases += 1; }
+  };
+  repository.pool = {
+    async connect() {
+      connectionAttempts += 1;
+      if (connectionAttempts === 1) {
+        const error = new Error('Connection terminated unexpectedly');
+        error.code = '08006';
+        throw error;
+      }
+      return client;
+    }
+  };
+  await repository.ensureSchema();
+  assert.strictEqual(connectionAttempts, 2, 'PostgreSQL schema startup must retry a transient pre-transaction connection failure.');
+  assert.strictEqual(releases, 1, 'The recovered PostgreSQL schema connection must be released exactly once.');
+  assert(calls.some(call => /PRIMARY KEY \(organization_id, id\)/.test(call.sql)), 'Schema recovery must still apply the company-scoped private document key.');
+  assert(calls.some(call => call.values.includes('20260718_document_tenant_primary_key_v4')), 'Schema recovery must record the private-document tenant migration.');
+}
+
 async function verifyWebhookTenantScope() {
   const repository = repositoryForUnitCheck();
   const transactionCalls = [];
@@ -150,6 +184,7 @@ async function verifyTransactionalIndexIsolation() {
 }
 
 async function main() {
+  await verifyTransientSchemaConnectionRecovery();
   await verifyDocumentMetadataIsolation();
   await verifyWebhookTenantScope();
   await verifyTransactionalIndexIsolation();

@@ -3,6 +3,7 @@
 const assert = require('node:assert');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
+const { Client } = require('pg');
 const stateRepository = require('../state-repository');
 
 let databaseUrl = String(process.env.WOA_TEST_DATABASE_URL || '').trim();
@@ -30,6 +31,24 @@ function stopCiPostgres() {
   if (!ciPostgresContainer) return;
   dockerCommand(['rm', '--force', ciPostgresContainer], { timeout: 30000, quiet: true });
   ciPostgresContainer = '';
+}
+
+async function waitForHostPostgres(url) {
+  let lastError;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const client = new Client({ connectionString: url, ssl: false, connectionTimeoutMillis: 3000 });
+    try {
+      await client.connect();
+      await client.query('SELECT 1 AS ready');
+      await client.end();
+      return;
+    } catch (error) {
+      lastError = error;
+      await client.end().catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+  throw new Error('GitHub PostgreSQL runtime container never accepted a stable host SQL connection: ' + String(lastError && lastError.message || lastError || 'unknown error'));
 }
 
 async function startGitHubPostgres() {
@@ -61,6 +80,7 @@ async function startGitHubPostgres() {
     if (!ready) throw new Error('GitHub PostgreSQL runtime container did not become healthy within 20 seconds.');
     databaseUrl = 'postgresql://wheelsonauto_ci:wheelsonauto_ci@127.0.0.1:' + match[1] + '/wheelsonauto_ci';
     databaseSslMode = 'disable';
+    await waitForHostPostgres(databaseUrl);
     confirmed = true;
     console.log('GitHub PostgreSQL 16 runtime container is ready for transactional recovery checks.');
   } catch (error) {

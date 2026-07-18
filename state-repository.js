@@ -1084,6 +1084,27 @@ function pgPool(options = {}) {
   });
 }
 
+function transientPostgresConnectionError(error) {
+  const code = String(error && error.code || '').toUpperCase();
+  if (code === '57P03' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ETIMEDOUT' || code.startsWith('08')) return true;
+  return /connection terminated unexpectedly|connection refused|connection reset|server closed the connection|terminating connection|timeout expired/i.test(String(error && error.message || error || ''));
+}
+
+async function connectPostgresClient(pool) {
+  const retryDelays = [0, 250, 500, 1000, 2000];
+  let lastError;
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (retryDelays[attempt]) await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
+    try {
+      return await pool.connect();
+    } catch (error) {
+      lastError = error;
+      if (!transientPostgresConnectionError(error) || attempt === retryDelays.length - 1) throw error;
+    }
+  }
+  throw lastError;
+}
+
 class PostgresStateRepository {
   constructor(options = {}) {
     if (!options.databaseUrl) throw new Error('WOA_DATA_BACKEND=postgres requires DATABASE_URL. Refusing to fall back to a JSON file.');
@@ -1104,11 +1125,16 @@ class PostgresStateRepository {
     return true;
   }
 
+  async connect() {
+    return connectPostgresClient(this.pool);
+  }
+
   async ensureSchema() {
     if (this.schemaReady) return this.schemaReady;
     this.schemaReady = (async () => {
-      const client = await this.pool.connect();
+      let client;
       try {
+        client = await this.connect();
         await client.query('BEGIN');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_schema_migrations (
           id TEXT PRIMARY KEY,
@@ -1354,11 +1380,11 @@ class PostgresStateRepository {
         }
         await client.query('COMMIT');
       } catch (error) {
-        await client.query('ROLLBACK').catch(() => {});
+        if (client) await client.query('ROLLBACK').catch(() => {});
         this.schemaReady = null;
         throw error;
       } finally {
-        client.release();
+        if (client) client.release();
       }
     })();
     return this.schemaReady;
@@ -1473,7 +1499,7 @@ class PostgresStateRepository {
 
   async write(incomingState, options = {}) {
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const existing = await client.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
@@ -1568,7 +1594,7 @@ class PostgresStateRepository {
   async claimWebhookEvent(provider, eventId, payload = {}) {
     if (!eventId) return { accepted: true, duplicate: false, eventId: '' };
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const existing = await client.query(`SELECT status, attempts, processing_started_at
@@ -1628,7 +1654,7 @@ class PostgresStateRepository {
     const identity = idempotencyScopeKey(scope, key);
     const requestHash = String(options.requestHash || idempotencyRequestHash(request));
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const existing = await client.query(`SELECT request_hash, status, claim_token, response, attempts, processing_started_at
@@ -1767,7 +1793,7 @@ class PostgresStateRepository {
     const targetId = Number(id);
     if (!Number.isSafeInteger(targetId) || targetId <= 0) throw new Error('A valid PostgreSQL job-error ID is required.');
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const targetResult = await client.query(`SELECT id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count
@@ -1836,7 +1862,7 @@ class PostgresStateRepository {
       throw new Error('Star AI quota requires valid day and month keys.');
     }
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       await client.query(`INSERT INTO woa_ai_usage (organization_id, period_type, period_key)
@@ -1879,7 +1905,7 @@ class PostgresStateRepository {
     const lockName = String(name || '').trim();
     if (!lockName) throw new Error('A durable job-lock name is required.');
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     const [keyOne, keyTwo] = advisoryLockKeys(this.organizationId, lockName);
     try {
       const result = await client.query('SELECT pg_try_advisory_lock($1::integer, $2::integer) AS acquired', [keyOne, keyTwo]);
@@ -1944,7 +1970,7 @@ class PostgresStateRepository {
       error.code = 'migration_proof_mismatch';
       throw error;
     }
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const current = await client.query('SELECT version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
@@ -2033,7 +2059,7 @@ class PostgresStateRepository {
       error.missingChecks = evidence.missingChecks;
       throw error;
     }
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const current = await client.query('SELECT version FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
@@ -2085,7 +2111,7 @@ class PostgresStateRepository {
       throw error;
     }
     await this.ensureSchema();
-    const client = await this.pool.connect();
+    const client = await this.connect();
     try {
       await client.query('BEGIN');
       const snapshotResult = await client.query(`SELECT id, version, checksum, state
