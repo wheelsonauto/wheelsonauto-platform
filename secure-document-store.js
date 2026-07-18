@@ -237,9 +237,11 @@ class SecureDocumentStore {
     if (nonce.length !== 12 || authTag.length !== 16 || !aad.length) throw new Error('Encrypted document metadata is invalid.');
     const aadParts = aad.toString('utf8').split('|');
     const recordOrganizationId = String(document.organizationId || '').trim();
+    const recordDocumentId = String(document.id || '').trim();
     const recordContentType = String(document.contentType || document.signatureImageContentType || '').trim();
     if (aadParts.length !== 3 ||
       (recordOrganizationId && aadParts[0] !== recordOrganizationId) ||
+      (recordDocumentId && aadParts[1] !== recordDocumentId) ||
       (recordContentType && aadParts[2] !== recordContentType)) {
       throw new Error('Encrypted document ownership metadata does not match the authenticated storage record.');
     }
