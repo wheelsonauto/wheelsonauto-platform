@@ -98,7 +98,56 @@ async function main() {
     assert.strictEqual(JSON.parse(noop.stdout).changed, false, 'A repeated migration must report that no state changed.');
     assert.strictEqual(await fs.readFile(dataFile, 'utf8'), beforeNoop, 'A repeated migration must leave encrypted state unchanged.');
 
-    console.log('Private document migration check passed: maintenance guard, immutable backup, encrypted read-back proof, legacy retention, and repeat-safe no-op are verified.');
+    const encryptedV1 = structuredClone(migrated);
+    const rotatedKey = crypto.randomBytes(32).toString('base64');
+    const rotatedRoot = path.join(temp, 'private-documents-v2');
+    const rotationEnvironment = {
+      ...baseEnvironment,
+      WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM: '1',
+      WOA_DOCUMENT_LOCAL_ROOT: rotatedRoot,
+      WOA_DOCUMENT_ENCRYPTION_KEY: rotatedKey,
+      WOA_DOCUMENT_ENCRYPTION_KEY_VERSION: 'migration-test-v2',
+      WOA_DOCUMENT_SOURCE_STORAGE_PROVIDER: 'local',
+      WOA_DOCUMENT_SOURCE_LOCAL_ROOT: path.join(temp, 'private-documents'),
+      WOA_DOCUMENT_SOURCE_ENCRYPTION_KEY: key,
+      WOA_DOCUMENT_SOURCE_ENCRYPTION_KEY_VERSION: 'migration-test-v1'
+    };
+    const failedRotationState = await fs.readFile(dataFile, 'utf8');
+    const failedRotation = runMigration(dataFile, {
+      ...rotationEnvironment,
+      WOA_DOCUMENT_SOURCE_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64')
+    });
+    assert.notStrictEqual(failedRotation.status, 0, 'Key rotation must fail closed when the encrypted source key is wrong.');
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), failedRotationState, 'A failed key rotation must not change protected document metadata.');
+
+    const rotated = runMigration(dataFile, rotationEnvironment);
+    assert.strictEqual(rotated.status, 0, rotated.stderr || 'Encrypted documents must be re-homed and rotated into the target store.');
+    const rotatedOutput = JSON.parse(rotated.stdout);
+    assert.strictEqual(rotatedOutput.migrated, 2, 'Every encrypted private record must be re-homed when provider or key version changes.');
+    assert.strictEqual(rotatedOutput.encryptedSourceObjectsRetained, true, 'Encrypted source objects must be retained by default for recovery.');
+    const rotatedState = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+    assert.strictEqual(rotatedState.documents[0].encryption.keyVersion, 'migration-test-v2', 'The rotated document must record the target key version.');
+    assert.strictEqual(rotatedState.documents[0].organizationId, 'org-private-migration-test', 'The encrypted record must retain its organization ownership metadata.');
+    assert.strictEqual(rotatedState.documents[0].storageMigrationHistory.length, 1, 'The re-homed document must retain recovery history for its previous object.');
+    assert.strictEqual(rotatedState.documents[0].storageMigrationHistory[0].fromStorageKey, encryptedV1.documents[0].storageKey, 'Recovery history must identify the previous encrypted object.');
+
+    const rotatedStore = secureDocumentStore.createSecureDocumentStore({
+      provider: 'local',
+      localRoot: rotatedRoot,
+      encryptionKey: rotatedKey,
+      keyVersion: 'migration-test-v2'
+    });
+    assert((await rotatedStore.read(rotatedState.documents[0])).equals(licenseBytes), 'Rotated document bytes must round-trip through the target key and store.');
+    assert((await rotatedStore.read(rotatedState.eSignatures[0])).equals(signatureBytes), 'Rotated signature bytes must round-trip through the target key and store.');
+    assert((await store.read(encryptedV1.documents[0])).equals(licenseBytes), 'The previous encrypted object must remain readable after a default re-home operation.');
+
+    const beforeRotationNoop = await fs.readFile(dataFile, 'utf8');
+    const rotationNoop = runMigration(dataFile, rotationEnvironment);
+    assert.strictEqual(rotationNoop.status, 0, rotationNoop.stderr || 'A repeated key/provider migration must safely no-op.');
+    assert.strictEqual(JSON.parse(rotationNoop.stdout).changed, false, 'A repeated key/provider migration must report no state change.');
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), beforeRotationNoop, 'A repeated key/provider migration must not rewrite protected state.');
+
+    console.log('Private document migration check passed: maintenance guard, immutable backup, encrypted read-back proof, fail-closed key rotation, provider/key re-homing, source retention, and repeat-safe no-op are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

@@ -275,8 +275,11 @@ async function main() {
     });
     const encrypted = await fs.readFile(path.join(temp, stored.storagePath));
     assert(!encrypted.equals(source), 'Private document bytes must be encrypted at rest.');
+    assert.strictEqual(stored.organizationId, 'org-test', 'Encrypted document metadata must retain its owning organization.');
     assert((await store.read(stored)).equals(source), 'Encrypted private document reads must restore the original bytes.');
     await assert.rejects(() => store.read({ ...stored, encryption: { ...stored.encryption, authTag: Buffer.alloc(16).toString('base64') } }), /authenticate|Unsupported state|unable/i, 'Tampered encrypted document metadata must not decrypt.');
+    await assert.rejects(() => store.read({ ...stored, organizationId: 'org-other-company' }), /ownership metadata/i, 'Moving a private document record into another company must fail authenticated ownership verification.');
+    await assert.rejects(() => store.read({ ...stored, contentType: 'image/png' }), /ownership metadata/i, 'Changing the authenticated private document type must fail closed.');
     const storageProbe = await store.probe({ organizationId: 'org-test' });
     assert(storageProbe.ok && storageProbe.encrypted && storageProbe.objectDeleted, 'Private document storage validation must prove encrypted write, read, and cleanup.');
 

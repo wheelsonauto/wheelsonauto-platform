@@ -197,21 +197,24 @@ class SecureDocumentStore {
     if (!this.isConfigured()) throw new Error(this.status().message);
     if (!Buffer.isBuffer(bytes) || !bytes.length) throw new Error('Private document data is missing.');
     const documentId = String(id || 'document').replace(/[^a-z0-9-]/gi, '').slice(0, 80) || 'document';
+    const ownerOrganizationId = String(organizationId || 'org-wheelsonauto');
+    const ownerContentType = String(contentType || 'application/octet-stream');
     const nonce = crypto.randomBytes(12);
-    const aad = Buffer.from([String(organizationId || 'org-wheelsonauto'), documentId, String(contentType || 'application/octet-stream')].join('|'), 'utf8');
+    const aad = Buffer.from([ownerOrganizationId, documentId, ownerContentType].join('|'), 'utf8');
     const cipher = crypto.createCipheriv('aes-256-gcm', this.key, nonce);
     cipher.setAAD(aad);
     const encrypted = Buffer.concat([cipher.update(bytes), cipher.final()]);
     const authTag = cipher.getAuthTag();
-    const storageKey = 'documents/' + String(organizationId || 'org-wheelsonauto').replace(/[^a-z0-9-]/gi, '') + '/' + documentId + '-' + crypto.randomBytes(8).toString('hex') + '.enc';
+    const storageKey = 'documents/' + ownerOrganizationId.replace(/[^a-z0-9-]/gi, '') + '/' + documentId + '-' + crypto.randomBytes(8).toString('hex') + '.enc';
     const stored = await this.writeObject(storageKey, encrypted);
     return {
       id: documentId,
+      organizationId: ownerOrganizationId,
       storageProvider: this.provider === 's3' ? 's3-encrypted' : 'local-encrypted',
       storageKey: stored.storageKey,
       storagePath: stored.storagePath,
       originalName: String(originalName || '').slice(0, 180),
-      contentType: String(contentType || 'application/octet-stream'),
+      contentType: ownerContentType,
       size: bytes.length,
       sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
       encryption: {
@@ -232,6 +235,14 @@ class SecureDocumentStore {
     const authTag = Buffer.from(String(encryption.authTag || ''), 'base64');
     const aad = Buffer.from(String(encryption.aad || ''), 'base64');
     if (nonce.length !== 12 || authTag.length !== 16 || !aad.length) throw new Error('Encrypted document metadata is invalid.');
+    const aadParts = aad.toString('utf8').split('|');
+    const recordOrganizationId = String(document.organizationId || '').trim();
+    const recordContentType = String(document.contentType || document.signatureImageContentType || '').trim();
+    if (aadParts.length !== 3 ||
+      (recordOrganizationId && aadParts[0] !== recordOrganizationId) ||
+      (recordContentType && aadParts[2] !== recordContentType)) {
+      throw new Error('Encrypted document ownership metadata does not match the authenticated storage record.');
+    }
     const encrypted = await this.readObject(document.storageKey);
     const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, nonce);
     decipher.setAAD(aad);

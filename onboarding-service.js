@@ -270,12 +270,14 @@ async function saveDocuments(data, session, application, files, dataDir, documen
   const saved = [];
   for (const kind of required) {
     const file = byKind.get(kind) || {};
+    const organizationId = session.organizationId || application.organizationId || 'org-wheelsonauto';
     const stored = await savePrivateDocument(file, dataDir, 'doc-onboard', documentStore, {
-      organizationId: session.organizationId || application.organizationId || 'org-wheelsonauto'
+      organizationId
     });
     data.documents = data.documents.filter(document => !(document.applicationId === application.id && document.onboardingSessionId === session.id && document.documentKind === kind));
     const record = {
       id: stored.id,
+      organizationId,
       applicationId: application.id,
       onboardingSessionId: session.id,
       onlineVehicleId: session.onlineVehicleId,
