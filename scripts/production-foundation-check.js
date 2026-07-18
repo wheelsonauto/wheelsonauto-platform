@@ -598,6 +598,28 @@ async function main() {
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
 
+    const sharedCustomerPlanA = { ...recurring, id: 'rec-shared-plan-a', cloverCustomerId: 'clover-shared-customer', cloverSubscriptionId: 'clover-subscription-a', stripeCustomerId: 'stripe-shared-customer' };
+    const sharedCustomerPlanB = { ...recurring, id: 'rec-shared-plan-b', cloverCustomerId: 'clover-shared-customer', cloverSubscriptionId: 'clover-subscription-b', stripeCustomerId: 'stripe-shared-customer' };
+    const sharedCustomerPayments = {
+      payments: [{
+        id: 'paid-shared-plan-a',
+        recurringPaymentId: sharedCustomerPlanA.id,
+        cloverSubscriptionId: sharedCustomerPlanA.cloverSubscriptionId,
+        cloverCustomerId: sharedCustomerPlanA.cloverCustomerId,
+        stripeCustomerId: sharedCustomerPlanA.stripeCustomerId,
+        billingPeriodKey: 'due:2026-07-24',
+        status: 'Paid'
+      }]
+    };
+    assert.strictEqual(stripeMigration.existingPaidPayment(sharedCustomerPayments, sharedCustomerPlanA, '2026-07-24').id, 'paid-shared-plan-a', 'Exact recurring and Clover subscription IDs must match the paid plan.');
+    assert.strictEqual(stripeMigration.existingPaidPayment(sharedCustomerPayments, sharedCustomerPlanB, '2026-07-24'), null, 'A payment for plan A must not fall back to the shared customer ID and block or complete plan B.');
+    const mismatchedPlanPayment = { ...sharedCustomerPayments.payments[0], recurringPaymentId: sharedCustomerPlanB.id, cloverSubscriptionId: sharedCustomerPlanA.cloverSubscriptionId };
+    assert.strictEqual(stripeMigration.paymentLinkedToRecurring(mismatchedPlanPayment, sharedCustomerPlanA), false, 'Conflicting explicit recurring and subscription IDs must fail closed instead of trusting one matching field.');
+    assert.strictEqual(stripeMigration.paymentLinkedToRecurring(mismatchedPlanPayment, sharedCustomerPlanB), false, 'Conflicting explicit recurring and subscription IDs must never fall back to a shared provider customer ID.');
+    const unscopedSharedCustomerPayment = { id: 'paid-shared-unscoped', cloverCustomerId: sharedCustomerPlanA.cloverCustomerId, billingPeriodKey: 'due:2026-07-24', status: 'Paid' };
+    assert.strictEqual(stripeMigration.paymentLinkedToRecurring(unscopedSharedCustomerPayment, sharedCustomerPlanA), true, 'A provider payment without a plan identifier must remain visible as ambiguous same-customer evidence instead of being silently ignored.');
+    assert.strictEqual(stripeMigration.paymentLinkedToRecurring(unscopedSharedCustomerPayment, sharedCustomerPlanB), true, 'Ambiguous same-customer evidence must block guessing across every potentially matching plan until staff links the exact transaction.');
+
     console.log('Production foundation check passed: atomic state fallback, durable money-action idempotency, migration-proof guard, checksum fail-closed behavior, controlled recovery-drill evidence, immutable identity preflight, encrypted private storage, tamper rejection, reviewable background monitoring, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });

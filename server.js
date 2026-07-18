@@ -20465,16 +20465,106 @@ const server = http.createServer(async (req, res) => {
       data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
       data.customers = Array.isArray(data.customers) ? data.customers : [];
       data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
-      assignAutopayVehicle(data, autopay);
       const customerKey = normKey(autopay.customer);
       const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
-      const existingAutopay = payload.reactivateExisting ? data.recurringPayments.find(row => (reactivateId && (row.id === reactivateId || row.cardSetupRequestId === reactivateId)) || (customerKey && normKey(row.customer) === customerKey)) : null;
-      if (existingAutopay) {
-        Object.assign(existingAutopay, autopay, {
-          id: existingAutopay.id,
-          createdAt: existingAutopay.createdAt || autopay.createdAt,
-          reactivatedAt: new Date().toISOString()
+      const cloverMembersSource = (((data.integrations || {}).clover || {}).recurringPlanMembers || []);
+      const cloverMembers = Array.isArray(cloverMembersSource) ? cloverMembersSource : [];
+      const candidateKey = row => String(row && (row.cloverSubscriptionId || row.id || row.cardSetupRequestId) || '').trim();
+      const exactCandidate = payload.reactivateExisting && reactivateId
+        ? [...data.recurringPayments, ...cloverMembers].find(row => row && (row.id === reactivateId || row.cardSetupRequestId === reactivateId || row.cloverSubscriptionId === reactivateId))
+        : null;
+      const namedCandidates = payload.reactivateExisting && customerKey
+        ? [...data.recurringPayments, ...cloverMembers].filter(row => row && normKey(row.customer) === customerKey)
+        : [];
+      const distinctNamedCandidates = Array.from(new Map(namedCandidates.map(row => [candidateKey(row) || ('name:' + normKey(row.customer) + ':' + String(row.amount || '') + ':' + String(row.nextRun || '')), row])).values());
+      if (payload.reactivateExisting && !exactCandidate && distinctNamedCandidates.length > 1) {
+        return json(res, 409, {
+          ok: false,
+          ambiguousRecurringPlans: true,
+          error: 'More than one recurring plan belongs to this customer. Choose the exact recurring plan instead of matching by name.',
+          plans: distinctNamedCandidates.map(row => ({
+            id: row.id || '',
+            cloverSubscriptionId: row.cloverSubscriptionId || '',
+            amount: Number(row.amount || 0),
+            frequency: row.frequency || '',
+            status: row.status || ''
+          }))
         });
+      }
+      const sourceAutopay = exactCandidate || distinctNamedCandidates[0] || null;
+      let existingAutopay = sourceAutopay
+        ? data.recurringPayments.find(row => row === sourceAutopay || (candidateKey(sourceAutopay) && candidateKey(row) === candidateKey(sourceAutopay)))
+        : null;
+      if (payload.reactivateExisting && reactivateId && !sourceAutopay) {
+        return json(res, 404, { ok: false, error: 'The exact recurring plan selected for reactivation was not found.' });
+      }
+      if (!existingAutopay && sourceAutopay) {
+        existingAutopay = { ...sourceAutopay };
+        data.recurringPayments.unshift(existingAutopay);
+      }
+      assignAutopayVehicle(data, autopay);
+      if (existingAutopay) {
+        if (stripeChargeAttemptIsPending(existingAutopay.stripeChargeAttempt) || /confirmation pending/i.test(String(existingAutopay.status || ''))) {
+          return json(res, 409, {
+            ok: false,
+            confirmationPending: true,
+            error: 'A provider charge is still being confirmed for this recurring plan. Wait for reconciliation before reactivating it.'
+          });
+        }
+        const continuityFields = [
+          'cloverCustomerId', 'cloverSubscriptionId', 'cloverPaymentSource', 'cloverPlanId',
+          'stripeCustomerId', 'stripePaymentMethodId', 'stripeSetupIntentId', 'stripeLivemode',
+          'stripeCardSavedAt', 'cardSavedAt', 'cardLabel', 'cardLast4'
+        ];
+        continuityFields.forEach(field => {
+          if ((autopay[field] === undefined || autopay[field] === null || autopay[field] === '') && existingAutopay[field] !== undefined) autopay[field] = existingAutopay[field];
+        });
+        const now = new Date().toISOString();
+        let continuityMigration = stripeMigration.migrationRecord(existingAutopay);
+        let continuityProvider = normalizedPaymentProvider(existingAutopay.paymentProvider || existingAutopay.provider || 'clover');
+        let staleCutoverCancelled = false;
+        if (continuityMigration.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
+          continuityMigration = stripeMigration.rollbackToClover(existingAutopay, {
+            at: now,
+            by: user.name || user.username || 'Staff',
+            note: 'A stale scheduled Stripe cutover was cancelled before this recurring plan was reactivated. Clover remains active until a new protected cutover is scheduled.'
+          });
+          continuityProvider = 'clover';
+          staleCutoverCancelled = true;
+        }
+        const explicitProvider = String(payload.paymentProvider || payload.provider || '').trim();
+        if (!explicitProvider || staleCutoverCancelled) {
+          autopay.paymentProvider = continuityProvider;
+          autopay.provider = paymentProviderLabel(continuityProvider);
+        }
+        const migrationPatch = stripeMigrationRecordPatch(continuityMigration);
+        const proposedAutopay = { ...existingAutopay, ...autopay, ...migrationPatch };
+        const activeRequested = String(autopay.status || '').toLowerCase() === 'active';
+        const savedCardReady = recurringCardReadyForProvider(proposedAutopay, proposedAutopay.paymentProvider || proposedAutopay.provider);
+        if (activeRequested && !savedCardReady) {
+          return json(res, 409, {
+            ok: false,
+            cardSetupNeeded: true,
+            error: 'This recurring plan does not have a verified chargeable card for ' + paymentProviderLabel(proposedAutopay.paymentProvider || proposedAutopay.provider) + '. Create a secure card setup link instead of marking it active.'
+          });
+        }
+        const reactivationPatch = {
+          ...autopay,
+          ...migrationPatch,
+          id: existingAutopay.id || existingAutopay.cloverSubscriptionId || autopay.id,
+          createdAt: existingAutopay.createdAt || autopay.createdAt,
+          reactivatedAt: now,
+          removedAt: '',
+          returnedAt: '',
+          endedAt: '',
+          retryCount: 0,
+          failedAttempts: 0,
+          autoChargeEnabled: activeRequested && savedCardReady,
+          autopayManagedBy: activeRequested && savedCardReady ? ('WheelsonAuto / ' + paymentProviderLabel(proposedAutopay.paymentProvider || proposedAutopay.provider)) : 'Setup or manual review',
+          stripeCutoverLocked: staleCutoverCancelled ? false : !!existingAutopay.stripeCutoverLocked
+        };
+        Object.assign(existingAutopay, reactivationPatch);
+        patchRecurringAdminState(data, existingAutopay.cloverSubscriptionId || existingAutopay.id, reactivationPatch);
       } else data.recurringPayments.unshift(autopay);
       if (autopay.customer && !data.customers.some(c => String(c.name || '').toLowerCase() === autopay.customer.toLowerCase())) {
         const activeAutopay = String(autopay.status || '').toLowerCase() === 'active';
@@ -20496,6 +20586,7 @@ const server = http.createServer(async (req, res) => {
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       const recurring = findRecurringRow(data, id);
       if (!recurring) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      const migrationBeforeUpdate = stripeMigration.migrationRecord(recurring);
       const nextRun = String(payload.nextRun || (recurring && recurring.nextRun) || '').trim();
       const frequency = String(payload.frequency || (recurring && recurring.frequency) || 'Weekly').trim();
       const amount = payload.amount === undefined || payload.amount === '' ? undefined : Number(payload.amount);
@@ -20555,6 +20646,35 @@ const server = http.createServer(async (req, res) => {
         notes: String(payload.note || recurring && recurring.notes || '').trim()
       };
       const updatedAt = new Date().toISOString();
+      let cutoverRescheduled = false;
+      if (migrationBeforeUpdate.state === stripeMigration.STATES.CUTOVER_SCHEDULED && scheduleChanged) {
+        if (nextRun < localDateKey()) {
+          return json(res, 409, { ok: false, error: 'A protected Stripe cutover cannot be moved to a past billing date. Choose today or a future date, or cancel the cutover first.' });
+        }
+        const existingCutoverPayment = stripeMigration.existingPaidPayment(data, recurring, nextRun);
+        if (existingCutoverPayment) {
+          return json(res, 409, {
+            ok: false,
+            error: 'A payment is already recorded for ' + nextRun + '. Choose the next unpaid billing date before rescheduling the Stripe cutover.',
+            payment: existingCutoverPayment
+          });
+        }
+        const rescheduledMigration = stripeMigration.transition(recurring, stripeMigration.STATES.CUTOVER_SCHEDULED, {
+          at: updatedAt,
+          by: user.name || user.username || 'Staff',
+          cutoverDate: nextRun,
+          cutoverScheduledAt: migrationBeforeUpdate.cutoverScheduledAt || updatedAt,
+          note: 'Protected Stripe cutover schedule updated from ' + (migrationBeforeUpdate.cutoverDate || recurring.nextRun || 'unscheduled') + ' to ' + nextRun + ' (' + frequency + ' at ' + chargeTime + '). Clover remains active until owner confirmation.'
+        });
+        Object.assign(patch, stripeMigrationRecordPatch(rescheduledMigration), {
+          stripeCutoverLocked: true,
+          paymentProvider: 'clover',
+          provider: 'Clover',
+          paymentSetup: 'Clover active - Stripe cutover scheduled',
+          autopayManagedBy: 'WheelsonAuto / Clover (cutover lock)'
+        });
+        cutoverRescheduled = true;
+      }
       if (scheduleChanged) patch.adminScheduleChangedAt = updatedAt;
       if (retryReset) Object.assign(patch, {
         retryCount: 0,
@@ -20573,27 +20693,55 @@ const server = http.createServer(async (req, res) => {
       enrichLinkedProfiles(data);
       appendAuditLog(data, user, scheduleChanged ? 'Autopay schedule updated' : (amountChanged ? 'Autopay amount updated' : 'Autopay reviewed'), [recurring && recurring.customer || id, moneyText(amount !== undefined ? amount : recurring && recurring.amount || 0), frequency, nextRun + ' ' + chargeTime, status]);
       await writeData(data);
-      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset });
+      return json(res, 200, { ok: true, nextRun, frequency, amount: amount !== undefined ? amount : recurring && recurring.amount, status, paymentDay, chargeTime, monthlyDay, retryRule, autopayManagedBy: patch.autopayManagedBy, autoChargeEnabled: enableWheelsonAutoCharge, amountChanged, scheduleChanged, retryReset, cutoverRescheduled, stripeCutoverDate: cutoverRescheduled ? nextRun : migrationBeforeUpdate.cutoverDate || '' });
     }
     if (url.pathname === '/api/recurring-payments/remove' && req.method === 'POST') {
       const payload = await readJsonBody(req);
       const data = await readData();
       const id = String(payload.recurringPaymentId || payload.id || '').trim();
       if (!id) return json(res, 400, { ok: false, error: 'Choose a recurring customer to remove.' });
+      const recurring = findRecurringRow(data, id);
+      if (!recurring) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
+      if (stripeChargeAttemptIsPending(recurring.stripeChargeAttempt) || /confirmation pending/i.test(String(recurring.status || ''))) {
+        return json(res, 409, {
+          ok: false,
+          confirmationPending: true,
+          error: 'A provider charge is still being confirmed for this customer. Wait for reconciliation before removing autopay so a late payment result cannot be hidden.'
+        });
+      }
       const removedAt = new Date().toISOString();
-      const found = patchRecurringAdminState(data, id, {
+      const removalPatch = {
         status: 'Removed',
         tone: 'bad',
         nextRun: 'Removed',
         removedAt,
+        autoChargeEnabled: false,
+        autopayManagedBy: 'Stopped - removed by admin',
         paymentSetup: 'Removed from WheelsonAuto autopay',
         notes: String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()
-      });
+      };
+      const migrationBeforeRemoval = stripeMigration.migrationRecord(recurring);
+      let cancelledScheduledCutover = false;
+      if (migrationBeforeRemoval.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
+        const cancelledMigration = stripeMigration.rollbackToClover(recurring, {
+          at: removedAt,
+          by: user.name || user.username || 'Staff',
+          note: 'Removing autopay cancelled the scheduled Stripe cutover. The saved Stripe card is retained, but Clover remains the recorded provider until a future protected cutover is scheduled.'
+        });
+        Object.assign(removalPatch, {
+          paymentProvider: 'clover',
+          provider: 'Clover',
+          stripeCutoverLocked: false,
+          ...stripeMigrationRecordPatch(cancelledMigration)
+        });
+        cancelledScheduledCutover = true;
+      }
+      const found = patchRecurringAdminState(data, id, removalPatch);
       if (!found) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       enrichLinkedProfiles(data);
-      appendAuditLog(data, user, 'Autopay removed', [id, String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim()]);
+      appendAuditLog(data, user, 'Autopay removed', [recurring.customer || id, String(payload.note || 'Removed from WheelsonAuto autopay by admin.').trim(), cancelledScheduledCutover ? 'Scheduled Stripe cutover cancelled' : 'Provider state retained']);
       await writeData(data);
-      return json(res, 200, { ok: true, removedAt });
+      return json(res, 200, { ok: true, removedAt, cancelledScheduledCutover, stripeMigrationState: cancelledScheduledCutover ? stripeMigration.STATES.STRIPE_CARD_SAVED : migrationBeforeRemoval.state });
     }
     if (url.pathname === '/api/card-setup-requests/delete' && req.method === 'POST') {
       const payload = await readJsonBody(req);

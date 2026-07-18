@@ -3210,6 +3210,34 @@ async function main() {
     });
     assert(scheduledCutover.status === 200 && scheduledCutover.json.scheduled && scheduledCutover.json.paymentProvider === 'clover', 'Scheduling Stripe must leave Clover as the active provider until owner confirmation.');
     assert(scheduledCutover.json.recurring && scheduledCutover.json.recurring.stripeMigration && scheduledCutover.json.recurring.stripeMigration.state === 'cutover_scheduled', 'Scheduling must persist the protected cutover state.');
+    const rescheduledCutoverDate = autopayDateOffset(1);
+    const rescheduledCutover = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: cutoverRecurringId,
+        amount: 229,
+        frequency: 'Weekly',
+        nextRun: rescheduledCutoverDate,
+        chargeTime: '18:00',
+        status: 'Active'
+      }
+    });
+    assert(rescheduledCutover.status === 200 && rescheduledCutover.json.cutoverRescheduled === true && rescheduledCutover.json.stripeCutoverDate === rescheduledCutoverDate, 'Editing a scheduled migration must atomically move its protected Stripe cutover date with the recurring due date.');
+    const rescheduledCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const rescheduledCutoverRow = rescheduledCutoverState.json.recurringPayments.find(row => row.id === cutoverRecurringId);
+    assert(rescheduledCutoverRow.nextRun === rescheduledCutoverDate && rescheduledCutoverRow.stripeMigration.cutoverDate === rescheduledCutoverDate && rescheduledCutoverRow.paymentProvider === 'clover' && rescheduledCutoverRow.stripeCutoverLocked === true, 'A cutover schedule edit must keep Clover active while the due date and migration lock remain synchronized.');
+    const restoredCutoverDate = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: cutoverRecurringId,
+        amount: 229,
+        frequency: 'Weekly',
+        nextRun: autopayTodayKey,
+        chargeTime: '18:00',
+        status: 'Active'
+      }
+    });
+    assert(restoredCutoverDate.status === 200 && restoredCutoverDate.json.cutoverRescheduled === true && restoredCutoverDate.json.stripeCutoverDate === autopayTodayKey, 'Moving the protected cutover back to today must keep both schedule records synchronized for the remaining duplicate-payment test.');
     const duplicateCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     duplicateCutoverState.json.payments.unshift({
       id: 'direct-cutover-existing-paid',
@@ -3234,6 +3262,173 @@ async function main() {
     });
     assert(cancelledCutover.status === 200 && cancelledCutover.json.cancelled === true && cancelledCutover.json.recurring.paymentProvider === 'clover', 'The owner must be able to cancel a scheduled cutover while leaving Clover active.');
     assert(cancelledCutover.json.recurring.stripeMigration.state === 'stripe_card_saved' && !cancelledCutover.json.recurring.stripeMigration.cutoverDate, 'Cancelling a cutover must return to card-saved preparation and clear the active cutover date.');
+
+    const removableCutoverId = 'direct-stripe-cutover-removal';
+    const removableCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    removableCutoverState.json.recurringPayments.unshift({
+      id: removableCutoverId,
+      customer: 'Direct Cutover Removal',
+      phone: '3135550781',
+      email: 'cutover-removal@example.com',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'clover',
+      provider: 'Clover',
+      cloverCustomerId: 'direct-shared-cutover-removal-customer',
+      cloverSubscriptionId: 'direct-clover-sub-cutover-removal',
+      cloverPaymentSource: 'direct-clover-source-cutover-removal',
+      stripeCustomerId: 'cus_direct_cutover_removal',
+      stripePaymentMethodId: 'pm_direct_cutover_removal',
+      stripeCardSavedAt: new Date().toISOString(),
+      stripeLivemode: true,
+      paymentSetup: 'Clover card saved and chargeable'
+    });
+    const removableCutoverSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: removableCutoverState.json });
+    assert(removableCutoverSeed.status === 200 && removableCutoverSeed.json.ok, 'Scheduled-cutover removal setup failed.');
+    const removableCutoverScheduled = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: removableCutoverId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
+    });
+    assert(removableCutoverScheduled.status === 200 && removableCutoverScheduled.json.scheduled, 'The removable Stripe cutover could not be scheduled.');
+    const removedScheduledCutover = await request(server, 'POST', '/api/recurring-payments/remove', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: removableCutoverId, note: 'Direct test removal during scheduled cutover.' }
+    });
+    assert(removedScheduledCutover.status === 200 && removedScheduledCutover.json.cancelledScheduledCutover === true && removedScheduledCutover.json.stripeMigrationState === 'stripe_card_saved', 'Removing autopay must cancel a merely scheduled Stripe cutover instead of leaving a stale charge date.');
+    const removedScheduledCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const removedScheduledCutoverRow = removedScheduledCutoverState.json.recurringPayments.find(row => row.id === removableCutoverId);
+    assert(removedScheduledCutoverRow && removedScheduledCutoverRow.status === 'Removed' && removedScheduledCutoverRow.autoChargeEnabled === false && removedScheduledCutoverRow.paymentProvider === 'clover' && removedScheduledCutoverRow.stripeMigration.state === 'stripe_card_saved' && !removedScheduledCutoverRow.stripeMigration.cutoverDate, 'A removed cutover row must be locally disabled, stay on Clover, retain the saved Stripe card, and clear the stale cutover date.');
+    const reactivatedScheduledCutover = await request(server, 'POST', '/api/recurring-payments', {
+      cookie: ownerCookie,
+      json: {
+        reactivateExisting: true,
+        recurringPaymentId: removableCutoverId,
+        customer: 'Direct Cutover Removal',
+        phone: '3135550781',
+        email: 'cutover-removal@example.com',
+        amount: 229,
+        frequency: 'Weekly',
+        nextRun: autopayDateOffset(2),
+        chargeTime: '18:00',
+        status: 'Active',
+        paymentSetup: 'Active saved card / Clover linked'
+      }
+    });
+    assert(reactivatedScheduledCutover.status === 201 && reactivatedScheduledCutover.json.reactivated === true, 'The exact removed recurring plan could not be reactivated.');
+    assert(reactivatedScheduledCutover.json.autopay.autoChargeEnabled === true && reactivatedScheduledCutover.json.autopay.paymentProvider === 'clover' && reactivatedScheduledCutover.json.autopay.cloverPaymentSource === 'direct-clover-source-cutover-removal' && reactivatedScheduledCutover.json.autopay.stripePaymentMethodId === 'pm_direct_cutover_removal' && reactivatedScheduledCutover.json.autopay.stripeMigration.state === 'stripe_card_saved' && !reactivatedScheduledCutover.json.autopay.stripeMigration.cutoverDate, 'Reactivation must preserve both provider vault references without reviving a cancelled cutover.');
+
+    const ambiguousPlanCustomer = 'Direct Shared Multi Plan Customer';
+    const ambiguousPlanAId = 'direct-shared-plan-a';
+    const ambiguousPlanBId = 'direct-shared-plan-b';
+    const ambiguousPlanState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    ambiguousPlanState.json.recurringPayments.unshift(
+      {
+        id: ambiguousPlanAId,
+        customer: ambiguousPlanCustomer,
+        amount: 199,
+        frequency: 'Weekly',
+        nextRun: 'Removed',
+        status: 'Removed',
+        autoChargeEnabled: false,
+        paymentProvider: 'clover',
+        provider: 'Clover',
+        cloverCustomerId: 'direct-shared-multi-plan-clover-customer',
+        cloverSubscriptionId: 'direct-shared-multi-plan-sub-a',
+        cloverPaymentSource: 'direct-shared-multi-plan-source-a',
+        paymentSetup: 'Clover card saved and chargeable'
+      },
+      {
+        id: ambiguousPlanBId,
+        customer: ambiguousPlanCustomer,
+        amount: 229,
+        frequency: 'Weekly',
+        nextRun: 'Removed',
+        status: 'Removed',
+        autoChargeEnabled: false,
+        paymentProvider: 'clover',
+        provider: 'Clover',
+        cloverCustomerId: 'direct-shared-multi-plan-clover-customer',
+        cloverSubscriptionId: 'direct-shared-multi-plan-sub-b',
+        cloverPaymentSource: 'direct-shared-multi-plan-source-b',
+        paymentSetup: 'Clover card saved and chargeable'
+      }
+    );
+    const ambiguousPlanSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: ambiguousPlanState.json });
+    assert(ambiguousPlanSeed.status === 200 && ambiguousPlanSeed.json.ok, 'Multi-plan reactivation setup failed.');
+    const ambiguousNameReactivation = await request(server, 'POST', '/api/recurring-payments', {
+      cookie: ownerCookie,
+      json: { reactivateExisting: true, customer: ambiguousPlanCustomer, amount: 229, frequency: 'Weekly', nextRun: autopayDateOffset(2), chargeTime: '18:00', status: 'Active', paymentSetup: 'Active saved card / Clover linked' }
+    });
+    assert(ambiguousNameReactivation.status === 409 && ambiguousNameReactivation.json.ambiguousRecurringPlans === true && ambiguousNameReactivation.json.plans.length === 2, 'Name-only reactivation must fail closed when one customer has multiple recurring plans.');
+    const exactPlanReactivation = await request(server, 'POST', '/api/recurring-payments', {
+      cookie: ownerCookie,
+      json: { reactivateExisting: true, recurringPaymentId: ambiguousPlanBId, customer: ambiguousPlanCustomer, amount: 229, frequency: 'Weekly', nextRun: autopayDateOffset(2), chargeTime: '18:00', status: 'Active', paymentSetup: 'Active saved card / Clover linked' }
+    });
+    assert(exactPlanReactivation.status === 201 && exactPlanReactivation.json.reactivated === true && exactPlanReactivation.json.autopay.id === ambiguousPlanBId, 'Selecting the exact recurring plan must reactivate only that plan.');
+    const exactPlanRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const exactPlanARow = exactPlanRead.json.recurringPayments.find(row => row.id === ambiguousPlanAId);
+    const exactPlanBRow = exactPlanRead.json.recurringPayments.find(row => row.id === ambiguousPlanBId);
+    assert(exactPlanARow.status === 'Removed' && exactPlanARow.autoChargeEnabled === false && exactPlanBRow.status === 'Active' && exactPlanBRow.autoChargeEnabled === true, 'Reactivating plan B must leave plan A removed even when both plans share the same customer identity.');
+
+    const sharedCutoverPlanAId = 'direct-shared-cutover-plan-a';
+    const sharedCutoverPlanBId = 'direct-shared-cutover-plan-b';
+    const sharedCutoverCustomerId = 'direct-shared-cutover-clover-customer';
+    const sharedCutoverStripeId = 'cus_direct_shared_cutover';
+    const sharedCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const sharedCutoverBase = {
+      customer: 'Direct Shared Cutover Customer',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'clover',
+      provider: 'Clover',
+      cloverCustomerId: sharedCutoverCustomerId,
+      cloverPaymentSource: 'direct-shared-cutover-source',
+      stripeCustomerId: sharedCutoverStripeId,
+      stripePaymentMethodId: 'pm_direct_shared_cutover',
+      stripeCardSavedAt: new Date().toISOString(),
+      stripeLivemode: true,
+      paymentSetup: 'Clover card saved and chargeable'
+    };
+    sharedCutoverState.json.recurringPayments.unshift(
+      { ...sharedCutoverBase, id: sharedCutoverPlanAId, cloverSubscriptionId: 'direct-shared-cutover-sub-a' },
+      { ...sharedCutoverBase, id: sharedCutoverPlanBId, cloverSubscriptionId: 'direct-shared-cutover-sub-b' }
+    );
+    sharedCutoverState.json.payments.unshift({
+      id: 'direct-shared-cutover-plan-a-paid',
+      recurringPaymentId: sharedCutoverPlanAId,
+      cloverSubscriptionId: 'direct-shared-cutover-sub-a',
+      cloverCustomerId: sharedCutoverCustomerId,
+      stripeCustomerId: sharedCutoverStripeId,
+      billingPeriodKey: 'due:' + autopayTodayKey,
+      scheduledDueDate: autopayTodayKey,
+      amount: 229,
+      status: 'Paid',
+      paymentProvider: 'clover',
+      createdAt: new Date().toISOString()
+    });
+    const sharedCutoverSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: sharedCutoverState.json });
+    assert(sharedCutoverSeed.status === 200 && sharedCutoverSeed.json.ok, 'Shared-customer cutover setup failed.');
+    const sharedPlanBScheduled = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: sharedCutoverPlanBId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
+    });
+    assert(sharedPlanBScheduled.status === 200 && sharedPlanBScheduled.json.scheduled, 'Plan B should remain independently eligible for a protected cutover.');
+    const sharedPlanBActivated = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: sharedCutoverPlanBId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+    });
+    assert(sharedPlanBActivated.status === 200 && sharedPlanBActivated.json.activated === true && sharedPlanBActivated.json.recurring.stripeMigration.state === 'first_stripe_charge_pending', 'A paid transaction explicitly linked to plan A must not block or complete plan B even when both share provider customer IDs.');
+
     const cleanCutoverRecurringId = 'direct-stripe-cutover-clean';
     const cleanCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     cleanCutoverState.json.recurringPayments.unshift({

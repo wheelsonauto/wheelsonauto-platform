@@ -194,7 +194,21 @@ function paymentPeriodKey(payment = {}) {
 
 function paymentLinkedToRecurring(payment = {}, recurring = {}) {
   const recurringId = text(recurring.id || recurring.recurringPaymentId);
-  if (recurringId && text(payment.recurringPaymentId) === recurringId) return true;
+  const paymentRecurringId = text(payment.recurringPaymentId);
+  if (paymentRecurringId) {
+    if (!recurringId || paymentRecurringId !== recurringId) return false;
+  }
+  const recurringCloverSubscriptionId = cloverSubscriptionId(recurring);
+  const paymentCloverSubscriptionId = cloverSubscriptionId(payment);
+  if (paymentCloverSubscriptionId) {
+    if (!recurringCloverSubscriptionId || paymentCloverSubscriptionId !== recurringCloverSubscriptionId) return false;
+  }
+  const recurringStripeSubscriptionId = text(recurring.stripeSubscriptionId);
+  const paymentStripeSubscriptionId = text(payment.stripeSubscriptionId);
+  if (paymentStripeSubscriptionId) {
+    if (!recurringStripeSubscriptionId || paymentStripeSubscriptionId !== recurringStripeSubscriptionId) return false;
+  }
+  if (paymentRecurringId || paymentCloverSubscriptionId || paymentStripeSubscriptionId) return true;
   const stripeCustomerId = text(recurring.stripeCustomerId);
   if (stripeCustomerId && text(payment.stripeCustomerId) === stripeCustomerId) return true;
   const cloverCustomerId = text(recurring.cloverCustomerId);
