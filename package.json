@@ -42,6 +42,7 @@
     "postgres-preflight": "node scripts/postgres-preflight.js",
     "postgres-migration-source-check": "node scripts/postgres-migration-source-check.js",
     "migrate-json-to-postgres": "node scripts/migrate-json-to-postgres.js",
+    "recover-postgres-migration-lock": "node scripts/recover-postgres-migration-lock.js",
     "verify-json-to-postgres": "node scripts/verify-json-to-postgres.js",
     "migrate-private-documents": "node scripts/migrate-private-documents.js",
     "passtime-check": "node --check passtime-adapter.js && node --check scripts/passtime-gps-check.js && node --check scripts/passtime-portal-check.js && node scripts/passtime-gps-check.js && node scripts/passtime-portal-check.js"

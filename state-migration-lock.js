@@ -5,6 +5,16 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const DEFAULT_LOCK_NAME = '.woa-postgres-migration.lock';
+const DEFAULT_RECOVERY_MIN_AGE_MS = 5 * 60 * 1000;
+
+function normalizedChecksum(value) {
+  const checksum = String(value || '').trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(checksum) ? checksum : '';
+}
+
+function checksumBytes(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
 
 function lockFilePath(options = {}) {
   const configured = String(options.lockFile || process.env.WOA_STATE_MIGRATION_LOCK_FILE || '').trim();
@@ -87,11 +97,74 @@ async function release(lock = {}) {
   return { released: true, file };
 }
 
+async function recoverStale(options = {}) {
+  const status = await lockStatus(options);
+  if (!status.active) {
+    const error = new Error('No PostgreSQL migration lock exists. There is nothing to recover.');
+    error.code = 'woa_postgres_migration_lock_missing';
+    throw error;
+  }
+  if (!status.valid) {
+    const error = new Error('The PostgreSQL migration lock metadata is invalid. Preserve and inspect the lock before restoring writes.');
+    error.code = 'woa_postgres_migration_lock_invalid';
+    throw error;
+  }
+  const expectedSourceChecksum = normalizedChecksum(options.expectedSourceChecksum);
+  if (!expectedSourceChecksum) {
+    throw new Error('A valid 64-character source SHA-256 checksum is required to recover a stale PostgreSQL migration lock.');
+  }
+  const lockedSourceChecksum = normalizedChecksum(status.record.sourceFileChecksum);
+  if (!lockedSourceChecksum || lockedSourceChecksum !== expectedSourceChecksum) {
+    throw new Error('The supplied source checksum does not match the protected source recorded by the PostgreSQL migration lock.');
+  }
+  const dataFile = path.resolve(options.dataFile || status.record.sourceFile || '');
+  if (!status.record.sourceFile || path.resolve(status.record.sourceFile) !== dataFile) {
+    throw new Error('The supplied protected source path does not match the PostgreSQL migration lock.');
+  }
+  const currentSourceChecksum = checksumBytes(await fs.readFile(dataFile));
+  if (currentSourceChecksum !== expectedSourceChecksum) {
+    throw new Error('The protected JSON source changed after the PostgreSQL migration lock was acquired. Keep writes blocked and reconcile the source before recovery.');
+  }
+  const acquiredAtMs = Date.parse(status.record.acquiredAt);
+  const minAgeMs = Number.isFinite(Number(options.minAgeMs))
+    ? Math.max(0, Number(options.minAgeMs))
+    : DEFAULT_RECOVERY_MIN_AGE_MS;
+  if (!Number.isFinite(acquiredAtMs) || Date.now() - acquiredAtMs < minAgeMs) {
+    const error = new Error('The PostgreSQL migration lock is not old enough to treat as stale. Wait for the active migration or its cleanup to finish.');
+    error.code = 'woa_postgres_migration_lock_not_stale';
+    throw error;
+  }
+  const recoveredAt = new Date().toISOString();
+  const suffix = recoveredAt.replace(/[^0-9]/g, '').slice(0, 14) + '-' + String(status.record.token).slice(0, 12);
+  const recoveryFile = status.file + '.recovered-' + suffix + '.json';
+  try {
+    await fs.rename(status.file, recoveryFile);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      const conflict = new Error('The PostgreSQL migration lock changed while recovery was being verified. Recheck its status before continuing.');
+      conflict.code = 'woa_postgres_migration_lock_recovery_race';
+      throw conflict;
+    }
+    throw error;
+  }
+  return {
+    recovered: true,
+    file: status.file,
+    recoveryFile,
+    recoveredAt,
+    acquiredAt: status.record.acquiredAt,
+    sourceFile: dataFile,
+    sourceFileChecksum: currentSourceChecksum
+  };
+}
+
 module.exports = {
   DEFAULT_LOCK_NAME,
+  DEFAULT_RECOVERY_MIN_AGE_MS,
   lockFilePath,
   lockStatus,
   assertWritesAllowed,
   acquire,
-  release
+  release,
+  recoverStale
 };

@@ -10,6 +10,7 @@ const stateMigrationLock = require('../state-migration-lock');
 
 const importer = path.join(__dirname, 'migrate-json-to-postgres.js');
 const verifier = path.join(__dirname, 'verify-json-to-postgres.js');
+const lockRecovery = path.join(__dirname, 'recover-postgres-migration-lock.js');
 
 function run(script, dataFile, env) {
   return spawnSync(process.execPath, [script, dataFile], { cwd: path.resolve(__dirname, '..'), env, encoding: 'utf8' });
@@ -40,6 +41,35 @@ async function main() {
     await stateMigrationLock.assertWritesAllowed({ dataFile });
 
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
+    const recoveryChecksum = (await source.readSource(dataFile)).sourceFileChecksum;
+    const staleLock = await stateMigrationLock.acquire({ dataFile, sourceFileChecksum: recoveryChecksum });
+    await assert.rejects(
+      () => stateMigrationLock.recoverStale({ dataFile, expectedSourceChecksum: recoveryChecksum, minAgeMs: 60_000 }),
+      error => error && error.code === 'woa_postgres_migration_lock_not_stale',
+      'A fresh migration lock must never be force-recovered while its importer may still be active.'
+    );
+    const staleRecord = JSON.parse(await fs.readFile(staleLock.file, 'utf8'));
+    staleRecord.acquiredAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    await fs.writeFile(staleLock.file, JSON.stringify(staleRecord, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    await assert.rejects(
+      () => stateMigrationLock.recoverStale({ dataFile, expectedSourceChecksum: '0'.repeat(64), minAgeMs: 60_000 }),
+      /does not match/i,
+      'Stale-lock recovery must require the exact protected-source checksum.'
+    );
+    await fs.writeFile(dataFile, JSON.stringify({ ...value, changedAfterLock: true }, null, 2), 'utf8');
+    await assert.rejects(
+      () => stateMigrationLock.recoverStale({ dataFile, expectedSourceChecksum: recoveryChecksum, minAgeMs: 60_000 }),
+      /source changed/i,
+      'Stale-lock recovery must keep writes blocked if the protected source changed.'
+    );
+    await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
+    const recoveredLock = await stateMigrationLock.recoverStale({ dataFile, expectedSourceChecksum: recoveryChecksum, minAgeMs: 60_000 });
+    assert.strictEqual(recoveredLock.recovered, true, 'A checksum-matched stale migration lock must be recoverable after the safety delay.');
+    assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, false, 'A verified stale-lock recovery must restore application writes.');
+    assert.strictEqual((await fs.stat(recoveredLock.recoveryFile)).isFile(), true, 'Stale-lock recovery must preserve the original lock metadata as evidence.');
+    await stateMigrationLock.assertWritesAllowed({ dataFile });
+
+    await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
     const exact = (await source.readSource(dataFile)).sourceFileChecksum;
     const base = { ...process.env, WOA_POSTGRES_MIGRATION_CONFIRM: '1', WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM: '1' };
     const noImporterChecksum = run(importer, dataFile, base);
@@ -59,12 +89,15 @@ async function main() {
     const validProofWithoutDatabase = run(verifier, dataFile, { ...proofBase, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact });
     assert.notStrictEqual(validProofWithoutDatabase.status, 0, 'A proof verification with a valid source still needs an explicit PostgreSQL database URL.');
     assert.match(validProofWithoutDatabase.stderr, /DATABASE_URL/, 'The verifier must not connect without a database URL.');
+    const unconfirmedRecovery = run(lockRecovery, dataFile, process.env);
+    assert.notStrictEqual(unconfirmedRecovery.status, 0, 'The stale-lock recovery CLI must require the exact destructive-action confirmation phrase.');
+    assert.match(unconfirmedRecovery.stderr, /WOA_POSTGRES_MIGRATION_LOCK_RECOVERY_CONFIRM/, 'The stale-lock recovery CLI must name its required confirmation guard.');
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const importerSource = await fs.readFile(importer, 'utf8');
     assert.match(serverSource, /stateMigrationLock\.assertWritesAllowed/, 'The production write path must enforce the shared PostgreSQL cutover lock.');
     assert.match(importerSource, /stateMigrationLock\.acquire/, 'The controlled PostgreSQL importer must acquire the shared cutover lock.');
     assert.match(importerSource, /stateMigrationLock\.release/, 'The controlled PostgreSQL importer must release its lock after success or failure.');
-    console.log('PostgreSQL protected-source check passed: exact preflight checksum, immutable source guard, enforced application write lock, single-import ownership, and changed-source rejection are verified.');
+    console.log('PostgreSQL protected-source check passed: exact preflight checksum, immutable source guard, enforced application write lock, single-import ownership, checksum-gated stale-lock recovery, and changed-source rejection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }
