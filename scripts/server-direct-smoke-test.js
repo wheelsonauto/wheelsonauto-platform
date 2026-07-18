@@ -232,6 +232,7 @@ async function main() {
     stripeWebhookConfigurationFingerprint,
     documentStorageConfigurationFingerprint,
     privateDocumentStorageEvidence,
+    privateDocumentKeyCoverage,
     operationalAlertConfigurationFingerprint,
     operationalAlertEvidence,
     recordOperationalFailure,
@@ -274,6 +275,10 @@ async function main() {
     assert(recurringDegraded.ready === false && recurringDegraded.degraded === true && /read-only/.test(recurringDegraded.error), 'A preserved roster after a current provider failure must block controlled Stripe cutovers.');
     const recurringNotApplicable = cloverRecurringMigrationReadiness({ recurringPayments: [{ id: 'rec-stripe-only', status: 'Active', paymentProvider: 'stripe', stripeCustomerId: 'cus_only', stripePaymentMethodId: 'pm_only' }], integrations: { clover: {} } });
     assert(recurringNotApplicable.ready === true && recurringNotApplicable.requiresFreshRoster === false, 'A Stripe-only roster must not require an irrelevant Clover refresh.');
+    const currentDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-current-key', storageKey: 'documents/org-direct/doc-current-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' } }] });
+    assert(currentDocumentKeyCoverage.ready === true && currentDocumentKeyCoverage.encryptedDocuments === 1 && currentDocumentKeyCoverage.requiredKeyVersions.includes('v1'), 'The launch gate must inventory encrypted documents covered by the active versioned key.');
+    const missingDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-retired-key', storageKey: 'documents/org-direct/doc-retired-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'retired-v0' } }] });
+    assert(missingDocumentKeyCoverage.ready === false && missingDocumentKeyCoverage.missingKeyVersions.includes('retired-v0') && /Restore private document decryption key/.test(missingDocumentKeyCoverage.error), 'The launch gate must block cutover when an encrypted customer file cannot be decrypted after key rotation.');
     const health = await request(server, 'GET', '/healthz');
     assert(health.status === 200 && health.json && health.json.ok === true && health.json.service === 'wheelsonauto-platform' && /^platform-/.test(health.json.release || ''), 'The unauthenticated deployment health check must prove the server and state repository are responsive.');
     assert(Object.prototype.hasOwnProperty.call(health.json, 'commit'), 'The deployment health check must include its short deploy-commit verification field.');
@@ -1424,6 +1429,8 @@ async function main() {
     assert(ownerLaunchPreflight.status === 200 && ownerLaunchPreflight.json, 'Owner must be able to read the controlled Stripe launch preflight.');
     assert(Array.isArray(ownerLaunchPreflight.json.missing) && ownerLaunchPreflight.json.missing.includes('controlled PostgreSQL recovery drill'), 'The owner launch preflight must block Stripe launch until a fresh controlled PostgreSQL recovery drill is recorded.');
     assert(ownerLaunchPreflight.json.recoveryDrill && ownerLaunchPreflight.json.recoveryDrill.ready === false, 'The owner launch preflight must expose an unverified recovery-drill gate instead of treating JSON development state as production-ready.');
+    assert(ownerLaunchPreflight.json.documentEncryptionKeys && ownerLaunchPreflight.json.documentEncryptionKeys.ready === true && Array.isArray(ownerLaunchPreflight.json.documentEncryptionKeys.availableKeyVersions), 'The owner launch preflight must expose safe key-version coverage without exposing any encryption key material.');
+    assert(!/BwcHBwcH|WOA_DOCUMENT_ENCRYPTION_KEY/i.test(JSON.stringify(ownerLaunchPreflight.json.documentEncryptionKeys)), 'The private-document key inventory must never expose key material or secret environment names.');
     assert(ownerLaunchPreflight.json.cloverRecurring && ownerLaunchPreflight.json.cloverRecurring.ready === false && ownerLaunchPreflight.json.missing.includes('fresh Clover recurring roster for controlled cutover'), 'The owner launch preflight must block cutover when active Clover recurring records do not have a fresh complete roster.');
     assert(!Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.recoveryDrill, 'configurationFingerprint'), 'Recovery drill fingerprints must remain server-only even in the owner launch preflight.');
     assert(typeof reportBackgroundTaskFailure === 'function', 'Background worker failures must share the durable operational-monitor path.');

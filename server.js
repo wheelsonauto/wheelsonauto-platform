@@ -182,6 +182,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
   localRoot: path.join(DATA_DIR, 'private-documents'),
   encryptionKey: process.env.WOA_DOCUMENT_ENCRYPTION_KEY || '',
   keyVersion: process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION || 'v1',
+  decryptionKeys: process.env.WOA_DOCUMENT_DECRYPTION_KEYS || '',
   bucket: process.env.WOA_OBJECT_STORAGE_BUCKET || process.env.S3_BUCKET || '',
   endpoint: process.env.WOA_OBJECT_STORAGE_ENDPOINT || process.env.S3_ENDPOINT || '',
   region: process.env.WOA_OBJECT_STORAGE_REGION || process.env.S3_REGION || '',
@@ -193,7 +194,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-stripe-webhook-order-146';
+const ASSET_VERSION = 'platform-20260718-document-keyring-147';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9022,6 +9023,30 @@ function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STO
     error
   };
 }
+function privateDocumentKeyCoverage(data = {}) {
+  const encryptedDocuments = stateRepository.privateDocumentRows(data)
+    .filter(record => PRIVATE_DOCUMENT_STORE.isEncryptedDocument(record));
+  const requiredKeyVersions = [...new Set(encryptedDocuments
+    .map(record => String(record.encryption && record.encryption.keyVersion || '').trim())
+    .filter(Boolean))].sort();
+  const unversionedDocuments = encryptedDocuments.filter(record => !String(record.encryption && record.encryption.keyVersion || '').trim()).length;
+  const missingKeyVersions = requiredKeyVersions.filter(version => !PRIVATE_DOCUMENT_STORE.hasDecryptionKey(version));
+  const unversionedKeyAvailable = unversionedDocuments === 0 || PRIVATE_DOCUMENT_STORE.hasDecryptionKey('');
+  const ready = missingKeyVersions.length === 0 && unversionedKeyAvailable;
+  return {
+    encryptedDocuments: encryptedDocuments.length,
+    requiredKeyVersions,
+    availableKeyVersions: PRIVATE_DOCUMENT_STORE.status().availableKeyVersions || [],
+    missingKeyVersions,
+    unversionedDocuments,
+    ready,
+    error: ready
+      ? ''
+      : missingKeyVersions.length
+        ? 'Restore private document decryption key version(s): ' + missingKeyVersions.join(', ') + '.'
+        : 'Restore the active private document encryption key before reading legacy unversioned documents.'
+  };
+}
 function operationalAlertConfigurationFingerprint(data = {}) {
   const configuration = operationalAlertConfiguration(data);
   const material = [
@@ -9138,6 +9163,7 @@ async function productionInfrastructurePreflight(data = null) {
   const stripeWebhook = stripeLiveWebhookEvidence(state);
   const stripeIdentityWebhook = stripeIdentityLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
+  const documentEncryptionKeys = privateDocumentKeyCoverage(state);
   const operationalAlerts = operationalAlertEvidence(state);
   const telnyxMessaging = telnyxLiveLaunchEvidence(state);
   const resendEmail = resendLiveLaunchEvidence(state);
@@ -9152,6 +9178,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!recoveryDrill.ready) missing.push('controlled PostgreSQL recovery drill');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
   if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
+  if (!documentEncryptionKeys.ready) missing.push('decryption keys for every encrypted private document');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
@@ -9178,6 +9205,7 @@ async function productionInfrastructurePreflight(data = null) {
     recoveryDrill,
     documentStorage,
     documentStorageValidation,
+    documentEncryptionKeys,
     stripeWebhook,
     stripeIdentityWebhook,
     operationalAlerts,
@@ -20200,6 +20228,7 @@ module.exports = {
   currentRecoveryDrillEvidence,
   documentStorageConfigurationFingerprint,
   privateDocumentStorageEvidence,
+  privateDocumentKeyCoverage,
   operationalAlertConfigurationFingerprint,
   operationalAlertEvidence,
   recordOperationalFailure,

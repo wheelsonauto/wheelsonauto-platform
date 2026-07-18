@@ -66,6 +66,7 @@ Required Render environment variables:
 WOA_DOCUMENT_STORAGE_PROVIDER=s3
 WOA_DOCUMENT_ENCRYPTION_KEY=<base64 32-byte random key>
 WOA_DOCUMENT_ENCRYPTION_KEY_VERSION=v1
+WOA_DOCUMENT_DECRYPTION_KEYS='{"v0":"<previous base64 32-byte key>"}' # only when older versions exist
 WOA_OBJECT_STORAGE_BUCKET=<private bucket>
 WOA_OBJECT_STORAGE_ENDPOINT=<S3-compatible endpoint>
 WOA_OBJECT_STORAGE_REGION=<region>
@@ -79,6 +80,15 @@ The platform encrypts each document with AES-256-GCM before it is stored. The
 database receives metadata and encrypted-object references, not file bytes.
 IDs, insurance, contracts, signatures, receipts, and dispute evidence should
 only be downloaded through the authenticated application route.
+
+When rotating the active key, keep every historical version that still owns a
+stored document in `WOA_DOCUMENT_DECRYPTION_KEYS`. The active
+`WOA_DOCUMENT_ENCRYPTION_KEY` is automatically registered under
+`WOA_DOCUMENT_ENCRYPTION_KEY_VERSION`; never duplicate that version with a
+different value. The launch preflight inventories encrypted records and blocks
+cutover if any required version is unavailable. Remove an old key only after
+the controlled document migration has re-encrypted every matching object under
+the new version and authenticated read-back has passed.
 
 If legacy files exist, make a backup first and test migration with a copied
 state file. Run the production migration only in a maintenance window while

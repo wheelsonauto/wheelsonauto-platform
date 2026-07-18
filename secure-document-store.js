@@ -16,6 +16,37 @@ function decodeEncryptionKey(value) {
   }
 }
 
+function parseDecryptionKeys(value) {
+  if (!value) return new Map();
+  let source = value;
+  if (typeof source === 'string') {
+    const raw = source.trim();
+    if (!raw) return new Map();
+    try {
+      source = JSON.parse(raw);
+    } catch {
+      throw new Error('WOA_DOCUMENT_DECRYPTION_KEYS must be a JSON object keyed by encryption-key version.');
+    }
+  }
+  const entries = source instanceof Map
+    ? [...source.entries()]
+    : source && typeof source === 'object' && !Array.isArray(source)
+      ? Object.entries(source)
+      : null;
+  if (!entries) throw new Error('Private document decryption keys must be an object keyed by encryption-key version.');
+  const keys = new Map();
+  entries.forEach(([versionValue, keyValue]) => {
+    const version = String(versionValue || '').trim();
+    if (!version || !/^[a-zA-Z0-9._-]{1,80}$/.test(version)) {
+      throw new Error('Private document decryption key versions may contain only letters, numbers, dots, underscores, and dashes.');
+    }
+    const key = decodeEncryptionKey(keyValue);
+    if (!key) throw new Error('Private document decryption key ' + version + ' must decode to exactly 32 bytes.');
+    keys.set(version, key);
+  });
+  return keys;
+}
+
 function hmac(key, value, encoding) {
   return crypto.createHmac('sha256', key).update(value, 'utf8').digest(encoding);
 }
@@ -80,6 +111,15 @@ class SecureDocumentStore {
     this.localRoot = path.resolve(options.localRoot || process.env.WOA_DOCUMENT_LOCAL_ROOT || path.join(process.cwd(), 'private-documents'));
     this.key = decodeEncryptionKey(options.encryptionKey || process.env.WOA_DOCUMENT_ENCRYPTION_KEY || '');
     this.keyVersion = String(options.keyVersion || process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION || 'v1').trim() || 'v1';
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(this.keyVersion)) throw new Error('WOA_DOCUMENT_ENCRYPTION_KEY_VERSION contains unsupported characters.');
+    this.decryptionKeys = parseDecryptionKeys(options.decryptionKeys || process.env.WOA_DOCUMENT_DECRYPTION_KEYS || '');
+    if (this.key) {
+      const configured = this.decryptionKeys.get(this.keyVersion);
+      if (configured && !configured.equals(this.key)) {
+        throw new Error('The active private document encryption key conflicts with WOA_DOCUMENT_DECRYPTION_KEYS[' + this.keyVersion + '].');
+      }
+      this.decryptionKeys.set(this.keyVersion, this.key);
+    }
     this.s3 = buildS3Config(options);
     this.fetch = options.fetch || global.fetch;
     this.timeoutMs = Math.max(3000, Math.min(60000, Number(options.timeoutMs || process.env.WOA_OBJECT_STORAGE_TIMEOUT_MS || 15000)));
@@ -104,6 +144,8 @@ class SecureDocumentStore {
       productionReady: encryptionConfigured && this.provider === 's3' && s3Configured && secureTransport,
       secureTransport: this.provider === 's3' ? secureTransport : false,
       keyVersion: encryptionConfigured ? this.keyVersion : '',
+      availableKeyVersions: [...this.decryptionKeys.keys()].sort(),
+      decryptionKeyCount: this.decryptionKeys.size,
       message: !encryptionConfigured
         ? 'Set WOA_DOCUMENT_ENCRYPTION_KEY before storing new identity or insurance documents.'
         : this.provider === 's3' && !s3Configured
@@ -122,6 +164,11 @@ class SecureDocumentStore {
 
   isEncryptedDocument(document = {}) {
     return !!(document && document.storageKey && document.encryption && document.encryption.algorithm === 'AES-256-GCM');
+  }
+
+  hasDecryptionKey(version) {
+    const requested = String(version || '').trim();
+    return requested ? this.decryptionKeys.has(requested) : !!this.key;
   }
 
   async fetchObject(url, options = {}) {
@@ -261,8 +308,12 @@ class SecureDocumentStore {
 
   async read(document = {}) {
     if (!this.isEncryptedDocument(document)) throw new Error('This document has not been migrated into encrypted private storage.');
-    if (!this.key) throw new Error('WOA_DOCUMENT_ENCRYPTION_KEY is required to read private documents.');
     const encryption = document.encryption || {};
+    const documentKeyVersion = String(encryption.keyVersion || '').trim();
+    const decryptionKey = documentKeyVersion ? this.decryptionKeys.get(documentKeyVersion) : this.key;
+    if (!decryptionKey) {
+      throw new Error('Private document encryption key version ' + (documentKeyVersion || '(legacy active key)') + ' is not configured. Restore the matching version in WOA_DOCUMENT_DECRYPTION_KEYS before reading or migrating this file.');
+    }
     const nonce = Buffer.from(String(encryption.nonce || ''), 'base64');
     const authTag = Buffer.from(String(encryption.authTag || ''), 'base64');
     const aad = Buffer.from(String(encryption.aad || ''), 'base64');
@@ -278,7 +329,7 @@ class SecureDocumentStore {
       throw new Error('Encrypted document ownership metadata does not match the authenticated storage record.');
     }
     const encrypted = await this.readObject(document.storageKey);
-    const decipher = crypto.createDecipheriv('aes-256-gcm', this.key, nonce);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', decryptionKey, nonce);
     decipher.setAAD(aad);
     decipher.setAuthTag(authTag);
     return Buffer.concat([decipher.update(encrypted), decipher.final()]);
@@ -291,6 +342,7 @@ function createSecureDocumentStore(options = {}) {
 
 module.exports = {
   decodeEncryptionKey,
+  parseDecryptionKeys,
   normalizeObjectKey,
   SecureDocumentStore,
   createSecureDocumentStore

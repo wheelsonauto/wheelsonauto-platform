@@ -269,10 +269,11 @@ async function main() {
     assert.strictEqual(stateRepository.identityWarnings({ vehicles: [{ id: 'application-placeholder', year: 'test', make: 'test', status: 'Pending application' }] }).length, 0, 'A pending application placeholder must not be treated as an operational fleet VIN blocker.');
 
     const documentRoot = path.join(temp, 'private-documents');
+    const foundationV1Key = Buffer.alloc(32, 9).toString('base64');
     const store = secureDocumentStore.createSecureDocumentStore({
       provider: 'local',
       localRoot: documentRoot,
-      encryptionKey: Buffer.alloc(32, 9).toString('base64'),
+      encryptionKey: foundationV1Key,
       keyVersion: 'test-v1'
     });
     const source = Buffer.from('private identity proof must never be written in clear text', 'utf8');
@@ -291,6 +292,29 @@ async function main() {
     await assert.rejects(() => store.read({ ...stored, organizationId: 'org-other-company' }), /ownership metadata/i, 'Moving a private document record into another company must fail authenticated ownership verification.');
     await assert.rejects(() => store.read({ ...stored, id: 'doc-other-customer' }), /ownership metadata/i, 'Relabeling a private document as another customer record must fail authenticated identity verification.');
     await assert.rejects(() => store.read({ ...stored, contentType: 'image/png' }), /ownership metadata/i, 'Changing the authenticated private document type must fail closed.');
+    const rotatedStore = secureDocumentStore.createSecureDocumentStore({
+      provider: 'local',
+      localRoot: documentRoot,
+      encryptionKey: Buffer.alloc(32, 10).toString('base64'),
+      keyVersion: 'test-v2',
+      decryptionKeys: { 'test-v1': foundationV1Key }
+    });
+    assert((await rotatedStore.read(stored)).equals(source), 'A rotated document store must keep older private files readable through their versioned decryption key.');
+    assert.deepStrictEqual(rotatedStore.status().availableKeyVersions, ['test-v1', 'test-v2'], 'Private storage readiness may expose key versions, but never key material, for recovery review.');
+    const missingHistoricalKeyStore = secureDocumentStore.createSecureDocumentStore({
+      provider: 'local',
+      localRoot: documentRoot,
+      encryptionKey: Buffer.alloc(32, 10).toString('base64'),
+      keyVersion: 'test-v2'
+    });
+    await assert.rejects(() => missingHistoricalKeyStore.read(stored), /key version test-v1 is not configured/i, 'A missing historical key must fail with an actionable recovery message instead of corrupting or replacing the file.');
+    assert.throws(() => secureDocumentStore.createSecureDocumentStore({
+      provider: 'local',
+      localRoot: documentRoot,
+      encryptionKey: Buffer.alloc(32, 10).toString('base64'),
+      keyVersion: 'test-v2',
+      decryptionKeys: { 'test-v2': Buffer.alloc(32, 11).toString('base64') }
+    }), /conflicts/i, 'The active key version must not silently conflict with the recovery keyring.');
     const storageProbe = await store.probe({ organizationId: 'org-test' });
     assert(storageProbe.ok && storageProbe.encrypted && storageProbe.objectDeleted, 'Private document storage validation must prove encrypted write, read, and cleanup.');
 
