@@ -205,12 +205,15 @@ async function main() {
     const secondWrite = await repository.write(secondState, { reason: 'runtime test changed state', actor: 'test' });
     assert(secondWrite.version > firstWrite.version, 'The second PostgreSQL write must advance the version.');
 
-    await repository.recordJobError('postgres-runtime-monitor', new Error('Controlled runtime job failure'), { route: 'runtime check' });
+    await repository.recordJobError('postgres-runtime-monitor', new Error('Controlled runtime job failure'), { route: 'runtime check', source: 'startup' });
+    await repository.recordJobError('postgres-runtime-monitor', new Error('Controlled runtime job failure'), { route: 'runtime check', source: 'background' });
     const openRuntimeErrors = await repository.recentJobErrors(5);
     const runtimeJobError = openRuntimeErrors.find(row => row.source === 'postgres-runtime-monitor');
     assert(runtimeJobError && runtimeJobError.id, 'PostgreSQL must retain a durable open job failure for owner review.');
+    assert.strictEqual(runtimeJobError.occurrenceCount, 2, 'Repeated PostgreSQL failures must coalesce into one actionable incident with an occurrence count.');
     const resolvedRuntimeError = await repository.resolveJobError(runtimeJobError.id, { resolvedBy: 'runtime owner', note: 'Controlled PostgreSQL review completed' });
     assert(resolvedRuntimeError && resolvedRuntimeError.resolvedAt && resolvedRuntimeError.resolvedBy === 'runtime owner', 'PostgreSQL must retain durable job-error review evidence.');
+    assert.strictEqual(resolvedRuntimeError.occurrenceCount, 2, 'Resolving a grouped PostgreSQL incident must retain its total occurrence count.');
     assert.strictEqual(resolvedRuntimeError.resolutionNote, 'Controlled PostgreSQL review completed', 'PostgreSQL must retain the controlled resolution note.');
     assert.strictEqual((await repository.recentJobErrors(5)).some(row => row.id === runtimeJobError.id), false, 'A reviewed PostgreSQL job error must leave the open launch queue.');
     assert.strictEqual(await repository.resolveJobError(runtimeJobError.id, { resolvedBy: 'runtime owner' }), null, 'PostgreSQL must not resolve the same error twice.');

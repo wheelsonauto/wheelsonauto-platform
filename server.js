@@ -190,7 +190,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-job-errors-139';
+const ASSET_VERSION = 'platform-20260718-incident-groups-140';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -211,6 +211,7 @@ const autoSyncStatus = {
   lastFinishedAt: '',
   lastSource: '',
   lastError: '',
+  lastWarning: '',
   lastResult: null
 };
 const woaAutopayStatus = {
@@ -2824,7 +2825,7 @@ async function recordOperationalFailure(source, error, context = {}, options = {
     dateKey: String(context.dateKey || '').slice(0, 32),
     provider: String(context.provider || '').slice(0, 80)
   };
-  const incidentKey = [safeSource, safeContext.route, safeContext.source, safeContext.recurringPaymentId, safeContext.eventId, safeContext.dateKey, message.slice(0, 160)].join('|');
+  const incidentKey = [safeSource, safeContext.route, safeContext.recurringPaymentId, safeContext.eventId, safeContext.dateKey, message.slice(0, 160)].join('|');
   const now = Date.now();
   let persisted = false;
   const lastRecordedAt = operationalErrorRecords.get(incidentKey) || 0;
@@ -11552,7 +11553,7 @@ async function protectConcurrentLocalWrites(data, options = {}) {
 async function syncCloverIntoData(data, options = {}) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
-  const result = { customers: 0, payments: 0, recurringPlans: 0, errors: [] };
+  const result = { customers: 0, payments: 0, recurringPlans: 0, errors: [], warnings: [] };
   if (options.customers !== false) {
     try {
       const body = await cloverGet('/v3/merchants/' + CLOVER_MERCHANT_ID + '/customers?expand=emailAddresses,phoneNumbers&limit=100');
@@ -11590,6 +11591,7 @@ async function syncCloverIntoData(data, options = {}) {
     try {
       const recurring = await syncCloverRecurringPlans(data);
       result.recurringPlans = recurring.recurringPlans;
+      if (recurring.warning) result.warnings.push(recurring.warning);
     } catch (err) {
       data.integrations.clover.lastRecurringPlanSyncError = String(err && err.message || err);
       result.errors.push(data.integrations.clover.lastRecurringPlanSyncError);
@@ -11629,8 +11631,10 @@ async function runAutoSync(options = {}) {
     autoSyncStatus.lastFinishedAt = new Date().toISOString();
     autoSyncStatus.lastResult = result;
     autoSyncStatus.lastError = result.errors[0] || '';
+    autoSyncStatus.lastWarning = result.warnings[0] || '';
     data.integrations.autoSync.lastFinishedAt = autoSyncStatus.lastFinishedAt;
     data.integrations.autoSync.lastError = autoSyncStatus.lastError;
+    data.integrations.autoSync.lastWarning = autoSyncStatus.lastWarning;
     data.integrations.autoSync.lastResult = result;
     await protectConcurrentLocalWrites(data);
     await writeData(data);
@@ -11645,6 +11649,7 @@ async function runAutoSync(options = {}) {
   } catch (err) {
     autoSyncStatus.lastFinishedAt = new Date().toISOString();
     autoSyncStatus.lastError = String(err && err.message || err);
+    autoSyncStatus.lastWarning = '';
     autoSyncStatus.lastResult = { errors: [autoSyncStatus.lastError] };
     try {
       const data = await readData();
@@ -11656,6 +11661,7 @@ async function runAutoSync(options = {}) {
         lastFinishedAt: autoSyncStatus.lastFinishedAt,
         lastSource: autoSyncStatus.lastSource,
         lastError: autoSyncStatus.lastError,
+        lastWarning: '',
         lastResult: autoSyncStatus.lastResult
       };
       await protectConcurrentLocalWrites(data);
@@ -11961,6 +11967,13 @@ function summarizeCloverPlans(plans) {
   }, { activePlans: 0, activeCustomers: 0, possibleWeekly: 0 });
   summary.possibleWeekly = Math.round(summary.possibleWeekly * 100) / 100;
   return summary;
+}
+function cloverRecurringCountWarning(savedSummary = {}, apiSummary = {}) {
+  const savedActive = Number(savedSummary.activeCustomers || 0);
+  const apiActive = Number(apiSummary.activeCustomers || 0);
+  return savedActive > apiActive
+    ? 'Clover recurring API returned ' + apiActive + ' active subscriptions, less than saved Plan Manager total ' + savedActive + '. Keeping saved plan totals.'
+    : '';
 }
 function amountFromRecurringValue(value) {
   if (value == null) return 0;
@@ -12436,10 +12449,20 @@ async function syncCloverRecurringPlans(data) {
     lookupErrors: (hydrationContext.stats && hydrationContext.stats.lookupErrors || []).slice(0, 25)
   };
   const savedSummary = data.integrations.clover.recurringPlanSummary || {};
-  const savedActive = Number(savedSummary.activeCustomers || 0);
-  const apiActive = Number(summary.activeCustomers || 0);
-  if (savedActive > apiActive) {
-    throw new Error('Clover recurring API returned ' + apiActive + ' active subscriptions, less than saved Plan Manager total ' + savedActive + '. Keeping saved plan totals.');
+  const countWarning = cloverRecurringCountWarning(savedSummary, summary);
+  if (countWarning) {
+    data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
+    data.integrations.clover.lastRecurringPlanSyncError = '';
+    data.integrations.clover.lastRecurringPlanSyncWarning = countWarning;
+    data.integrations.clover.lastRecurringPlanSyncSource = 'Clover recurring API';
+    data.integrations.clover.lastRecurringPlanSyncPaths = attempted;
+    return {
+      recurringPlans: Array.isArray(data.integrations.clover.recurringPlans) ? data.integrations.clover.recurringPlans.length : plans.length,
+      summary: savedSummary,
+      identity: data.integrations.clover.lastRecurringIdentitySync,
+      warning: countWarning,
+      preservedSavedTotals: true
+    };
   }
   const savedMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
   const savedNamedMembers = savedMembers.filter(member => String(member.customer || '').trim() && member.customer !== 'Clover recurring customer');
@@ -12450,6 +12473,7 @@ async function syncCloverRecurringPlans(data) {
   data.integrations.clover.recurringPlanSummary = summary;
   data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
   data.integrations.clover.lastRecurringPlanSyncError = '';
+  data.integrations.clover.lastRecurringPlanSyncWarning = '';
   data.integrations.clover.lastRecurringPlanSyncSource = 'Clover recurring API';
   data.integrations.clover.lastRecurringPlanSyncPaths = attempted;
   data.integrations.clover.lastRecurringMemberSyncWarning = keepSavedMembers ? ('Clover returned ' + importedNamedMembers.length + ' named recurring customers, less than saved roster ' + savedNamedMembers.length + '. Keeping saved recurring roster.') : '';
@@ -19956,6 +19980,7 @@ module.exports = {
   mergeRecurringCustomerDetail,
   membersFromRecurringSubscriptions,
   mapCloverPayment,
+  cloverRecurringCountWarning,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,
   activeHostedCheckoutHref,

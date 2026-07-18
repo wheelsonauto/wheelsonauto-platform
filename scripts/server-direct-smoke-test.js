@@ -223,6 +223,7 @@ async function main() {
     mergeRecurringCustomerDetail,
     membersFromRecurringSubscriptions,
     mapCloverPayment,
+    cloverRecurringCountWarning,
     stripeLiveWebhookEvidence,
     stripeIdentityLiveWebhookEvidence,
     stripeWebhookConfigurationFingerprint,
@@ -252,6 +253,9 @@ async function main() {
   };
 
   try {
+    const recurringCountWarning = cloverRecurringCountWarning({ activeCustomers: 57 }, { activeCustomers: 55 });
+    assert(/55 active subscriptions/.test(recurringCountWarning) && /saved Plan Manager total 57/.test(recurringCountWarning), 'A lower Clover recurring count must remain a preservation warning instead of deleting saved customers or failing the whole sync.');
+    assert(cloverRecurringCountWarning({ activeCustomers: 55 }, { activeCustomers: 57 }) === '', 'A complete or larger Clover recurring result must not create a false preservation warning.');
     const health = await request(server, 'GET', '/healthz');
     assert(health.status === 200 && health.json && health.json.ok === true && health.json.service === 'wheelsonauto-platform' && /^platform-/.test(health.json.release || ''), 'The unauthenticated deployment health check must prove the server and state repository are responsive.');
     assert(!/customer|payment|vehicle|database|postgres|json/i.test(JSON.stringify(health.json)), 'The public deployment health check must not expose customer data or infrastructure details.');

@@ -3210,8 +3210,8 @@ function liveLaunchJobErrorReview(jobErrors){
   jobErrors=Array.isArray(jobErrors)?jobErrors:[];
   if(!jobErrors.length)return'<div class="notice good">No unresolved background job or webhook failures are waiting for owner review.</div>';
   var visible=jobErrors.slice(0,8),rows=visible.map(function(row){
-    var severity=String(row.severity||'error').toLowerCase(),tone=severity==='warning'||severity==='warn'?'warn':'bad';
-    return[esc(shortDate(row.createdAt)||row.createdAt||'Unknown time'),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>','<button class="btn" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>']
+    var severity=String(row.severity||'error').toLowerCase(),tone=severity==='warning'||severity==='warn'?'warn':'bad',occurrences=Math.max(1,Number(row.occurrenceCount||1)),firstSeen=row.firstSeenAt||row.createdAt||'',lastSeen=row.lastSeenAt||row.createdAt||'';
+    return['<strong>'+esc(shortDate(lastSeen)||lastSeen||'Unknown time')+'</strong>'+(occurrences>1?'<div class="muted">'+occurrences+' occurrences since '+esc(shortDate(firstSeen)||firstSeen)+'</div>':''),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>','<button class="btn" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>']
   });
   return table(['When','Source','Failure','Action'],rows)+(jobErrors.length>visible.length?'<div class="notice mini">Showing the newest '+visible.length+' of '+jobErrors.length+'. Review these, then reopen preflight for the next set.</div>':'')
 }

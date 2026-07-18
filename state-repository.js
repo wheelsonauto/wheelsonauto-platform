@@ -31,6 +31,62 @@ function checksum(value) {
   return crypto.createHash('sha256').update(stableJson(value || {}), 'utf8').digest('hex');
 }
 
+function jobErrorFingerprint(source, severity, message, context = {}, explicit = '') {
+  const supplied = String(explicit || '').trim();
+  if (supplied) return supplied.slice(0, 128);
+  const fingerprintContext = context && typeof context === 'object' && !Array.isArray(context) ? { ...context } : {};
+  delete fingerprintContext.source;
+  return checksum({
+    source: String(source || 'server').slice(0, 120),
+    severity: String(severity || 'error').slice(0, 20),
+    message: String(message || 'Unknown error').slice(0, 3000),
+    context: fingerprintContext
+  });
+}
+
+function jobErrorTime(value, fallback = '') {
+  const parsed = Date.parse(value || '');
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : String(value || fallback || '');
+}
+
+function groupedOpenJobErrors(rows = [], limit = 20) {
+  const groups = new Map();
+  (Array.isArray(rows) ? rows : []).forEach(row => {
+    if (!row || row.resolvedAt || row.resolved_at) return;
+    const fingerprint = jobErrorFingerprint(row.source, row.severity, row.message, row.context, row.fingerprint);
+    const occurrenceCount = Math.max(1, Number(row.occurrenceCount || row.occurrence_count || 1));
+    const firstSeenAt = jobErrorTime(row.firstSeenAt || row.first_seen_at || row.createdAt || row.created_at);
+    const lastSeenAt = jobErrorTime(row.lastSeenAt || row.last_seen_at || row.createdAt || row.created_at, firstSeenAt);
+    const existing = groups.get(fingerprint);
+    if (!existing) {
+      groups.set(fingerprint, {
+        ...row,
+        fingerprint,
+        firstSeenAt,
+        lastSeenAt,
+        occurrenceCount,
+        relatedIds: [row.id]
+      });
+      return;
+    }
+    existing.occurrenceCount += occurrenceCount;
+    existing.relatedIds.push(row.id);
+    if (Date.parse(firstSeenAt || '') < Date.parse(existing.firstSeenAt || '')) existing.firstSeenAt = firstSeenAt;
+    if (Date.parse(lastSeenAt || '') > Date.parse(existing.lastSeenAt || '')) {
+      existing.id = row.id;
+      existing.source = row.source;
+      existing.severity = row.severity;
+      existing.message = row.message;
+      existing.context = row.context || {};
+      existing.createdAt = row.createdAt || row.created_at;
+      existing.lastSeenAt = lastSeenAt;
+    }
+  });
+  return [...groups.values()]
+    .sort((left, right) => Date.parse(right.lastSeenAt || right.createdAt || 0) - Date.parse(left.lastSeenAt || left.createdAt || 0))
+    .slice(0, Math.max(1, Math.min(100, Number(limit || 20))));
+}
+
 function idempotencyRequestHash(request = {}) {
   return checksum(request && typeof request === 'object' ? request : { value: request });
 }
@@ -516,7 +572,11 @@ class JsonStateRepository {
         severity: String(row.severity || 'error').slice(0, 20),
         message: String(row.message || 'Unknown error').slice(0, 3000),
         context: clone(row.context || {}),
+        fingerprint: jobErrorFingerprint(row.source, row.severity, row.message, row.context, row.fingerprint),
         createdAt: String(row.createdAt || row.created_at || ''),
+        firstSeenAt: String(row.firstSeenAt || row.first_seen_at || row.createdAt || row.created_at || ''),
+        lastSeenAt: String(row.lastSeenAt || row.last_seen_at || row.createdAt || row.created_at || ''),
+        occurrenceCount: Math.max(1, Number(row.occurrenceCount || row.occurrence_count || 1)),
         resolvedAt: String(row.resolvedAt || row.resolved_at || ''),
         resolvedBy: String(row.resolvedBy || row.resolved_by || '').slice(0, 160),
         resolutionNote: String(row.resolutionNote || row.resolution_note || '').slice(0, 1000)
@@ -531,23 +591,51 @@ class JsonStateRepository {
     const directory = path.dirname(this.jobErrorFile);
     const temporary = this.jobErrorFile + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
     await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(temporary, JSON.stringify({ version: 1, errors: rows.slice(0, this.jobErrorLimit) }, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.writeFile(temporary, JSON.stringify({ version: 2, errors: rows.slice(0, this.jobErrorLimit) }, null, 2), { encoding: 'utf8', mode: 0o600 });
     await fs.rename(temporary, this.jobErrorFile);
   }
 
-  async recordJobError(source, error, context = {}, severity = 'error') {
+  async recordJobError(source, error, context = {}, severity = 'error', options = {}) {
     if (!this.jobErrorFile) return;
     const run = async () => {
       const rows = await this.readJobErrors();
+      const now = new Date().toISOString();
+      const safeSource = String(source || 'server').slice(0, 120);
+      const safeSeverity = String(severity || 'error').slice(0, 20);
+      const safeMessage = String(error && error.message || error || 'Unknown error').slice(0, 3000);
+      const safeContext = clone(context || {});
+      const fingerprint = jobErrorFingerprint(safeSource, safeSeverity, safeMessage, safeContext, options.fingerprint);
+      const existingIndex = rows.findIndex(row => !row.resolvedAt && jobErrorFingerprint(row.source, row.severity, row.message, row.context, row.fingerprint) === fingerprint);
+      if (existingIndex >= 0) {
+        const existing = rows.splice(existingIndex, 1)[0];
+        const updated = {
+          ...existing,
+          source: safeSource,
+          severity: safeSeverity,
+          message: safeMessage,
+          context: safeContext,
+          fingerprint,
+          firstSeenAt: existing.firstSeenAt || existing.createdAt || now,
+          lastSeenAt: now,
+          occurrenceCount: Math.max(1, Number(existing.occurrenceCount || 1)) + 1
+        };
+        await this.writeJobErrors([updated, ...rows]);
+        return { ...clone(updated), coalesced: true };
+      }
       const entry = {
         id: 'json-error-' + Date.now() + '-' + crypto.randomBytes(5).toString('hex'),
-        source: String(source || 'server').slice(0, 120),
-        severity: String(severity || 'error').slice(0, 20),
-        message: String(error && error.message || error || 'Unknown error').slice(0, 3000),
-        context: clone(context || {}),
-        createdAt: new Date().toISOString()
+        source: safeSource,
+        severity: safeSeverity,
+        message: safeMessage,
+        context: safeContext,
+        fingerprint,
+        createdAt: now,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        occurrenceCount: 1
       };
       await this.writeJobErrors([entry, ...rows]);
+      return clone(entry);
     };
     const pending = this.jobErrorWrite.then(run, run);
     this.jobErrorWrite = pending.catch(() => {});
@@ -556,9 +644,7 @@ class JsonStateRepository {
 
   async recentJobErrors(limit = 20) {
     await this.jobErrorWrite;
-    return (await this.readJobErrors())
-      .filter(row => !row.resolvedAt)
-      .slice(0, Math.max(1, Math.min(100, Number(limit || 20))));
+    return groupedOpenJobErrors(await this.readJobErrors(), limit);
   }
 
   async resolveJobError(id, options = {}) {
@@ -568,14 +654,21 @@ class JsonStateRepository {
       const rows = await this.readJobErrors();
       const index = rows.findIndex(row => row.id === targetId && !row.resolvedAt);
       if (index < 0) return null;
-      rows[index] = {
-        ...rows[index],
-        resolvedAt: new Date().toISOString(),
-        resolvedBy: String(options.resolvedBy || 'owner').trim().slice(0, 160),
-        resolutionNote: String(options.note || 'Reviewed by owner').trim().slice(0, 1000)
-      };
+      const targetFingerprint = jobErrorFingerprint(rows[index].source, rows[index].severity, rows[index].message, rows[index].context, rows[index].fingerprint);
+      const resolvedAt = new Date().toISOString();
+      const resolvedBy = String(options.resolvedBy || 'owner').trim().slice(0, 160);
+      const resolutionNote = String(options.note || 'Reviewed by owner').trim().slice(0, 1000);
+      const matching = rows.filter(row => !row.resolvedAt && jobErrorFingerprint(row.source, row.severity, row.message, row.context, row.fingerprint) === targetFingerprint);
+      rows.forEach((row, rowIndex) => {
+        if (row.resolvedAt || jobErrorFingerprint(row.source, row.severity, row.message, row.context, row.fingerprint) !== targetFingerprint) return;
+        rows[rowIndex] = { ...row, resolvedAt, resolvedBy, resolutionNote };
+      });
       await this.writeJobErrors(rows);
-      return clone(rows[index]);
+      return {
+        ...clone(rows[index]),
+        occurrenceCount: matching.reduce((total, row) => total + Math.max(1, Number(row.occurrenceCount || 1)), 0),
+        relatedIds: matching.map(row => row.id)
+      };
     };
     const pending = this.jobErrorWrite.then(run, run);
     this.jobErrorWrite = pending.catch(() => {});
@@ -811,7 +904,18 @@ class PostgresStateRepository {
         )`);
         await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS resolved_by TEXT NOT NULL DEFAULT \'\'');
         await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS resolution_note TEXT NOT NULL DEFAULT \'\'');
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT \'\'');
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ');
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ');
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS occurrence_count INTEGER NOT NULL DEFAULT 1');
+        await client.query('UPDATE woa_job_errors SET first_seen_at = created_at WHERE first_seen_at IS NULL');
+        await client.query('UPDATE woa_job_errors SET last_seen_at = created_at WHERE last_seen_at IS NULL');
+        await client.query('ALTER TABLE woa_job_errors ALTER COLUMN first_seen_at SET DEFAULT now()');
+        await client.query('ALTER TABLE woa_job_errors ALTER COLUMN first_seen_at SET NOT NULL');
+        await client.query('ALTER TABLE woa_job_errors ALTER COLUMN last_seen_at SET DEFAULT now()');
+        await client.query('ALTER TABLE woa_job_errors ALTER COLUMN last_seen_at SET NOT NULL');
         await client.query('CREATE INDEX IF NOT EXISTS woa_job_errors_open_idx ON woa_job_errors (organization_id, resolved_at, created_at DESC)');
+        await client.query('CREATE UNIQUE INDEX IF NOT EXISTS woa_job_errors_open_fingerprint_unique ON woa_job_errors (organization_id, fingerprint) WHERE resolved_at IS NULL AND fingerprint <> \'\'');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_ai_usage (
           organization_id TEXT NOT NULL,
           period_type TEXT NOT NULL CHECK (period_type IN ('day', 'month')),
@@ -1075,43 +1179,25 @@ class PostgresStateRepository {
     return result.rowCount > 0;
   }
 
-  async recordJobError(source, error, context = {}, severity = 'error') {
+  async recordJobError(source, error, context = {}, severity = 'error', options = {}) {
     await this.ensureSchema();
-    await this.pool.query(`INSERT INTO woa_job_errors (organization_id, source, severity, message, context)
-      VALUES ($1, $2, $3, $4, $5::jsonb)`, [this.organizationId, String(source || 'server').slice(0, 120), String(severity || 'error').slice(0, 20), String(error && error.message || error || 'Unknown error').slice(0, 3000), JSON.stringify(context || {})]);
-  }
-
-  async recentJobErrors(limit = 20) {
-    await this.ensureSchema();
-    const result = await this.pool.query(`SELECT id, source, severity, message, context, created_at
-      FROM woa_job_errors
-      WHERE organization_id = $1 AND resolved_at IS NULL
-      ORDER BY created_at DESC
-      LIMIT $2`, [this.organizationId, Math.max(1, Math.min(100, Number(limit || 20)))]);
-    return result.rows.map(row => ({
-      id: Number(row.id),
-      source: row.source,
-      severity: row.severity,
-      message: row.message,
-      context: row.context || {},
-      createdAt: row.created_at
-    }));
-  }
-
-  async resolveJobError(id, options = {}) {
-    const targetId = Number(id);
-    if (!Number.isSafeInteger(targetId) || targetId <= 0) throw new Error('A valid PostgreSQL job-error ID is required.');
-    await this.ensureSchema();
-    const result = await this.pool.query(`UPDATE woa_job_errors
-      SET resolved_at = now(), resolved_by = $3, resolution_note = $4
-      WHERE organization_id = $1 AND id = $2 AND resolved_at IS NULL
-      RETURNING id, source, severity, message, context, created_at, resolved_at, resolved_by, resolution_note`, [
-      this.organizationId,
-      targetId,
-      String(options.resolvedBy || 'owner').trim().slice(0, 160),
-      String(options.note || 'Reviewed by owner').trim().slice(0, 1000)
-    ]);
-    if (!result.rowCount) return null;
+    const safeSource = String(source || 'server').slice(0, 120);
+    const safeSeverity = String(severity || 'error').slice(0, 20);
+    const safeMessage = String(error && error.message || error || 'Unknown error').slice(0, 3000);
+    const safeContext = context && typeof context === 'object' && !Array.isArray(context) ? context : {};
+    const fingerprint = jobErrorFingerprint(safeSource, safeSeverity, safeMessage, safeContext, options.fingerprint);
+    const result = await this.pool.query(`INSERT INTO woa_job_errors
+      (organization_id, source, severity, message, context, fingerprint, first_seen_at, last_seen_at, occurrence_count)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6, now(), now(), 1)
+      ON CONFLICT (organization_id, fingerprint) WHERE resolved_at IS NULL AND fingerprint <> ''
+      DO UPDATE SET
+        source = EXCLUDED.source,
+        severity = EXCLUDED.severity,
+        message = EXCLUDED.message,
+        context = EXCLUDED.context,
+        last_seen_at = now(),
+        occurrence_count = woa_job_errors.occurrence_count + 1
+      RETURNING id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count`, [this.organizationId, safeSource, safeSeverity, safeMessage, JSON.stringify(safeContext), fingerprint]);
     const row = result.rows[0];
     return {
       id: Number(row.id),
@@ -1119,11 +1205,97 @@ class PostgresStateRepository {
       severity: row.severity,
       message: row.message,
       context: row.context || {},
+      fingerprint: row.fingerprint,
       createdAt: row.created_at,
-      resolvedAt: row.resolved_at,
-      resolvedBy: row.resolved_by,
-      resolutionNote: row.resolution_note
+      firstSeenAt: row.first_seen_at,
+      lastSeenAt: row.last_seen_at,
+      occurrenceCount: Math.max(1, Number(row.occurrence_count || 1))
     };
+  }
+
+  async recentJobErrors(limit = 20) {
+    await this.ensureSchema();
+    const result = await this.pool.query(`SELECT id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count
+      FROM woa_job_errors
+      WHERE organization_id = $1 AND resolved_at IS NULL
+      ORDER BY last_seen_at DESC
+      LIMIT 250`, [this.organizationId]);
+    return groupedOpenJobErrors(result.rows.map(row => ({
+      id: Number(row.id),
+      source: row.source,
+      severity: row.severity,
+      message: row.message,
+      context: row.context || {},
+      fingerprint: row.fingerprint,
+      createdAt: row.created_at,
+      firstSeenAt: row.first_seen_at,
+      lastSeenAt: row.last_seen_at,
+      occurrenceCount: Math.max(1, Number(row.occurrence_count || 1))
+    })), limit);
+  }
+
+  async resolveJobError(id, options = {}) {
+    const targetId = Number(id);
+    if (!Number.isSafeInteger(targetId) || targetId <= 0) throw new Error('A valid PostgreSQL job-error ID is required.');
+    await this.ensureSchema();
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const targetResult = await client.query(`SELECT id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count
+        FROM woa_job_errors
+        WHERE organization_id = $1 AND id = $2 AND resolved_at IS NULL
+        FOR UPDATE`, [this.organizationId, targetId]);
+      if (!targetResult.rowCount) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const target = targetResult.rows[0];
+      const targetFingerprint = jobErrorFingerprint(target.source, target.severity, target.message, target.context, target.fingerprint);
+      let matchingIds = [targetId];
+      if (target.fingerprint) {
+        const matching = await client.query(`SELECT id FROM woa_job_errors
+          WHERE organization_id = $1 AND fingerprint = $2 AND resolved_at IS NULL
+          FOR UPDATE`, [this.organizationId, target.fingerprint]);
+        matchingIds = matching.rows.map(row => Number(row.id));
+      } else {
+        const legacy = await client.query(`SELECT id, source, severity, message, context, fingerprint FROM woa_job_errors
+          WHERE organization_id = $1 AND resolved_at IS NULL
+          FOR UPDATE`, [this.organizationId]);
+        matchingIds = legacy.rows
+          .filter(row => jobErrorFingerprint(row.source, row.severity, row.message, row.context, row.fingerprint) === targetFingerprint)
+          .map(row => Number(row.id));
+      }
+      const resolvedBy = String(options.resolvedBy || 'owner').trim().slice(0, 160);
+      const resolutionNote = String(options.note || 'Reviewed by owner').trim().slice(0, 1000);
+      const result = await client.query(`UPDATE woa_job_errors
+        SET resolved_at = now(), resolved_by = $3, resolution_note = $4
+        WHERE organization_id = $1 AND id = ANY($2::bigint[]) AND resolved_at IS NULL
+        RETURNING id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count, resolved_at, resolved_by, resolution_note`, [this.organizationId, matchingIds, resolvedBy, resolutionNote]);
+      await client.query('COMMIT');
+      const row = result.rows.find(candidate => Number(candidate.id) === targetId) || result.rows[0];
+      if (!row) return null;
+      return {
+        id: Number(row.id),
+        source: row.source,
+        severity: row.severity,
+        message: row.message,
+        context: row.context || {},
+        fingerprint: row.fingerprint || targetFingerprint,
+        createdAt: row.created_at,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+        occurrenceCount: result.rows.reduce((total, candidate) => total + Math.max(1, Number(candidate.occurrence_count || 1)), 0),
+        relatedIds: result.rows.map(candidate => Number(candidate.id)),
+        resolvedAt: row.resolved_at,
+        resolvedBy: row.resolved_by,
+        resolutionNote: row.resolution_note
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async reserveAiUsage(options = {}) {
