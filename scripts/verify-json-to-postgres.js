@@ -3,6 +3,7 @@
 const path = require('node:path');
 const stateRepository = require('../state-repository');
 const migrationSource = require('../postgres-migration-source');
+const dataBackendCutover = require('../data-backend-cutover');
 const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
@@ -58,6 +59,12 @@ async function main() {
     if (!proof.migrationProofReady || !health.migrationProofReady || !health.snapshotRecoveryReady) {
       throw new Error('PostgreSQL import proof or current recovery snapshot verification failed. No state was changed.');
     }
+    const cutoverSentinel = await dataBackendCutover.writePostgresSentinel({
+      dataDir: process.env.WOA_DATA_BACKEND_SENTINEL_DIR || process.env.DATA_DIR || path.dirname(dataFile),
+      health,
+      organizationId: process.env.WOA_ORGANIZATION_ID || 'org-wheelsonauto',
+      protectedSourceFileChecksum: source.sourceFileChecksum
+    });
     console.log(JSON.stringify({
       ok: true,
       source: dataFile,
@@ -65,7 +72,12 @@ async function main() {
       databaseVersion: target.version,
       checksum: target.checksum,
       migrationProof: proof,
-      message: 'The JSON source exactly matches PostgreSQL. Import proof metadata was recorded without rewriting either state.'
+      cutoverSentinel: {
+        created: cutoverSentinel.created,
+        file: cutoverSentinel.file,
+        protectedSourceFileChecksum: cutoverSentinel.sentinel.protectedSourceFileChecksum
+      },
+      message: 'The JSON source exactly matches PostgreSQL. Import proof metadata and the persistent cutover sentinel were verified without rewriting either business state.'
     }, null, 2));
   } finally {
     await repository.close();

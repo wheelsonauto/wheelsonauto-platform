@@ -4,6 +4,7 @@ const path = require('node:path');
 const stateRepository = require('../state-repository');
 const migrationSource = require('../postgres-migration-source');
 const stateMigrationLock = require('../state-migration-lock');
+const dataBackendCutover = require('../data-backend-cutover');
 const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
@@ -73,6 +74,12 @@ async function main() {
     if (!migrationProof.migrationProofReady || !health.migrationProofReady || !health.snapshotRecoveryReady) {
       throw new Error('PostgreSQL import proof or current recovery snapshot verification failed. JSON source was not changed.');
     }
+    const cutoverSentinel = await dataBackendCutover.writePostgresSentinel({
+      dataDir: process.env.WOA_DATA_BACKEND_SENTINEL_DIR || process.env.DATA_DIR || path.dirname(dataFile),
+      health,
+      organizationId: process.env.WOA_ORGANIZATION_ID || 'org-wheelsonauto',
+      protectedSourceFileChecksum: source.sourceFileChecksum
+    });
     console.log(JSON.stringify({
       ok: true,
       source: dataFile,
@@ -80,8 +87,13 @@ async function main() {
       databaseVersion: verified.version,
       checksum: verified.checksum,
       migrationProof,
+      cutoverSentinel: {
+        created: cutoverSentinel.created,
+        file: cutoverSentinel.file,
+        protectedSourceFileChecksum: cutoverSentinel.sentinel.protectedSourceFileChecksum
+      },
       maintenanceLock: { acquiredAt: maintenanceLock.acquiredAt, sourceFileChecksum: maintenanceLock.sourceFileChecksum },
-      message: 'PostgreSQL import and checksum/count evidence verified against the preflight-confirmed protected source. Keep the JSON rollback snapshot until the dedicated recovery test is complete.'
+      message: 'PostgreSQL import and checksum/count evidence verified against the preflight-confirmed protected source. The persistent cutover sentinel now prevents the retained JSON rollback artifact from becoming writable by accident.'
     }, null, 2));
   } finally {
     try {

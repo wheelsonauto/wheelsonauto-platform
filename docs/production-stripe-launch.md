@@ -27,6 +27,9 @@ artifact and must never be committed as part of a code release.
   available, returns retryable `503` responses for business writes and
   provider webhooks, and does not start autopay, sync, messaging, or monitoring
   background writers.
+- The verified importer writes an owner-only persistent cutover sentinel beside
+  the live data directory. After that point, a missing or misspelled
+  `WOA_DATA_BACKEND` cannot silently reopen the retained JSON rollback file.
 - Run `pnpm run secret-hygiene-check` before a release. It rejects committed
   production-key signatures and private key blocks without printing the secret
   value if one is found.
@@ -304,6 +307,23 @@ writes on the JSON backend after taking the protected source copy. If that
 deployment fails its health check, restore the protected JSON configuration
 with maintenance mode still enabled, investigate, and repeat the import from a
 new protected snapshot; never let both stores accept writes.
+
+The importer also writes `.wheelsonauto-postgres-cutover.json` to `DATA_DIR`
+after the database checksum, recovery snapshot, and migration proof pass. The
+file contains checksums and migration version only, never credentials. Server
+startup verifies that sentinel before listening. A later typo, missing
+`WOA_DATA_BACKEND`, empty database, or conflicting re-import fails closed
+instead of falling back to stale JSON. For incident review only, retained JSON
+can be opened with both of these settings:
+
+```text
+WOA_MIGRATION_MAINTENANCE_MODE=1
+WOA_JSON_ROLLBACK_REVIEW_CONFIRM=REVIEW JSON ROLLBACK IN MAINTENANCE MODE
+```
+
+That path remains read-only because maintenance mode blocks every business
+write and background worker. It is not permission to operate two writable
+stores or resume production on JSON.
 
 The Clover-to-Stripe provider-switch endpoint is also fail-closed. It refuses
 to schedule or activate a live cutover while

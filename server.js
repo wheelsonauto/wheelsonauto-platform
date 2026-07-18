@@ -19,6 +19,7 @@ const stateMigrationLock = require('./state-migration-lock');
 const recoveryGuard = require('./recovery-guard');
 const encryptedStateBackup = require('./encrypted-state-backup');
 const messagingConsent = require('./messaging-consent');
+const dataBackendCutover = require('./data-backend-cutover');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -211,7 +212,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-telnyx-qualification-165';
+const ASSET_VERSION = 'platform-20260718-cutover-sentinel-166';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9343,6 +9344,35 @@ function privateDocumentKeyCoverage(data = {}) {
         : 'Restore the active private document encryption key before reading legacy unversioned documents.'
   };
 }
+async function dataBackendCutoverEvidence() {
+  try {
+    const sentinel = await dataBackendCutover.readSentinel(DATA_DIR);
+    const ready = STATE_REPOSITORY.kind === 'postgres' && !!sentinel;
+    return {
+      backend: STATE_REPOSITORY.kind,
+      ready,
+      jsonBackendRetired: !!sentinel,
+      protectedSourceChecksumRecorded: !!(sentinel && sentinel.protectedSourceFileChecksum),
+      importedVersion: sentinel ? sentinel.importedVersion : 0,
+      recordedAt: sentinel ? sentinel.createdAt : '',
+      error: ready
+        ? ''
+        : STATE_REPOSITORY.kind !== 'postgres'
+          ? 'WheelsonAuto is still using the JSON development backend.'
+          : 'The persistent PostgreSQL cutover sentinel is missing.'
+    };
+  } catch (error) {
+    return {
+      backend: STATE_REPOSITORY.kind,
+      ready: false,
+      jsonBackendRetired: true,
+      protectedSourceChecksumRecorded: false,
+      importedVersion: 0,
+      recordedAt: '',
+      error: String(error && error.message || error).slice(0, 500)
+    };
+  }
+}
 function operationalAlertConfigurationFingerprint(data = {}) {
   const configuration = operationalAlertConfiguration(data);
   const material = [
@@ -9477,6 +9507,7 @@ function cloverRecurringMigrationReadiness(data = {}) {
 }
 async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
+  const backendCutover = await dataBackendCutoverEvidence();
   const recoveryDrill = currentRecoveryDrillEvidence(database);
   const databaseWithRecoveryDrill = { ...database, recoveryDrill, recoveryDrillReady: recoveryDrill.ready };
   const stateBackup = await encryptedStateBackupEvidence();
@@ -9496,6 +9527,7 @@ async function productionInfrastructurePreflight(data = null) {
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
+  if (!backendCutover.ready) missing.push('persistent PostgreSQL cutover sentinel');
   if (!databaseWithRecoveryDrill.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
   if (!databaseWithRecoveryDrill.migrationProofReady) missing.push('verified JSON-to-PostgreSQL import proof');
   if (!recoveryDrill.ready) missing.push('controlled PostgreSQL recovery drill');
@@ -9532,6 +9564,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   return {
     database: databaseWithRecoveryDrill,
+    backendCutover,
     recoveryDrill,
     stateBackup,
     documentStorage,
@@ -9554,6 +9587,16 @@ async function productionInfrastructurePreflight(data = null) {
       ? 'Keep Clover as the live provider until the controlled Stripe preflight is clear: ' + missing.join(', ') + '.'
       : 'Transactional database with a verified import, recovery snapshot, controlled recovery drill, fresh encrypted offsite backup, encrypted private storage, Stripe onboarding and Identity, signed live Stripe webhooks, a fresh Clover cutover roster, Telnyx, Resend, and Star proof, verified failure alerts, password-only owner access, and session safeguards are ready for controlled Stripe live testing.'
   };
+}
+async function assertDataBackendTransition() {
+  return dataBackendCutover.assertBackendTransition({
+    backend: STATE_REPOSITORY.kind,
+    dataDir: DATA_DIR,
+    repository: STATE_REPOSITORY,
+    organizationId: MAIN_ORG_ID,
+    maintenanceMode: WOA_MIGRATION_MAINTENANCE_MODE,
+    rollbackReviewConfirmation: process.env.WOA_JSON_ROLLBACK_REVIEW_CONFIRM || ''
+  });
 }
 async function assertProductionInfrastructure() {
   if (!WOA_PRODUCTION_HARDENING_REQUIRED) return { skipped: true };
@@ -21411,7 +21454,8 @@ async function gracefulShutdown(signal) {
 if (require.main === module) {
   process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
   process.once('SIGINT', () => { void gracefulShutdown('SIGINT'); });
-  assertProductionInfrastructure()
+  assertDataBackendTransition()
+    .then(() => assertProductionInfrastructure())
     .then(() => server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
     if (WOA_MIGRATION_MAINTENANCE_MODE) {
@@ -21575,6 +21619,8 @@ module.exports = {
   stripeWebhookConfigurationFingerprint,
   recoveryDrillConfigurationFingerprint,
   currentRecoveryDrillEvidence,
+  dataBackendCutoverEvidence,
+  assertDataBackendTransition,
   runEncryptedStateBackup,
   encryptedStateBackupEvidence,
   documentStorageConfigurationFingerprint,

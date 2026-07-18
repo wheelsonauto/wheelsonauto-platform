@@ -337,7 +337,11 @@ function advisoryLockKeys(organizationId, name) {
 
 function normalizeBackend(value) {
   const backend = String(value || 'json').trim().toLowerCase();
-  return backend === 'postgres' || backend === 'postgresql' ? 'postgres' : 'json';
+  if (backend === 'postgres' || backend === 'postgresql') return 'postgres';
+  if (backend === 'json') return 'json';
+  const error = new Error('Unsupported WOA_DATA_BACKEND "' + backend + '". Use exactly json or postgres; refusing to guess and fall back to a file.');
+  error.code = 'woa_data_backend_invalid';
+  throw error;
 }
 
 function normalizedIdentity(value) {
@@ -2559,6 +2563,7 @@ module.exports = {
   RECOVERY_DRILL_REQUIRED_CHECKS,
   migrationRecordCounts,
   migrationProofEvidence,
+  normalizeBackend,
   advisoryLockKeys,
   identityEntries,
   identityConflicts,
