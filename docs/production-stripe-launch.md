@@ -87,6 +87,25 @@ also verifies the original plaintext SHA-256 checksum and byte count after
 authenticated decryption. A mismatched record or incomplete object fails
 closed instead of returning questionable evidence.
 
+Native e-sign stores two separate encrypted immutable objects: the drawn PNG
+signature and a readable signed-agreement artifact containing the exact
+rendered contract, template and document hashes, typed legal name, consent
+certificate, signing time, IP, user agent, and signature hash. The customer
+portal may download only the agreement linked to that signed-in customer and
+company; another customer receives not-found instead of existence metadata.
+Both objects are removed if the authoritative state transaction fails, while
+a committed agreement remains recoverable from its document record.
+
+Every paid transaction also receives a customer/vehicle-linked receipt record
+immediately, then a durable background worker writes its immutable encrypted
+receipt artifact. Recording the provider-confirmed payment never waits on an
+object-storage outage; missing artifacts remain visible and retry until stored,
+and the Stripe launch gate stays blocked until the backfill is complete. An
+owner-reviewed dispute packet is stricter: production hardening will not mark
+it evidence-ready unless its exact evidence snapshot is encrypted and stored.
+Failed state commits remove newly written receipt/evidence objects so no
+unreferenced private evidence is left behind.
+
 When rotating the active key, keep every historical version that still owns a
 stored document in `WOA_DOCUMENT_DECRYPTION_KEYS`. The active
 `WOA_DOCUMENT_ENCRYPTION_KEY` is automatically registered under

@@ -166,6 +166,9 @@ const WOA_STATE_BACKUP_ENABLED = process.env.WOA_STATE_BACKUP_ENABLED === '1';
 const WOA_STATE_BACKUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STATE_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 const WOA_STATE_BACKUP_STARTUP_DELAY_MS = Math.max(30 * 1000, Number(process.env.WOA_STATE_BACKUP_STARTUP_DELAY_MS || 2 * 60 * 1000));
 const WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS || 12 * 60 * 60 * 1000));
+const WOA_PRIVATE_ARTIFACT_INTERVAL_MS = Math.max(60 * 1000, Number(process.env.WOA_PRIVATE_ARTIFACT_INTERVAL_MS || 5 * 60 * 1000));
+const WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS = Math.max(10 * 1000, Number(process.env.WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS || 45 * 1000));
+const WOA_PRIVATE_ARTIFACT_BATCH_LIMIT = Math.max(1, Math.min(100, Number(process.env.WOA_PRIVATE_ARTIFACT_BATCH_LIMIT || 25)));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
 const WOA_ERROR_RECORD_WINDOW_MS = Math.max(15 * 1000, Number(process.env.WOA_ERROR_RECORD_WINDOW_MS || 60 * 1000));
@@ -212,7 +215,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-vin-review-168';
+const ASSET_VERSION = 'platform-20260718-private-artifacts-169';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -295,6 +298,16 @@ const stateBackupStatus = {
   lastFinishedAt: '',
   lastVerifiedAt: '',
   lastSource: '',
+  lastError: '',
+  lastResult: null
+};
+const privateArtifactStatus = {
+  enabled: true,
+  intervalMs: WOA_PRIVATE_ARTIFACT_INTERVAL_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
+  lastStoredAt: '',
   lastError: '',
   lastResult: null
 };
@@ -6711,7 +6724,10 @@ function privateDocumentAvailable(record = {}) {
   return !!(record.storageKey || record.storagePath || record.signatureImagePath);
 }
 async function readPrivateDocumentBytes(record = {}) {
-  if (PRIVATE_DOCUMENT_STORE.isEncryptedDocument(record)) return PRIVATE_DOCUMENT_STORE.read(record);
+  if (PRIVATE_DOCUMENT_STORE.isEncryptedDocument(record)) {
+    const storageRecord = record.privateArtifactId ? { ...record, id: record.privateArtifactId } : record;
+    return PRIVATE_DOCUMENT_STORE.read(storageRecord);
+  }
   const relativePath = String(record.storagePath || record.signatureImagePath || '');
   const root = path.resolve(DATA_DIR, 'onboarding-uploads');
   const filePath = path.resolve(DATA_DIR, relativePath);
@@ -6724,7 +6740,7 @@ async function readPrivateDocumentBytes(record = {}) {
 }
 function redactPrivateDocumentMetadata(record = {}) {
   const safe = { ...record, privateFileAvailable: privateDocumentAvailable(record) };
-  ['storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath'].forEach(key => delete safe[key]);
+  ['storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'privateArtifactId'].forEach(key => delete safe[key]);
   return safe;
 }
 function cookies(req) { return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => { const i = part.indexOf('='); return [part.slice(0, i).trim(), part.slice(i + 1).trim()]; })); }
@@ -6850,7 +6866,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData', 'privateArtifactId'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
@@ -8042,6 +8058,7 @@ function stripCustomerPortalPayment(row = {}) {
   return safe;
 }
 function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) {
+  const persistedReceiptDocuments = (scopedData.documents || []).filter(row => /receipt/i.test(String([row.kind, row.documentKind, row.type].filter(Boolean).join(' '))));
   const visibleDocs = (scopedData.documents || []).filter(row => {
     if (!customerPortalRecordMatches(row, identity, 'document')) return false;
     if (row.customerVisible === true || row.portalVisible === true) return true;
@@ -8049,14 +8066,15 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
     return visibility === 'customer' || visibility === 'customer portal' || visibility === 'customer visible';
   }).map(row => stripPrivateCustomerFields({
     ...row,
-    kind: 'Document',
+    kind: row.kind || 'Document',
     date: row.date || row.createdAt || row.expires || row.due || '',
     title: row.title || row.type || 'Document',
     portalDownloadUrl: privateDocumentAvailable(row) && row.customerAccountId ? '/customer/documents/' + encodeURIComponent(row.id) : ''
   }));
   const receipts = (payments || []).filter(row => {
     const status = String(row.status || '').toLowerCase();
-    return status === 'paid' || status.indexOf('paid outside app') >= 0;
+    return (status === 'paid' || status.indexOf('paid outside app') >= 0)
+      && !persistedReceiptDocuments.some(document => receiptDocumentMatchesPayment(document, row));
   }).map(row => stripPrivateCustomerFields({
     id: 'receipt-' + (row.id || row.cloverPaymentId || row.createdAt || Date.now()),
     kind: 'Receipt',
@@ -9517,6 +9535,7 @@ async function productionInfrastructurePreflight(data = null) {
   const stripeIdentityWebhook = stripeIdentityLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
   const documentEncryptionKeys = privateDocumentKeyCoverage(state);
+  const privateArtifacts = privateArtifactCoverage(state);
   const operationalAlerts = operationalAlertEvidence(state);
   const telnyxMessaging = telnyxLiveLaunchEvidence(state);
   const resendEmail = resendLiveLaunchEvidence(state);
@@ -9539,6 +9558,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
   if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
   if (!documentEncryptionKeys.ready) missing.push('decryption keys for every encrypted private document');
+  if (!privateArtifacts.ready) missing.push('encrypted payment receipt and dispute evidence artifact backfill');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
@@ -9570,6 +9590,7 @@ async function productionInfrastructurePreflight(data = null) {
     documentStorage,
     documentStorageValidation,
     documentEncryptionKeys,
+    privateArtifacts,
     stripeWebhook,
     stripeIdentityWebhook,
     operationalAlerts,
@@ -15227,6 +15248,325 @@ async function attachHostedCheckout(data, request) {
   error.statusCode = 503;
   throw error;
 }
+function paymentReceiptEligible(payment = {}) {
+  const status = String(payment.status || '').toLowerCase();
+  return stripeMigration.paymentIsPaid(status) || status.includes('paid outside app');
+}
+function paymentReceiptIdentity(payment = {}) {
+  const provider = normalizedPaymentProvider(payment.paymentProvider || payment.provider || (/stripe/i.test(String(payment.source || '')) ? 'stripe' : 'clover'));
+  const reference = String(payment.stripePaymentIntentId || payment.providerPaymentId || payment.cloverPaymentId || payment.cloverChargeId || payment.externalReferenceId || payment.id || '').trim();
+  return [provider, reference, payment.paymentRequestId || '', payment.recurringPaymentId || '', payment.createdAt || payment.date || '', Number(payment.amount || 0).toFixed(2)].join('|');
+}
+function paymentReceiptDocumentId(payment = {}) {
+  return 'receipt-payment-' + crypto.createHash('sha256').update(paymentReceiptIdentity(payment)).digest('hex').slice(0, 24);
+}
+function receiptDocumentMatchesPayment(document = {}, payment = {}) {
+  if (!document || !payment || !paymentReceiptEligible(payment)) return false;
+  if (document.paymentId && payment.id && String(document.paymentId) === String(payment.id)) return true;
+  if (document.paymentRequestId && payment.paymentRequestId && String(document.paymentRequestId) === String(payment.paymentRequestId)) return true;
+  const providerReferences = [payment.stripePaymentIntentId, payment.providerPaymentId, payment.cloverPaymentId, payment.cloverChargeId].map(value => String(value || '').trim()).filter(Boolean);
+  const documentReferences = [document.stripePaymentIntentId, document.providerPaymentId, document.cloverPaymentId, document.cloverChargeId].map(value => String(value || '').trim()).filter(Boolean);
+  if (providerReferences.some(reference => documentReferences.includes(reference))) return true;
+  return String(document.id || '') === paymentReceiptDocumentId(payment);
+}
+function receiptCustomerAccount(data = {}, record = {}) {
+  const accounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  const exact = accounts.find(account => record.customerAccountId && account.id === record.customerAccountId)
+    || accounts.find(account => record.applicationId && account.applicationId === record.applicationId)
+    || accounts.find(account => record.recurringPaymentId && account.recurringPaymentId === record.recurringPaymentId)
+    || accounts.find(account => record.customerId && account.customerId === record.customerId);
+  if (exact) return exact;
+  const email = emailKey(record.email || '');
+  const phone = phoneKey(record.phone || '');
+  const customer = normKey(record.customer || record.name || '');
+  const candidates = accounts.filter(account => email && emailKey(account.email || account.username || '') === email
+    || phone && phoneKey(account.phone || account.username || '') === phone
+    || customer && [account.customer, account.name].some(value => value && softNameMatch(value, customer)));
+  return candidates.length === 1 ? candidates[0] : null;
+}
+function ensurePaymentReceiptDocument(data, payment = {}, details = {}) {
+  if (!paymentReceiptEligible(payment)) return null;
+  data.documents = Array.isArray(data.documents) ? data.documents : [];
+  const account = receiptCustomerAccount(data, { ...payment, ...details }) || {};
+  const provider = normalizedPaymentProvider(details.paymentProvider || payment.paymentProvider || payment.provider || 'clover');
+  const providerName = paymentProviderLabel(provider);
+  const existing = data.documents.find(document => /receipt/i.test(String([document.kind, document.documentKind, document.type].filter(Boolean).join(' '))) && receiptDocumentMatchesPayment(document, payment));
+  const document = existing || { id: paymentReceiptDocumentId(payment) };
+  Object.assign(document, {
+    organizationId: payment.organizationId || details.organizationId || account.organizationId || MAIN_ORG_ID,
+    paymentId: payment.id || document.paymentId || '',
+    paymentRequestId: payment.paymentRequestId || details.paymentRequestId || document.paymentRequestId || '',
+    recurringPaymentId: payment.recurringPaymentId || details.recurringPaymentId || document.recurringPaymentId || '',
+    applicationId: payment.applicationId || details.applicationId || document.applicationId || '',
+    onboardingSessionId: payment.onboardingSessionId || details.onboardingSessionId || document.onboardingSessionId || '',
+    customerAccountId: payment.customerAccountId || details.customerAccountId || account.id || document.customerAccountId || '',
+    paymentProvider: provider,
+    providerPaymentId: payment.providerPaymentId || details.providerPaymentId || document.providerPaymentId || '',
+    stripePaymentIntentId: payment.stripePaymentIntentId || details.stripePaymentIntentId || document.stripePaymentIntentId || '',
+    stripeChargeId: payment.stripeChargeId || document.stripeChargeId || '',
+    cloverPaymentId: payment.cloverPaymentId || details.cloverPaymentId || document.cloverPaymentId || '',
+    customer: payment.customer || details.customer || document.customer || '',
+    phone: payment.phone || details.phone || document.phone || '',
+    email: payment.email || details.email || document.email || '',
+    vehicle: payment.vehicle || details.vehicle || document.vehicle || '',
+    vehicleId: payment.vehicleId || details.vehicleId || document.vehicleId || '',
+    vin: payment.vin || details.vin || document.vin || '',
+    licensePlate: payment.licensePlate || payment.plate || details.licensePlate || document.licensePlate || '',
+    title: details.title || document.title || (payment.paymentType || payment.type || 'Payment') + ' receipt',
+    type: details.type || document.type || 'Payment receipt',
+    kind: 'Receipt',
+    documentKind: 'payment_receipt',
+    amount: Number(payment.amount || details.amount || document.amount || 0),
+    method: payment.method || details.method || document.method || providerName,
+    status: payment.status || details.status || document.status || 'Paid',
+    date: payment.createdAt || payment.date || details.date || document.date || new Date().toISOString(),
+    createdAt: document.createdAt || payment.createdAt || details.date || new Date().toISOString(),
+    customerVisible: true,
+    portalVisible: true,
+    source: payment.source || details.source || document.source || providerName + ' verified payment',
+    privateArtifactRequired: true,
+    privateArtifactKind: 'payment_receipt',
+    privateArtifactStatus: document.storageKey ? 'Stored encrypted' : (document.privateArtifactStatus || 'Pending secure storage')
+  });
+  if (!existing) data.documents.unshift(document);
+  return document;
+}
+function ensurePaymentReceiptDocuments(data = {}) {
+  let created = 0;
+  (data.payments || []).filter(paymentReceiptEligible).forEach(payment => {
+    const existed = (data.documents || []).some(document => /receipt/i.test(String([document.kind, document.documentKind, document.type].filter(Boolean).join(' '))) && receiptDocumentMatchesPayment(document, payment));
+    ensurePaymentReceiptDocument(data, payment);
+    if (!existed) created += 1;
+  });
+  return created;
+}
+function paymentForReceiptDocument(data = {}, document = {}) {
+  return (data.payments || []).find(payment => receiptDocumentMatchesPayment(document, payment)) || null;
+}
+function privateArtifactRequiredDocument(document = {}) {
+  const classification = String([document.kind, document.documentKind, document.type, document.privateArtifactKind].filter(Boolean).join(' ')).toLowerCase();
+  return document.privateArtifactRequired === true || /payment[_ ]receipt|dispute[_ ]evidence|signed[_ ]contract/.test(classification);
+}
+function artifactSafeValue(value, limit = 500) {
+  return String(value == null ? '' : value).replace(/[\r\n\u0000]+/g, ' ').trim().slice(0, limit);
+}
+function paymentReceiptArtifact(data = {}, document = {}) {
+  const payment = paymentForReceiptDocument(data, document) || {};
+  const provider = paymentProviderLabel(document.paymentProvider || payment.paymentProvider || payment.provider || 'clover');
+  const providerReference = document.stripePaymentIntentId || payment.stripePaymentIntentId || document.providerPaymentId || payment.providerPaymentId || document.cloverPaymentId || payment.cloverPaymentId || '';
+  const createdAt = document.date || payment.createdAt || payment.date || document.createdAt || new Date().toISOString();
+  const body = [
+    'WHEELSONAUTO PAYMENT RECEIPT',
+    'Artifact format: wheelsonauto-payment-receipt-v1',
+    'Receipt record ID: ' + artifactSafeValue(document.id, 160),
+    'Payment record ID: ' + artifactSafeValue(payment.id || document.paymentId, 160),
+    'Customer: ' + artifactSafeValue(document.customer || payment.customer, 220),
+    'Email: ' + artifactSafeValue(document.email || payment.email, 220),
+    'Phone: ' + artifactSafeValue(document.phone || payment.phone, 80),
+    'Vehicle: ' + artifactSafeValue(document.vehicle || payment.vehicle, 220),
+    'Vehicle ID: ' + artifactSafeValue(document.vehicleId || payment.vehicleId, 160),
+    'VIN: ' + artifactSafeValue(document.vin || payment.vin, 80),
+    'Tag / plate: ' + artifactSafeValue(document.licensePlate || payment.licensePlate || payment.plate, 80),
+    'Amount: ' + Number(document.amount || payment.amount || 0).toFixed(2) + ' USD',
+    'Status: ' + artifactSafeValue(document.status || payment.status || 'Paid', 120),
+    'Method: ' + artifactSafeValue(document.method || payment.method || provider, 180),
+    'Provider: ' + artifactSafeValue(provider, 80),
+    'Provider payment reference: ' + artifactSafeValue(providerReference, 220),
+    'Payment request ID: ' + artifactSafeValue(document.paymentRequestId || payment.paymentRequestId, 160),
+    'Recurring payment ID: ' + artifactSafeValue(document.recurringPaymentId || payment.recurringPaymentId, 160),
+    'Paid / recorded at: ' + artifactSafeValue(createdAt, 80),
+    'Source: ' + artifactSafeValue(document.source || payment.source || 'WheelsonAuto verified payment', 300),
+    '',
+    'This immutable receipt artifact was generated from the authoritative WheelsonAuto payment record. Provider confirmation and customer/vehicle references above are preserved for reconciliation and dispute evidence.'
+  ].join('\n');
+  return {
+    body,
+    contentType: 'text/plain; charset=utf-8',
+    originalName: 'wheelsonauto-payment-receipt-' + artifactSafeValue(document.id, 100).replace(/[^a-z0-9-]/gi, '-') + '.txt'
+  };
+}
+function disputeEvidenceArtifact(data = {}, document = {}) {
+  const claim = (data.claims || []).find(row => row.id === document.claimId) || {};
+  const packet = document.evidencePacket || claim.evidencePacket || {};
+  const body = [
+    'WHEELSONAUTO DISPUTE EVIDENCE PACKET',
+    'Artifact format: wheelsonauto-dispute-evidence-v1',
+    'Evidence record ID: ' + artifactSafeValue(document.id, 160),
+    'Claim ID: ' + artifactSafeValue(claim.id || document.claimId, 160),
+    'Customer: ' + artifactSafeValue(document.customer || claim.customer, 220),
+    'Provider: ' + artifactSafeValue(claim.provider || document.paymentProvider, 80),
+    'Provider dispute ID: ' + artifactSafeValue(claim.stripeDisputeId || claim.disputeId || claim.reference, 220),
+    'Generated at: ' + artifactSafeValue(packet.generatedAt || document.createdAt, 80),
+    '',
+    'EVIDENCE SNAPSHOT',
+    JSON.stringify(packet, null, 2),
+    '',
+    'END OF EVIDENCE SNAPSHOT'
+  ].join('\n');
+  return {
+    body,
+    contentType: 'text/plain; charset=utf-8',
+    originalName: 'wheelsonauto-dispute-evidence-' + artifactSafeValue(claim.id || document.id, 100).replace(/[^a-z0-9-]/gi, '-') + '.txt'
+  };
+}
+function ensureDisputeEvidenceDocument(data = {}, claim = {}, user = {}) {
+  data.documents = Array.isArray(data.documents) ? data.documents : [];
+  const packet = claim.evidencePacket && typeof claim.evidencePacket === 'object' ? JSON.parse(JSON.stringify(claim.evidencePacket)) : {};
+  const packetHash = crypto.createHash('sha256').update(JSON.stringify(packet)).digest('hex');
+  const existing = data.documents.find(document => document.documentKind === 'dispute_evidence_packet' && document.claimId === claim.id && document.evidencePacketHash === packetHash);
+  if (existing) {
+    claim.evidenceDocumentId = existing.id;
+    return existing;
+  }
+  const document = {
+    id: 'dispute-evidence-' + crypto.randomBytes(10).toString('hex'),
+    organizationId: claim.organizationId || MAIN_ORG_ID,
+    claimId: claim.id || '',
+    paymentId: claim.paymentId || '',
+    recurringPaymentId: claim.recurringPaymentId || '',
+    customer: claim.customer || '',
+    email: claim.email || '',
+    phone: claim.phone || '',
+    vehicle: claim.vehicle || '',
+    vehicleId: claim.vehicleId || '',
+    vin: claim.vin || '',
+    licensePlate: claim.plate || claim.licensePlate || '',
+    paymentProvider: normalizedPaymentProvider(claim.provider || claim.source || 'stripe'),
+    providerPaymentId: claim.stripePaymentIntentId || claim.cloverPaymentId || '',
+    title: 'Payment dispute evidence packet',
+    type: 'Dispute evidence',
+    kind: 'Evidence',
+    documentKind: 'dispute_evidence_packet',
+    status: 'Owner reviewed - immutable snapshot required',
+    visibility: 'Private staff review',
+    customerVisible: false,
+    portalVisible: false,
+    createdAt: new Date().toISOString(),
+    createdBy: String(user.name || user.username || user.role || 'Owner'),
+    source: paymentProviderLabel(claim.provider || 'stripe') + ' dispute owner review',
+    evidencePacket: packet,
+    evidencePacketHash: packetHash,
+    privateArtifactRequired: true,
+    privateArtifactKind: 'dispute_evidence',
+    privateArtifactStatus: 'Pending secure storage'
+  };
+  data.documents.unshift(document);
+  claim.evidenceDocumentId = document.id;
+  claim.evidencePacketHash = packetHash;
+  return document;
+}
+function privateArtifactDescriptor(data = {}, document = {}) {
+  if (document.privateArtifactKind === 'dispute_evidence' || document.documentKind === 'dispute_evidence_packet') return disputeEvidenceArtifact(data, document);
+  if (document.privateArtifactKind === 'payment_receipt' || document.documentKind === 'payment_receipt' || String(document.kind || '').toLowerCase() === 'receipt') return paymentReceiptArtifact(data, document);
+  return null;
+}
+async function storePrivateArtifactForDocument(data, document) {
+  if (PRIVATE_DOCUMENT_STORE.isEncryptedDocument(document)) return null;
+  const descriptor = privateArtifactDescriptor(data, document);
+  if (!descriptor || descriptor.body.length < 100) throw new Error('The private artifact source is incomplete.');
+  const stored = await PRIVATE_DOCUMENT_STORE.save({
+    id: 'artifact-' + crypto.randomBytes(12).toString('hex'),
+    bytes: Buffer.from(descriptor.body, 'utf8'),
+    contentType: descriptor.contentType,
+    originalName: descriptor.originalName,
+    organizationId: document.organizationId || MAIN_ORG_ID
+  });
+  Object.assign(document, {
+    organizationId: stored.organizationId || document.organizationId || MAIN_ORG_ID,
+    privateArtifactId: stored.id,
+    originalName: stored.originalName,
+    contentType: stored.contentType,
+    size: stored.size,
+    sha256: stored.sha256,
+    storagePath: stored.storagePath || '',
+    storageKey: stored.storageKey || '',
+    storageProvider: stored.storageProvider || '',
+    storageSecurity: stored.encryption ? 'encrypted' : '',
+    encryption: stored.encryption || {},
+    privateArtifactStatus: 'Stored encrypted',
+    privateArtifactStoredAt: new Date().toISOString(),
+    privateArtifactLastError: ''
+  });
+  return stored;
+}
+function privateArtifactCoverage(data = {}) {
+  const payments = (data.payments || []).filter(paymentReceiptEligible);
+  const documents = Array.isArray(data.documents) ? data.documents : [];
+  const receiptDocuments = documents.filter(document => /receipt/i.test(String([document.kind, document.documentKind, document.type].filter(Boolean).join(' '))));
+  const missingReceiptDocuments = payments.filter(payment => !receiptDocuments.some(document => receiptDocumentMatchesPayment(document, payment)));
+  const requiredDocuments = documents.filter(privateArtifactRequiredDocument);
+  const missingEncryptedArtifacts = requiredDocuments.filter(document => !PRIVATE_DOCUMENT_STORE.isEncryptedDocument(document));
+  return {
+    paidPayments: payments.length,
+    receiptDocuments: receiptDocuments.length,
+    requiredDocuments: requiredDocuments.length,
+    encryptedArtifacts: requiredDocuments.length - missingEncryptedArtifacts.length,
+    missingReceiptDocuments: missingReceiptDocuments.length,
+    missingEncryptedArtifacts: missingEncryptedArtifacts.length,
+    pendingDocumentIds: missingEncryptedArtifacts.slice(0, 50).map(document => document.id),
+    ready: missingReceiptDocuments.length === 0 && missingEncryptedArtifacts.length === 0,
+    error: missingReceiptDocuments.length || missingEncryptedArtifacts.length
+      ? missingReceiptDocuments.length + ' payment receipt record(s) and ' + missingEncryptedArtifacts.length + ' encrypted receipt/evidence artifact(s) still need durable storage.'
+      : ''
+  };
+}
+async function runPrivateArtifactBackfill(options = {}) {
+  const source = String(options.source || 'manual').slice(0, 80);
+  const status = PRIVATE_DOCUMENT_STORE.status();
+  if (!status.configured) return { ok: true, skipped: true, reason: status.message };
+  if (privateArtifactStatus.inFlight) return { ok: true, skipped: true, reason: 'Private artifact storage is already running.' };
+  privateArtifactStatus.inFlight = true;
+  privateArtifactStatus.lastStartedAt = new Date().toISOString();
+  privateArtifactStatus.lastError = '';
+  let jobLock = null;
+  const storedArtifacts = [];
+  try {
+    jobLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-private-artifacts');
+    if (!jobLock.acquired) return { ok: true, skipped: true, reason: 'Another server is storing private artifacts.' };
+    const data = await readData();
+    const createdReceiptRecords = ensurePaymentReceiptDocuments(data);
+    const candidates = (data.documents || []).filter(document => privateArtifactRequiredDocument(document) && !PRIVATE_DOCUMENT_STORE.isEncryptedDocument(document)).slice(0, Number(options.limit || WOA_PRIVATE_ARTIFACT_BATCH_LIMIT));
+    const failures = [];
+    for (const document of candidates) {
+      document.privateArtifactLastAttemptAt = new Date().toISOString();
+      try {
+        const stored = await storePrivateArtifactForDocument(data, document);
+        if (stored) storedArtifacts.push(stored);
+      } catch (error) {
+        document.privateArtifactStatus = 'Retry required';
+        document.privateArtifactLastError = artifactSafeValue(error && error.message || error, 500);
+        failures.push({ documentId: document.id, error: document.privateArtifactLastError });
+      }
+    }
+    if (createdReceiptRecords || candidates.length) {
+      try {
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      } catch (error) {
+        throw await attachPrivateDocumentRollback(error, storedArtifacts);
+      }
+    }
+    const coverage = privateArtifactCoverage(data);
+    const result = { ok: failures.length === 0, skipped: false, source, createdReceiptRecords, checked: candidates.length, stored: storedArtifacts.length, failed: failures.length, failures, remaining: coverage.missingReceiptDocuments + coverage.missingEncryptedArtifacts, coverage };
+    privateArtifactStatus.lastFinishedAt = new Date().toISOString();
+    if (storedArtifacts.length) privateArtifactStatus.lastStoredAt = privateArtifactStatus.lastFinishedAt;
+    privateArtifactStatus.lastResult = result;
+    if (failures.length) {
+      const error = new Error('Private artifact storage failed for ' + failures.length + ' document(s).');
+      error.code = 'woa_private_artifact_backfill_failed';
+      error.result = result;
+      throw error;
+    }
+    return result;
+  } catch (error) {
+    privateArtifactStatus.lastFinishedAt = new Date().toISOString();
+    privateArtifactStatus.lastError = artifactSafeValue(error && error.message || error, 500);
+    throw error;
+  } finally {
+    privateArtifactStatus.inFlight = false;
+    if (jobLock && jobLock.acquired) await jobLock.release().catch(() => {});
+  }
+}
 function recordHostedCheckoutPayment(data, request, details = {}) {
   const paidAt = details.paidAt || new Date().toISOString();
   const provider = normalizedPaymentProvider(details.provider || request.paymentProvider || 'clover');
@@ -15241,8 +15581,10 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   request.providerPaymentId = details.providerPaymentId || request.providerPaymentId || request.cloverPaymentId || '';
   request.webhookVerifiedAt = paidAt;
   data.payments = Array.isArray(data.payments) ? data.payments : [];
-  if (!data.payments.some(payment => payment.paymentRequestId === request.id)) {
-    data.payments.unshift({ id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' });
+  let payment = data.payments.find(row => row.paymentRequestId === request.id);
+  if (!payment) {
+    payment = { id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' };
+    data.payments.unshift(payment);
   }
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
   if (recurring) {
@@ -15250,10 +15592,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
     recurring.tone = 'good';
     recurring.lastPaymentAt = request.paidAt;
   }
-  data.documents = Array.isArray(data.documents) ? data.documents : [];
-  if (!data.documents.some(document => document.paymentRequestId === request.id && document.kind === 'Receipt')) {
-    data.documents.unshift({ id: 'receipt-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', customer: request.customer || '', vehicle: request.vehicle || '', vehicleId: request.vehicleId || '', vin: request.vin || '', licensePlate: request.licensePlate || '', title: (request.paymentType || 'Payment') + ' receipt', type: request.paymentType || 'Payment receipt', kind: 'Receipt', amount: Number(request.amount || 0), method: providerName + ' Hosted Checkout', status: 'Paid', date: request.paidAt, customerVisible: true, portalVisible: true, source: providerName + ' Hosted Checkout verified webhook' });
-  }
+  ensurePaymentReceiptDocument(data, payment, request);
   if (request.onboardingSessionId) {
     const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
     const application = (data.applications || []).find(row => row.id === request.applicationId);
@@ -15319,29 +15658,13 @@ function stripePaymentIntentClaimDescriptor(recurring, intent = {}, scheduledDue
 function recordStripePaymentReceipt(data, payment = {}) {
   const intentId = String(payment.stripePaymentIntentId || '').trim();
   if (!intentId) return;
-  data.documents = Array.isArray(data.documents) ? data.documents : [];
-  if (data.documents.some(document => document && document.kind === 'Receipt' && String(document.stripePaymentIntentId || '') === intentId)) return;
-  data.documents.unshift({
-    id: 'receipt-stripe-' + intentId,
-    recurringPaymentId: payment.recurringPaymentId || '',
+  ensurePaymentReceiptDocument(data, payment, {
     paymentProvider: 'stripe',
     providerPaymentId: intentId,
     stripePaymentIntentId: intentId,
-    stripeChargeId: payment.stripeChargeId || '',
-    customer: payment.customer || '',
-    vehicle: payment.vehicle || '',
-    vehicleId: payment.vehicleId || '',
-    vin: payment.vin || '',
-    licensePlate: payment.licensePlate || payment.plate || '',
     title: 'Stripe payment receipt',
     type: 'Payment receipt',
-    kind: 'Receipt',
-    amount: Number(payment.amount || 0),
     method: 'Stripe saved card',
-    status: 'Paid',
-    date: payment.createdAt || new Date().toISOString(),
-    customerVisible: true,
-    portalVisible: true,
     source: 'Stripe signed payment webhook'
   });
 }
@@ -17023,55 +17346,116 @@ const server = http.createServer(async (req, res) => {
         const signedAt = new Date().toISOString();
         const signedContract = onboarding.buildContract(data, application, vehicle, session, template, { signedAt });
         if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
-        const signatureImage = await onboarding.saveSignatureImage(payload.signatureData, session, DATA_DIR, PRIVATE_DOCUMENT_STORE);
-        const signature = {
-          id: 'esign-' + crypto.randomBytes(9).toString('hex'),
-          applicationId: application.id,
-          onboardingSessionId: session.id,
-          onlineVehicleId: vehicle.id,
-          organizationId: application.organizationId || MAIN_ORG_ID,
-          customer: application.name || '',
-          typedName: onboarding.text(payload.typedName, 160),
-          contractVersion: template.version || 1,
-          templateId: template.id || '',
-          templateHash: signedContract.templateHash,
-          documentHash: signedContract.documentHash,
-          contractBody: signedContract.body,
-          contractValues: signedContract.values,
-          pricingSnapshot: application.pricingSnapshot || {},
-          signatureImageId: signatureImage.id,
-          signatureImageHash: signatureImage.sha256,
-          signatureImagePath: signatureImage.storagePath,
-          storagePath: signatureImage.storagePath || '',
-          storageKey: signatureImage.storageKey || '',
-          storageProvider: signatureImage.storageProvider || 'legacy-local',
-          storageSecurity: signatureImage.storageSecurity || (signatureImage.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
-          encryption: signatureImage.encryption || {},
-          signatureImageContentType: signatureImage.contentType,
-          signatureImageSize: signatureImage.size,
-          electronicConsent: true,
-          signatureMatchConsent: true,
-          signedAt,
-          signedIp: requestIp(req),
-          signedUserAgent: onboarding.text(req.headers['user-agent'], 400),
-          status: 'Signed - staff comparison required',
-          verificationStatus: 'Waiting on staff'
-        };
-        data.eSignatures.unshift(signature);
-        Object.assign(session, {
-          signatureId: signature.id,
-          signedAt,
-          signatureReviewStatus: 'Waiting on staff',
-          reviewStatus: 'Signature waiting',
-          status: 'Agreement signed'
-        });
-        application.onboardingStatus = 'Signature waiting for comparison';
-        application.updatedAt = signedAt;
+        const privateArtifacts = [];
         try {
+          const signatureId = 'esign-' + crypto.randomBytes(9).toString('hex');
+          const signedIp = requestIp(req);
+          const signedUserAgent = onboarding.text(req.headers['user-agent'], 400);
+          const signatureImage = await onboarding.saveSignatureImage(payload.signatureData, session, DATA_DIR, PRIVATE_DOCUMENT_STORE);
+          privateArtifacts.push(signatureImage);
+          const contractArtifact = await onboarding.saveSignedContractArtifact({
+            signedContract,
+            signatureImage,
+            session,
+            application,
+            typedName: payload.typedName,
+            signedAt,
+            signedIp,
+            signedUserAgent,
+            eSignatureId: signatureId,
+            templateId: template.id || '',
+            contractVersion: template.version || 1
+          }, DATA_DIR, PRIVATE_DOCUMENT_STORE);
+          privateArtifacts.push(contractArtifact);
+          const customerAccount = (data.customerAccounts || []).find(row => row.applicationId === application.id) || {};
+          const contractDocument = {
+            id: contractArtifact.id,
+            organizationId: application.organizationId || MAIN_ORG_ID,
+            applicationId: application.id,
+            onboardingSessionId: session.id,
+            onlineVehicleId: vehicle.id,
+            customerAccountId: customerAccount.id || application.customerAccountId || '',
+            customer: application.name || '',
+            vehicle: nativeSite.vehicleTitle(vehicle),
+            vehicleId: vehicle.platformVehicleId || '',
+            vin: vehicle.vin || '',
+            licensePlate: vehicle.plate || '',
+            title: 'Signed WheelsonAuto agreement',
+            type: 'Signed contract',
+            kind: 'Contract',
+            documentKind: 'signed_contract',
+            originalName: contractArtifact.originalName,
+            contentType: contractArtifact.contentType,
+            size: contractArtifact.size,
+            sha256: contractArtifact.sha256,
+            storagePath: contractArtifact.storagePath || '',
+            storageKey: contractArtifact.storageKey || '',
+            storageProvider: contractArtifact.storageProvider || 'legacy-local',
+            storageSecurity: contractArtifact.storageSecurity || (contractArtifact.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
+            encryption: contractArtifact.encryption || {},
+            eSignatureId: signatureId,
+            contractDocumentHash: signedContract.documentHash,
+            signatureImageHash: signatureImage.sha256,
+            status: 'Signed - immutable',
+            visibility: 'Customer portal',
+            customerVisible: true,
+            portalVisible: true,
+            date: signedAt,
+            signedAt,
+            createdAt: signedAt,
+            source: 'WheelsonAuto native e-signature'
+          };
+          const signature = {
+            id: signatureId,
+            applicationId: application.id,
+            onboardingSessionId: session.id,
+            onlineVehicleId: vehicle.id,
+            organizationId: application.organizationId || MAIN_ORG_ID,
+            customer: application.name || '',
+            typedName: onboarding.text(payload.typedName, 160),
+            contractVersion: template.version || 1,
+            templateId: template.id || '',
+            templateHash: signedContract.templateHash,
+            documentHash: signedContract.documentHash,
+            contractBody: signedContract.body,
+            contractValues: signedContract.values,
+            pricingSnapshot: application.pricingSnapshot || {},
+            contractDocumentId: contractDocument.id,
+            contractArtifactHash: contractDocument.sha256,
+            signatureImageId: signatureImage.id,
+            signatureImageHash: signatureImage.sha256,
+            signatureImagePath: signatureImage.storagePath,
+            storagePath: signatureImage.storagePath || '',
+            storageKey: signatureImage.storageKey || '',
+            storageProvider: signatureImage.storageProvider || 'legacy-local',
+            storageSecurity: signatureImage.storageSecurity || (signatureImage.encryption ? 'encrypted' : 'legacy-local-unencrypted'),
+            encryption: signatureImage.encryption || {},
+            signatureImageContentType: signatureImage.contentType,
+            signatureImageSize: signatureImage.size,
+            electronicConsent: true,
+            signatureMatchConsent: true,
+            signedAt,
+            signedIp,
+            signedUserAgent,
+            status: 'Signed - staff comparison required',
+            verificationStatus: 'Waiting on staff'
+          };
+          data.documents.unshift(contractDocument);
+          data.eSignatures.unshift(signature);
+          Object.assign(session, {
+            signatureId: signature.id,
+            signedContractDocumentId: contractDocument.id,
+            signedAt,
+            signatureReviewStatus: 'Waiting on staff',
+            reviewStatus: 'Signature waiting',
+            status: 'Agreement signed'
+          });
+          application.onboardingStatus = 'Signature waiting for comparison';
+          application.updatedAt = signedAt;
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         } catch (error) {
-          throw await attachPrivateDocumentRollback(error, signatureImage);
+          throw await attachPrivateDocumentRollback(error, privateArtifacts);
         }
         return json(res, 201, { ok: true, message: 'Agreement signed and locked. WheelsonAuto will compare the signature with the driver license.' });
       }
@@ -18760,6 +19144,18 @@ const server = http.createServer(async (req, res) => {
       if (action === 'evidence_ready' && (String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !claim.customer || !claim.paymentId && !claim.cloverPaymentId && !claim.stripePaymentIntentId)) return json(res, 409, { ok: false, error: 'Match the customer and provider payment before marking the evidence package ready.' });
       if (action === 'evidence_ready' && stripeClaim && claim.evidencePacket && claim.evidencePacket.missing.length) return json(res, 409, { ok: false, error: 'Evidence is still missing: ' + claim.evidencePacket.missing.join(', ') + '.' });
       if (action === 'submitted' && !String(payload.providerSubmissionReference || '').trim()) return json(res, 409, { ok: false, error: 'Enter the Stripe/Clover submission confirmation reference before marking this dispute submitted.' });
+      let storedEvidenceArtifact = null;
+      if (action === 'evidence_ready') {
+        if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
+        const evidenceDocument = ensureDisputeEvidenceDocument(data, claim, user);
+        if (PRIVATE_DOCUMENT_STORE.isConfigured() && !PRIVATE_DOCUMENT_STORE.isEncryptedDocument(evidenceDocument)) {
+          try {
+            storedEvidenceArtifact = await storePrivateArtifactForDocument(data, evidenceDocument);
+          } catch (error) {
+            return json(res, 502, { ok: false, error: 'The evidence packet could not be written to private encrypted storage. No dispute status was changed.', detail: artifactSafeValue(error && error.message || error, 300) });
+          }
+        }
+      }
       const now = new Date().toISOString();
       claim.status = statuses[action];
       claim.disputeWorkflowStatus = statuses[action];
@@ -18770,8 +19166,13 @@ const server = http.createServer(async (req, res) => {
       claim.workflowHistory = Array.isArray(claim.workflowHistory) ? claim.workflowHistory : [];
       claim.workflowHistory.push({ at: now, action, status: claim.status, by: claim.disputeUpdatedBy, notes: String(payload.notes || '').trim() });
       appendAuditLog(data, user, paymentProviderLabel(claim.provider || (stripeClaim ? 'stripe' : 'clover')) + ' dispute status updated', [claim.customer || 'Unassigned', claim.reference || claim.disputeId || claim.id, claim.status, claim.providerSubmissionReference || 'No provider reference']);
-      await protectConcurrentLocalWrites(data, { preferIncoming: true });
-      await writeData(data);
+      try {
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      } catch (error) {
+        if (storedEvidenceArtifact) throw await attachPrivateDocumentRollback(error, storedEvidenceArtifact);
+        throw error;
+      }
       return json(res, 200, { ok: true, dispute: claim });
     }
     if (url.pathname === '/api/integrations/tracker/status' && req.method === 'GET') {
@@ -20291,12 +20692,21 @@ const server = http.createServer(async (req, res) => {
         appendAuditLog(data, user, 'Private document storage validated', [result.provider, result.publicReadBlocked === true ? 'Encrypted write/read/private/delete proof passed' : 'Encrypted local write/read/delete proof passed']);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        const preflight = await productionInfrastructurePreflight(data);
+        let artifactBackfill = null;
+        try {
+          artifactBackfill = await runPrivateArtifactBackfill({ source: 'owner storage validation', limit: 100 });
+        } catch (error) {
+          artifactBackfill = { ok: false, error: artifactSafeValue(error && error.message || error, 500), result: error && error.result || null };
+          await recordOperationalFailure('private-artifact-storage', error, { route: 'Owner private storage validation', source: 'owner validation' }).catch(() => {});
+        }
+        const preflight = await productionInfrastructurePreflight();
         const liveReady = !!(preflight.documentStorageValidation && preflight.documentStorageValidation.live);
         return json(res, 200, {
           ok: true,
           result,
+          artifactBackfill,
           documentStorageValidation: preflight.documentStorageValidation,
+          privateArtifacts: preflight.privateArtifacts,
           message: liveReady
             ? 'Private document storage write/read/private/delete validation passed and is ready for the launch gate.'
             : 'Private document storage I/O passed, but the Stripe launch gate remains blocked until S3-compatible production storage and the rest of the infrastructure preflight are complete.'
@@ -21469,6 +21879,17 @@ if (require.main === module) {
       setInterval(() => runEncryptedStateBackup({ source: 'background' })
         .catch(err => reportBackgroundTaskFailure('encrypted-state-backup', err, { route: 'Encrypted offsite state backup', source: 'background' }, 'Background encrypted state backup')), WOA_STATE_BACKUP_INTERVAL_MS);
     }
+    if (PRIVATE_DOCUMENT_STORE.isConfigured()) {
+      setTimeout(() => runPrivateArtifactBackfill({ source: 'startup' })
+        .then(result => console.log(result && result.skipped ? 'Private receipt/evidence artifact storage skipped: ' + result.reason : 'Private artifact storage checked ' + result.checked + ', stored ' + result.stored + ', remaining ' + result.remaining + '.'))
+        .catch(err => reportBackgroundTaskFailure('private-artifact-storage', err, { route: 'Encrypted receipt and evidence artifact storage', source: 'startup' }, 'Startup private artifact storage')), WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS);
+      setInterval(() => runPrivateArtifactBackfill({ source: 'background' })
+        .then(result => {
+          if (!result || result.skipped || (!result.stored && !result.failed)) return;
+          console.log('Private artifact storage checked ' + result.checked + ', stored ' + result.stored + ', failed ' + result.failed + ', remaining ' + result.remaining + '.');
+        })
+        .catch(err => reportBackgroundTaskFailure('private-artifact-storage', err, { route: 'Encrypted receipt and evidence artifact storage', source: 'background' }, 'Background private artifact storage')), WOA_PRIVATE_ARTIFACT_INTERVAL_MS);
+    }
     setTimeout(() => autoConfigureTwilioSmsWebhook()
       .then(result => console.log(result && result.skipped ? 'Twilio inbox auto-connect skipped.' : 'Twilio inbound SMS connected.'))
       .catch(err => reportBackgroundTaskFailure('twilio-inbound-setup', err, { route: 'Twilio inbound SMS webhook setup', source: 'startup' }, 'Twilio inbox auto-connect')), 250);
@@ -21614,6 +22035,14 @@ module.exports = {
   hostedCheckoutWebhookDetails,
   applyHostedCheckoutWebhook,
   recordHostedCheckoutPayment,
+  ensurePaymentReceiptDocument,
+  ensurePaymentReceiptDocuments,
+  receiptDocumentMatchesPayment,
+  paymentReceiptArtifact,
+  ensureDisputeEvidenceDocument,
+  privateArtifactCoverage,
+  storePrivateArtifactForDocument,
+  runPrivateArtifactBackfill,
   stripeLiveWebhookEvidence,
   stripeIdentityLiveWebhookEvidence,
   stripeWebhookConfigurationFingerprint,

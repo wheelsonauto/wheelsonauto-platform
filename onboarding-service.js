@@ -380,6 +380,74 @@ async function saveSignatureImage(signatureData, session, dataDir, documentStore
   };
 }
 
+async function saveSignedContractArtifact(details = {}, dataDir, documentStore = null) {
+  const signedContract = details.signedContract || {};
+  const session = details.session || {};
+  const application = details.application || {};
+  const signatureImage = details.signatureImage || {};
+  const body = String(signedContract.body || '').trim();
+  const documentHash = String(signedContract.documentHash || '').trim().toLowerCase();
+  const signatureHash = String(signatureImage.sha256 || '').trim().toLowerCase();
+  if (body.length < 1000 || !/^[a-f0-9]{64}$/.test(documentHash)) throw new Error('The signed contract artifact is incomplete.');
+  if (!/^[a-f0-9]{64}$/.test(signatureHash)) throw new Error('The signed contract signature hash is missing.');
+  const signedAt = String(details.signedAt || new Date().toISOString());
+  if (!Number.isFinite(Date.parse(signedAt))) throw new Error('The signed contract timestamp is invalid.');
+  const id = 'signed-contract-' + crypto.randomBytes(10).toString('hex');
+  const organizationId = session.organizationId || application.organizationId || 'org-wheelsonauto';
+  const certificate = [
+    'WHEELSONAUTO SIGNED AGREEMENT',
+    'Artifact format: wheelsonauto-signed-contract-v1',
+    'Electronic signature ID: ' + text(details.eSignatureId, 120),
+    'Application ID: ' + text(application.id, 120),
+    'Onboarding session ID: ' + text(session.id, 120),
+    'Customer: ' + text(application.name, 180),
+    'Typed legal name: ' + text(details.typedName, 180),
+    'Signed at: ' + signedAt,
+    'Contract template ID: ' + text(details.templateId, 120),
+    'Contract template version: ' + text(details.contractVersion, 40),
+    'Contract template SHA-256: ' + String(signedContract.templateHash || ''),
+    'Rendered agreement SHA-256: ' + documentHash,
+    'Signature image ID: ' + text(signatureImage.id, 120),
+    'Signature image SHA-256: ' + signatureHash,
+    'Electronic-signature consent: confirmed',
+    'Signature-match consent: confirmed',
+    'Signing IP: ' + text(details.signedIp, 120),
+    'Signing user agent: ' + text(details.signedUserAgent, 400),
+    '',
+    'AGREEMENT',
+    body,
+    '',
+    'END OF SIGNED AGREEMENT'
+  ].join('\n');
+  const bytes = Buffer.from(certificate, 'utf8');
+  if (bytes.length > 2 * 1024 * 1024) throw new Error('The signed contract artifact is too large.');
+  const originalName = 'wheelsonauto-signed-agreement-' + text(application.id || id, 80).replace(/[^a-z0-9-]/gi, '-') + '.txt';
+  if (documentStore && documentStore.isConfigured && documentStore.isConfigured()) {
+    return documentStore.save({
+      id,
+      bytes,
+      contentType: 'text/plain; charset=utf-8',
+      originalName,
+      organizationId
+    });
+  }
+  const folder = path.join(dataDir, 'onboarding-uploads');
+  await fs.mkdir(folder, { recursive: true });
+  const filename = id + '.txt';
+  await fs.writeFile(path.join(folder, filename), bytes, { flag: 'wx' });
+  return {
+    id,
+    organizationId,
+    originalName,
+    contentType: 'text/plain; charset=utf-8',
+    size: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    storagePath: path.join('onboarding-uploads', filename),
+    storageProvider: 'legacy-local',
+    storageSecurity: 'legacy-local-unencrypted'
+  };
+}
+
 function pickupWindow(settings, requestedDate) {
   const raw = String(requestedDate || '').slice(0, 10);
   const requested = new Date(raw + 'T12:00:00');
@@ -486,6 +554,7 @@ module.exports = {
   discardPrivateDocument,
   discardPrivateDocuments,
   saveSignatureImage,
+  saveSignedContractArtifact,
   pickupWindow,
   pickupWeekday,
   validatePickupTime,

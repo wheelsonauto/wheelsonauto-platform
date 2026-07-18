@@ -76,6 +76,7 @@ async function main() {
     await fs.writeFile(seedFile, JSON.stringify({ vehicles: [], customers: [], payments: [], documents: [], eSignatures: [] }), 'utf8');
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+    const onboardingSource = await fs.readFile(path.resolve(__dirname, '..', 'onboarding-service.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
     const objectStorageRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'object-storage-runtime-check.js'), 'utf8');
@@ -104,6 +105,15 @@ async function main() {
     assert(serverSource.includes('async function gracefulShutdown') && serverSource.includes("process.once('SIGTERM'") && serverSource.includes('await writeDataQueue.catch'), 'Production shutdown must stop accepting requests and drain queued state writes before exit.');
     await verifyGracefulShutdown(path.resolve(__dirname, '..'), path.join(temp, 'graceful-runtime'));
     assert(serverSource.includes('function reportBackgroundTaskFailure') && serverSource.includes("recordOperationalFailure(source, error, context, { alert: true })"), 'Every scheduled worker failure must use the shared durable monitor and owner-alert path.');
+    assert(onboardingSource.includes('async function saveSignedContractArtifact')
+      && onboardingSource.includes('Artifact format: wheelsonauto-signed-contract-v1')
+      && serverSource.includes("documentKind: 'signed_contract'")
+      && serverSource.includes('attachPrivateDocumentRollback(error, privateArtifacts)'), 'E-sign must preserve the exact rendered agreement and signature certificate as an immutable private artifact, link it to the customer document file, and remove every uncommitted object if the state transaction fails.');
+    assert(serverSource.includes('Artifact format: wheelsonauto-payment-receipt-v1')
+      && serverSource.includes('Artifact format: wheelsonauto-dispute-evidence-v1')
+      && serverSource.includes('async function runPrivateArtifactBackfill')
+      && serverSource.includes("reportBackgroundTaskFailure('private-artifact-storage'")
+      && serverSource.includes("missing.push('encrypted payment receipt and dispute evidence artifact backfill')"), 'Paid transactions and owner-reviewed dispute packets must become encrypted immutable artifacts through a durable retry worker, and launch must fail closed while any required artifact is missing.');
     assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical records and active vehicle assignments into transactionally synchronized indexes.');
     assert(stateRepositorySource.includes('pg_advisory_xact_lock') && stateRepositorySource.includes("advisoryLockKeys('wheelsonauto-platform', 'postgres-schema-migrations')"), 'PostgreSQL schema upgrades must be serialized across overlapping Render instances.');
     assert(stateRepositorySource.includes('PRIMARY KEY (organization_id, provider, event_id)') && stateRepositorySource.includes('$webhook_tenant_primary_key$'), 'Webhook uniqueness must be company-scoped for current and previously migrated PostgreSQL databases.');
@@ -131,6 +141,7 @@ async function main() {
       'autopay-run',
       'verification-monitor',
       'passtime-gps-sync',
+      'private-artifact-storage',
       'encrypted-state-backup'
     ].forEach(sourceName => {
       assert(serverSource.includes("reportBackgroundTaskFailure('" + sourceName + "'"), 'Scheduled worker ' + sourceName + ' must report failures through the durable monitor.');

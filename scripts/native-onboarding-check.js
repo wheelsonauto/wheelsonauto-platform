@@ -266,8 +266,14 @@ async function main() {
     assert(signature.status === 201, 'Customer should be able to sign the exact versioned agreement after document approval.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const signedAgreement = saved.eSignatures.find(row => row.onboardingSessionId === onboardingId);
+    const signedContractDocument = saved.documents.find(row => row.onboardingSessionId === onboardingId && row.documentKind === 'signed_contract');
     assert(signedAgreement && /nineteen \(19\) consecutive months/i.test(signedAgreement.contractBody || ''), 'New signed agreements should lock the corrected 19-month optional-purchase term.');
     assert(signedAgreement && Number(signedAgreement.pricingSnapshot && signedAgreement.pricingSnapshot.contractMonths) === 19, 'The immutable pricing snapshot should store the canonical 19-month term.');
+    assert(signedContractDocument && signedAgreement.contractDocumentId === signedContractDocument.id && signedContractDocument.customerVisible === true && signedContractDocument.customerAccountId === pendingCustomerAccount.id, 'Signing must atomically add a private immutable contract artifact linked to the e-signature and customer portal account.');
+    const customerContractDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(signedContractDocument.id), { cookie: String(customerEmailLogin.cookie).split(';')[0] });
+    assert(customerContractDownload.status === 200 && /WHEELSONAUTO SIGNED AGREEMENT/.test(customerContractDownload.text) && /nineteen \(19\) consecutive months/i.test(customerContractDownload.text) && /END OF SIGNED AGREEMENT/.test(customerContractDownload.text), 'The signed-in customer must be able to open only their own complete signed-agreement artifact.');
+    const foreignContractDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(signedContractDocument.id), { cookie: String(legacyCustomerLogin.cookie).split(';')[0] });
+    assert(foreignContractDownload.status === 404, 'A different signed-in customer must not be able to open another customer\'s signed contract artifact.');
     const earlyCard = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
     assert(earlyCard.status === 409, 'Clover card setup must remain locked until staff compares the signature with the license.');
     const signatureApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'signature', decision: 'approve', signatureMatchConfirmed: true, notes: 'Signature manually matched to license.' } });
