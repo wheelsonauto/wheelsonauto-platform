@@ -211,7 +211,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-backup-status-164';
+const ASSET_VERSION = 'platform-20260718-telnyx-qualification-165';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -2486,10 +2486,18 @@ async function checkTelnyx10dlcReadiness(options = {}) {
   let campaign = {};
   let campaignStatus = '';
   let brandStatus = '';
+  let currentBrandId = '';
   let historicalCampaignStatus = '';
   let historicalFailureReason = '';
+  let historicalCampaignUsecase = '';
   let rejectedCampaignCount = 0;
+  let usecaseQualificationChecked = false;
+  let usecaseQualified = false;
+  let usecaseQualificationReason = '';
+  let usecaseQualificationFees = {};
   const campaignState = row => String(row && (row.campaignStatus || row.campaign_status || row.status || row.submissionStatus || row.submission_status) || '').trim().toUpperCase();
+  const campaignUsecase = row => String(row && (row.usecase || row.useCase || row.use_case) || '').trim().slice(0, 160);
+  const campaignBrandId = row => String(row && (row.__wheelsonautoBrandId || row.brandId || row.brand_id) || '').trim();
   const campaignFailure = row => {
     const raw = row && (row.failureReasons || row.failure_reasons || row.failureReason || row.failure_reason || row.reasons || row.reason);
     if (!raw) return '';
@@ -2529,31 +2537,64 @@ async function checkTelnyx10dlcReadiness(options = {}) {
       const brandState = brand => String(brand && (brand.identityStatus || brand.identity_status || brand.status) || '').trim().toUpperCase();
       const currentBrand = brands.find(brand => ['VERIFIED', 'VETTED_VERIFIED'].includes(brandState(brand))) || brands[0] || {};
       brandStatus = brandState(currentBrand);
+      currentBrandId = String(currentBrand.brandId || currentBrand.brand_id || currentBrand.id || '').trim();
       for (const brand of brands) {
         const brandId = String(brand.brandId || brand.brand_id || brand.id || '').trim();
         if (!brandId) continue;
         const listed = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaign?brandId=' + encodeURIComponent(brandId) + '&page=1&recordsPerPage=500');
         const rows = Array.isArray(listed.records) ? listed.records : Array.isArray(listed.data) ? listed.data : [];
-        campaigns.push(...rows);
+        campaigns.push(...rows.map(row => ({ ...row, __wheelsonautoBrandId: brandId })));
       }
     } catch (err) {
       if (!campaigns.length || Number(err && err.statusCode) !== 404) throw err;
     }
-    const uniqueCampaigns = Array.from(new Map(campaigns.map(row => [String(row.campaignId || row.campaign_id || row.id || JSON.stringify(row)), row])).values());
-    const rejectedCampaigns = uniqueCampaigns.filter(row => rejectedCampaignState(campaignState(row)));
+    const campaignMap = new Map();
+    for (const row of campaigns) {
+      const key = String(row && (row.campaignId || row.campaign_id || row.id) || JSON.stringify(row));
+      campaignMap.set(key, { ...(campaignMap.get(key) || {}), ...row });
+    }
+    const uniqueCampaigns = Array.from(campaignMap.values());
+    const currentBrandCampaigns = currentBrandId ? uniqueCampaigns.filter(row => campaignBrandId(row) === currentBrandId) : [];
+    const campaignPool = currentBrandCampaigns.length ? currentBrandCampaigns : uniqueCampaigns;
+    const rejectedCampaigns = campaignPool.filter(row => rejectedCampaignState(campaignState(row)));
     const historicalCampaign = rejectedCampaigns[0] || {};
     rejectedCampaignCount = rejectedCampaigns.length;
     historicalCampaignStatus = campaignState(historicalCampaign);
     historicalFailureReason = campaignFailure(historicalCampaign);
-    campaign = uniqueCampaigns.find(row => activeCampaignState(campaignState(row))) ||
-      uniqueCampaigns.find(row => pendingCampaignState(campaignState(row))) ||
-      uniqueCampaigns.find(row => !rejectedCampaignState(campaignState(row))) || {};
+    historicalCampaignUsecase = campaignUsecase(historicalCampaign);
+    campaign = campaignPool.find(row => activeCampaignState(campaignState(row))) ||
+      campaignPool.find(row => pendingCampaignState(campaignState(row))) ||
+      campaignPool.find(row => !rejectedCampaignState(campaignState(row))) || {};
     campaignId = String(campaign.campaignId || campaign.campaign_id || campaign.id || '').trim();
     campaignStatus = campaignState(campaign);
   }
   const brandVerified = ['VERIFIED', 'VETTED_VERIFIED'].includes(brandStatus);
   const campaignActive = activeCampaignState(campaignStatus);
   const failureReason = campaignFailure(campaign) || historicalFailureReason;
+  const usecaseQualificationRequired = brandVerified && !campaignId && /(?:does not|not) qualify/i.test(historicalFailureReason);
+  if (usecaseQualificationRequired) {
+    if (!currentBrandId) {
+      usecaseQualificationReason = 'Telnyx did not return the verified brand identifier. Recheck the brand before resubmitting.';
+    } else if (!historicalCampaignUsecase) {
+      usecaseQualificationReason = 'Telnyx did not return the rejected campaign use case. Confirm a qualified use case before resubmitting.';
+    } else {
+      usecaseQualificationChecked = true;
+      try {
+        const qualificationBody = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder/brand/' + encodeURIComponent(currentBrandId) + '/usecase/' + encodeURIComponent(historicalCampaignUsecase));
+        const qualification = qualificationBody.data || qualificationBody || {};
+        usecaseQualified = true;
+        usecaseQualificationFees = {
+          monthly: Number(qualification.monthlyFee || qualification.monthly_fee || 0),
+          quarterly: Number(qualification.quarterlyFee || qualification.quarterly_fee || 0),
+          annual: Number(qualification.annualFee || qualification.annual_fee || 0)
+        };
+      } catch (err) {
+        usecaseQualified = false;
+        usecaseQualificationReason = String(err && err.message || 'Telnyx did not qualify this brand for the rejected use case.').trim().slice(0, 800);
+      }
+    }
+  }
+  const resubmissionBlocked = usecaseQualificationRequired && !(usecaseQualificationChecked && usecaseQualified);
   let registrationStage = 'brand_registration';
   let nextAction = 'Register and verify the WheelsonAuto business identity with Telnyx.';
   let summary = 'No Telnyx 10DLC brand was found yet.';
@@ -2574,11 +2615,19 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     nextAction = 'Wait for Telnyx and carrier review to finish before assigning the number.';
     summary = 'Telnyx campaign is currently ' + (campaignStatus || 'under review') + '; the SMS number cannot be attached until approval is complete.' + (failureReason ? ' Reason: ' + failureReason : '');
   } else if (brandVerified) {
-    registrationStage = 'campaign_creation';
-    nextAction = historicalFailureReason
-      ? 'Review the previous carrier rejection with Telnyx before resubmitting: ' + historicalFailureReason
-      : 'Create a corrected customer-care campaign for the verified brand, then wait for carrier approval.';
-    summary = 'Telnyx brand is verified.' + (historicalCampaignStatus ? ' The previous ' + historicalCampaignStatus + ' campaign remains history only.' : '') + (historicalFailureReason ? ' Rejection reason: ' + historicalFailureReason + ' Create the corrected campaign only after Telnyx confirms the rejection is resolved.' : ' Create the corrected campaign next.');
+    registrationStage = resubmissionBlocked ? 'campaign_qualification' : 'campaign_creation';
+    if (resubmissionBlocked) {
+      nextAction = 'Do not resubmit or pay another review fee. The rejected ' + (historicalCampaignUsecase || 'campaign') + ' use case has not passed Telnyx qualification' + (usecaseQualificationReason ? ': ' + usecaseQualificationReason : '.');
+      summary = 'Telnyx brand is verified, but campaign resubmission is locked until the intended use case passes Telnyx qualification. Rejection reason: ' + historicalFailureReason;
+    } else if (usecaseQualificationChecked && usecaseQualified) {
+      nextAction = 'Telnyx confirms this brand qualifies for ' + historicalCampaignUsecase + '. Review the corrected campaign details with Telnyx before paying to resubmit.';
+      summary = 'Telnyx brand and the ' + historicalCampaignUsecase + ' use case are qualified. The previous ' + historicalCampaignStatus + ' campaign remains history only.';
+    } else {
+      nextAction = historicalFailureReason
+        ? 'Review the previous carrier rejection with Telnyx before resubmitting: ' + historicalFailureReason
+        : 'Choose the intended use case, run Telnyx qualification, then create the corrected campaign.';
+      summary = 'Telnyx brand is verified.' + (historicalCampaignStatus ? ' The previous ' + historicalCampaignStatus + ' campaign remains history only.' : '') + (historicalFailureReason ? ' Rejection reason: ' + historicalFailureReason + ' Create the corrected campaign only after Telnyx confirms the rejection is resolved.' : ' Qualify the intended use case before campaign creation.');
+    }
   } else if (brandStatus) {
     registrationStage = 'brand_verification';
     nextAction = 'Complete Telnyx brand verification before creating a campaign.';
@@ -2595,7 +2644,13 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     brandVerified,
     historicalCampaignStatus,
     historicalFailureReason,
+    historicalCampaignUsecase,
     rejectedCampaignCount,
+    usecaseQualificationChecked,
+    usecaseQualified,
+    usecaseQualificationReason,
+    usecaseQualificationFees,
+    resubmissionBlocked,
     failureReason,
     campaignActive,
     readyForDeliveryTest: numberAssigned && campaignActive,
@@ -2616,7 +2671,17 @@ function publicTelnyx10dlcReadiness(readiness = {}) {
     brandVerified: !!readiness.brandVerified,
     historicalCampaignStatus: readiness.historicalCampaignStatus || '',
     historicalFailureReason: readiness.historicalFailureReason || '',
+    historicalCampaignUsecase: readiness.historicalCampaignUsecase || '',
     rejectedCampaignCount: Number(readiness.rejectedCampaignCount || 0),
+    usecaseQualificationChecked: !!readiness.usecaseQualificationChecked,
+    usecaseQualified: !!readiness.usecaseQualified,
+    usecaseQualificationReason: readiness.usecaseQualificationReason || '',
+    usecaseQualificationFees: readiness.usecaseQualificationFees && typeof readiness.usecaseQualificationFees === 'object' ? {
+      monthly: Number(readiness.usecaseQualificationFees.monthly || 0),
+      quarterly: Number(readiness.usecaseQualificationFees.quarterly || 0),
+      annual: Number(readiness.usecaseQualificationFees.annual || 0)
+    } : {},
+    resubmissionBlocked: !!readiness.resubmissionBlocked,
     failureReason: readiness.failureReason || '',
     campaignActive: !!readiness.campaignActive,
     readyForDeliveryTest: !!readiness.readyForDeliveryTest,

@@ -235,6 +235,10 @@ assertIncludes('Owner live launch preflight surface', app, [
 assertIncludes('Actionable Telnyx carrier rejection surface', app, [
   'Previous carrier rejection:',
   'historicalFailureReason',
+  'Rejected use case:',
+  'Resubmission locked:',
+  'usecaseQualificationReason',
+  'campaign_qualification',
   'carrierRegistrationStatus||status.carrierRegistrationNextAction'
 ]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [

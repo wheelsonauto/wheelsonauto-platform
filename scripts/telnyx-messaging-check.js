@@ -238,14 +238,34 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
       if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
       if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
       if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-failed', identityStatus: 'VERIFIED' }] }; } };
-      if (href.includes('/10dlc/campaign?brandId=brand-failed')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-failed', status: 'ACTIVE', campaignStatus: 'TCR_FAILED', failureReasons: 'Opt-in description must identify the exact customer consent flow.' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-failed')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-failed', status: 'ACTIVE', campaignStatus: 'TCR_FAILED', usecase: 'LOW_VOLUME', failureReasons: 'Brand does not qualify for submitted campaign use-case.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder/brand/brand-failed/usecase/LOW_VOLUME')) return { ok: false, status: 422, async json() { return { errors: [{ detail: 'Brand does not qualify for LOW_VOLUME.' }] }; } };
       throw new Error('Unexpected failed readiness URL: ' + url);
     }
   });
   assert(!failedRegistration.campaignActive && failedRegistration.campaignStatus === 'Not found' && failedRegistration.historicalCampaignStatus === 'TCR_FAILED', 'A rejected campaign must remain history instead of becoming the current campaign.');
-  assert(failedRegistration.registrationStage === 'campaign_creation' && /Create the corrected campaign/.test(failedRegistration.summary), 'A verified brand with only a rejected campaign must advance to corrected campaign creation.');
-  assert(/exact customer consent flow/.test(failedRegistration.historicalFailureReason), 'Historical Telnyx failure reasons must remain available for diagnosis.');
-  assert(/exact customer consent flow/.test(failedRegistration.summary) && /exact customer consent flow/.test(failedRegistration.nextAction), 'A rejected Telnyx campaign must show its exact carrier reason in both the saved status and next action.');
+  assert.strictEqual(failedRegistration.historicalCampaignUsecase, 'LOW_VOLUME', 'The rejected campaign use case must be retained for the official qualification check.');
+  assert(failedRegistration.registrationStage === 'campaign_qualification' && failedRegistration.resubmissionBlocked, 'A rejected brand/use-case combination must fail closed before another paid submission.');
+  assert(failedRegistration.usecaseQualificationChecked && !failedRegistration.usecaseQualified, 'A Telnyx 422 qualification result must remain a failed qualification, not a generic provider error.');
+  assert(/does not qualify/.test(failedRegistration.historicalFailureReason), 'Historical Telnyx failure reasons must remain available for diagnosis.');
+  assert(/does not qualify/.test(failedRegistration.summary) && /Do not resubmit/.test(failedRegistration.nextAction), 'A rejected Telnyx campaign must show its carrier reason and explicitly block resubmission.');
+  const qualifiedRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-qualified', identityStatus: 'VERIFIED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-qualified')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-rejected', campaignStatus: 'TCR_FAILED', usecase: 'CUSTOMER_CARE', failureReasons: 'Brand does not qualify for submitted campaign use-case.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder/brand/brand-qualified/usecase/CUSTOMER_CARE')) return { ok: true, status: 200, async json() { return { usecase: 'CUSTOMER_CARE', monthlyFee: 2, quarterlyFee: 6, annualFee: 24 }; } };
+      throw new Error('Unexpected qualified readiness URL: ' + url);
+    }
+  });
+  assert(qualifiedRegistration.usecaseQualificationChecked && qualifiedRegistration.usecaseQualified && !qualifiedRegistration.resubmissionBlocked, 'A successful official qualification response may unlock corrected campaign creation.');
+  assert.strictEqual(qualifiedRegistration.registrationStage, 'campaign_creation');
+  assert.deepStrictEqual(qualifiedRegistration.usecaseQualificationFees, { monthly: 2, quarterly: 6, annual: 24 });
+  assert(/Review the corrected campaign details/.test(qualifiedRegistration.nextAction), 'Passing qualification still requires owner review before a paid campaign submission.');
   const unverifiedBrandRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',
