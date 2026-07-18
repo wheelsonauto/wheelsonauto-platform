@@ -204,8 +204,10 @@ if (!/if \(!owner\) safe = dataScopedToOrganization\(safe, userOrganizationId\(u
 if (!/key === 'organizations' \? String\(row && row\.id \|\| ''\) === orgId : rowOrganizationId\(row\) === orgId/.test(dataScopedToOrganization)) {
   fail('Organization scoping should filter company records by id while filtering data records by organizationId.');
 }
-if (!/preferIncoming/.test(protectConcurrentLocalWrites + mergeConcurrentState) || !/mergeById\(data\[key\], latest\[key\]\)/.test(mergeConcurrentState)) {
-  fail('Concurrent direct-save merge preference is not wired in protectConcurrentLocalWrites.');
+if (!/preferIncoming/.test(protectConcurrentLocalWrites + mergeConcurrentState)
+  || !/baseState/.test(protectConcurrentLocalWrites + mergeConcurrentState)
+  || !/mergeConcurrentRows\(data\[key\], latest\[key\], baseState\[key\], key, preferIncoming\)/.test(mergeConcurrentState)) {
+  fail('Concurrent direct-save three-way merge preference is not wired in protectConcurrentLocalWrites.');
 }
 if (!/organizationId:\s*userOrganizationId\(user\)/.test(server)) {
   fail('Staff write merges should stamp incoming rows to the signed-in company.');

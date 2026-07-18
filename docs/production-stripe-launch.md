@@ -209,6 +209,14 @@ advisory lock. A second app process will skip the same run instead of starting
 a competing charge pass; the lock is released automatically if its database
 session ends unexpectedly.
 
+Every state read also carries a private, server-only merge baseline. When a
+staff save, webhook, synchronization pass, or autopay result reaches the same
+customer or payment record at nearly the same time, the transactional write
+performs a field-level three-way merge under the PostgreSQL row lock. Changes
+to different fields and concurrent history additions survive together; only
+an exact same-field conflict follows the route's explicit incoming/latest
+preference. The browser never receives this baseline.
+
 Stripe webhook events are also claimed durably. A duplicate received while the
 first copy is still processing gets a retry response instead of being processed
 twice; an expired processing lease can be reclaimed after a crash.

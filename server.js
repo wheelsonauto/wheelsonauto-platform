@@ -734,8 +734,20 @@ function baseRecordIds(data = {}) {
 }
 function attachStateReadMeta(data, snapshot = {}) {
   if (!data || typeof data !== 'object') return data;
-  Object.defineProperty(data, STATE_READ_META, { value: { version: snapshot.version, baseIds: baseRecordIds(data) }, configurable: true });
+  Object.defineProperty(data, STATE_READ_META, {
+    value: {
+      version: snapshot.version,
+      baseIds: baseRecordIds(data),
+      baseState: cloneConcurrentValue(data)
+    },
+    configurable: true
+  });
   return data;
+}
+function inheritStateReadMeta(target, source) {
+  if (!target || typeof target !== 'object' || !source || typeof source !== 'object' || !source[STATE_READ_META]) return target;
+  Object.defineProperty(target, STATE_READ_META, { value: source[STATE_READ_META], configurable: true });
+  return target;
 }
 function inferredDeleteIds(data = {}) {
   const metadata = data && data[STATE_READ_META];
@@ -765,8 +777,11 @@ let writeDataQueue = Promise.resolve();
 async function writeDataNow(data) {
   repairDataIds(data);
   const meta = data && data[STATE_WRITE_META] || {};
-  const inferred = { preferIncoming: true, deletedIds: inferredDeleteIds(data) };
-  const options = meta.options || inferred;
+  const readMeta = data && data[STATE_READ_META] || {};
+  const inferred = { preferIncoming: true, deletedIds: inferredDeleteIds(data), baseState: readMeta.baseState || {} };
+  const options = meta.options
+    ? { ...inferred, ...meta.options, deletedIds: { ...inferred.deletedIds, ...(meta.options.deletedIds || {}) }, baseState: meta.options.baseState || inferred.baseState }
+    : inferred;
   if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) {
     return STATE_REPOSITORY.write(data, {
       reason: meta.reason || 'platform state mutation',
@@ -6983,7 +6998,7 @@ function stateForUserWrite(current, incoming, user) {
     });
     next.documents = preserveRedactedDocumentMetadata(current.documents, next.documents);
     next.eSignatures = preserveRedactedDocumentMetadata(current.eSignatures, next.eSignatures);
-    return next;
+    return inheritStateReadMeta(next, current);
   }
   const role = String(user && user.role || '').toLowerCase();
   const allowed = role === 'mechanic'
@@ -7001,7 +7016,7 @@ function stateForUserWrite(current, incoming, user) {
   restoreCompactedClientNotes(current, next);
   next.lastStaffSaveAt = new Date().toISOString();
   next.lastStaffSaveBy = user && (user.name || user.role) || 'Staff';
-  return next;
+  return inheritStateReadMeta(next, current);
 }
 function auditChangedSections(current = {}, next = {}) {
   const keys = ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'applications', 'websiteLeads', 'staffAccounts', 'customerAccounts', 'organizations', 'subscriptions', 'billingInvoices', 'billingEvents', 'dailyCloseouts'];
@@ -11426,33 +11441,104 @@ function upsertById(list, incoming) {
   });
   return next;
 }
-function mergeById(preferred, fallback) {
-  const merged = (Array.isArray(preferred) ? preferred : []).filter(Boolean);
-  const seen = new Set(merged.map(item => item && item.id).filter(Boolean));
-  (Array.isArray(fallback) ? fallback : []).forEach(item => {
-    if (!item) return;
-    const id = item.id;
-    if (id && seen.has(id)) return;
-    if (id) seen.add(id);
-    merged.push(item);
+function cloneConcurrentValue(value) {
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+function concurrentValuesEqual(left, right) {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => concurrentValuesEqual(value, right[index]));
+  }
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index] && concurrentValuesEqual(left[key], right[key]));
+}
+function concurrentPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function mergeConcurrentArray(base, incoming, latest, preferIncoming) {
+  const baseRows = Array.isArray(base) ? base : [];
+  const preferred = preferIncoming ? incoming : latest;
+  const fallback = preferIncoming ? latest : incoming;
+  const merged = preferred.map(cloneConcurrentValue);
+  fallback.forEach(value => {
+    if (merged.some(existing => concurrentValuesEqual(existing, value))) return;
+    const existedInBase = baseRows.some(existing => concurrentValuesEqual(existing, value));
+    if (existedInBase && !preferred.some(existing => concurrentValuesEqual(existing, value))) return;
+    merged.push(cloneConcurrentValue(value));
+  });
+  return merged;
+}
+function mergeConcurrentValue(base, incoming, latest, preferIncoming = true) {
+  if (concurrentValuesEqual(incoming, base)) return cloneConcurrentValue(latest);
+  if (concurrentValuesEqual(latest, base)) return cloneConcurrentValue(incoming);
+  if (concurrentValuesEqual(incoming, latest)) return cloneConcurrentValue(incoming);
+  if (Array.isArray(incoming) && Array.isArray(latest)) return mergeConcurrentArray(base, incoming, latest, preferIncoming);
+  if (concurrentPlainObject(incoming) && concurrentPlainObject(latest)) {
+    const baseObject = concurrentPlainObject(base) ? base : {};
+    const merged = {};
+    const keys = new Set([...Object.keys(baseObject), ...Object.keys(incoming), ...Object.keys(latest)]);
+    keys.forEach(key => {
+      const value = mergeConcurrentValue(baseObject[key], incoming[key], latest[key], preferIncoming);
+      if (value !== undefined) merged[key] = value;
+    });
+    return merged;
+  }
+  return cloneConcurrentValue(preferIncoming ? incoming : latest);
+}
+function concurrentRecordMatch(collection, left, right) {
+  if (!left || !right) return false;
+  const leftId = String(left.id || '').trim();
+  const rightId = String(right.id || '').trim();
+  if (leftId && rightId && leftId === rightId) return true;
+  return collection === 'payments' && paymentRecordsMatch(left, right);
+}
+function mergeConcurrentRows(incomingRows, latestRows, baseRows, collection, preferIncoming) {
+  const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter(Boolean);
+  const latest = (Array.isArray(latestRows) ? latestRows : []).filter(Boolean);
+  const base = (Array.isArray(baseRows) ? baseRows : []).filter(Boolean);
+  const preferred = preferIncoming ? incoming : latest;
+  const fallback = preferIncoming ? latest : incoming;
+  const merged = preferred.map(cloneConcurrentValue);
+  fallback.forEach(fallbackRow => {
+    const index = merged.findIndex(row => concurrentRecordMatch(collection, row, fallbackRow));
+    if (index < 0) {
+      merged.push(cloneConcurrentValue(fallbackRow));
+      return;
+    }
+    const preferredRow = merged[index];
+    const incomingRow = preferIncoming ? preferredRow : fallbackRow;
+    const latestRow = preferIncoming ? fallbackRow : preferredRow;
+    const baseRow = base.find(row => concurrentRecordMatch(collection, row, incomingRow) || concurrentRecordMatch(collection, row, latestRow));
+    if (baseRow) merged[index] = mergeConcurrentValue(baseRow, incomingRow, latestRow, preferIncoming);
+    if (collection === 'payments') merged[index] = mergePaymentRecord(latestRow, merged[index]);
   });
   return merged;
 }
 function mergeConcurrentState(data, latest, options = {}) {
   const preferIncoming = !!options.preferIncoming;
   const deletedIds = options.deletedIds || {};
+  const baseState = options.baseState || {};
   CONCURRENT_COLLECTIONS.forEach(key => {
-    data[key] = preferIncoming ? mergeById(data[key], latest[key]) : mergeById(latest[key], data[key]);
+    data[key] = mergeConcurrentRows(data[key], latest[key], baseState[key], key, preferIncoming);
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
   });
-  data.customers = preferIncoming ? upsertById(latest.customers, data.customers) : upsertById(data.customers, latest.customers);
-  data.payments = preferIncoming ? upsertById(latest.payments, data.payments) : upsertById(data.payments, latest.payments);
+  ['customers', 'payments'].forEach(key => {
+    data[key] = mergeConcurrentRows(data[key], latest[key], baseState[key], key, preferIncoming);
+    const removed = new Set((deletedIds[key] || []).map(String));
+    if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
+  });
   if (options.preserveLatestIntegrations) data.integrations = latest.integrations || data.integrations || {};
   return data;
 }
 async function protectConcurrentLocalWrites(data, options = {}) {
-  const mergedOptions = { ...options, deletedIds: { ...inferredDeleteIds(data), ...(options.deletedIds || {}) } };
+  const readMeta = data && data[STATE_READ_META] || {};
+  const mergedOptions = { ...options, deletedIds: { ...inferredDeleteIds(data), ...(options.deletedIds || {}) }, baseState: options.baseState || readMeta.baseState || {} };
   if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) {
     Object.defineProperty(data, STATE_WRITE_META, { value: { options: mergedOptions, reason: options.reason || 'concurrent state merge' }, configurable: true });
     return data;
@@ -19721,6 +19807,8 @@ module.exports = {
   repairDataIds,
   stateForUserRead,
   stateForUserWrite,
+  mergeConcurrentState,
+  mergeConcurrentValue,
   repairVehicleSheetLinkConflicts,
   rowClaimsVehicle,
   enrichLinkedProfiles,
