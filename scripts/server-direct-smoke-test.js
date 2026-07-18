@@ -265,6 +265,16 @@ async function main() {
   });
   global.fetch = async (url, options = {}) => {
     const requestUrl = String(url);
+    if (requestUrl === 'https://api.stripe.com/v1/account') {
+      return providerResponse(200, {
+        id: 'acct_direct_smoke_ready',
+        country: 'US',
+        charges_enabled: true,
+        payouts_enabled: true,
+        details_submitted: true,
+        requirements: { currently_due: [], past_due: [], disabled_reason: null }
+      });
+    }
     if (cloverRecurringFixture && requestUrl.includes('/recurring/v1/')) {
       cloverRecurringRequests.push(requestUrl);
       if (requestUrl.includes('/recurring/v1/plans?')) {
@@ -1548,6 +1558,11 @@ async function main() {
     assert(managerStarProviderHealth.status === 403, 'Manager must not run the owner-only Star provider health test.');
     const managerTelnyxReadiness = await request(server, 'POST', '/api/integrations/telnyx/readiness', { cookie: managerCookie, json: {} });
     assert(managerTelnyxReadiness.status === 403, 'Manager must not inspect or mutate owner-only Telnyx carrier registration evidence.');
+    const managerStripeReadiness = await request(server, 'POST', '/api/integrations/stripe/readiness', { cookie: managerCookie, json: {} });
+    assert(managerStripeReadiness.status === 403, 'Manager must not inspect or mutate owner-only Stripe account activation evidence.');
+    const ownerStripeReadiness = await request(server, 'POST', '/api/integrations/stripe/readiness', { cookie: ownerCookie, json: {} });
+    assert(ownerStripeReadiness.status === 200 && ownerStripeReadiness.json && ownerStripeReadiness.json.stripeAccount.live === true, 'Owner Stripe readiness must verify the read-only account endpoint and persist live charges/payout activation evidence.');
+    assert(!Object.prototype.hasOwnProperty.call(ownerStripeReadiness.json.stripeAccount, 'configurationFingerprint'), 'Stripe account readiness responses must not expose the server-only configuration fingerprint.');
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
     const ownerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
@@ -1558,6 +1573,7 @@ async function main() {
     assert(ownerLaunchPreflight.json.stateBackup && ownerLaunchPreflight.json.stateBackup.verified === true && ownerLaunchPreflight.json.missing.includes('HTTPS offsite encrypted state-backup storage'), 'The launch preflight must recognize an authenticated backup while still rejecting local-only storage for production.');
     assert(!/BwcHBwcH|WOA_DOCUMENT_ENCRYPTION_KEY/i.test(JSON.stringify(ownerLaunchPreflight.json.documentEncryptionKeys)), 'The private-document key inventory must never expose key material or secret environment names.');
     assert(ownerLaunchPreflight.json.cloverRecurring && ownerLaunchPreflight.json.cloverRecurring.ready === false && ownerLaunchPreflight.json.missing.includes('fresh Clover recurring roster for controlled cutover'), 'The owner launch preflight must block cutover when active Clover recurring records do not have a fresh complete roster.');
+    assert(ownerLaunchPreflight.json.stripeAccount && ownerLaunchPreflight.json.stripeAccount.live === true && !ownerLaunchPreflight.json.missing.includes('Stripe live account activation proof'), 'A fresh owner-verified Stripe account with live charges and payouts must clear only the account-activation gate.');
     assert(!Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.recoveryDrill, 'configurationFingerprint'), 'Recovery drill fingerprints must remain server-only even in the owner launch preflight.');
     assert(typeof reportBackgroundTaskFailure === 'function', 'Background worker failures must share the durable operational-monitor path.');
     const monitoredFailure = new Error('Direct monitored background failure');

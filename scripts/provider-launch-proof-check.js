@@ -22,6 +22,7 @@ process.env.STRIPE_PUBLISHABLE_KEY = 'pk_live_provider_launch_proof';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_provider_launch_proof';
 process.env.WOA_ONBOARDING_PAYMENT_PROVIDER = 'stripe';
 process.env.WOA_IDENTITY_PROVIDER = 'stripe';
+process.env.WOA_STRIPE_ACCOUNT_VALIDATION_MAX_AGE_MS = String(24 * 60 * 60 * 1000);
 process.env.WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS = String(30 * 24 * 60 * 60 * 1000);
 
 const {
@@ -32,6 +33,8 @@ const {
   telnyxLiveLaunchEvidence,
   resendLiveLaunchEvidence,
   starAiLiveLaunchEvidence,
+  stripeAccountConfigurationFingerprint,
+  stripeAccountLiveEvidence,
   stripeWebhookConfigurationFingerprint,
   stripeLiveWebhookEvidence,
   stripeIdentityLiveWebhookEvidence,
@@ -115,7 +118,21 @@ function readyState() {
 
 const data = readyState();
 const stripeFingerprint = stripeWebhookConfigurationFingerprint();
+const stripeAccountFingerprint = stripeAccountConfigurationFingerprint();
 data.integrations.stripe = {
+  lastAccountHealthAt: new Date().toISOString(),
+  lastAccountHealthSuccess: true,
+  lastAccountHealthKeyMode: 'live',
+  lastAccountId: 'acct_provider_launch_proof',
+  lastAccountCountry: 'US',
+  lastAccountChargesEnabled: true,
+  lastAccountPayoutsEnabled: true,
+  lastAccountDetailsSubmitted: true,
+  lastAccountRequirementsCurrentlyDueCount: 0,
+  lastAccountRequirementsPastDueCount: 0,
+  lastAccountDisabledReason: '',
+  lastAccountHealthConfigurationFingerprint: stripeAccountFingerprint,
+  lastAccountHealthError: '',
   lastLaunchWebhookAt: new Date().toISOString(),
   lastLaunchWebhookType: 'payment_intent.succeeded',
   lastLaunchWebhookEventId: 'evt_live_provider_launch_payment',
@@ -182,6 +199,33 @@ assert.strictEqual(stripePayment.live, true, 'Stripe payment launch proof must r
 assert.strictEqual(stripePayment.relevantEvent, true);
 assert.strictEqual(stripePayment.fresh, true);
 
+const stripeAccount = stripeAccountLiveEvidence(data);
+assert.strictEqual(stripeAccount.live, true, 'Stripe account proof must require a fresh live-mode account check with charges, payouts, and business details enabled.');
+assert.strictEqual(stripeAccount.chargesEnabled, true);
+assert.strictEqual(stripeAccount.payoutsEnabled, true);
+assert.strictEqual(stripeAccount.detailsSubmitted, true);
+
+const stripeChargesDisabled = clone(data);
+stripeChargesDisabled.integrations.stripe.lastAccountChargesEnabled = false;
+assert.strictEqual(stripeAccountLiveEvidence(stripeChargesDisabled).live, false, 'A Stripe account with charges disabled must not unlock launch.');
+assert.match(stripeAccountLiveEvidence(stripeChargesDisabled).error, /not enabled charges/i);
+
+const stripePayoutsDisabled = clone(data);
+stripePayoutsDisabled.integrations.stripe.lastAccountPayoutsEnabled = false;
+assert.strictEqual(stripeAccountLiveEvidence(stripePayoutsDisabled).live, false, 'A Stripe account with payouts disabled must not unlock launch.');
+
+const stripeOnboardingIncomplete = clone(data);
+stripeOnboardingIncomplete.integrations.stripe.lastAccountDetailsSubmitted = false;
+assert.strictEqual(stripeAccountLiveEvidence(stripeOnboardingIncomplete).live, false, 'Incomplete Stripe business onboarding must not unlock launch.');
+
+const staleStripeAccount = clone(data);
+staleStripeAccount.integrations.stripe.lastAccountHealthAt = '2020-01-01T00:00:00.000Z';
+assert.strictEqual(stripeAccountLiveEvidence(staleStripeAccount).live, false, 'Expired Stripe account activation proof must require another read-only check.');
+
+const mismatchedStripeAccount = clone(data);
+mismatchedStripeAccount.integrations.stripe.lastAccountHealthConfigurationFingerprint = 'stale-proof';
+assert.strictEqual(stripeAccountLiveEvidence(mismatchedStripeAccount).live, false, 'Stripe account evidence from another key configuration must not unlock launch.');
+
 const unrelatedStripe = clone(data);
 unrelatedStripe.integrations.stripe.lastLaunchWebhookType = 'customer.updated';
 assert.strictEqual(stripeLiveWebhookEvidence(unrelatedStripe).live, false, 'An unrelated signed Stripe event must not unlock the payment launch gate.');
@@ -203,8 +247,12 @@ assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.messages.find(
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.messaging, 'lastAiHealthConfigurationFingerprint'), false, 'Integration proof fingerprints must never be returned to the browser state.');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastLaunchWebhookConfigurationFingerprint'), false, 'Stripe payment proof fingerprints must never be returned to browser state.');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastIdentityWebhookConfigurationFingerprint'), false, 'Stripe Identity proof fingerprints must never be returned to browser state.');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastAccountHealthConfigurationFingerprint'), false, 'Stripe account proof fingerprints must never be returned to browser state.');
 
 const forgedState = clone(data);
+forgedState.integrations.stripe.lastAccountChargesEnabled = false;
+forgedState.integrations.stripe.lastAccountPayoutsEnabled = false;
+forgedState.integrations.stripe.lastAccountHealthConfigurationFingerprint = 'forged-account-proof';
 forgedState.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint = 'forged-proof';
 forgedState.messages.push({
   id: 'forged-provider-proof',
@@ -222,5 +270,8 @@ assert.strictEqual(ownerWrite.messages.find(record => record.id === 'resend-inbo
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerWrite.messages.find(record => record.id === 'forged-provider-proof'), 'providerConfigurationFingerprint'), false, 'Browser writes must not create a new provider proof fingerprint.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastLaunchWebhookConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe payment proof fingerprint.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastIdentityWebhookConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe Identity proof fingerprint.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastAccountHealthConfigurationFingerprint, stripeAccountFingerprint, 'Browser writes must preserve the server-only Stripe account proof fingerprint.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastAccountChargesEnabled, true, 'Browser writes must not forge or clear the server-verified Stripe account readiness values.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastAccountPayoutsEnabled, true, 'Browser writes must not forge or clear the server-verified Stripe payout readiness value.');
 
-console.log('Provider launch proof check passed: Stripe payments, Stripe Identity, Telnyx, Resend, and Star require fresh evidence tied to the current secured configuration.');
+console.log('Provider launch proof check passed: Stripe account activation, Stripe payments, Stripe Identity, Telnyx, Resend, and Star require fresh evidence tied to the current secured configuration.');

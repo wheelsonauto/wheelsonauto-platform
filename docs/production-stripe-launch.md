@@ -399,13 +399,20 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 WOA_PAYMENT_PROVIDER=clover
 WOA_ONBOARDING_PAYMENT_PROVIDER=stripe
 WOA_IDENTITY_PROVIDER=stripe
+WOA_STRIPE_ACCOUNT_VALIDATION_MAX_AGE_MS=86400000
 WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS=2592000000
 PUBLIC_BASE_URL=https://wheelsonauto.com
 ```
 
 Start with the default payment provider left on Clover. The onboarding provider
 can use Stripe for new customers while existing customers migrate one at a
-time. Configure Stripe webhook events for successful/failed payment intents,
+time. Finish Stripe business onboarding first and confirm the Stripe dashboard
+shows both charges and payouts enabled. Then open **API Roadmap -> Stripe
+Payments -> Check Stripe account**. This read-only check calls Stripe's account
+endpoint, stores only the account ID, country, readiness booleans, requirement
+counts, and a server-only configuration proof, and never creates a customer or
+money movement. The proof expires after 24 hours by default and must be rerun
+after the live key or API configuration changes. Configure Stripe webhook events for successful/failed payment intents,
 refunds, disputes, setup intents, and Stripe Identity updates. The webhook
 must be signed and reach the live platform before it is treated as connected.
 Stripe customer card preparation is exposed only when the server has an
@@ -591,20 +598,23 @@ commit. This is the required crash boundary for live payment cutover.
 
 1. In **Settings -> System health**, use **Validate private storage**. It must
    complete an encrypted write/read/delete probe against the private bucket.
-2. In **Messages -> Setup**, connect the Telnyx inbox. Then use **API Roadmap
+2. In **API Roadmap -> Stripe Payments**, use **Check Stripe account**. It must
+   report a live-mode account with business details submitted and both charges
+   and payouts enabled. A test key or incomplete Stripe activation stays blocked.
+3. In **Messages -> Setup**, connect the Telnyx inbox. Then use **API Roadmap
    -> SMS** to check 10DLC/number assignment. Send one harmless test text from
    a WheelsonAuto message thread and reply to it from the controlled phone.
    Confirm the carrier delivery status and signed reply both appear in the
    same thread before enabling automatic SMS.
-3. In **Messages**, send one harmless email to the controlled inbox and reply
+4. In **Messages**, send one harmless email to the controlled inbox and reply
    to it. The outbound record and signed inbound webhook must both appear in
    Messages before email is considered two-way.
-4. In **Messages -> Star**, use **Test Star provider**. It only runs a safe
+5. In **Messages -> Star**, use **Test Star provider**. It only runs a safe
    Responses API health prompt; it does not message a customer, charge a card,
    or change an account.
-5. In **Settings -> System health**, use **Test failure alerts** and verify
+6. In **Settings -> System health**, use **Test failure alerts** and verify
    the owner email receives it.
-6. Open **Live launch preflight** from System health. It must show each gate
+7. Open **Live launch preflight** from System health. It must show each gate
    as verified. A provider showing `Blocked` has not passed the live evidence
    requirement yet, even if its keys are saved in Render.
 

@@ -74,6 +74,10 @@ async function run() {
       return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'pi_test', status: 'succeeded' }) };
     }
   });
+  await client.retrieveAccount();
+  assert(captured.url.endsWith('/account'), 'Stripe account readiness must use the authenticated account endpoint.');
+  assert.strictEqual(captured.options.method, 'GET', 'Stripe account readiness must be a read-only request.');
+  assert.strictEqual(captured.options.body, undefined, 'Stripe account readiness must never submit money or account changes.');
   await client.createPaymentIntent({ amount: 22900, currency: 'usd', metadata: { recurringPaymentId: 'rec-1' } }, 'woa-test-key');
   assert.strictEqual(captured.options.headers.Authorization, 'Bearer sk_test_private', 'Stripe secret key must only be sent in the Authorization header.');
   assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-test-key', 'Money actions must use an idempotency key.');
@@ -112,6 +116,10 @@ async function run() {
   [
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
+    "'/api/integrations/stripe/readiness'",
+    'stripeAccountLiveEvidence',
+    'lastAccountChargesEnabled',
+    'lastAccountPayoutsEnabled',
     'WOA_ONBOARDING_PAYMENT_PROVIDER',
     "'/api/webhooks/stripe'",
     "'/api/payment-provider/switch'",

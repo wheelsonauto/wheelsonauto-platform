@@ -100,6 +100,7 @@ function stripeClient(options = {}) {
 
   return {
     configured: () => !!secretKey,
+    retrieveAccount: () => request('GET', '/account'),
     createCustomer: payload => request('POST', '/customers', payload),
     createSetupCheckoutSession: (payload, idempotencyKey) => request('POST', '/checkout/sessions', payload, { idempotencyKey }),
     retrieveCheckoutSession: id => request('GET', '/checkout/sessions/' + encodeURIComponent(id), { expand: ['setup_intent', 'payment_intent', 'customer'] }),
