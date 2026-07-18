@@ -345,6 +345,39 @@ two-way inbox. The hardened Stripe launch requires those fresh outbound and
 inbound records to match the active Resend configuration. A test sent from an
 old sender, key, or webhook secret cannot clear the launch gate.
 
+### Record Live Provider Evidence From WheelsonAuto
+
+After the current Render settings are deployed, use an owner-controlled test
+inbox and phone. Do not test a new provider by contacting a customer first.
+Each check leaves an audit record and is tied to the current Render
+configuration, so changing a key, sender, webhook secret, or provider setting
+requires a new proof.
+
+1. In **Settings -> System health**, use **Validate private storage**. It must
+   complete an encrypted write/read/delete probe against the private bucket.
+2. In **Messages -> Setup**, connect the Telnyx inbox. Then use **API Roadmap
+   -> SMS** to check 10DLC/number assignment. Send one harmless test text from
+   a WheelsonAuto message thread and reply to it from the controlled phone.
+   Confirm the carrier delivery status and signed reply both appear in the
+   same thread before enabling automatic SMS.
+3. In **Messages**, send one harmless email to the controlled inbox and reply
+   to it. The outbound record and signed inbound webhook must both appear in
+   Messages before email is considered two-way.
+4. In **Messages -> Star**, use **Test Star provider**. It only runs a safe
+   Responses API health prompt; it does not message a customer, charge a card,
+   or change an account.
+5. In **Settings -> System health**, use **Test failure alerts** and verify
+   the owner email receives it.
+6. Open **Live launch preflight** from System health. It must show each gate
+   as verified. A provider showing `Blocked` has not passed the live evidence
+   requirement yet, even if its keys are saved in Render.
+
+For Stripe, the final evidence comes from the controlled onboarding record:
+complete the test application, Stripe Identity verification, card setup,
+separate deposit and first-week charges, e-sign, and pickup scheduling. Keep
+the record clearly labeled as a controlled test and do not use a real customer
+until its receipts, vehicle context, and webhook evidence are all visible.
+
 ## 7. Enable the Launch Guard Last
 
 After all the above checks are green, set:

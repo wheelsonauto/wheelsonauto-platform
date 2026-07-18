@@ -57,6 +57,7 @@ async function main() {
     assert.strictEqual(recoveryTargetGuard.status, 1, 'A recovery proof run must fail before opening a database when its test target matches the production proof target.');
     assert.match([recoveryTargetGuard.stdout, recoveryTargetGuard.stderr].filter(Boolean).join(''), /different dedicated test database/i, 'The recovery proof refusal must explain that the test database cannot be production.');
     assert(launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_RECORD=1') && launchRunbook.includes('WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL') && /same database as\n+the production proof target/i.test(launchRunbook), 'The production runbook must explain that recovery proof is recorded only after import from a separate test database.');
+    assert(launchRunbook.includes('Validate private storage') && launchRunbook.includes('connect the Telnyx inbox') && launchRunbook.includes('Test Star provider') && launchRunbook.includes('Test failure alerts') && launchRunbook.includes('Live launch preflight'), 'The production runbook must give the owner the exact in-app provider proof actions needed to clear the launch gate.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     const jsonAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
