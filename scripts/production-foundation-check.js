@@ -501,12 +501,18 @@ async function main() {
       cloverCustomerId: 'clover-foundation',
       cloverPaymentSource: 'source-foundation',
       stripeCustomerId: 'cus-foundation',
-      stripePaymentMethodId: 'pm-foundation'
+      stripePaymentMethodId: 'pm-foundation',
+      stripeMigration: { state: stripeMigration.STATES.CLOVER_ACTIVE }
     };
+    assert.throws(
+      () => stripeMigration.transition({ ...recurring, stripeMigration: { state: stripeMigration.STATES.CLOVER_ACTIVE } }, stripeMigration.STATES.CLOVER_DISABLED, { at: '2026-07-17T09:59:00.000Z' }),
+      error => error && error.code === 'invalid_stripe_migration_transition' && error.currentState === stripeMigration.STATES.CLOVER_ACTIVE,
+      'The shared migration engine must reject a direct Clover-active to Clover-disabled state skip.'
+    );
     let migration = stripeMigration.transition(recurring, stripeMigration.STATES.STRIPE_SETUP_SENT, { at: '2026-07-17T10:00:00.000Z' });
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-17'), true, 'Sending a Stripe setup link must not stop the existing Clover schedule.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'stripe', '2026-07-17'), false, 'Stripe must remain inactive while card setup is only pending.');
-    migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.STRIPE_CARD_SAVED, { at: '2026-07-17T10:01:00.000Z' });
+    migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.STRIPE_CARD_SAVED, { at: '2026-07-17T10:01:00.000Z', cardSavedAt: '2026-07-17T10:01:00.000Z' });
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-17'), true, 'Saving a Stripe card must not stop Clover before a protected cutover.');
     migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.CUTOVER_SCHEDULED, { at: '2026-07-17T10:02:00.000Z', cutoverDate: '2026-07-24' });
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-23'), true, 'Clover must remain chargeable for billing periods before the scheduled cutover.');
@@ -516,6 +522,34 @@ async function main() {
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, 'stripe', '2026-07-24'), true, 'A confirmed same-day cutover may allow the protected first Stripe charge.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, 'stripe', '2026-07-23'), false, 'The first Stripe charge must not run for a billing date before the protected cutover.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { ...migration, cutoverDate: '' } }, 'stripe', '2026-07-24'), false, 'A Clover-to-Stripe first charge without a saved cutover date must fail closed.');
+    assert.throws(
+      () => stripeMigration.transition({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, stripeMigration.STATES.CLOVER_DISABLED, { at: '2026-07-24T18:00:00.000Z' }),
+      error => error && error.code === 'invalid_stripe_migration_transition',
+      'The shared migration engine must not mark Clover disabled before the verified first Stripe charge passes.'
+    );
+    migration = stripeMigration.transition({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED, {
+      at: '2026-07-24T18:00:00.000Z',
+      firstStripeChargeAt: '2026-07-24T18:00:00.000Z',
+      firstStripePaymentIntentId: 'pi-foundation-first-charge'
+    });
+    migration = stripeMigration.transition({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, stripeMigration.STATES.CLOVER_DISABLED, {
+      at: '2026-07-24T18:00:01.000Z',
+      cloverDisabledAt: '2026-07-24T18:00:01.000Z',
+      cloverDisabledBy: 'Foundation owner'
+    });
+    assert.strictEqual(migration.state, stripeMigration.STATES.CLOVER_DISABLED, 'The complete evidence-backed transition sequence must reach Clover disabled.');
+    assert.throws(
+      () => stripeMigration.rollbackToClover({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, { at: '2026-07-24T18:05:00.000Z' }),
+      error => error && error.code === 'invalid_stripe_migration_transition',
+      'Returning a Stripe-active customer to Clover must require explicit confirmation that Stripe stopped.'
+    );
+    const rolledBack = stripeMigration.rollbackToClover({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, {
+      at: '2026-07-24T18:05:00.000Z',
+      stripeStoppedConfirmedAt: '2026-07-24T18:05:00.000Z',
+      by: 'Foundation owner'
+    });
+    assert.strictEqual(rolledBack.state, stripeMigration.STATES.STRIPE_CARD_SAVED, 'A confirmed return to Clover must preserve the saved Stripe card without leaving an active cutover.');
+    assert.strictEqual(rolledBack.cutoverDate, '', 'A confirmed return to Clover must clear the active cutover date.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { state: stripeMigration.STATES.CLOVER_ACTIVE } }, 'stripe', '2026-07-24'), false, 'An inconsistent Stripe-provider row that is still Clover-active must fail closed.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'clover', stripeMigration: { state: stripeMigration.STATES.CLOVER_DISABLED } }, 'clover', '2026-07-24'), false, 'An inconsistent Clover-provider row marked Clover-disabled must fail closed.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { state: stripeMigration.STATES.STRIPE_ACTIVE } }, 'stripe', '2026-07-24'), true, 'A consistent Stripe-active row may use Stripe autopay.');

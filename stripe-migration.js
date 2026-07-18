@@ -11,6 +11,17 @@ const STATES = Object.freeze({
   STRIPE_ACTIVE: 'stripe_active'
 });
 
+const FORWARD_TRANSITIONS = Object.freeze({
+  [STATES.CLOVER_ACTIVE]: Object.freeze([STATES.STRIPE_SETUP_SENT, STATES.STRIPE_CARD_SAVED]),
+  [STATES.STRIPE_SETUP_SENT]: Object.freeze([STATES.STRIPE_CARD_SAVED]),
+  [STATES.STRIPE_CARD_SAVED]: Object.freeze([STATES.CUTOVER_SCHEDULED]),
+  [STATES.CUTOVER_SCHEDULED]: Object.freeze([STATES.FIRST_STRIPE_CHARGE_PENDING]),
+  [STATES.FIRST_STRIPE_CHARGE_PENDING]: Object.freeze([STATES.FIRST_STRIPE_CHARGE_PASSED]),
+  [STATES.FIRST_STRIPE_CHARGE_PASSED]: Object.freeze([STATES.CLOVER_DISABLED]),
+  [STATES.CLOVER_DISABLED]: Object.freeze([STATES.STRIPE_ACTIVE]),
+  [STATES.STRIPE_ACTIVE]: Object.freeze([])
+});
+
 function text(value) {
   return String(value || '').trim();
 }
@@ -135,6 +146,7 @@ function migrationRecord(row = {}) {
     // cutover-blocked until an owner explicitly confirms Clover is stopped.
     // Pure Stripe rows without a Clover source can remain Stripe-active.
     else if (provider(row.paymentProvider || row.provider) === 'stripe') state = hasCloverSource(row) ? STATES.STRIPE_CARD_SAVED : STATES.STRIPE_ACTIVE;
+    else if (hasCloverSource(row) && hasStripeCard(row)) state = STATES.STRIPE_CARD_SAVED;
     else state = STATES.CLOVER_ACTIVE;
   }
   return {
@@ -211,10 +223,49 @@ function assertBillingPeriodOpen(data, recurring, dueDate, options = {}) {
   return existing;
 }
 
+function migrationTransitionError(currentState, nextState, message) {
+  const error = new Error(message || ('Stripe migration cannot move from ' + currentState + ' to ' + nextState + '. Complete each protected cutover step in order.'));
+  error.code = 'invalid_stripe_migration_transition';
+  error.statusCode = 409;
+  error.currentState = currentState;
+  error.nextState = nextState;
+  return error;
+}
+
+function assertTransitionEvidence(row, currentState, nextState, migration) {
+  if (nextState === STATES.STRIPE_CARD_SAVED && currentState !== nextState && !hasStripeCard(row) && !text(migration.cardSavedAt)) {
+    throw migrationTransitionError(currentState, nextState, 'A verified Stripe card setup result is required before the card-saved migration stage.');
+  }
+  if (nextState === STATES.CUTOVER_SCHEDULED && !validDateKey(migration.cutoverDate)) {
+    throw migrationTransitionError(currentState, nextState, 'A protected cutover date is required before Stripe can be scheduled.');
+  }
+  if (nextState === STATES.FIRST_STRIPE_CHARGE_PENDING && hasCloverSource(row)) {
+    if (!validDateKey(migration.cutoverDate) || !text(migration.cloverStoppedConfirmedAt)) {
+      throw migrationTransitionError(currentState, nextState, 'Confirm the exact cutover date and that Clover was stopped before the first Stripe charge can become pending.');
+    }
+  }
+  if (nextState === STATES.FIRST_STRIPE_CHARGE_PASSED && hasCloverSource(row)) {
+    if (!text(migration.firstStripeChargeAt) || !text(migration.firstStripePaymentIntentId)) {
+      throw migrationTransitionError(currentState, nextState, 'A verified first Stripe payment and PaymentIntent are required before the migration can advance.');
+    }
+  }
+  if (nextState === STATES.CLOVER_DISABLED && hasCloverSource(row)) {
+    if (!text(migration.firstStripeChargeAt) || !text(migration.firstStripePaymentIntentId) || !text(migration.cloverDisabledAt)) {
+      throw migrationTransitionError(currentState, nextState, 'Clover can be marked disabled only after the verified first Stripe charge is recorded.');
+    }
+  }
+}
+
 function transition(row = {}, nextState, details = {}) {
   const current = migrationRecord(row);
   const now = text(details.at) || new Date().toISOString();
-  const state = Object.values(STATES).includes(nextState) ? nextState : current.state;
+  const state = text(nextState).toLowerCase();
+  if (!Object.values(STATES).includes(state)) {
+    throw migrationTransitionError(current.state, state || 'unknown', 'WheelsonAuto rejected an unknown Stripe migration state.');
+  }
+  if (state !== current.state && !(FORWARD_TRANSITIONS[current.state] || []).includes(state)) {
+    throw migrationTransitionError(current.state, state);
+  }
   const entry = {
     state,
     at: now,
@@ -226,7 +277,40 @@ function transition(row = {}, nextState, details = {}) {
   delete next.at;
   delete next.by;
   delete next.note;
+  assertTransitionEvidence(row, current.state, state, next);
   return next;
+}
+
+function rollbackToClover(row = {}, details = {}) {
+  const current = migrationRecord(row);
+  const currentProvider = provider(row.paymentProvider || row.provider || 'clover');
+  const requiresStripeStopConfirmation = currentProvider === 'stripe' || [
+    STATES.FIRST_STRIPE_CHARGE_PENDING,
+    STATES.FIRST_STRIPE_CHARGE_PASSED,
+    STATES.CLOVER_DISABLED,
+    STATES.STRIPE_ACTIVE
+  ].includes(current.state);
+  if (requiresStripeStopConfirmation && !text(details.stripeStoppedConfirmedAt)) {
+    throw migrationTransitionError(current.state, hasStripeCard(row) ? STATES.STRIPE_CARD_SAVED : STATES.CLOVER_ACTIVE, 'Confirm that Stripe autopay is stopped before returning this customer to Clover.');
+  }
+  const now = text(details.at) || new Date().toISOString();
+  const state = hasStripeCard(row) ? STATES.STRIPE_CARD_SAVED : STATES.CLOVER_ACTIVE;
+  const entry = {
+    state,
+    at: now,
+    by: text(details.by),
+    note: text(details.note || 'Protected Stripe cutover cancelled; Clover remains active.').slice(0, 500)
+  };
+  return {
+    ...current,
+    state,
+    history: current.history.concat(entry).slice(-30),
+    cutoverDate: '',
+    cutoverScheduledAt: '',
+    cloverStoppedConfirmedAt: '',
+    cloverStoppedConfirmedBy: '',
+    updatedAt: now
+  };
 }
 
 function automaticChargeAllowed(row = {}, paymentProvider, dateKey) {
@@ -274,6 +358,8 @@ module.exports = {
   existingPaidPayment,
   duplicateChargeError,
   assertBillingPeriodOpen,
+  migrationTransitionError,
   transition,
+  rollbackToClover,
   automaticChargeAllowed
 };

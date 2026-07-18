@@ -196,7 +196,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-durable-rate-limits-158';
+const ASSET_VERSION = 'platform-20260718-stripe-transition-lock-159';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -13030,10 +13030,16 @@ async function attachStripeCardSetupCheckout(data, request, req) {
   });
   stripeRecurringRowsForRequest(data, request).forEach(row => {
     if (normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover') !== 'clover' || !stripeMigration.hasCloverSource(row)) return;
-    Object.assign(row, stripeMigrationPatch(row, stripeMigration.STATES.STRIPE_SETUP_SENT, {
+    const currentMigration = stripeMigration.migrationRecord(row);
+    const nextState = [stripeMigration.STATES.CLOVER_ACTIVE, stripeMigration.STATES.STRIPE_SETUP_SENT].includes(currentMigration.state)
+      ? stripeMigration.STATES.STRIPE_SETUP_SENT
+      : currentMigration.state;
+    Object.assign(row, stripeMigrationPatch(row, nextState, {
       at: now,
       setupSentAt: now,
-      note: 'Stripe card setup link sent. Clover remains the active provider until a protected cutover is scheduled.'
+      note: nextState === stripeMigration.STATES.STRIPE_SETUP_SENT
+        ? 'Stripe card setup link sent. Clover remains the active provider until a protected cutover is scheduled.'
+        : 'A replacement Stripe card setup link was sent without changing the protected migration stage.'
     }));
   });
   await writeData(data);
@@ -13078,6 +13084,13 @@ async function completeStripeCardSetup(data, request, sessionInput) {
   rows.forEach(row => {
     const currentProvider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
     const hasLiveClover = currentProvider === 'clover' && !!(row.cloverSubscriptionId || row.cloverPaymentSource || row.cloverCustomerId);
+    const currentMigration = stripeMigration.migrationRecord(row);
+    const hasCloverHistory = stripeMigration.hasCloverSource(row);
+    const nextMigrationState = hasCloverHistory
+      ? ([stripeMigration.STATES.CLOVER_ACTIVE, stripeMigration.STATES.STRIPE_SETUP_SENT, stripeMigration.STATES.STRIPE_CARD_SAVED].includes(currentMigration.state)
+          ? stripeMigration.STATES.STRIPE_CARD_SAVED
+          : currentMigration.state)
+      : stripeMigration.STATES.STRIPE_ACTIVE;
     Object.assign(row, {
       stripeCustomerId: customerId,
       stripePaymentMethodId: paymentMethodId,
@@ -13085,12 +13098,14 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       stripeCardBrand: card.brand || '',
       stripeCardLast4: card.last4 || '',
       stripeCardSavedAt: completedAt,
-      ...stripeMigrationPatch(row, hasLiveClover ? stripeMigration.STATES.STRIPE_CARD_SAVED : stripeMigration.STATES.STRIPE_ACTIVE, {
+      ...stripeMigrationPatch(row, nextMigrationState, {
         at: completedAt,
         cardSavedAt: completedAt,
         note: hasLiveClover
           ? 'Stripe card saved. Schedule the next billing-date cutover before stopping Clover.'
-          : 'Stripe card saved for an existing Stripe schedule.'
+          : hasCloverHistory
+            ? 'Stripe card updated without changing the protected Clover-to-Stripe migration stage.'
+            : 'Stripe card saved for an existing Stripe schedule.'
       }),
       pendingCardProvider: '',
       cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
@@ -13361,8 +13376,7 @@ function retryDelayPassed(row, date = new Date()) {
 function isWheelsonAutoManagedAutopay(row) {
   return !!(row && row.autoChargeEnabled && hasWheelsonAutoSavedCard(row));
 }
-function stripeMigrationPatch(row, nextState, details = {}) {
-  const migration = stripeMigration.transition(row, nextState, details);
+function stripeMigrationRecordPatch(migration) {
   return {
     stripeMigration: migration,
     stripeMigrationStatus: stripeMigration.stateLabel(migration.state),
@@ -13376,6 +13390,9 @@ function stripeMigrationPatch(row, nextState, details = {}) {
     cloverDisabledBy: migration.cloverDisabledBy || '',
     lastBillingPeriodKey: migration.lastBillingPeriodKey || ''
   };
+}
+function stripeMigrationPatch(row, nextState, details = {}) {
+  return stripeMigrationRecordPatch(stripeMigration.transition(row, nextState, details));
 }
 function isDuplicateBillingPeriodError(err) {
   return String(err && err.code || '') === 'duplicate_billing_period';
@@ -20136,7 +20153,35 @@ const server = http.createServer(async (req, res) => {
       if (!recurring) return json(res, 404, { ok: false, error: 'Recurring customer was not found.' });
       const target = normalizedPaymentProvider(payload.paymentProvider || payload.provider);
       const current = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+      const action = String(payload.action || 'schedule').trim().toLowerCase();
+      const actor = user.name || user.username || 'Owner';
+      const now = new Date().toISOString();
+      const migration = stripeMigration.migrationRecord(recurring);
       if (!['clover', 'stripe'].includes(target)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe.' });
+      if (target === current && target === 'clover' && action === 'cancel-cutover') {
+        if (migration.state !== stripeMigration.STATES.CUTOVER_SCHEDULED) return json(res, 409, { ok: false, error: 'There is no scheduled Stripe cutover to cancel.' });
+        const cancelledMigration = stripeMigration.rollbackToClover(recurring, {
+          at: now,
+          by: actor,
+          note: 'Owner cancelled the protected Stripe cutover. Clover remains active; the saved Stripe card remains available for a future cutover.'
+        });
+        updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, {
+          paymentProvider: 'clover',
+          provider: 'Clover',
+          paymentSetup: 'Clover card saved and chargeable',
+          autopayManagedBy: 'WheelsonAuto / Clover',
+          status: 'Active',
+          tone: 'good',
+          autoChargeEnabled: true,
+          stripeCutoverLocked: false,
+          ...stripeMigrationRecordPatch(cancelledMigration),
+          updatedAt: now
+        });
+        appendAuditLog(data, user, 'Stripe cutover cancelled', [recurring.customer || 'Unknown customer', 'Clover remains active', recurring.nextRun || 'No next date']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, cancelled: true, paymentProvider: 'clover', recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId) });
+      }
       if (target === current) return json(res, 200, { ok: true, unchanged: true, paymentProvider: target, recurring });
       if (target === 'stripe') {
         const cutoverEligibility = stripeMigration.cutoverEligibility(data, recurring);
@@ -20149,12 +20194,11 @@ const server = http.createServer(async (req, res) => {
           });
         }
         if (!recurring.stripeCustomerId || !recurring.stripePaymentMethodId) return json(res, 409, { ok: false, error: 'Stripe card setup is not complete for this customer.' });
-        const action = String(payload.action || 'schedule').trim().toLowerCase();
-        const actor = user.name || user.username || 'Owner';
-        const now = new Date().toISOString();
         const dueDate = recurringDateKey(recurring);
-        const migration = stripeMigration.migrationRecord(recurring);
         if (action === 'schedule') {
+          if (![stripeMigration.STATES.STRIPE_CARD_SAVED, stripeMigration.STATES.CUTOVER_SCHEDULED].includes(migration.state)) {
+            return json(res, 409, { ok: false, error: 'Complete and verify Stripe card setup before scheduling the protected cutover.' });
+          }
           const cutoverDate = validCalendarDateKey(payload.cutoverDate || dueDate);
           if (!cutoverDate) return json(res, 409, { ok: false, error: 'Set the next charge date before scheduling a Stripe cutover.' });
           if (cutoverDate < localDateKey()) return json(res, 409, { ok: false, error: 'Choose a future or today cutover date. Past billing dates cannot be safely migrated.' });
@@ -20232,29 +20276,18 @@ const server = http.createServer(async (req, res) => {
         if (!recurring.cloverCustomerId || !recurring.cloverPaymentSource) return json(res, 409, { ok: false, error: 'A chargeable Clover saved-card source is not linked to this customer.' });
         if (current === 'stripe' && payload.stripeStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that Stripe autopay was stopped before reactivating Clover. This prevents duplicate charges.' });
       }
-      const now = new Date().toISOString();
-      const patch = target === 'stripe' ? {
-        paymentProvider: 'stripe',
-        provider: 'Stripe',
-        paymentSetup: 'Stripe card saved and chargeable',
-        cardLabel: recurring.stripeCardBrand || recurring.cardLabel || '',
-        cardLast4: recurring.stripeCardLast4 || recurring.cardLast4 || '',
-        cardSavedAt: recurring.stripeCardSavedAt || recurring.cardSavedAt || now,
-        ...stripeMigrationPatch(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, {
-          at: now,
-          cloverStoppedConfirmedAt: now,
-          cloverStoppedConfirmedBy: user.name || user.username || 'Owner',
-          note: 'Legacy owner-confirmed Stripe activation.'
-        }),
-        autopayManagedBy: 'WheelsonAuto / Stripe'
-      } : {
+      const cloverMigration = stripeMigration.rollbackToClover(recurring, {
+        at: now,
+        by: actor,
+        stripeStoppedConfirmedAt: current === 'stripe' ? now : '',
+        note: 'Owner confirmed Stripe was stopped before Clover reactivation.'
+      });
+      const patch = {
         paymentProvider: 'clover',
         provider: 'Clover',
         paymentSetup: 'Clover card saved and chargeable',
-        ...stripeMigrationPatch(recurring, stripeMigration.STATES.CLOVER_ACTIVE, {
-          at: now,
-          note: 'Owner confirmed Stripe was stopped before Clover reactivation.'
-        }),
+        ...stripeMigrationRecordPatch(cloverMigration),
+        stripeCutoverLocked: false,
         autopayManagedBy: 'WheelsonAuto / Clover'
       };
       Object.assign(patch, { status: 'Active', tone: 'good', autoChargeEnabled: true, providerSwitchedAt: now, providerSwitchedBy: user.name || user.username || 'Owner', updatedAt: now });

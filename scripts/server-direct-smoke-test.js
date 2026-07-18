@@ -3197,6 +3197,12 @@ async function main() {
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
     });
     assert(duplicateActivation.status === 409 && /already recorded/i.test(duplicateActivation.json.error || ''), 'A paid Clover billing period must block Stripe activation.');
+    const cancelledCutover = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'clover', action: 'cancel-cutover', confirmed: true }
+    });
+    assert(cancelledCutover.status === 200 && cancelledCutover.json.cancelled === true && cancelledCutover.json.recurring.paymentProvider === 'clover', 'The owner must be able to cancel a scheduled cutover while leaving Clover active.');
+    assert(cancelledCutover.json.recurring.stripeMigration.state === 'stripe_card_saved' && !cancelledCutover.json.recurring.stripeMigration.cutoverDate, 'Cancelling a cutover must return to card-saved preparation and clear the active cutover date.');
     const cleanCutoverRecurringId = 'direct-stripe-cutover-clean';
     const cleanCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     cleanCutoverState.json.recurringPayments.unshift({
