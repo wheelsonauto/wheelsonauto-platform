@@ -41,6 +41,14 @@ function paymentIsPaid(value) {
   return !!status && !/(fail|declin|void|refund|dispute|not found|rejected|cancel)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
 }
 
+function paymentConsumesBillingPeriod(value) {
+  const status = text(value).toLowerCase();
+  if (!status) return false;
+  if (paymentIsPaid(status)) return true;
+  if (/(refund|dispute|chargeback|retrieval)/.test(status)) return true;
+  return /(pending|processing|requesting|confirmation pending|in progress|requires[_ -]?capture|authori[sz]ed)/.test(status);
+}
+
 function hasCloverSource(row = {}) {
   return !!(text(row.cloverSubscriptionId) || text(row.cloverPaymentSource) || text(row.cloverCustomerId));
 }
@@ -223,6 +231,13 @@ function existingPaidPayment(data = {}, recurring = {}, dueDate) {
   return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentIsPaid(payment.status) && paymentPeriodKey(payment) === period) || null;
 }
 
+function existingBillingPeriodPayment(data = {}, recurring = {}, dueDate) {
+  const period = billingPeriodKey(dueDate);
+  if (!period) return null;
+  const payments = Array.isArray(data.payments) ? data.payments : [];
+  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentConsumesBillingPeriod(payment.status) && paymentPeriodKey(payment) === period) || null;
+}
+
 function isolatedProviderTestMode(environment = process.env) {
   const env = environment && typeof environment === 'object' ? environment : {};
   const deployedRuntime = String(env.RENDER || '').toLowerCase() === 'true'
@@ -324,7 +339,8 @@ function assertStripeCutoverLaunchReady(options = {}) {
 }
 
 function duplicateChargeError(existing, dueDate) {
-  const error = new Error('A successful payment is already recorded for the ' + validDateKey(dueDate) + ' billing period. WheelsonAuto blocked a duplicate charge.');
+  const status = text(existing && existing.status) || 'protected';
+  const error = new Error('A ' + status + ' payment record already occupies the ' + validDateKey(dueDate) + ' billing period. WheelsonAuto blocked a duplicate charge; review that record before any owner-approved additional charge.');
   error.code = 'duplicate_billing_period';
   error.statusCode = 409;
   error.existingPayment = existing || null;
@@ -332,7 +348,7 @@ function duplicateChargeError(existing, dueDate) {
 }
 
 function assertBillingPeriodOpen(data, recurring, dueDate, options = {}) {
-  const existing = existingPaidPayment(data, recurring, dueDate);
+  const existing = existingBillingPeriodPayment(data, recurring, dueDate);
   if (existing && options.allowAdditionalManualCharge !== true) throw duplicateChargeError(existing, dueDate);
   return existing;
 }
@@ -458,6 +474,7 @@ module.exports = {
   provider,
   validDateKey,
   paymentIsPaid,
+  paymentConsumesBillingPeriod,
   hasCloverSource,
   hasStripeCard,
   activeCutoverRow,
@@ -470,6 +487,7 @@ module.exports = {
   paymentPeriodKey,
   paymentLinkedToRecurring,
   existingPaidPayment,
+  existingBillingPeriodPayment,
   isolatedProviderTestMode,
   stripeCutoverLaunchError,
   stripeLaunchSafetyError,

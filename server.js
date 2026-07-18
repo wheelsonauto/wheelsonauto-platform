@@ -20651,11 +20651,11 @@ const server = http.createServer(async (req, res) => {
         if (nextRun < localDateKey()) {
           return json(res, 409, { ok: false, error: 'A protected Stripe cutover cannot be moved to a past billing date. Choose today or a future date, or cancel the cutover first.' });
         }
-        const existingCutoverPayment = stripeMigration.existingPaidPayment(data, recurring, nextRun);
+        const existingCutoverPayment = stripeMigration.existingBillingPeriodPayment(data, recurring, nextRun);
         if (existingCutoverPayment) {
           return json(res, 409, {
             ok: false,
-            error: 'A payment is already recorded for ' + nextRun + '. Choose the next unpaid billing date before rescheduling the Stripe cutover.',
+            error: 'A ' + (existingCutoverPayment.status || 'protected') + ' payment record already occupies ' + nextRun + '. Review it and choose a clear billing date before rescheduling the Stripe cutover.',
             payment: existingCutoverPayment
           });
         }
@@ -20833,8 +20833,8 @@ const server = http.createServer(async (req, res) => {
           if (!cutoverDate) return json(res, 409, { ok: false, error: 'Set the next charge date before scheduling a Stripe cutover.' });
           if (cutoverDate < localDateKey()) return json(res, 409, { ok: false, error: 'Choose a future or today cutover date. Past billing dates cannot be safely migrated.' });
           if (dueDate && cutoverDate !== dueDate) return json(res, 409, { ok: false, error: 'Set this customer\'s next charge date to the intended Stripe cutover date first. This keeps the billing period unambiguous.' });
-          const existing = stripeMigration.existingPaidPayment(data, recurring, cutoverDate);
-          if (existing) return json(res, 409, { ok: false, error: 'A payment is already recorded for the ' + cutoverDate + ' billing period. Select the next unpaid billing date before scheduling Stripe.', payment: existing });
+          const existing = stripeMigration.existingBillingPeriodPayment(data, recurring, cutoverDate);
+          if (existing) return json(res, 409, { ok: false, error: 'A ' + (existing.status || 'protected') + ' payment record already occupies the ' + cutoverDate + ' billing period. Review it and select a clear billing date before scheduling Stripe.', payment: existing });
           const patch = {
             paymentProvider: 'clover',
             provider: 'Clover',
@@ -20871,8 +20871,8 @@ const server = http.createServer(async (req, res) => {
         if (payload.cloverStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that the Clover recurring schedule was stopped before activating Stripe. This prevents duplicate charges.' });
         const cutoverDate = migration.cutoverDate || dueDate;
         if (cutoverDate && cutoverDate > localDateKey()) return json(res, 409, { ok: false, error: 'The protected cutover is scheduled for ' + cutoverDate + '. Keep Clover active until that date.' });
-        const existing = stripeMigration.existingPaidPayment(data, recurring, cutoverDate);
-        if (existing) return json(res, 409, { ok: false, error: 'A payment is already recorded for the ' + cutoverDate + ' billing period. WheelsonAuto will not activate Stripe for that already-paid period.', payment: existing });
+        const existing = stripeMigration.existingBillingPeriodPayment(data, recurring, cutoverDate);
+        if (existing) return json(res, 409, { ok: false, error: 'A ' + (existing.status || 'protected') + ' payment record already occupies the ' + cutoverDate + ' billing period. WheelsonAuto will not activate Stripe until that billing period is reviewed.', payment: existing });
         const patch = {
           paymentProvider: 'stripe',
           provider: 'Stripe',

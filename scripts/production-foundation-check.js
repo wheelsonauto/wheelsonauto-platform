@@ -637,6 +637,18 @@ async function main() {
     const periodState = { payments: [{ id: 'paid-clover-period', recurringPaymentId: recurring.id, paymentProvider: 'clover', billingPeriodKey: 'due:2026-07-24', status: 'Paid' }] };
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
+    ['Processing', 'Confirmation pending', 'Refunded', 'Partially refunded', 'Disputed', 'Chargeback'].forEach(status => {
+      const protectedPeriod = { payments: [{ id: 'protected-' + status.toLowerCase().replace(/\s+/g, '-'), recurringPaymentId: recurring.id, billingPeriodKey: 'due:2026-07-25', status }] };
+      assert.throws(() => stripeMigration.assertBillingPeriodOpen(protectedPeriod, recurring, '2026-07-25'), /duplicate charge/i, status + ' must keep the billing period closed until an owner deliberately reviews it.');
+      assert.strictEqual(stripeMigration.existingPaidPayment(protectedPeriod, recurring, '2026-07-25'), null, status + ' must not masquerade as verified successful-payment evidence.');
+      assert.strictEqual(stripeMigration.existingBillingPeriodPayment(protectedPeriod, recurring, '2026-07-25').status, status, status + ' must remain visible as duplicate-charge protection evidence.');
+    });
+    ['1x failed - retrying', 'Declined', 'Payment not found - check Clover', 'Voided', 'Stripe card authentication required'].forEach(status => {
+      const retryablePeriod = { payments: [{ id: 'retryable-' + status.toLowerCase().replace(/\s+/g, '-'), recurringPaymentId: recurring.id, billingPeriodKey: 'due:2026-07-26', status }] };
+      assert.strictEqual(stripeMigration.assertBillingPeriodOpen(retryablePeriod, recurring, '2026-07-26'), null, status + ' must remain eligible for the controlled retry or card-recovery workflow.');
+    });
+    const refundedPeriod = { payments: [{ id: 'owner-reviewed-refund', recurringPaymentId: recurring.id, billingPeriodKey: 'due:2026-07-27', status: 'Refunded' }] };
+    assert.strictEqual(stripeMigration.assertBillingPeriodOpen(refundedPeriod, recurring, '2026-07-27', { allowAdditionalManualCharge: true }).id, 'owner-reviewed-refund', 'Only an explicit owner-reviewed additional manual charge may override a protected billing period.');
 
     const sharedCustomerPlanA = { ...recurring, id: 'rec-shared-plan-a', cloverCustomerId: 'clover-shared-customer', cloverSubscriptionId: 'clover-subscription-a', stripeCustomerId: 'stripe-shared-customer' };
     const sharedCustomerPlanB = { ...recurring, id: 'rec-shared-plan-b', cloverCustomerId: 'clover-shared-customer', cloverSubscriptionId: 'clover-subscription-b', stripeCustomerId: 'stripe-shared-customer' };

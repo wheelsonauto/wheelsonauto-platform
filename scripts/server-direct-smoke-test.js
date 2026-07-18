@@ -3255,7 +3255,16 @@ async function main() {
       cookie: ownerCookie,
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
     });
-    assert(duplicateActivation.status === 409 && /already recorded/i.test(duplicateActivation.json.error || ''), 'A paid Clover billing period must block Stripe activation.');
+    assert(duplicateActivation.status === 409 && /occupies/i.test(duplicateActivation.json.error || ''), 'A paid Clover billing period must block Stripe activation.');
+    const processingCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    processingCutoverState.json.payments.find(payment => payment.id === 'direct-cutover-existing-paid').status = 'Processing';
+    const processingCutoverWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: processingCutoverState.json });
+    assert(processingCutoverWrite.status === 200 && processingCutoverWrite.json.ok, 'Processing billing-period payment setup failed.');
+    const processingActivation = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+    });
+    assert(processingActivation.status === 409 && /processing.*occupies/i.test(processingActivation.json.error || ''), 'An unresolved Clover billing period must block Stripe activation until reconciliation.');
     const cancelledCutover = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
       json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'clover', action: 'cancel-cutover', confirmed: true }
