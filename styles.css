@@ -7637,3 +7637,44 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .passtime-fleet-actions{display:grid;grid-template-columns:1fr 1fr;width:100%;margin-left:0}
   .passtime-fleet-actions .btn{width:100%;min-width:0}
 }
+
+/* Tablet API provider rows stay actionable without a hidden horizontal table. */
+@media(min-width:761px) and (max-width:920px){
+  .admin-shell .view-api-roadmap .api-provider-focused .table-wrap{overflow:visible!important}
+  .admin-shell .view-api-roadmap .api-provider-focused .table{display:block;width:100%;min-width:0!important}
+  .admin-shell .view-api-roadmap .api-provider-focused .table thead{display:none}
+  .admin-shell .view-api-roadmap .api-provider-focused .table tbody{display:grid;gap:8px}
+  .admin-shell .view-api-roadmap .api-provider-focused .table tr{
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:8px 10px;
+    width:100%;
+    min-width:0;
+    padding:10px;
+    border:1px solid rgba(220,226,231,.14);
+    border-radius:8px;
+    background:rgba(255,255,255,.035);
+  }
+  .admin-shell .view-api-roadmap .api-provider-focused .table td{
+    display:grid!important;
+    grid-template-columns:minmax(0,1fr);
+    gap:3px;
+    width:auto!important;
+    min-width:0;
+    padding:0!important;
+    border:0!important;
+    background:transparent!important;
+    overflow-wrap:anywhere;
+  }
+  .admin-shell .view-api-roadmap .api-provider-focused .table td:nth-child(n+3){grid-column:1/-1}
+  .admin-shell .view-api-roadmap .api-provider-focused .table td::before{
+    content:attr(data-label);
+    color:#a9aaac;
+    font-size:9px;
+    font-weight:850;
+    text-transform:uppercase;
+  }
+  .admin-shell .view-api-roadmap .api-provider-focused .table td:last-child{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .admin-shell .view-api-roadmap .api-provider-focused .table td:last-child::before{grid-column:1/-1}
+  .admin-shell .view-api-roadmap .api-provider-focused .table td:last-child .btn{width:100%;min-width:0}
+}

@@ -53,6 +53,8 @@ requireText('Mobile staff logo removal', '.admin-shell>.sidebar{display:none!imp
 requireText('Progressive action menu', '.action-menu-panel{');
 requireText('Closed progressive action menu guard', '.action-menu:not([open])>.action-menu-panel{display:none}');
 requireText('Tablet message compose fit guard', '@media(min-width:761px) and (max-width:900px)');
+requireText('Tablet API provider card guard', 'Tablet API provider rows stay actionable without a hidden horizontal table.');
+requireText('Tablet API provider action fit', '.admin-shell .view-api-roadmap .api-provider-focused .table td:last-child{grid-template-columns:repeat(2,minmax(0,1fr))}');
 requireText('Mobile tabs wrap guard', 'Mobile tab fit guard: section tabs wrap instead of clipping off-screen.');
 requireText('Mobile Operations tab grid', '.admin-shell .view-operations>.staff-tabs');
 requireText('Mobile manager tab grid', '.admin-shell .view-manager-portal>.staff-tabs');
