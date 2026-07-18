@@ -279,6 +279,27 @@ async function main() {
     assert(rowClaimsVehicle(cailahFile, cailahVehicle), 'A customer file must keep claiming the car whose vehicle ID, VIN, and tag match.');
     assert(!rowClaimsVehicle(cailahFile, natashaVehicle), 'Two same-year/model cars with different vehicle IDs, VINs, and tags must never clear each other customer files.');
     assert(rowClaimsVehicle({ customer: 'Legacy Customer', vehicle: '2018 Ford Fiesta Silver' }, cailahVehicle), 'A legacy row with no strong identity may still use an exact vehicle label as a fallback.');
+    const pendingAssignmentState = {
+      vehicles: [{ id: 'veh-direct-pending', name: '2026 Pending Intake Car', status: 'Ready', assignmentConflict: 'Old pending conflict' }],
+      customers: [{ id: 'cus-direct-pending', name: 'Pending Intake Customer', vehicleId: 'veh-direct-pending', vehicle: '2026 Pending Intake Car', status: 'Pending application' }],
+      contracts: [],
+      recurringPayments: [],
+      integrations: { clover: { recurringPlanMembers: [] } }
+    };
+    enrichLinkedProfiles(pendingAssignmentState);
+    assert(!pendingAssignmentState.vehicles[0].assignmentConflict, 'A pending application must not keep an old fleet assignment conflict alive.');
+    const conflictingAssignmentState = {
+      vehicles: [{ id: 'veh-direct-conflict', name: '2026 Conflict Check Car', status: 'Rented', currentCustomer: 'Primary Active Customer' }],
+      customers: [
+        { id: 'cus-direct-primary', name: 'Primary Active Customer', vehicleId: 'veh-direct-conflict', vehicle: '2026 Conflict Check Car', status: 'Active' },
+        { id: 'cus-direct-other', name: 'Different Active Customer', vehicleId: 'veh-direct-conflict', vehicle: '2026 Conflict Check Car', status: 'Active' }
+      ],
+      contracts: [],
+      recurringPayments: [],
+      integrations: { clover: { recurringPlanMembers: [] } }
+    };
+    enrichLinkedProfiles(conflictingAssignmentState);
+    assert(String(conflictingAssignmentState.vehicles[0].assignmentConflict || '').includes('Primary Active Customer') && String(conflictingAssignmentState.vehicles[0].assignmentConflict || '').includes('Different Active Customer'), 'Two truly active customer claims must still stay visible as an assignment conflict.');
     const cloverSubscription = mergeRecurringSubscriptionDetail({ id: 'SUB-CAILAH', active: true, amount: 21000 }, { id: 'SUB-CAILAH', customerUuid: 'ECOM-CUSTOMER-CAILAH', collectionMethod: 'CHARGE_AUTOMATICALLY', active: true });
     const hydratedCailah = mergeRecurringCustomerDetail(cloverSubscription, { id: 'ECOM-CUSTOMER-CAILAH', firstName: 'Cailah', lastName: 'Taylor', email: 'cailah@example.com', sources: { data: [{ id: 'clv_cailah_saved_source', brand: 'VISA', last4: '4242' }] } });
     const hydratedMembers = membersFromRecurringSubscriptions({ id: 'PLAN-WEEKLY-210', name: 'Weekly 210', amount: 21000, interval: 'WEEK' }, [hydratedCailah]);

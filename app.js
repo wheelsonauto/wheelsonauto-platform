@@ -3144,6 +3144,13 @@ window.addEventListener('click',function guardCustomerFileVehicleSave(event){
   notify(resolved.ambiguous?'Multiple cars match that search. Choose the exact VIN, tag, tracker, or vehicle from the list before saving.':'That vehicle search did not match one fleet car. Choose the exact vehicle from the list or clear the search before saving.');
 },true);
 
+// Navigation from a review/search modal should move to the workspace, not
+// leave an old overlay blocking the page underneath it.
+document.addEventListener('click',function closeModalBeforeWorkspaceNavigation(event){
+  var button=event.target.closest('#modalBackdrop button[data-view]');
+  if(button)closeModal();
+},true);
+
 var __woaSystemHealthStorageBase=systemHealthPanel;
 systemHealthPanel=function(){
   var html=__woaSystemHealthStorageBase();

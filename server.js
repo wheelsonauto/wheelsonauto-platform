@@ -5191,7 +5191,9 @@ function activeAssignmentRecord(row = {}) {
   const vehicleId = String(row.vehicleId || '').trim();
   if (!customer || !vehicleId) return null;
   const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' ')).toLowerCase();
-  if (/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped)/.test(status)) return null;
+  // A lead or pickup hold can reserve a car, but it must not compete with a live
+  // customer file/autopay assignment until the customer is actually active.
+  if (/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|pending application|pending approval|awaiting approval|awaiting pickup|pending pickup|\bdraft\b|\blead\b|\bprospect\b|\bnew\b)/.test(status)) return null;
   return { customer, vehicleId };
 }
 function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '') {
@@ -5242,7 +5244,12 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
   let vehicleAssignmentsSynced = 0, linkedRowsSynced = 0, serviceRowsSynced = 0, conflicts = 0;
   data.vehicles.forEach(vehicle => {
     const list = byVehicle.get(String(vehicle.id || '')) || [];
-    if (!list.length) return;
+    // A previous conflict must not remain forever after the records that caused
+    // it have been ended, returned, or moved back to pending intake.
+    if (!list.length) {
+      if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
+      return;
+    }
     const identityGroups = [];
     list.map(item => item.customer).filter(Boolean).forEach(name => {
       const group = identityGroups.find(names => names.some(saved => sameAssignmentCustomer(saved, name)));

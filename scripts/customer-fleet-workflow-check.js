@@ -51,6 +51,7 @@ const tollMatcher = finalFunctionSlice(server, 'tollImportMatch') + finalFunctio
 const tollClaim = finalFunctionSlice(server, 'prepareTollImport');
 const tollSave = finalFunctionSlice(server, 'importTollRows');
 const assignAutopayVehicle = finalFunctionSlice(server, 'assignAutopayVehicle');
+const activeAssignmentRecord = finalFunctionSlice(server, 'activeAssignmentRecord');
 const syncVehicleAssignmentsFromActiveRecords = finalFunctionSlice(server, 'syncVehicleAssignmentsFromActiveRecords');
 const addRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/update'", server.indexOf("if (url.pathname === '/api/recurring-payments' && req.method === 'POST')")));
 const updateRecurringRoute = server.slice(server.indexOf("if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST')"), server.indexOf("if (url.pathname === '/api/recurring-payments/remove'", server.indexOf("if (url.pathname === '/api/recurring-payments/update' && req.method === 'POST')")));
@@ -184,12 +185,17 @@ const removeRecurringRoute = server.slice(server.indexOf("if (url.pathname === '
   'source: \'WheelsonAuto autopay\''
 ].forEach(text => requireText('Autopay creates full customer file', addRecurringRoute, text));
 
+requireText('Review modal navigation should close the old overlay', app, 'closeModalBeforeWorkspaceNavigation');
+requireText('Review modal navigation should target workspace links only', app, "#modalBackdrop button[data-view]");
+
 [
   'activeAssignmentRecord',
   'syncRowVehicleIdentity',
   'vehicle.currentCustomer = customer',
   'job.previousCustomer',
   'assignmentConflict',
+  'if (!list.length)',
+  'delete vehicle.assignmentConflict',
   'data.integrations.clover.recurringPlanMembers',
   'serviceRowsSynced'
 ].forEach(text => requireText('Server active assignment truth repair', syncVehicleAssignmentsFromActiveRecords, text));
@@ -197,5 +203,6 @@ const removeRecurringRoute = server.slice(server.indexOf("if (url.pathname === '
 requireText('Profile enrichment should run assignment truth repair', server, 'const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data)');
 requireText('Autopay schedule update should refresh linked truth layer before save', updateRecurringRoute, 'enrichLinkedProfiles(data)');
 requireText('Autopay removal should refresh linked truth layer before save', removeRecurringRoute, 'enrichLinkedProfiles(data)');
+requireText('Pending intake rows must not claim a live assignment', activeAssignmentRecord, 'pending application');
 
 console.log('Customer/fleet workflow check passed: searchable vehicle pickers, reassignment, return/end customer, and backend autopay assignment truth layer are wired.');
