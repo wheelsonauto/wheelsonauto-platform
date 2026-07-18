@@ -76,6 +76,7 @@ async function main() {
     const idempotencyRequest = { recurringPaymentId: 'rec-postgres-runtime', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };
     const firstIdempotencyClaim = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
     assert.strictEqual(firstIdempotencyClaim.accepted, true, 'The first PostgreSQL Stripe billing-period claim must be accepted.');
+    assert(firstIdempotencyClaim.claimToken, 'A PostgreSQL Stripe billing-period claim must receive a unique lease token.');
     const activeIdempotencyDuplicate = await competingRepository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
     assert.strictEqual(activeIdempotencyDuplicate.inProgress, true, 'A competing PostgreSQL worker must not charge the same billing period while the first worker is active.');
     await assert.rejects(
@@ -84,10 +85,13 @@ async function main() {
       'A PostgreSQL Stripe billing-period claim must reject a changed amount while the original request is protected.'
     );
     await repository.failIdempotencyKey(idempotencyScope, idempotencyKey, new Error('controlled decline'));
+    assert.strictEqual(await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_failed_postgres_claim_must_not_settle' }, { claimToken: firstIdempotencyClaim.claimToken }), false, 'A failed PostgreSQL Stripe claim must not be converted to paid by a late worker response.');
     const retriedIdempotencyClaim = await competingRepository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
     assert.strictEqual(retriedIdempotencyClaim.accepted, true, 'A terminal PostgreSQL Stripe decline must permit a corrected retry.');
     assert.strictEqual(retriedIdempotencyClaim.retried, true, 'A corrected PostgreSQL Stripe retry must be marked as a retry.');
-    await competingRepository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_postgres_runtime_idempotency_1', status: 'succeeded' });
+    assert.notStrictEqual(retriedIdempotencyClaim.claimToken, firstIdempotencyClaim.claimToken, 'A retried PostgreSQL Stripe billing-period claim must replace the old worker lease token.');
+    assert.strictEqual(await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_stale_postgres_worker_must_not_win' }, { claimToken: firstIdempotencyClaim.claimToken }), false, 'A stale PostgreSQL worker must not complete a newer billing-period claim.');
+    await competingRepository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_postgres_runtime_idempotency_1', status: 'succeeded' }, { claimToken: retriedIdempotencyClaim.claimToken });
     const completedIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
     assert.strictEqual(completedIdempotencyDuplicate.completed, true, 'A completed PostgreSQL Stripe billing-period claim must remain deduplicated after a process handoff.');
     assert.strictEqual(completedIdempotencyDuplicate.response.paymentIntentId, 'pi_postgres_runtime_idempotency_1', 'A completed PostgreSQL Stripe billing-period claim must keep its reconciliation response.');

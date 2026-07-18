@@ -8,6 +8,7 @@ const root = path.join(__dirname, '..');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const nativeSite = fs.readFileSync(path.join(root, 'native-site.js'), 'utf8');
+const stateRepository = fs.readFileSync(path.join(root, 'state-repository.js'), 'utf8');
 
 async function run() {
   const form = stripeAdapter.formBody({
@@ -98,9 +99,13 @@ async function run() {
     'claimIdempotencyKey',
     'stripe_recurring_charge',
     'stripeRecurringChargeClaimKey',
+    'idempotencyClaimToken',
     'completeStripeRecurringChargeClaim',
     'failStripeRecurringChargeClaim'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
+  ['claim_token', 'idempotencyClaimToken', 'claimIdempotencyKey', 'completeIdempotencyKey', 'failIdempotencyKey'].forEach(value => {
+    assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);
+  });
   assert(app.includes('id="rPaymentProvider"'), 'Admin recurring setup must expose a Clover/Stripe provider choice.');
   assert(app.includes("r.stripeCustomerId&&r.stripePaymentMethodId"), 'Admin charge readiness must recognize only complete Stripe saved-card records.');
   assert(app.includes('stripe card update required'), 'Admin payment status must clearly show when Stripe requires a customer card update.');

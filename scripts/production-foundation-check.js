@@ -34,6 +34,7 @@ async function main() {
     const idempotencyRequest = { recurringPaymentId: 'rec-foundation-1', billingPeriodKey: 'due:2026-07-24', amountCents: 22900 };
     const firstJsonIdempotencyClaim = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
     assert.strictEqual(firstJsonIdempotencyClaim.accepted, true, 'The first local Stripe billing-period claim must be accepted.');
+    assert(firstJsonIdempotencyClaim.claimToken, 'A local Stripe billing-period claim must receive a unique lease token.');
     const activeJsonIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, idempotencyRequest);
     assert.strictEqual(activeJsonIdempotencyDuplicate.inProgress, true, 'A concurrent local Stripe billing-period claim must remain protected while the first request is processing.');
     await assert.rejects(
@@ -42,10 +43,13 @@ async function main() {
       'A protected Stripe billing period must reject a changed amount until the first request reaches a terminal state.'
     );
     await repository.failIdempotencyKey(idempotencyScope, idempotencyKey, new Error('controlled decline'));
+    assert.strictEqual(await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_failed_claim_must_not_settle' }, { claimToken: firstJsonIdempotencyClaim.claimToken }), false, 'A failed local Stripe claim must not be converted to paid by a late worker response.');
     const retryJsonIdempotencyClaim = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
     assert.strictEqual(retryJsonIdempotencyClaim.accepted, true, 'A terminal local Stripe decline must allow a deliberate corrected retry.');
     assert.strictEqual(retryJsonIdempotencyClaim.retried, true, 'A corrected local Stripe retry must be labeled as a retry.');
-    await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_foundation_idempotency_1', status: 'succeeded' });
+    assert.notStrictEqual(retryJsonIdempotencyClaim.claimToken, firstJsonIdempotencyClaim.claimToken, 'A retried local Stripe billing-period claim must replace the old worker lease token.');
+    assert.strictEqual(await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_stale_worker_must_not_win' }, { claimToken: firstJsonIdempotencyClaim.claimToken }), false, 'A stale local Stripe worker must not complete a newer billing-period claim.');
+    await repository.completeIdempotencyKey(idempotencyScope, idempotencyKey, { paymentIntentId: 'pi_foundation_idempotency_1', status: 'succeeded' }, { claimToken: retryJsonIdempotencyClaim.claimToken });
     const completedJsonIdempotencyDuplicate = await repository.claimIdempotencyKey(idempotencyScope, idempotencyKey, { ...idempotencyRequest, amountCents: 23000 });
     assert.strictEqual(completedJsonIdempotencyDuplicate.completed, true, 'A completed local Stripe billing-period claim must be permanently deduplicated.');
     assert.strictEqual(completedJsonIdempotencyDuplicate.response.paymentIntentId, 'pi_foundation_idempotency_1', 'A completed local Stripe billing-period claim must retain its reconciliation result.');

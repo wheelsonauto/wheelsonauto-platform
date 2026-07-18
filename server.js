@@ -13234,16 +13234,16 @@ function stripeIdempotencyPayment(data, idempotencyKey) {
     return String(payment && payment.stripeIdempotencyKey || '') === String(idempotencyKey || '') && stripeMigration.paymentIsPaid(payment && payment.status);
   }) || null;
 }
-async function failStripeRecurringChargeClaim(scope, key, error) {
+async function failStripeRecurringChargeClaim(scope, key, error, claimToken = '') {
   try {
-    await STATE_REPOSITORY.failIdempotencyKey(scope, key, error);
+    await STATE_REPOSITORY.failIdempotencyKey(scope, key, error, { claimToken });
   } catch (claimError) {
     await recordOperationalFailure('stripe-idempotency-release', claimError, { route: 'Stripe saved-card charge', recurringPaymentId: String(key || '').slice(0, 160) });
   }
 }
-async function completeStripeRecurringChargeClaim(scope, key, response = {}) {
+async function completeStripeRecurringChargeClaim(scope, key, response = {}, claimToken = '') {
   try {
-    await STATE_REPOSITORY.completeIdempotencyKey(scope, key, response);
+    await STATE_REPOSITORY.completeIdempotencyKey(scope, key, response, { claimToken });
   } catch (claimError) {
     await recordOperationalFailure('stripe-idempotency-complete', claimError, { route: 'Stripe saved-card charge', recurringPaymentId: String(key || '').slice(0, 160) });
   }
@@ -13298,6 +13298,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         : 'Another WheelsonAuto worker is already processing this protected Stripe billing period.'
     }, attempt);
   }
+  const idempotencyClaimToken = String(durableClaim.claimToken || '');
   let intent;
   try {
     intent = await stripe.createPaymentIntent({
@@ -13346,7 +13347,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         authenticationRequiredAt: new Date().toISOString(),
         providerError: String(error && (error.providerError || error.message) || '').slice(0, 500)
       });
-      await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error);
+      await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error, idempotencyClaimToken);
       throw stripeAuthenticationRequiredError(error, protectedAttempt, error && error.paymentIntent);
     }
     updateStripeChargeAttempt(data, recurring, attempt, {
@@ -13355,7 +13356,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
       paymentIntentId: stripeObjectId(error && error.paymentIntent),
       providerError: String(error && error.message || error).slice(0, 500)
     });
-    await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error);
+    await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error, idempotencyClaimToken);
     throw error;
   }
   const paid = String(intent.status || '').toLowerCase() === 'succeeded';
@@ -13388,7 +13389,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
         authenticationRequiredAt: new Date().toISOString(),
         providerError: String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe requires customer authentication.')
       });
-      await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, intent);
+      await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, intent, idempotencyClaimToken);
       throw stripeAuthenticationRequiredError(intent, protectedAttempt, intent);
     }
     updateStripeChargeAttempt(data, recurring, attempt, {
@@ -13400,7 +13401,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     const error = new Error('Stripe returned ' + String(intent.status || 'an unconfirmed payment result') + '. The next charge date was not advanced.');
     error.code = 'stripe_' + String(intent.status || 'unconfirmed');
     error.paymentIntent = intent;
-    await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error);
+    await failStripeRecurringChargeClaim(idempotencyScope, idempotencyClaimKey, error, idempotencyClaimToken);
     throw error;
   }
   const paymentAt = new Date(Number(intent.created || 0) * 1000 || Date.now());
@@ -13487,7 +13488,7 @@ async function chargeStripeSavedCard(data, recurring, payload = {}) {
     recurringPaymentId: recurring.id || '',
     billingPeriodKey,
     status: 'succeeded'
-  });
+  }, idempotencyClaimToken);
   return { charge: intent, payment, recurring };
 }
 async function chargeSavedRecurringCard(data, payload, req) {

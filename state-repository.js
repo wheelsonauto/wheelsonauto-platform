@@ -25,6 +25,12 @@ function idempotencyRequestHash(request = {}) {
   return checksum(request && typeof request === 'object' ? request : { value: request });
 }
 
+function idempotencyClaimToken() {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(24).toString('hex');
+}
+
 function idempotencyScopeKey(scope, key) {
   const normalizedScope = String(scope || '').trim().slice(0, 120);
   const normalizedKey = String(key || '').trim().slice(0, 255);
@@ -359,6 +365,7 @@ class JsonStateRepository {
       const next = {
         ...existing,
         status: 'claimed',
+        claimToken: idempotencyClaimToken(),
         requestHash,
         attempts: Number(existing.attempts || 0) + 1,
         processingStartedAt: now,
@@ -367,10 +374,12 @@ class JsonStateRepository {
         response: null
       };
       this.idempotencyClaims.set(mapKey, next);
-      return { accepted: true, duplicate: false, reclaimed: existing.status === 'claimed', retried: existing.status === 'failed', scope: identity.scope, key: identity.key, attempts: next.attempts };
+      return { accepted: true, duplicate: false, reclaimed: existing.status === 'claimed', retried: existing.status === 'failed', scope: identity.scope, key: identity.key, claimToken: next.claimToken, attempts: next.attempts };
     }
+    const claimToken = idempotencyClaimToken();
     this.idempotencyClaims.set(mapKey, {
       status: 'claimed',
+      claimToken,
       requestHash,
       attempts: 1,
       response: null,
@@ -380,24 +389,31 @@ class JsonStateRepository {
       processingStartedAt: now
     });
     this.pruneIdempotencyClaims();
-    return { accepted: true, duplicate: false, scope: identity.scope, key: identity.key, attempts: 1 };
+    return { accepted: true, duplicate: false, scope: identity.scope, key: identity.key, claimToken, attempts: 1 };
   }
 
-  async completeIdempotencyKey(scope, key, response = {}) {
+  async completeIdempotencyKey(scope, key, response = {}, options = {}) {
     const identity = idempotencyScopeKey(scope, key);
     const mapKey = [this.organizationId, identity.scope, identity.key].join('|');
     const existing = this.idempotencyClaims.get(mapKey);
     if (!existing) throw new Error('The durable idempotency claim was not found while completing the money action.');
+    const claimToken = String(options.claimToken || '').trim();
+    if (String(existing.status || '') !== 'claimed') return false;
+    if (claimToken && claimToken !== String(existing.claimToken || '')) return false;
     const now = new Date().toISOString();
     this.idempotencyClaims.set(mapKey, { ...existing, status: 'completed', response: clone(response || {}), completedAt: now, updatedAt: now, lastError: '' });
     this.pruneIdempotencyClaims();
+    return true;
   }
 
-  async failIdempotencyKey(scope, key, error) {
+  async failIdempotencyKey(scope, key, error, options = {}) {
     const identity = idempotencyScopeKey(scope, key);
     const mapKey = [this.organizationId, identity.scope, identity.key].join('|');
     const existing = this.idempotencyClaims.get(mapKey);
-    if (!existing) return;
+    if (!existing) return false;
+    const claimToken = String(options.claimToken || '').trim();
+    if (String(existing.status || '') !== 'claimed') return false;
+    if (claimToken && claimToken !== String(existing.claimToken || '')) return false;
     this.idempotencyClaims.set(mapKey, {
       ...existing,
       status: 'failed',
@@ -405,6 +421,7 @@ class JsonStateRepository {
       updatedAt: new Date().toISOString()
     });
     this.pruneIdempotencyClaims();
+    return true;
   }
 
   async readJobErrors() {
@@ -613,6 +630,7 @@ class PostgresStateRepository {
           key TEXT NOT NULL,
           request_hash TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'claimed',
+          claim_token TEXT NOT NULL DEFAULT '',
           response JSONB,
           attempts INTEGER NOT NULL DEFAULT 0,
           processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -623,6 +641,7 @@ class PostgresStateRepository {
           PRIMARY KEY (organization_id, scope, key)
         )`);
         await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0');
+        await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT \'\'');
         await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now()');
         await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT \'\'');
         await client.query('ALTER TABLE woa_idempotency_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()');
@@ -855,7 +874,7 @@ class PostgresStateRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const existing = await client.query(`SELECT request_hash, status, response, attempts, processing_started_at
+      const existing = await client.query(`SELECT request_hash, status, claim_token, response, attempts, processing_started_at
         FROM woa_idempotency_keys
         WHERE organization_id = $1 AND scope = $2 AND key = $3
         FOR UPDATE`, [this.organizationId, identity.scope, identity.key]);
@@ -874,18 +893,20 @@ class PostgresStateRepository {
           await client.query('COMMIT');
           return { accepted: false, duplicate: true, inProgress: true, scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 1) };
         }
+        const claimToken = idempotencyClaimToken();
         await client.query(`UPDATE woa_idempotency_keys
-          SET request_hash = $4, status = 'claimed', response = NULL, attempts = attempts + 1,
+          SET request_hash = $4, claim_token = $5, status = 'claimed', response = NULL, attempts = attempts + 1,
             processing_started_at = now(), last_error = '', updated_at = now(), completed_at = NULL
-          WHERE organization_id = $1 AND scope = $2 AND key = $3`, [this.organizationId, identity.scope, identity.key, requestHash]);
+          WHERE organization_id = $1 AND scope = $2 AND key = $3`, [this.organizationId, identity.scope, identity.key, requestHash, claimToken]);
         await client.query('COMMIT');
-        return { accepted: true, duplicate: false, reclaimed: status === 'claimed', retried: status === 'failed', scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 0) + 1 };
+        return { accepted: true, duplicate: false, reclaimed: status === 'claimed', retried: status === 'failed', scope: identity.scope, key: identity.key, claimToken, attempts: Number(row.attempts || 0) + 1 };
       }
+      const claimToken = idempotencyClaimToken();
       await client.query(`INSERT INTO woa_idempotency_keys (
-        organization_id, scope, key, request_hash, status, attempts, processing_started_at, updated_at
-      ) VALUES ($1, $2, $3, $4, 'claimed', 1, now(), now())`, [this.organizationId, identity.scope, identity.key, requestHash]);
+        organization_id, scope, key, request_hash, claim_token, status, attempts, processing_started_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, 'claimed', 1, now(), now())`, [this.organizationId, identity.scope, identity.key, requestHash, claimToken]);
       await client.query('COMMIT');
-      return { accepted: true, duplicate: false, scope: identity.scope, key: identity.key, attempts: 1 };
+      return { accepted: true, duplicate: false, scope: identity.scope, key: identity.key, claimToken, attempts: 1 };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
@@ -894,22 +915,36 @@ class PostgresStateRepository {
     }
   }
 
-  async completeIdempotencyKey(scope, key, response = {}) {
+  async completeIdempotencyKey(scope, key, response = {}, options = {}) {
     const identity = idempotencyScopeKey(scope, key);
+    const claimToken = String(options.claimToken || '').trim();
     await this.ensureSchema();
+    const tokenCondition = claimToken ? ' AND claim_token = $5' : '';
+    const params = [this.organizationId, identity.scope, identity.key, JSON.stringify(response || {})];
+    if (claimToken) params.push(claimToken);
     const result = await this.pool.query(`UPDATE woa_idempotency_keys
       SET status = 'completed', response = $4::jsonb, completed_at = now(), updated_at = now(), last_error = ''
-      WHERE organization_id = $1 AND scope = $2 AND key = $3
-      RETURNING attempts`, [this.organizationId, identity.scope, identity.key, JSON.stringify(response || {})]);
-    if (!result.rowCount) throw new Error('The durable idempotency claim was not found while completing the money action.');
+      WHERE organization_id = $1 AND scope = $2 AND key = $3 AND status = 'claimed'${tokenCondition}
+      RETURNING attempts`, params);
+    if (!result.rowCount) {
+      if (claimToken) return false;
+      throw new Error('The durable idempotency claim was not found while completing the money action.');
+    }
+    return true;
   }
 
-  async failIdempotencyKey(scope, key, error) {
+  async failIdempotencyKey(scope, key, error, options = {}) {
     const identity = idempotencyScopeKey(scope, key);
+    const claimToken = String(options.claimToken || '').trim();
     await this.ensureSchema();
-    await this.pool.query(`UPDATE woa_idempotency_keys
+    const tokenCondition = claimToken ? ' AND claim_token = $5' : '';
+    const params = [this.organizationId, identity.scope, identity.key, String(error && error.message || error || '').slice(0, 3000)];
+    if (claimToken) params.push(claimToken);
+    const result = await this.pool.query(`UPDATE woa_idempotency_keys
       SET status = 'failed', last_error = $4, updated_at = now()
-      WHERE organization_id = $1 AND scope = $2 AND key = $3`, [this.organizationId, identity.scope, identity.key, String(error && error.message || error || '').slice(0, 3000)]);
+      WHERE organization_id = $1 AND scope = $2 AND key = $3 AND status = 'claimed'${tokenCondition}
+      RETURNING attempts`, params);
+    return result.rowCount > 0;
   }
 
   async recordJobError(source, error, context = {}, severity = 'error') {
