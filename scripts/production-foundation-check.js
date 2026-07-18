@@ -241,6 +241,12 @@ async function main() {
     assert.strictEqual(jsonJobErrors[0].context.route, 'foundation check', 'The JSON fallback error record must retain safe context.');
     assert.strictEqual(await fs.readFile(dataFile, 'utf8'), stateBeforeJsonJobError, 'Recording a JSON fallback operational error must not rewrite business data.json.');
     assert((await fs.stat(dataFile + '.job-errors.json')).size > 0, 'The JSON fallback error log must live beside, not inside, the protected business state file.');
+    const resolvedJsonJobError = await repository.resolveJobError(jsonJobErrors[0].id, { resolvedBy: 'foundation owner', note: 'Controlled review completed' });
+    assert(resolvedJsonJobError && resolvedJsonJobError.resolvedAt && resolvedJsonJobError.resolvedBy === 'foundation owner', 'The JSON fallback must retain who reviewed an operational error and when.');
+    assert.strictEqual(resolvedJsonJobError.resolutionNote, 'Controlled review completed', 'The JSON fallback must retain the owner review note.');
+    assert.strictEqual((await repository.recentJobErrors(5)).length, 0, 'A reviewed JSON fallback error must leave the open launch queue without being deleted.');
+    assert.strictEqual(await repository.resolveJobError(jsonJobErrors[0].id, { resolvedBy: 'foundation owner' }), null, 'A resolved job error must not be resolved twice.');
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), stateBeforeJsonJobError, 'Resolving a JSON fallback operational error must not rewrite business data.json.');
     const aiReservation = await repository.reserveAiUsage({ dayKey: '2026-07-17', monthKey: '2026-07', dailyLimit: 1, monthlyLimit: 2 });
     assert.strictEqual(aiReservation.allowed, true, 'The local development guard must reserve the first Star model request.');
     const aiBlocked = await repository.reserveAiUsage({ dayKey: '2026-07-17', monthKey: '2026-07', dailyLimit: 1, monthlyLimit: 2 });
@@ -302,7 +308,7 @@ async function main() {
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
 
-    console.log('Production foundation check passed: atomic state fallback, durable money-action idempotency, migration-proof guard, checksum fail-closed behavior, controlled recovery-drill evidence, immutable identity preflight, encrypted private storage, tamper rejection, rate-limited background monitoring, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
+    console.log('Production foundation check passed: atomic state fallback, durable money-action idempotency, migration-proof guard, checksum fail-closed behavior, controlled recovery-drill evidence, immutable identity preflight, encrypted private storage, tamper rejection, reviewable background monitoring, Star request caps, durable job-lock contract, and Clover-to-Stripe duplicate protection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

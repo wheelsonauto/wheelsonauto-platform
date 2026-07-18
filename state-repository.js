@@ -517,11 +517,22 @@ class JsonStateRepository {
         message: String(row.message || 'Unknown error').slice(0, 3000),
         context: clone(row.context || {}),
         createdAt: String(row.createdAt || row.created_at || ''),
-        resolvedAt: String(row.resolvedAt || row.resolved_at || '')
+        resolvedAt: String(row.resolvedAt || row.resolved_at || ''),
+        resolvedBy: String(row.resolvedBy || row.resolved_by || '').slice(0, 160),
+        resolutionNote: String(row.resolutionNote || row.resolution_note || '').slice(0, 1000)
       }));
     } catch {
       return [];
     }
+  }
+
+  async writeJobErrors(rows = []) {
+    if (!this.jobErrorFile) return;
+    const directory = path.dirname(this.jobErrorFile);
+    const temporary = this.jobErrorFile + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(temporary, JSON.stringify({ version: 1, errors: rows.slice(0, this.jobErrorLimit) }, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.rename(temporary, this.jobErrorFile);
   }
 
   async recordJobError(source, error, context = {}, severity = 'error') {
@@ -536,11 +547,7 @@ class JsonStateRepository {
         context: clone(context || {}),
         createdAt: new Date().toISOString()
       };
-      const directory = path.dirname(this.jobErrorFile);
-      const temporary = this.jobErrorFile + '.' + process.pid + '.' + Date.now() + '.' + crypto.randomBytes(4).toString('hex') + '.tmp';
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(temporary, JSON.stringify({ version: 1, errors: [entry, ...rows].slice(0, this.jobErrorLimit) }, null, 2), 'utf8');
-      await fs.rename(temporary, this.jobErrorFile);
+      await this.writeJobErrors([entry, ...rows]);
     };
     const pending = this.jobErrorWrite.then(run, run);
     this.jobErrorWrite = pending.catch(() => {});
@@ -552,6 +559,27 @@ class JsonStateRepository {
     return (await this.readJobErrors())
       .filter(row => !row.resolvedAt)
       .slice(0, Math.max(1, Math.min(100, Number(limit || 20))));
+  }
+
+  async resolveJobError(id, options = {}) {
+    const targetId = String(id || '').trim();
+    if (!targetId) throw new Error('A job-error ID is required.');
+    const run = async () => {
+      const rows = await this.readJobErrors();
+      const index = rows.findIndex(row => row.id === targetId && !row.resolvedAt);
+      if (index < 0) return null;
+      rows[index] = {
+        ...rows[index],
+        resolvedAt: new Date().toISOString(),
+        resolvedBy: String(options.resolvedBy || 'owner').trim().slice(0, 160),
+        resolutionNote: String(options.note || 'Reviewed by owner').trim().slice(0, 1000)
+      };
+      await this.writeJobErrors(rows);
+      return clone(rows[index]);
+    };
+    const pending = this.jobErrorWrite.then(run, run);
+    this.jobErrorWrite = pending.catch(() => {});
+    return pending;
   }
 
   async listSnapshots() {
@@ -781,6 +809,8 @@ class PostgresStateRepository {
           resolved_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )`);
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS resolved_by TEXT NOT NULL DEFAULT \'\'');
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS resolution_note TEXT NOT NULL DEFAULT \'\'');
         await client.query('CREATE INDEX IF NOT EXISTS woa_job_errors_open_idx ON woa_job_errors (organization_id, resolved_at, created_at DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_ai_usage (
           organization_id TEXT NOT NULL,
@@ -1066,6 +1096,34 @@ class PostgresStateRepository {
       context: row.context || {},
       createdAt: row.created_at
     }));
+  }
+
+  async resolveJobError(id, options = {}) {
+    const targetId = Number(id);
+    if (!Number.isSafeInteger(targetId) || targetId <= 0) throw new Error('A valid PostgreSQL job-error ID is required.');
+    await this.ensureSchema();
+    const result = await this.pool.query(`UPDATE woa_job_errors
+      SET resolved_at = now(), resolved_by = $3, resolution_note = $4
+      WHERE organization_id = $1 AND id = $2 AND resolved_at IS NULL
+      RETURNING id, source, severity, message, context, created_at, resolved_at, resolved_by, resolution_note`, [
+      this.organizationId,
+      targetId,
+      String(options.resolvedBy || 'owner').trim().slice(0, 160),
+      String(options.note || 'Reviewed by owner').trim().slice(0, 1000)
+    ]);
+    if (!result.rowCount) return null;
+    const row = result.rows[0];
+    return {
+      id: Number(row.id),
+      source: row.source,
+      severity: row.severity,
+      message: row.message,
+      context: row.context || {},
+      createdAt: row.created_at,
+      resolvedAt: row.resolved_at,
+      resolvedBy: row.resolved_by,
+      resolutionNote: row.resolution_note
+    };
   }
 
   async reserveAiUsage(options = {}) {

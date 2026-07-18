@@ -18847,6 +18847,22 @@ const server = http.createServer(async (req, res) => {
         ]
       });
     }
+    if (url.pathname === '/api/system/job-errors' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can review operational job errors.' });
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') || 30)));
+      return json(res, 200, { ok: true, errors: await STATE_REPOSITORY.recentJobErrors(limit) });
+    }
+    const jobErrorResolveMatch = url.pathname.match(/^\/api\/system\/job-errors\/([^/]+)\/resolve$/);
+    if (jobErrorResolveMatch && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can resolve operational job errors.' });
+      const payload = await readJsonBody(req);
+      const errorId = decodeURIComponent(jobErrorResolveMatch[1]);
+      const note = String(payload.note || 'Reviewed from the controlled launch preflight').trim().slice(0, 1000);
+      const resolvedBy = String(user.username || user.email || user.name || 'owner').trim().slice(0, 160);
+      const resolved = await STATE_REPOSITORY.resolveJobError(errorId, { note, resolvedBy });
+      if (!resolved) return json(res, 404, { ok: false, error: 'That open job error was not found or was already resolved.' });
+      return json(res, 200, { ok: true, resolved });
+    }
     if (url.pathname === '/api/system/infrastructure/document-storage/validate' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can validate private document storage.' });
       const data = await readData();

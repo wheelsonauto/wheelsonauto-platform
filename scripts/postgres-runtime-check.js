@@ -205,6 +205,16 @@ async function main() {
     const secondWrite = await repository.write(secondState, { reason: 'runtime test changed state', actor: 'test' });
     assert(secondWrite.version > firstWrite.version, 'The second PostgreSQL write must advance the version.');
 
+    await repository.recordJobError('postgres-runtime-monitor', new Error('Controlled runtime job failure'), { route: 'runtime check' });
+    const openRuntimeErrors = await repository.recentJobErrors(5);
+    const runtimeJobError = openRuntimeErrors.find(row => row.source === 'postgres-runtime-monitor');
+    assert(runtimeJobError && runtimeJobError.id, 'PostgreSQL must retain a durable open job failure for owner review.');
+    const resolvedRuntimeError = await repository.resolveJobError(runtimeJobError.id, { resolvedBy: 'runtime owner', note: 'Controlled PostgreSQL review completed' });
+    assert(resolvedRuntimeError && resolvedRuntimeError.resolvedAt && resolvedRuntimeError.resolvedBy === 'runtime owner', 'PostgreSQL must retain durable job-error review evidence.');
+    assert.strictEqual(resolvedRuntimeError.resolutionNote, 'Controlled PostgreSQL review completed', 'PostgreSQL must retain the controlled resolution note.');
+    assert.strictEqual((await repository.recentJobErrors(5)).some(row => row.id === runtimeJobError.id), false, 'A reviewed PostgreSQL job error must leave the open launch queue.');
+    assert.strictEqual(await repository.resolveJobError(runtimeJobError.id, { resolvedBy: 'runtime owner' }), null, 'PostgreSQL must not resolve the same error twice.');
+
     const firstAiReservation = await repository.reserveAiUsage({ dayKey: '2026-07-17', monthKey: '2026-07', dailyLimit: 1, monthlyLimit: 2 });
     assert.strictEqual(firstAiReservation.allowed, true, 'PostgreSQL must atomically reserve the first Star model request.');
     const blockedAiReservation = await repository.reserveAiUsage({ dayKey: '2026-07-17', monthKey: '2026-07', dailyLimit: 1, monthlyLimit: 2 });
@@ -263,7 +273,7 @@ async function main() {
       stateChecksum: true,
       migrationProof: true
     });
-    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
+    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, Stripe money-action idempotency, reviewable job errors, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await competingRepository.close();

@@ -3206,6 +3206,15 @@ function liveLaunchGateDetail(item,ready,fallback){
   if(ready)return item&&item.message||item&&item.summary||fallback||'Current proof is present.';
   return item&&item.error||item&&item.message||fallback||'Current proof is missing or stale.'
 }
+function liveLaunchJobErrorReview(jobErrors){
+  jobErrors=Array.isArray(jobErrors)?jobErrors:[];
+  if(!jobErrors.length)return'<div class="notice good">No unresolved background job or webhook failures are waiting for owner review.</div>';
+  var visible=jobErrors.slice(0,8),rows=visible.map(function(row){
+    var severity=String(row.severity||'error').toLowerCase(),tone=severity==='warning'||severity==='warn'?'warn':'bad';
+    return[esc(shortDate(row.createdAt)||row.createdAt||'Unknown time'),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>','<button class="btn" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>']
+  });
+  return table(['When','Source','Failure','Action'],rows)+(jobErrors.length>visible.length?'<div class="notice mini">Showing the newest '+visible.length+' of '+jobErrors.length+'. Review these, then reopen preflight for the next set.</div>':'')
+}
 function liveLaunchPreflightModal(preflight){
   preflight=preflight||{};
   var database=preflight.database||{},recoveryDrill=preflight.recoveryDrill||database.recoveryDrill||{},storage=preflight.documentStorage||{},storageValidation=preflight.documentStorageValidation||{},stripeWebhook=preflight.stripeWebhook||{},identityWebhook=preflight.stripeIdentityWebhook||{},alerts=preflight.operationalAlerts||{},telnyx=preflight.telnyxMessaging||{},resend=preflight.resendEmail||{},star=preflight.starAi||{},owner=preflight.ownerAuthentication||{};
@@ -3230,7 +3239,7 @@ function liveLaunchPreflightModal(preflight){
   if(identityWarnings.length)issues.push('Complete VIN review for '+identityWarnings.length+' vehicle'+(identityWarnings.length===1?'':'s')+' before cutover.');
   if(jobErrors.length)issues.push('Review '+jobErrors.length+' open job error'+(jobErrors.length===1?'':'s')+' before cutover.');
   var warningHtml=identityWarnings.length?'<ul class="list compact-list">'+identityWarnings.map(function(item){return '<li>'+esc(item.message||item.label||'Vehicle identity review required')+'</li>'}).join('')+'</ul>':'<div class="notice good">Vehicle VIN identity review is clear.</div>';
-  return summary+'<section class="section" style="padding:0;margin-top:12px"><h2>Launch evidence</h2>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check only reads server-held evidence. It does not send a charge, change a customer, or turn on a provider.</div>'
+  return summary+'<section class="section" style="padding:0;margin-top:12px"><h2>Launch evidence</h2>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Recent job failures</h2>'+liveLaunchJobErrorReview(jobErrors)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check never sends a charge, changes a customer, or turns on a provider. Marking a job failure reviewed only closes that durable monitoring record.</div>'
 }
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="open-live-launch-preflight"]');
@@ -3251,6 +3260,24 @@ document.addEventListener('click',async function(event){
     button.disabled=false;
     button.classList.remove('is-loading');
   }
+},true);
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="resolve-job-error"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if(roleName()!=='owner'){notify('Only the owner can review job failures');return}
+  var id=button.getAttribute('data-error-id')||'';
+  if(!id||!window.confirm('Mark this background job failure as reviewed? The original error remains preserved for audit history.'))return;
+  button.disabled=true;
+  button.classList.add('is-loading');
+  var result=await post('/api/system/job-errors/'+encodeURIComponent(id)+'/resolve',{note:'Reviewed from the controlled launch preflight'});
+  if(!result.ok){button.disabled=false;button.classList.remove('is-loading');notify(result.error||'Job failure could not be marked reviewed');return}
+  try{
+    var response=await fetch('/api/system/infrastructure/preflight',{headers:{Accept:'application/json'},cache:'no-store'}),fresh=await response.json();
+    openModal('Controlled Stripe launch preflight',liveLaunchPreflightModal(fresh));
+  }catch(error){closeModal()}
+  notify('Job failure marked reviewed');
 },true);
 
 function customerFileLargeNoteContext(){

@@ -1413,6 +1413,18 @@ async function main() {
     const monitoredFailureRow = ((monitoredFailureHealth.json.infrastructure || {}).openJobErrors || []).find(row => row.source === 'direct-background-monitor');
     assert(monitoredFailureRow && monitoredFailureRow.context && monitoredFailureRow.context.route === 'Direct background worker' && monitoredFailureRow.context.source === 'background', 'Owner health must expose the safe source and route for a monitored background failure.');
     assert(!JSON.stringify(monitoredFailureRow.context).includes('must-not-be-persisted'), 'Operational failure records must whitelist safe context instead of storing arbitrary secrets.');
+    const managerJobErrorList = await request(server, 'GET', '/api/system/job-errors', { cookie: managerCookie });
+    assert(managerJobErrorList.status === 403, 'Manager must not read the owner operational-error ledger.');
+    const managerJobErrorResolve = await request(server, 'POST', '/api/system/job-errors/' + encodeURIComponent(monitoredFailureRow.id) + '/resolve', { cookie: managerCookie, json: { note: 'Manager must not resolve this' } });
+    assert(managerJobErrorResolve.status === 403, 'Manager must not resolve an owner operational-error record.');
+    const ownerJobErrorList = await request(server, 'GET', '/api/system/job-errors?limit=30', { cookie: ownerCookie });
+    assert(ownerJobErrorList.status === 200 && ownerJobErrorList.json.errors.some(row => row.id === monitoredFailureRow.id), 'Owner must be able to list unresolved operational failures.');
+    const ownerJobErrorResolve = await request(server, 'POST', '/api/system/job-errors/' + encodeURIComponent(monitoredFailureRow.id) + '/resolve', { cookie: ownerCookie, json: { note: 'Reviewed in direct launch preflight' } });
+    assert(ownerJobErrorResolve.status === 200 && ownerJobErrorResolve.json.resolved.resolutionNote === 'Reviewed in direct launch preflight', 'Owner must be able to close a job failure with durable review evidence.');
+    const duplicateJobErrorResolve = await request(server, 'POST', '/api/system/job-errors/' + encodeURIComponent(monitoredFailureRow.id) + '/resolve', { cookie: ownerCookie, json: { note: 'Duplicate review' } });
+    assert(duplicateJobErrorResolve.status === 404, 'A reviewed operational failure must not be closed twice.');
+    const resolvedFailureHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    assert(!((resolvedFailureHealth.json.infrastructure || {}).openJobErrors || []).some(row => row.id === monitoredFailureRow.id), 'A reviewed job failure must leave the open launch queue while remaining in durable audit storage.');
     const operationalAlertFetch = global.fetch;
     const operationalAlertCalls = [];
     global.fetch = async (url, options = {}) => {
