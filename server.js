@@ -156,6 +156,7 @@ const WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number
 const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_MESSAGING_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_EMAIL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_EMAIL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_AI_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_AI_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
+const WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS = Math.max(5 * 60 * 1000, Number(process.env.WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS || 6 * 60 * 60 * 1000));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
 const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
@@ -194,7 +195,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-private-integrity-150';
+const ASSET_VERSION = 'platform-20260718-stripe-proof-151';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -7217,7 +7218,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const priorMessaging = current && current.integrations && current.integrations.messaging || {};
-  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError'];
+  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError'];
@@ -7274,6 +7275,7 @@ function redactStaffSecrets(data) {
   }
   if (safe.integrations && safe.integrations.stripe) {
     delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
+    delete safe.integrations.stripe.lastLaunchWebhookConfigurationFingerprint;
     delete safe.integrations.stripe.lastIdentityWebhookConfigurationFingerprint;
   }
   if (safe.integrations && safe.integrations.documentStorage) delete safe.integrations.documentStorage.lastValidationConfigurationFingerprint;
@@ -8926,22 +8928,36 @@ function stripeWebhookConfigurationFingerprint() {
   // A server-secret HMAC lets us compare configuration evidence without exposing key material to clients.
   return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(material).digest('hex');
 }
+function stripeLaunchWebhookEventType(type) {
+  return /^(checkout\.session\.completed|payment_intent\.(succeeded|payment_failed|requires_action)|charge\.dispute\.(created|updated|closed)|refund\.(created|updated|failed)|charge\.refunded)$/.test(String(type || ''));
+}
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
   const expectedFingerprint = stripeWebhookConfigurationFingerprint();
-  const recordedFingerprint = String(stripeState.lastWebhookConfigurationFingerprint || '');
+  const receivedAt = String(stripeState.lastLaunchWebhookAt || '');
+  const type = String(stripeState.lastLaunchWebhookType || '');
+  const eventId = String(stripeState.lastLaunchWebhookEventId || '');
+  const recordedFingerprint = String(stripeState.lastLaunchWebhookConfigurationFingerprint || '');
   const configurationMatched = !!(recordedFingerprint && secureWebhookValueMatch(recordedFingerprint, expectedFingerprint));
-  const hasLiveEvent = stripeState.lastWebhookLivemode === true;
-  const mismatchMessage = hasLiveEvent && !configurationMatched
-    ? 'The recorded signed Stripe webhook belongs to an older or unknown Stripe configuration. Send one new signed live test after the current Render settings are deployed.'
-    : '';
+  const hasLiveEvent = stripeState.lastLaunchWebhookLivemode === true;
+  const relevantEvent = stripeLaunchWebhookEventType(type);
+  const freshness = providerEvidenceFreshness(receivedAt, WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS);
+  const live = STRIPE_KEY_MODE === 'live' && relevantEvent && !!eventId && hasLiveEvent && configurationMatched && freshness.fresh;
+  let error = '';
+  if (STRIPE_KEY_MODE !== 'live') error = 'Use the active Stripe live secret key before recording launch evidence.';
+  else if (!relevantEvent || !eventId || !hasLiveEvent) error = 'Complete one live WheelsonAuto Stripe card setup, payment, refund, or dispute event so the signed webhook is proven against a matched platform record.';
+  else if (!configurationMatched) error = 'The recorded signed Stripe webhook belongs to an older or unknown Stripe configuration. Complete one new matched live event after the current Render settings are deployed.';
+  else if (!freshness.fresh) error = 'The matched Stripe webhook proof is stale. Complete one fresh live payment-path event before the controlled launch.';
   return {
-    receivedAt: String(stripeState.lastWebhookAt || ''),
-    type: String(stripeState.lastWebhookType || ''),
-    eventId: String(stripeState.lastWebhookEventId || ''),
-    live: hasLiveEvent && configurationMatched,
+    receivedAt,
+    type,
+    eventId,
+    live,
+    relevantEvent,
     configurationMatched,
-    error: mismatchMessage || String(stripeState.lastWebhookError || '')
+    fresh: freshness.fresh,
+    maxAgeHours: freshness.maxAgeHours,
+    error: error || String(stripeState.lastLaunchWebhookError || '')
   };
 }
 function stripeIdentityLiveWebhookEvidence(data = {}) {
@@ -8953,18 +8969,22 @@ function stripeIdentityLiveWebhookEvidence(data = {}) {
   const eventId = String(stripeState.lastIdentityWebhookEventId || '');
   const verifiedEvent = type === 'identity.verification_session.verified';
   const hasLiveEvent = stripeState.lastIdentityWebhookLivemode === true;
-  const live = IDENTITY_PROVIDER === 'stripe' && STRIPE_KEY_MODE === 'live' && verifiedEvent && !!eventId && hasLiveEvent && configurationMatched;
+  const freshness = providerEvidenceFreshness(stripeState.lastIdentityWebhookAt, WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS);
+  const live = IDENTITY_PROVIDER === 'stripe' && STRIPE_KEY_MODE === 'live' && verifiedEvent && !!eventId && hasLiveEvent && configurationMatched && freshness.fresh;
   let error = '';
   if (IDENTITY_PROVIDER !== 'stripe') error = 'Set WOA_IDENTITY_PROVIDER=stripe before the controlled Stripe launch.';
   else if (STRIPE_KEY_MODE !== 'live') error = 'Stripe Identity requires the active live Stripe secret key.';
   else if (!verifiedEvent || !eventId || !hasLiveEvent) error = 'Complete one WheelsonAuto onboarding license and selfie verification so a signed live Stripe Identity result is recorded.';
   else if (!configurationMatched) error = 'The recorded signed Stripe Identity result belongs to an older or unknown Stripe configuration. Complete one new verification after the current Render settings are deployed.';
+  else if (!freshness.fresh) error = 'The signed Stripe Identity proof is stale. Complete one fresh live license and selfie verification before the controlled launch.';
   return {
     receivedAt: String(stripeState.lastIdentityWebhookAt || ''),
     type,
     eventId,
     live,
     configurationMatched,
+    fresh: freshness.fresh,
+    maxAgeHours: freshness.maxAgeHours,
     error
   };
 }
@@ -15197,6 +15217,21 @@ async function recordStripeWebhookEvent(event = {}) {
   stripeState.lastWebhookLivemode = event.livemode === true;
   stripeState.lastWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
   stripeState.lastWebhookError = '';
+  const matchedLaunchEvent = !!(
+    cardSetupRequestId ||
+    paymentRequestId ||
+    refundRequestId ||
+    (disputeClaimId && !stripeDisputeIgnored) ||
+    (stripePaymentIntentResult && stripePaymentIntentResult.matched)
+  );
+  if (matchedLaunchEvent && stripeLaunchWebhookEventType(type)) {
+    stripeState.lastLaunchWebhookAt = stripeState.lastWebhookAt;
+    stripeState.lastLaunchWebhookType = type;
+    stripeState.lastLaunchWebhookEventId = event.id || '';
+    stripeState.lastLaunchWebhookLivemode = event.livemode === true;
+    stripeState.lastLaunchWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
+    stripeState.lastLaunchWebhookError = '';
+  }
   if (signedIdentityVerified) {
     stripeState.lastIdentityWebhookAt = stripeState.lastWebhookAt;
     stripeState.lastIdentityWebhookType = type;

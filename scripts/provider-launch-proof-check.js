@@ -17,6 +17,12 @@ process.env.OPENAI_API_KEY = 'test-openai-provider-launch-proof';
 process.env.WOA_AI_MODEL = 'gpt-5.4-nano';
 process.env.WOA_AI_MAX_REQUESTS_PER_DAY = '50';
 process.env.WOA_AI_MAX_REQUESTS_PER_MONTH = '500';
+process.env.STRIPE_SECRET_KEY = 'sk_live_provider_launch_proof';
+process.env.STRIPE_PUBLISHABLE_KEY = 'pk_live_provider_launch_proof';
+process.env.STRIPE_WEBHOOK_SECRET = 'whsec_provider_launch_proof';
+process.env.WOA_ONBOARDING_PAYMENT_PROVIDER = 'stripe';
+process.env.WOA_IDENTITY_PROVIDER = 'stripe';
+process.env.WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS = String(30 * 24 * 60 * 60 * 1000);
 
 const {
   messagingLaunchConfigurationFingerprint,
@@ -26,6 +32,9 @@ const {
   telnyxLiveLaunchEvidence,
   resendLiveLaunchEvidence,
   starAiLiveLaunchEvidence,
+  stripeWebhookConfigurationFingerprint,
+  stripeLiveWebhookEvidence,
+  stripeIdentityLiveWebhookEvidence,
   stateForUserRead,
   stateForUserWrite
 } = require('../server');
@@ -105,6 +114,19 @@ function readyState() {
 }
 
 const data = readyState();
+const stripeFingerprint = stripeWebhookConfigurationFingerprint();
+data.integrations.stripe = {
+  lastLaunchWebhookAt: new Date().toISOString(),
+  lastLaunchWebhookType: 'payment_intent.succeeded',
+  lastLaunchWebhookEventId: 'evt_live_provider_launch_payment',
+  lastLaunchWebhookLivemode: true,
+  lastLaunchWebhookConfigurationFingerprint: stripeFingerprint,
+  lastIdentityWebhookAt: new Date().toISOString(),
+  lastIdentityWebhookType: 'identity.verification_session.verified',
+  lastIdentityWebhookEventId: 'evt_live_provider_launch_identity',
+  lastIdentityWebhookLivemode: true,
+  lastIdentityWebhookConfigurationFingerprint: stripeFingerprint
+};
 
 assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('WheelsonAuto <notifications@wheelsonauto.com>'), true, 'The verified root sending domain must remain valid.');
 assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('WheelsonAuto <notifications@notify.wheelsonauto.com>'), true, 'A verified WheelsonAuto sending subdomain must satisfy the launch gate.');
@@ -141,9 +163,32 @@ const staleStar = clone(data);
 staleStar.integrations.messaging.lastAiHealthConfigurationFingerprint = 'stale-proof';
 assert.strictEqual(starAiLiveLaunchEvidence(staleStar).live, false, 'An OpenAI health proof from another configuration must not unlock the launch gate.');
 
+const stripePayment = stripeLiveWebhookEvidence(data);
+assert.strictEqual(stripePayment.live, true, 'Stripe payment launch proof must require a fresh matched live financial event tied to the current Stripe configuration.');
+assert.strictEqual(stripePayment.relevantEvent, true);
+assert.strictEqual(stripePayment.fresh, true);
+
+const unrelatedStripe = clone(data);
+unrelatedStripe.integrations.stripe.lastLaunchWebhookType = 'customer.updated';
+assert.strictEqual(stripeLiveWebhookEvidence(unrelatedStripe).live, false, 'An unrelated signed Stripe event must not unlock the payment launch gate.');
+
+const staleStripe = clone(data);
+staleStripe.integrations.stripe.lastLaunchWebhookAt = '2020-01-01T00:00:00.000Z';
+assert.strictEqual(stripeLiveWebhookEvidence(staleStripe).live, false, 'Expired Stripe payment evidence must require a new matched live event.');
+
+const stripeIdentity = stripeIdentityLiveWebhookEvidence(data);
+assert.strictEqual(stripeIdentity.live, true, 'Stripe Identity launch proof must require a fresh signed live verified event tied to the current Stripe configuration.');
+assert.strictEqual(stripeIdentity.fresh, true);
+
+const staleIdentity = clone(data);
+staleIdentity.integrations.stripe.lastIdentityWebhookAt = '2020-01-01T00:00:00.000Z';
+assert.strictEqual(stripeIdentityLiveWebhookEvidence(staleIdentity).live, false, 'Expired Stripe Identity evidence must require a new live license and selfie verification.');
+
 const ownerRead = stateForUserRead(data, { role: 'Owner', organizationId: 'org-wheelsonauto' });
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.messages.find(record => record.id === 'resend-inbound-proof'), 'providerConfigurationFingerprint'), false, 'Provider proof fingerprints must never be returned to the browser state.');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.messaging, 'lastAiHealthConfigurationFingerprint'), false, 'Integration proof fingerprints must never be returned to the browser state.');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastLaunchWebhookConfigurationFingerprint'), false, 'Stripe payment proof fingerprints must never be returned to browser state.');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastIdentityWebhookConfigurationFingerprint'), false, 'Stripe Identity proof fingerprints must never be returned to browser state.');
 
 const forgedState = clone(data);
 forgedState.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint = 'forged-proof';
@@ -161,5 +206,7 @@ forgedState.messages.push({
 const ownerWrite = stateForUserWrite(data, forgedState, { role: 'Owner', organizationId: 'org-wheelsonauto' });
 assert.strictEqual(ownerWrite.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint, data.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint, 'Browser writes must preserve existing provider evidence instead of replacing it.');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerWrite.messages.find(record => record.id === 'forged-provider-proof'), 'providerConfigurationFingerprint'), false, 'Browser writes must not create a new provider proof fingerprint.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastLaunchWebhookConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe payment proof fingerprint.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastIdentityWebhookConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe Identity proof fingerprint.');
 
-console.log('Provider launch proof check passed: Telnyx, Resend, and Star require fresh evidence tied to the current secured configuration.');
+console.log('Provider launch proof check passed: Stripe payments, Stripe Identity, Telnyx, Resend, and Star require fresh evidence tied to the current secured configuration.');

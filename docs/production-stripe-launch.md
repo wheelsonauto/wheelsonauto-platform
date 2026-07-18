@@ -301,6 +301,7 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 WOA_PAYMENT_PROVIDER=clover
 WOA_ONBOARDING_PAYMENT_PROVIDER=stripe
 WOA_IDENTITY_PROVIDER=stripe
+WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS=2592000000
 PUBLIC_BASE_URL=https://wheelsonauto.com
 ```
 
@@ -309,18 +310,21 @@ can use Stripe for new customers while existing customers migrate one at a
 time. Configure Stripe webhook events for successful/failed payment intents,
 refunds, disputes, setup intents, and Stripe Identity updates. The webhook
 must be signed and reach the live platform before it is treated as connected.
-The launch preflight records the most recent Stripe event and refuses to call
-the platform live-ready until it has received a signed event with Stripe's
-`livemode: true` flag. A copied secret or dashboard-only test is not enough.
-That proof is bound to the active Stripe key, publishable key, webhook secret,
-API base URL, public URL, identity mode, and onboarding payment provider using
-a server-only fingerprint. Changing any of those Render settings intentionally
-requires one fresh signed live event before the preflight is green again.
+The launch preflight records a dedicated proof only when the signed live event
+matches a WheelsonAuto card-setup, payment, refund, or dispute record. Generic
+Stripe account traffic is acknowledged but cannot create or overwrite launch
+proof. The matched event must carry Stripe's `livemode: true` flag and remain
+within the configured freshness window (30 days by default). A copied secret
+or dashboard-only test is not enough. That proof is bound to the active Stripe
+key, publishable key, webhook secret, API base URL, public URL, identity mode,
+and onboarding payment provider using a server-only fingerprint. Changing any
+of those Render settings intentionally requires one fresh matched signed live
+event before the preflight is green again.
 The production guard also requires `WOA_ONBOARDING_PAYMENT_PROVIDER=stripe`,
 `WOA_IDENTITY_PROVIDER=stripe`, and one signed
 `identity.verification_session.verified` event matched to a WheelsonAuto
-onboarding file. A generic payment, refund, or unrelated Stripe event cannot
-stand in for the license-and-selfie test.
+onboarding file within the same freshness window. A generic payment, refund,
+or unrelated Stripe event cannot stand in for the license-and-selfie test.
 
 Run one complete controlled test record:
 

@@ -48,12 +48,11 @@ class MockResponse {
   }
 }
 
-function request(server, method, route, form = null) {
-  const body = form ? new URLSearchParams(form).toString() : '';
+function rawRequest(server, method, route, body = '', headers = {}) {
   return new Promise((resolve, reject) => {
     const req = new MockRequest(method, route, {
-      'content-type': form ? 'application/x-www-form-urlencoded' : '',
-      'content-length': String(Buffer.byteLength(body))
+      'content-length': String(Buffer.byteLength(body)),
+      ...headers
     }, body);
     const res = new MockResponse(resolve);
     try {
@@ -64,10 +63,127 @@ function request(server, method, route, form = null) {
   });
 }
 
+function request(server, method, route, form = null, headers = {}) {
+  const body = form ? new URLSearchParams(form).toString() : '';
+  return rawRequest(server, method, route, body, {
+    'content-type': form ? 'application/x-www-form-urlencoded' : '',
+    ...headers
+  });
+}
+
+function requestJson(server, method, route, payload, headers = {}) {
+  return rawRequest(server, method, route, JSON.stringify(payload || {}), {
+    'content-type': 'application/json',
+    ...headers
+  });
+}
+
+function clearOwnerEnvironmentPassword() {
+  delete process.env.WOA_ADMIN_PASSWORD;
+  delete process.env.WOA_OWNER_PASSWORD;
+  delete process.env.WOA_ADMIN_PASSWORD_HASH;
+  delete process.env.WOA_OWNER_PASSWORD_HASH;
+  delete process.env.WOA_ADMIN_PASSWORD_SALT;
+  delete process.env.WOA_OWNER_PASSWORD_SALT;
+}
+
+function loadServer() {
+  delete require.cache[require.resolve('../server.js')];
+  return require('../server.js').server;
+}
+
+function cookieHeader(response) {
+  return String(response.headers['Set-Cookie'] || response.headers['set-cookie'] || '').split(';')[0];
+}
+
 async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-owner-auth-runtime-'));
   try {
     process.env.DATA_DIR = dataDir;
+    process.env.WOA_ADMIN_PIN = '9999';
+    process.env.WOA_ADMIN_USERNAME = 'owner';
+    process.env.WOA_SESSION_SECRET = 'owner-cutover-runtime-session-secret';
+    process.env.WOA_AUTO_SYNC_MS = '3600000';
+    process.env.WOA_AUTOPAY_MS = '3600000';
+    process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
+
+    // Phase one mirrors the live transition: use the temporary recovery PIN once,
+    // create the durable owner password, and prove the old session is revoked.
+    process.env.WOA_PRODUCTION_HARDENING_REQUIRED = '0';
+    process.env.WOA_OWNER_PIN_FALLBACK_ENABLED = '1';
+    clearOwnerEnvironmentPassword();
+    let server = loadServer();
+    try {
+      const initialPage = await request(server, 'GET', '/login');
+      assert(initialPage.text.includes('Access PIN'), 'The temporary recovery phase must expose the explicitly enabled owner PIN field.');
+
+      const pinLogin = await request(server, 'POST', '/login', { username: 'owner', pin: '9999' });
+      assert.strictEqual(pinLogin.status, 302, 'The explicitly enabled recovery PIN must allow the owner to begin the password cutover.');
+      const oldSession = cookieHeader(pinLogin);
+      assert(oldSession.includes('woa_session='), 'The temporary owner login must create a signed session.');
+
+      const newPassword = 'StoredOwnerPassword123!';
+      const passwordUpdate = await requestJson(server, 'POST', '/api/account/password', {
+        username: 'owner',
+        currentPassword: '9999',
+        newPassword
+      }, { cookie: oldSession });
+      assert.strictEqual(passwordUpdate.status, 200, 'The authenticated owner must be able to store a strong password through Settings.');
+      const updatePayload = JSON.parse(passwordUpdate.text);
+      assert.strictEqual(updatePayload.reauthenticate, true, 'Changing the owner password must require a fresh login.');
+
+      const staleSession = await request(server, 'GET', '/api/state', null, { cookie: oldSession });
+      assert.strictEqual(staleSession.status, 401, 'Saving a new owner password must immediately revoke the older PIN-backed session.');
+
+      const savedState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      const ownerRecord = savedState.security && savedState.security.ownerLogin || {};
+      assert.strictEqual(ownerRecord.username, 'owner', 'The owner username must persist with the password record.');
+      assert(/^pbkdf2\$310000\$[a-f0-9]{64}$/i.test(String(ownerRecord.passwordHash || '')), 'The owner password must persist only as the current PBKDF2 record.');
+      assert(ownerRecord.passwordSalt && ownerRecord.passwordUpdatedAt, 'The stored owner password needs a salt and revocation timestamp.');
+      assert(!JSON.stringify(savedState).includes(newPassword), 'The plain owner password must never be written to state.');
+    } finally {
+      try { server.close(); } catch (_) {}
+    }
+
+    // Phase two simulates the next deploy with hardening enabled. The recovery
+    // PIN must disappear and fail while the stored password remains usable.
+    process.env.WOA_PRODUCTION_HARDENING_REQUIRED = '1';
+    process.env.WOA_OWNER_PIN_FALLBACK_ENABLED = '0';
+    clearOwnerEnvironmentPassword();
+    server = loadServer();
+    try {
+      const hardenedPage = await request(server, 'GET', '/login');
+      assert.strictEqual(hardenedPage.status, 200, 'The hardened stored-password login page must render.');
+      assert(!hardenedPage.text.includes('Access PIN'), 'The hardened login page must hide the owner PIN field.');
+
+      const rejectedPin = await request(server, 'POST', '/login', { username: 'owner', pin: '9999' });
+      assert.strictEqual(rejectedPin.status, 401, 'The hardened restart must reject the old owner PIN.');
+
+      const storedLogin = await request(server, 'POST', '/login', { username: 'owner', password: 'StoredOwnerPassword123!' });
+      assert.strictEqual(storedLogin.status, 302, 'The password stored through Settings must survive restart and remain usable after PIN removal.');
+      const hardenedSession = cookieHeader(storedLogin);
+      const sessionParts = hardenedSession.split('=')[1].split('.');
+      const sessionPayload = JSON.parse(Buffer.from(sessionParts[2], 'base64url').toString('utf8'));
+      assert.strictEqual(sessionPayload.authSource, 'owner_stored', 'The hardened owner session must identify the durable stored-password source.');
+
+      const preflightResponse = await request(server, 'GET', '/api/system/infrastructure/preflight', null, { cookie: hardenedSession });
+      assert.strictEqual(preflightResponse.status, 200, 'The authenticated owner must be able to inspect the hardened launch preflight.');
+      const preflight = JSON.parse(preflightResponse.text);
+      assert.strictEqual(preflight.ownerAuthentication.passwordLoginStrong, true, 'The stored PBKDF2 password must clear the owner password-strength gate.');
+      assert.strictEqual(preflight.ownerAuthentication.pinFallbackAllowed, false, 'The hardened restart must clear the owner PIN-fallback gate.');
+
+      const stateResponse = await request(server, 'GET', '/api/state', null, { cookie: hardenedSession });
+      assert.strictEqual(stateResponse.status, 200, 'The stored-password owner session must retain normal platform access.');
+      assert(!stateResponse.text.includes('passwordHash') && !stateResponse.text.includes('passwordSalt'), 'Owner password records must never leak through normal state reads.');
+    } finally {
+      try { server.close(); } catch (_) {}
+    }
+
+    // Retain coverage for deployments that use a PBKDF2 record in Render
+    // instead of the in-app stored owner record.
+    const environmentDir = path.join(dataDir, 'environment-password');
+    await fs.mkdir(environmentDir, { recursive: true });
+    process.env.DATA_DIR = environmentDir;
     process.env.WOA_PRODUCTION_HARDENING_REQUIRED = '1';
     process.env.WOA_ADMIN_PIN = '9999';
     process.env.WOA_ADMIN_USERNAME = 'owner';
@@ -76,11 +192,7 @@ async function main() {
     process.env.WOA_ADMIN_PASSWORD_HASH = 'pbkdf2$310000$' + crypto.pbkdf2Sync(password, salt, 310000, 32, 'sha256').toString('hex');
     process.env.WOA_ADMIN_PASSWORD_SALT = salt;
     delete process.env.WOA_ADMIN_PASSWORD;
-    process.env.WOA_AUTO_SYNC_MS = '3600000';
-    process.env.WOA_AUTOPAY_MS = '3600000';
-    process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
-    delete require.cache[require.resolve('../server.js')];
-    const { server } = require('../server.js');
+    server = loadServer();
     try {
       const page = await request(server, 'GET', '/login');
       assert.strictEqual(page.status, 200, 'The password-only production login page must render.');
@@ -100,7 +212,7 @@ async function main() {
     } finally {
       try { server.close(); } catch (_) {}
     }
-    console.log('Owner auth runtime check passed: hardened production hides and rejects owner PIN fallback while preserving password login.');
+    console.log('Owner auth runtime check passed: Settings password cutover revokes the PIN session, survives restart, hides credentials, disables PIN fallback, and preserves stored or environment PBKDF2 login.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
