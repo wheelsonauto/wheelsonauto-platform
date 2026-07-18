@@ -536,6 +536,7 @@ async function main() {
     const ownerSessionParts = ownerCookie.split('=')[1].split('.');
     const ownerSessionPayload = JSON.parse(Buffer.from(ownerSessionParts[2], 'base64url').toString('utf8'));
     assert(Number(ownerSessionPayload.exp) > Math.floor(Date.now() / 1000) && Number(ownerSessionPayload.exp) - Number(ownerSessionPayload.iat) <= 24 * 60 * 60, 'Staff session must carry a bounded signed expiration.');
+    assert(/^owner_environment_/.test(ownerSessionPayload.authSource || '') && String(ownerSessionPayload.credentialVersion || '').length >= 24, 'Owner sessions must carry a server-derived credential version without exposing the credential itself.');
     const expiredPayload = Buffer.from(JSON.stringify({ id: 'expired-owner', role: 'Owner', iat: Math.floor(Date.now() / 1000) - 120, exp: Math.floor(Date.now() / 1000) - 60 }), 'utf8').toString('base64url');
     const expiredSession = 'v2.staff.' + expiredPayload + '.' + sessionSignature('staff', expiredPayload);
     assert(verifySignedSessionCookie(expiredSession, 'staff') === null, 'Expired signed staff sessions must be rejected.');
@@ -1070,6 +1071,7 @@ async function main() {
       }
     });
     assert(managerEdit.status === 200 && managerEdit.json.ok, 'Owner could not edit manager without replacing password.');
+    const managerBeforeResetCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
 
     const staffForgotPage = await request(server, 'GET', '/forgot');
     assert(staffForgotPage.status === 200 && staffForgotPage.text.includes('Reset staff access'), 'Staff forgot-password page did not render.');
@@ -1098,6 +1100,8 @@ async function main() {
     assert(!resetManagerPassword.json.staff.passwordHash && !resetManagerPassword.json.staff.passwordSalt, 'Staff reset response should not expose password secrets.');
     const oldStaffPasswordAttempt = await request(server, 'POST', '/login', { form: { username: 'direct-manager', password: 'DirectManager123!' } });
     assert(oldStaffPasswordAttempt.status === 401, 'Old staff password should stop working after owner reset.');
+    const oldStaffSessionAfterReset = await request(server, 'GET', '/api/state', { cookie: managerBeforeResetCookie });
+    assert(oldStaffSessionAfterReset.status === 401, 'Resetting a staff password must revoke that staff member\'s already-issued sessions immediately.');
 
     const weakCustomerPassword = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,
@@ -2096,6 +2100,9 @@ async function main() {
     assert(customerLoginRes.status === 302 && String(customerLoginRes.cookie).includes('woa_customer_session='), 'Customer login did not set a customer session.');
     assertSecureCookie(customerLoginRes.cookie, 'Customer login');
     const customerCookie = cleanCookie(customerLoginRes.cookie);
+    const customerSessionParts = customerCookie.split('=')[1].split('.');
+    const customerSessionPayload = JSON.parse(Buffer.from(customerSessionParts[2], 'base64url').toString('utf8'));
+    assert(customerSessionPayload.authSource === 'customer' && String(customerSessionPayload.credentialVersion || '').length >= 24, 'Customer sessions must carry a server-derived credential version without exposing the password record.');
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
@@ -2403,6 +2410,8 @@ async function main() {
     assert(!resetCustomerPassword.json.account.passwordHash && !resetCustomerPassword.json.account.passwordSalt, 'Customer reset response should not expose password secrets.');
     const oldCustomerPasswordAttempt = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer123!' } });
     assert(oldCustomerPasswordAttempt.status === 401, 'Old customer password should stop working after owner reset.');
+    const oldCustomerSessionAfterReset = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
+    assert(oldCustomerSessionAfterReset.status === 401, 'Resetting a customer password must revoke that customer\'s already-issued sessions immediately.');
     const newCustomerPasswordAttempt = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer456!' } });
     assert(newCustomerPasswordAttempt.status === 302, 'New owner-set customer password should sign in.');
     assertSecureCookie(newCustomerPasswordAttempt.cookie, 'Customer reset password login');
@@ -3879,7 +3888,23 @@ async function main() {
     const revokedStaffRead = await request(server, 'GET', '/api/state', { cookie: revocableCookie });
     assert(revokedStaffRead.status === 401 && revokedStaffRead.json && revokedStaffRead.json.error === 'Authentication required.', 'Removing a staff account must revoke its already-issued session immediately.');
 
-    console.log('Direct server smoke passed: login, customer portal privacy/logout, company accounts, duplicate guards, dispute matching, state repair, public application, role filters, SMS/email messages, durable background monitoring, email notifications, autopay failure tracking, inbound email webhook, Star email approval, and staff permissions.');
+    const ownerPasswordChange = await request(server, 'POST', '/api/account/password', {
+      cookie: ownerCookie,
+      json: {
+        username: 'direct-owner',
+        currentPassword: adminPin,
+        newPassword: 'DirectOwner456!'
+      }
+    });
+    assert(ownerPasswordChange.status === 200 && ownerPasswordChange.json && ownerPasswordChange.json.reauthenticate === true, 'Owner password change should require a fresh login.');
+    assertSecureCookie(ownerPasswordChange.cookie, 'Owner password change session cleanup', { clear: true });
+    const oldOwnerSessionAfterReset = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(oldOwnerSessionAfterReset.status === 401, 'Changing the owner password must revoke the already-issued owner session immediately.');
+    const replacementOwnerCookie = await login(server, { username: 'direct-owner', password: 'DirectOwner456!' });
+    const replacementOwnerRead = await request(server, 'GET', '/api/state', { cookie: replacementOwnerCookie });
+    assert(replacementOwnerRead.status === 200, 'The replacement owner password must create a valid fresh session.');
+
+    console.log('Direct server smoke passed: login/session revocation, customer portal privacy/logout, company accounts, duplicate guards, dispute matching, state repair, public application, role filters, SMS/email messages, durable background monitoring, email notifications, autopay failure tracking, inbound email webhook, Star email approval, and staff permissions.');
   } finally {
     global.fetch = providerEmailFetch;
     try { server.close(); } catch (_) {}

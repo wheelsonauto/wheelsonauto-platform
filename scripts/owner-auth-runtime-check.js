@@ -91,7 +91,12 @@ async function main() {
 
       const passwordLogin = await request(server, 'POST', '/login', { username: 'owner', password });
       assert.strictEqual(passwordLogin.status, 302, 'Production hardening must retain password-backed owner login.');
-      assert(String(passwordLogin.headers['Set-Cookie'] || '').includes('woa_session='), 'A production password login must create a signed owner session.');
+      const sessionCookie = String(passwordLogin.headers['Set-Cookie'] || '');
+      assert(sessionCookie.includes('woa_session='), 'A production password login must create a signed owner session.');
+      const sessionParts = sessionCookie.split(';')[0].split('=')[1].split('.');
+      const sessionPayload = JSON.parse(Buffer.from(sessionParts[2], 'base64url').toString('utf8'));
+      assert.strictEqual(sessionPayload.authSource, 'owner_environment_hash', 'Hardened owner sessions must remember the password-backed authentication source.');
+      assert(String(sessionPayload.credentialVersion || '').length >= 24, 'Hardened owner sessions must carry a server-derived credential version for password-reset revocation.');
     } finally {
       try { server.close(); } catch (_) {}
     }

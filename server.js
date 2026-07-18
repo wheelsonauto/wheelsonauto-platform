@@ -6466,6 +6466,20 @@ function sessionSetCookie(name, value, options = {}) {
 function sessionSignature(scope, payload) {
   return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(String(scope || '') + '.' + String(payload || '')).digest('base64url');
 }
+function sessionCredentialVersion(record = {}, source = 'account', revocationMarker = '') {
+  const credentialMaterial = [
+    record.passwordHash || '',
+    record.passwordSalt || '',
+    record.passwordUpdatedAt || '',
+    record.pinHint || '',
+    revocationMarker || ''
+  ].map(value => String(value || ''));
+  if (!credentialMaterial.some(Boolean)) return '';
+  return crypto.createHmac('sha256', SESSION_SIGNING_SECRET)
+    .update(['wheelsonauto-session-credential-v1', String(source || 'account'), ...credentialMaterial].join('\u0000'))
+    .digest('base64url')
+    .slice(0, 32);
+}
 function sessionTtlSeconds(scope) {
   return String(scope || '').toLowerCase() === 'customer' ? CUSTOMER_SESSION_TTL_SECONDS : STAFF_SESSION_TTL_SECONDS;
 }
@@ -6526,7 +6540,7 @@ function organizationExists(data, organizationId) {
   return (data.organizations || []).some(item => item.id === clean);
 }
 function staffLoginUser(staff) {
-  return { id: staff.id || ('staff-' + Date.now()), username: staff.username || staff.email || '', name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || MAIN_ORG_ID, companyName: staff.companyName || 'WheelsonAuto' };
+  return { id: staff.id || ('staff-' + Date.now()), username: staff.username || staff.email || '', name: staff.name || staff.role || 'Staff', role: staff.role || 'Staff', homeView: staff.homeView || roleHome(staff.role), access: roleAccess(staff.role), organizationId: staff.organizationId || MAIN_ORG_ID, companyName: staff.companyName || 'WheelsonAuto', authSource: 'staff', credentialVersion: sessionCredentialVersion(staff, 'staff') };
 }
 function userOrganizationId(user = {}) {
   return String(user.organizationId || MAIN_ORG_ID).trim() || MAIN_ORG_ID;
@@ -6692,22 +6706,41 @@ function cleanStaffAccountPayload(payload, existing = null) {
 function staffStatusActive(row) {
   return !/disabled|removed|inactive|closed/i.test(String(row && row.status || 'Active'));
 }
-let activeStaffSessionCache = { version: '', accounts: new Map(), companies: new Map() };
+let activeStaffSessionCache = { version: '', accounts: new Map(), companies: new Map(), ownerLogin: {} };
 async function activeStaffSessionUser(user) {
-  if (!user || isOwnerUser(user)) return user || null;
+  if (!user) return null;
   const version = await dataVersion();
   if (activeStaffSessionCache.version !== version) {
     const data = await readData();
     activeStaffSessionCache = {
       version,
       accounts: new Map((data.staffAccounts || []).filter(staffStatusActive).map(account => [String(account.id || ''), account])),
-      companies: new Map((data.organizations || []).map(company => [String(company.id || ''), company]))
+      companies: new Map((data.organizations || []).map(company => [String(company.id || ''), company])),
+      ownerLogin: data.security && data.security.ownerLogin || {}
+    };
+  }
+  if (isOwnerUser(user)) {
+    let currentVersion = '';
+    if (user.authSource === 'owner_stored') currentVersion = sessionCredentialVersion(activeStaffSessionCache.ownerLogin, 'owner_stored');
+    else if (String(user.authSource || '').startsWith('owner_environment_')) currentVersion = ownerEnvironmentCredentialVersion(user.authSource, activeStaffSessionCache.ownerLogin);
+    if (!user.credentialVersion || !currentVersion || !secureCompare(user.credentialVersion, currentVersion)) return null;
+    const storedUsername = activeStaffSessionCache.ownerLogin && activeStaffSessionCache.ownerLogin.username;
+    return {
+      id: 'owner',
+      username: user.authSource === 'owner_stored' ? storedUsername || LOGIN_USERNAME || 'admin' : LOGIN_USERNAME || 'admin',
+      name: 'Owner admin',
+      role: 'Owner',
+      homeView: 'Dashboard',
+      access: 'Full platform access',
+      authSource: user.authSource,
+      credentialVersion: currentVersion
     };
   }
   const account = activeStaffSessionCache.accounts.get(String(user.id || ''));
   if (!account) return null;
   if (!/^(manager|mechanic)$/i.test(String(account.role || ''))) return null;
   const current = staffLoginUser(account);
+  if (!user.credentialVersion || !current.credentialVersion || !secureCompare(user.credentialVersion, current.credentialVersion)) return null;
   const company = activeStaffSessionCache.companies.get(String(current.organizationId || MAIN_ORG_ID));
   current.companyName = company && company.name || account.companyName || 'WheelsonAuto';
   return current;
@@ -6735,8 +6768,17 @@ function customerLoginUser(account) {
     vehicleId: account.vehicleId || '',
     cloverCustomerId: account.cloverCustomerId || '',
     phone: account.phone || '',
-    email: account.email || ''
+    email: account.email || '',
+    authSource: 'customer',
+    credentialVersion: sessionCredentialVersion(account, 'customer')
   };
+}
+function activeCustomerSessionAccount(data, user) {
+  if (!user || user.role !== 'Customer' || user.authSource !== 'customer' || !user.credentialVersion) return null;
+  const account = (data.customerAccounts || []).find(item => item.id === user.id && staffStatusActive(item));
+  if (!account) return null;
+  const currentVersion = sessionCredentialVersion(account, 'customer');
+  return currentVersion && secureCompare(user.credentialVersion, currentVersion) ? account : null;
 }
 function findCustomerAccountByLogin(data, username, password) {
   const cleanUser = normalizeLogin(username);
@@ -7480,6 +7522,38 @@ function ownerLoginMatches(username, password, pin) {
   if (LOGIN_PASSWORD && secureCompare(password, LOGIN_PASSWORD)) return true;
   if (LOGIN_PASSWORD_HASH && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return true;
   return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed() && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
+}
+function ownerEnvironmentAuthSource(username, password, pin) {
+  if (!ownerLoginMatches(username, password, pin)) return '';
+  if (ownerPinLoginAllowed() && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return 'owner_environment_pin';
+  if (LOGIN_PASSWORD && password && secureCompare(password, LOGIN_PASSWORD)) return 'owner_environment_password';
+  if (LOGIN_PASSWORD_HASH && password && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return 'owner_environment_hash';
+  if (!LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed() && LOGIN_PIN && password && secureCompare(password, LOGIN_PIN)) return 'owner_environment_pin';
+  return '';
+}
+function ownerEnvironmentCredentialVersion(source, ownerRecord = {}) {
+  const cleanSource = String(source || '');
+  let record = {};
+  if (cleanSource === 'owner_environment_pin') record = { passwordHash: LOGIN_PIN };
+  else if (cleanSource === 'owner_environment_password') record = { passwordHash: LOGIN_PASSWORD };
+  else if (cleanSource === 'owner_environment_hash') record = { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT };
+  return sessionCredentialVersion(record, cleanSource, ownerRecord && ownerRecord.passwordUpdatedAt || '');
+}
+function ownerSessionUser(source, ownerRecord = {}) {
+  const stored = source === 'owner_stored';
+  const credentialVersion = stored
+    ? sessionCredentialVersion(ownerRecord, 'owner_stored')
+    : ownerEnvironmentCredentialVersion(source, ownerRecord);
+  return {
+    id: 'owner',
+    username: stored ? ownerRecord.username || LOGIN_USERNAME || 'admin' : LOGIN_USERNAME || 'admin',
+    name: 'Owner admin',
+    role: 'Owner',
+    homeView: 'Dashboard',
+    access: 'Full platform access',
+    authSource: source,
+    credentialVersion
+  };
 }
 function storedOwnerLoginMatches(data, username, password) {
   const security = data && data.security || {};
@@ -8694,7 +8768,13 @@ async function appHtml({ publicMode = false, user = null } = {}) {
     clientData.integrations.messaging = { ...(clientData.integrations.messaging || {}), ...publicMessagingStatus(data) };
   }
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
-  const currentUser = publicMode ? null : (user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  const currentUser = publicMode ? null : { ...(user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) };
+  if (currentUser) {
+    delete currentUser.authSource;
+    delete currentUser.credentialVersion;
+    delete currentUser.iat;
+    delete currentUser.exp;
+  }
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__SERVER_DATA_VERSION__=' + JSON.stringify(serverDataVersion) + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
@@ -16425,7 +16505,7 @@ const server = http.createServer(async (req, res) => {
       const body = String(form.get('body') || '').trim().slice(0, 1200);
       if (!body) return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && String(item.status || 'Active').toLowerCase() !== 'disabled');
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const portal = customerPortalState(data, account);
       const summary = portal.summary || {};
@@ -16504,7 +16584,7 @@ const server = http.createServer(async (req, res) => {
 	      const form = new URLSearchParams(await readBody(req, 64 * 1024));
 	      const paymentHint = String(form.get('paymentHint') || '').trim().slice(0, 160);
 	      const data = await readData();
-	      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+	      const account = activeCustomerSessionAccount(data, customerUser);
 	      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
 	      const portal = customerPortalState(data, account);
 	      const summary = portal.summary || {};
@@ -16575,7 +16655,7 @@ const server = http.createServer(async (req, res) => {
 	      const requestType = String(form.get('requestType') || 'Account statement').trim().slice(0, 80) || 'Account statement';
 	      const note = String(form.get('note') || '').trim().slice(0, 200);
 	      const data = await readData();
-	      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+	      const account = activeCustomerSessionAccount(data, customerUser);
 	      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
 	      const portal = customerPortalState(data, account);
 	      const summary = portal.summary || {};
@@ -16695,7 +16775,7 @@ const server = http.createServer(async (req, res) => {
       const proofUrl = String(form.get('proofUrl') || form.get('url') || '').trim().slice(0, 500);
       if (!Number.isFinite(amount) || amount <= 0) return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const portal = customerPortalState(data, account);
       const recurring = portal.recurring || {};
@@ -16788,7 +16868,7 @@ const server = http.createServer(async (req, res) => {
       const notes = String(form.get('notes') || '').trim().slice(0, 1200);
       const proofUrl = String(form.get('proofUrl') || form.get('url') || '').trim().slice(0, 500);
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
       const context = aiFindCustomerContext(scopedData, {
@@ -16885,7 +16965,7 @@ const server = http.createServer(async (req, res) => {
       const notes = String(form.get('notes') || '').trim().slice(0, 1200);
       const proofUrl = String(form.get('proofUrl') || form.get('url') || '').trim().slice(0, 500);
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
       const context = aiFindCustomerContext(scopedData, {
@@ -16986,7 +17066,7 @@ const server = http.createServer(async (req, res) => {
       const proofUrl = String(payload.proofUrl || payload.url || '').trim().slice(0, 500);
       const notes = String(payload.notes || '').trim().slice(0, 1200);
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
       const context = aiFindCustomerContext(scopedData, {
@@ -17109,7 +17189,7 @@ const server = http.createServer(async (req, res) => {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
       const document = (data.documents || []).find(row => row.id === id && row.customerAccountId === account.id && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
@@ -17125,7 +17205,7 @@ const server = http.createServer(async (req, res) => {
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
       const context = aiFindCustomerContext(scopedData, {
@@ -17226,7 +17306,7 @@ const server = http.createServer(async (req, res) => {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       return send(res, 200, customerPortalHtml(account, customerPortalState(data, account)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
@@ -17234,7 +17314,7 @@ const server = http.createServer(async (req, res) => {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return json(res, 401, { ok: false, error: 'Customer login required.' });
       const data = await readData();
-      const account = (data.customerAccounts || []).find(item => item.id === customerUser.id && staffStatusActive(item));
+      const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
       return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
     }
@@ -17303,14 +17383,16 @@ const server = http.createServer(async (req, res) => {
       const throttleKey = loginThrottleKey(req, 'staff', username || (pin ? 'pin-login' : 'blank'));
       const waitMs = loginThrottleWaitMs(throttleKey);
       if (waitMs) return send(res, 429, loginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
-      if (ownerLoginMatches(username, password, pin)) {
-        clearLoginFailure(throttleKey);
-        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
-      }
       const data = await readData();
+      const ownerRecord = data.security && data.security.ownerLogin || {};
+      const environmentOwnerSource = ownerEnvironmentAuthSource(username, password, pin);
+      if (environmentOwnerSource) {
+        clearLoginFailure(throttleKey);
+        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser(environmentOwnerSource, ownerRecord))), Location: '/' });
+      }
       if (storedOwnerLoginMatches(data, username, password)) {
         clearLoginFailure(throttleKey);
-        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie({ id: 'owner', username: (data.security && data.security.ownerLogin && data.security.ownerLogin.username) || LOGIN_USERNAME || 'admin', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' })), Location: '/' });
+        return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser('owner_stored', ownerRecord))), Location: '/' });
       }
       const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
       if (staff) {
@@ -19283,7 +19365,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, 'Password changed', [isOwnerUser(user) ? 'Owner login' : 'Staff login ' + (user.name || user.username || user.id), 'Password hash updated']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt });
+      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt, reauthenticate: true }, { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }) });
     }
     if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });
