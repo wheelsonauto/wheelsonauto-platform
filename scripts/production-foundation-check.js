@@ -249,9 +249,14 @@ async function main() {
 
     const duplicate = { ...next, vehicles: next.vehicles.concat({ id: 'vehicle-2', vin: '1HGCM82633A004352' }) };
     assert.strictEqual(stateRepository.identityConflicts(duplicate).length, 1, 'A duplicate immutable VIN must be found before PostgreSQL migration.');
+    const sharedEmail = { ...next, customers: next.customers.concat({ id: 'customer-2', email: 'customer@example.com' }) };
+    assert.strictEqual(stateRepository.identityConflicts(sharedEmail).length, 0, 'Repeated customer email aliases must not block migration when Clover or plan history contains multiple rows for one person.');
+    const duplicatePortalUsername = { ...next, customerAccounts: next.customerAccounts.concat({ id: 'account-2', username: 'customer@example.com' }) };
+    assert.strictEqual(stateRepository.identityConflicts(duplicatePortalUsername).length, 1, 'A duplicate portal username must still block migration because it can expose the wrong customer account.');
     const missingVinWarnings = stateRepository.identityWarnings({ vehicles: [{ id: 'vehicle-missing-vin', year: 2013, make: 'BMW', model: '528XI' }] });
     assert.strictEqual(missingVinWarnings.length, 1, 'A vehicle without a VIN must remain visible for owner review before Stripe cutover.');
     assert.strictEqual(missingVinWarnings[0].kind, 'vehicle_missing_vin', 'A missing VIN warning must retain a stable review category.');
+    assert.strictEqual(stateRepository.identityWarnings({ vehicles: [{ id: 'application-placeholder', year: 'test', make: 'test', status: 'Pending application' }] }).length, 0, 'A pending application placeholder must not be treated as an operational fleet VIN blocker.');
 
     const documentRoot = path.join(temp, 'private-documents');
     const store = secureDocumentStore.createSecureDocumentStore({

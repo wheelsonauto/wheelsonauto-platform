@@ -237,10 +237,9 @@ function identityEntries(state = {}) {
     pushIdentity(entries, 'vehicle_vin', vehicle && vehicle.vin, 'vehicle', id);
     pushIdentity(entries, 'vehicle_plate', vehicle && (vehicle.plate || vehicle.stock), 'vehicle', id);
   });
-  (state.customers || []).forEach((customer, index) => {
-    const id = rowId(customer, 'customer-' + index);
-    pushIdentity(entries, 'customer_email', customer && customer.email, 'customer', id);
-  });
+  // Email is a contact alias, not an immutable customer identity. Clover can
+  // legitimately return multiple customer/plan history rows for one person,
+  // and family members can share an inbox. Portal usernames remain strict.
   (state.customerAccounts || []).forEach((account, index) => {
     const id = rowId(account, 'customer-account-' + index);
     pushIdentity(entries, 'portal_username', account && account.username, 'customer_account', id);
@@ -274,6 +273,8 @@ function identityWarnings(state = {}) {
   const warnings = [];
   (state.vehicles || []).forEach((vehicle, index) => {
     if (normalizedIdentity(vehicle && vehicle.vin)) return;
+    const status = normalizedIdentity(vehicle && vehicle.status);
+    if (['pending application', 'application draft', 'draft', 'removed', 'deleted'].includes(status)) return;
     const id = rowId(vehicle, 'vehicle-' + index);
     const label = [vehicle && vehicle.year, vehicle && vehicle.make, vehicle && vehicle.model].filter(Boolean).join(' ').trim()
       || String(vehicle && (vehicle.name || vehicle.vehicle) || id).trim();
@@ -822,7 +823,7 @@ class PostgresStateRepository {
   async refreshIdentityIndex(client, state) {
     const conflicts = identityConflicts(state);
     if (conflicts.length) {
-      const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, email, or payment IDs before enabling PostgreSQL.');
+      const error = new Error('Database migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the conflicting VIN, plate, portal username, or payment IDs before enabling PostgreSQL.');
       error.code = 'woa_identity_conflict';
       error.conflicts = conflicts.slice(0, 20);
       throw error;
