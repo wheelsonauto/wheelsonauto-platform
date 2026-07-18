@@ -194,7 +194,7 @@ const PRIVATE_DOCUMENT_STORE = secureDocumentStore.createSecureDocumentStore({
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-safe-stripe-cutover-148';
+const ASSET_VERSION = 'platform-20260718-manual-cutover-lock-149';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -13286,6 +13286,13 @@ function stripeMigrationPatch(row, nextState, details = {}) {
 function isDuplicateBillingPeriodError(err) {
   return String(err && err.code || '') === 'duplicate_billing_period';
 }
+function isMigrationChargeLockedError(err) {
+  return [
+    'payment_provider_migration_locked',
+    'stripe_cutover_not_scheduled',
+    'stripe_cutover_not_confirmed'
+  ].includes(String(err && err.code || ''));
+}
 function assertRecurringChargeAllowed(data, recurring, payload, provider) {
   const scheduledDueKey = validCalendarDateKey(payload.scheduledDueDate || recurringDateKey(recurring));
   const allowAdditionalManualCharge = payload.automatic !== true && payload.allowAdditionalManualCharge === true;
@@ -13327,6 +13334,24 @@ function assertRecurringChargeAllowed(data, recurring, payload, provider) {
       error.statusCode = 409;
       throw error;
     }
+  }
+  // The provider/cutover state protects manual charges too. Without this
+  // guard, a scheduled cutover blocked autopay but could still be bypassed by
+  // the staff manual-charge route on the same billing date.
+  if (!stripeMigration.automaticChargeAllowed(recurring, selectedProvider, scheduledDueKey)) {
+    const providerName = paymentProviderLabel(selectedProvider);
+    let message = providerName + ' charging is locked because this customer\'s payment-provider migration state does not match the requested charge.';
+    if (selectedProvider === 'clover' && migration.state === stripeMigration.STATES.CUTOVER_SCHEDULED) {
+      message = 'Clover charging is locked for the protected Stripe cutover on ' + (migration.cutoverDate || scheduledDueKey || 'this billing date') + '. Confirm Clover was stopped, then activate Stripe before charging.';
+    } else if (selectedProvider === 'clover') {
+      message = 'Clover charging is locked because this customer has already moved into the protected Stripe phase. Review the provider migration before charging.';
+    } else if (selectedProvider === 'stripe' && migration.state === stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING) {
+      message = 'Stripe cannot charge a billing date before the protected cutover date ' + (migration.cutoverDate || 'saved on this customer') + '.';
+    }
+    const error = new Error(message);
+    error.code = 'payment_provider_migration_locked';
+    error.statusCode = 409;
+    throw error;
   }
   return { scheduledDueKey, migration };
 }
@@ -19974,6 +19999,18 @@ const server = http.createServer(async (req, res) => {
           await protectConcurrentLocalWrites(data);
           await writeData(data);
           return json(res, 409, { ok: false, error: String(err && err.message || err), duplicateBlocked: true, payment: err.existingPayment || null });
+        }
+        if (recurring && isMigrationChargeLockedError(err)) {
+          appendAuditLog(data, user, 'Charge blocked by provider migration', [recurring.customer || 'Unknown customer', recurring.stripeMigrationStatus || stripeMigration.stateLabel(stripeMigration.migrationRecord(recurring).state), String(err && err.message || err)]);
+          await protectConcurrentLocalWrites(data);
+          await writeData(data);
+          return json(res, 409, {
+            ok: false,
+            migrationLocked: true,
+            code: String(err.code || 'payment_provider_migration_locked'),
+            error: String(err && err.message || err),
+            recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId)
+          });
         }
         if (recurring && isStripeAuthenticationRequired(err)) {
           const payment = saveStripeAuthenticationRequiredResult(data, recurring, payload, err, {

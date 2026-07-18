@@ -161,8 +161,9 @@ function automaticChargeAllowed(row = {}, paymentProvider, dateKey) {
     return currentProvider === 'clover' && !!cutoverDate && !!validDateKey(dateKey) && validDateKey(dateKey) < cutoverDate;
   }
   if (currentProvider === 'stripe' && hasCloverSource(row) && migration.state === STATES.FIRST_STRIPE_CHARGE_PENDING) {
-    const cutoverDate = migration.cutoverDate || validDateKey(dateKey);
-    return !!(migration.cloverStoppedConfirmedAt && (!cutoverDate || validDateKey(dateKey) >= cutoverDate));
+    const cutoverDate = migration.cutoverDate;
+    const chargeDate = validDateKey(dateKey);
+    return !!(migration.cloverStoppedConfirmedAt && cutoverDate && chargeDate && chargeDate >= cutoverDate);
   }
   if (migration.state === STATES.FIRST_STRIPE_CHARGE_PENDING) return currentProvider === 'stripe' && !hasCloverSource(row);
   if ([STATES.FIRST_STRIPE_CHARGE_PASSED, STATES.CLOVER_DISABLED, STATES.STRIPE_ACTIVE].includes(migration.state)) {

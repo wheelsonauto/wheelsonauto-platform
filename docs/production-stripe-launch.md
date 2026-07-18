@@ -359,7 +359,9 @@ they must never pause an existing Clover schedule. If a cutover is scheduled
 ahead of time, Clover remains eligible for billing periods before that date,
 then both providers are locked for the cutover period until the owner confirms
 the Clover schedule was stopped. This prevents both an accidental missed week
-and a same-period duplicate charge.
+and a same-period duplicate charge. The same lock applies to staff manual
+saved-card charges: a manual Clover charge cannot bypass the cutover date, and
+a blocked migration action must not count as a failed customer card attempt.
 
 The Clover recurring roster uses the documented `/recurring/v1/plans` and
 `/recurring/v1/plans/{planId}/subscriptions` endpoints with the merchant ID in

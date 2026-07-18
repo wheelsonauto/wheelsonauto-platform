@@ -3127,6 +3127,15 @@ async function main() {
       json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'schedule', cutoverDate: autopayTodayKey, confirmed: true }
     });
     assert(scheduledCleanCutover.status === 200 && scheduledCleanCutover.json.scheduled, 'A clean unpaid billing period should allow the protected Stripe cutover to be scheduled.');
+    const lockedCutoverManualCharge = await request(server, 'POST', '/api/integrations/payments/manual-charge', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cleanCutoverRecurringId, scheduledDueDate: autopayTodayKey }
+    });
+    assert(lockedCutoverManualCharge.status === 409 && lockedCutoverManualCharge.json.migrationLocked === true && /Clover charging is locked/i.test(lockedCutoverManualCharge.json.error || ''), 'The protected cutover date must block a staff manual Clover charge before Stripe activation.');
+    const lockedCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const lockedCutoverRow = lockedCutoverState.json.recurringPayments.find(row => row.id === cleanCutoverRecurringId);
+    assert(lockedCutoverRow && Number(lockedCutoverRow.retryCount || lockedCutoverRow.failedAttempts || 0) === 0, 'A provider-migration lock must not be recorded as a customer card failure.');
+    assert(!(lockedCutoverState.json.payments || []).some(payment => payment.recurringPaymentId === cleanCutoverRecurringId), 'A provider-migration lock must not create a misleading failed payment transaction.');
     const activatedCutover = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
       json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
