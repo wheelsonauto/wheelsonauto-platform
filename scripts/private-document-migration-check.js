@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const secureDocumentStore = require('../secure-document-store');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 
 const root = path.resolve(__dirname, '..');
 const migrationScript = path.join(__dirname, 'migrate-private-documents.js');
@@ -52,13 +53,46 @@ async function main() {
       WOA_DOCUMENT_STORAGE_PROVIDER: 'local',
       WOA_DOCUMENT_ENCRYPTION_KEY: key,
       WOA_DOCUMENT_ENCRYPTION_KEY_VERSION: 'migration-test-v1',
-      WOA_PRIVATE_DOCUMENT_MIGRATION_CONFIRM: '1'
+      WOA_PRIVATE_DOCUMENT_MIGRATION_CONFIRM: '1',
+      WOA_MIGRATION_MAINTENANCE_MODE: '1',
+      WOA_SESSION_SECRET: 'private-document-migration-lease-secret-2026',
+      WOA_SERVICE_ID: 'srv-private-document-migration-check',
+      WOA_DEPLOY_COMMIT: 'abcdef1234567890abcdef1234567890abcdef12'
     };
 
     const blocked = runMigration(dataFile, baseEnvironment);
     assert.notStrictEqual(blocked.status, 0, 'A private-document migration must refuse to run without an explicit maintenance-window confirmation.');
     assert.match(blocked.stderr, /MAINTENANCE_CONFIRM=1/i, 'The maintenance guard must explain how to run the migration safely.');
     assert.strictEqual(await fs.readFile(dataFile, 'utf8'), originalState, 'A blocked migration must not change the protected source state.');
+
+    const unprovenMaintenance = runMigration(dataFile, {
+      ...baseEnvironment,
+      WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM: '1'
+    });
+    assert.notStrictEqual(unprovenMaintenance.status, 0, 'A shell maintenance flag must not authorize private-document migration without the deployed service lease.');
+    assert.match(unprovenMaintenance.stderr, /has not published a migration-maintenance lease/i);
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), originalState, 'An unproven maintenance window must leave customer and document metadata unchanged.');
+
+    await migrationMaintenanceLease.publishLease({ environment: baseEnvironment, maintenanceMode: false });
+    const inactiveMaintenance = runMigration(dataFile, {
+      ...baseEnvironment,
+      WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM: '1'
+    });
+    assert.notStrictEqual(inactiveMaintenance.status, 0, 'An inactive deployed lease must not authorize private-document migration.');
+    assert.match(inactiveMaintenance.stderr, /not in migration maintenance mode/i);
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), originalState, 'An inactive maintenance lease must leave customer and document metadata unchanged.');
+
+    const staleAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    await migrationMaintenanceLease.publishLease({ environment: baseEnvironment, maintenanceMode: true, now: staleAt, startedAt: staleAt });
+    const staleMaintenance = runMigration(dataFile, {
+      ...baseEnvironment,
+      WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM: '1'
+    });
+    assert.notStrictEqual(staleMaintenance.status, 0, 'A stale deployed lease must not authorize private-document migration.');
+    assert.match(staleMaintenance.stderr, /lease is stale/i);
+    assert.strictEqual(await fs.readFile(dataFile, 'utf8'), originalState, 'A stale maintenance lease must leave customer and document metadata unchanged.');
+
+    const activeMaintenanceLease = await migrationMaintenanceLease.publishLease({ environment: baseEnvironment, maintenanceMode: true });
 
     const completed = runMigration(dataFile, {
       ...baseEnvironment,
@@ -68,6 +102,11 @@ async function main() {
     const output = JSON.parse(completed.stdout);
     assert.strictEqual(output.ok, true, 'The completed migration must report success.');
     assert.strictEqual(output.migrated, 2, 'Every legacy document and signature must be moved to encrypted storage.');
+    assert.strictEqual(output.maintenanceRenderServiceId, activeMaintenanceLease.serviceId, 'Migration evidence must identify the deployed maintenance service.');
+    assert.strictEqual(output.maintenanceRenderCommit, activeMaintenanceLease.renderCommit, 'Migration evidence must identify the exact deployed maintenance commit.');
+    assert.strictEqual(output.maintenanceInstanceId, activeMaintenanceLease.instanceId, 'Migration evidence must identify the exact maintenance-process instance.');
+    assert.strictEqual(output.maintenanceStartedAt, activeMaintenanceLease.startedAt, 'Migration evidence must retain when the authorized maintenance process started.');
+    assert.strictEqual(output.maintenanceLeaseSignatureChecksum, activeMaintenanceLease.signatureChecksum, 'Migration evidence must retain a safe fingerprint of the signed maintenance lease.');
     assert(output.backupPath, 'The migration must report an immutable pre-migration backup path.');
     assert.strictEqual(await fs.readFile(output.backupPath, 'utf8'), originalState, 'The backup must exactly match the protected source state before migration.');
 

@@ -5,10 +5,23 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const encryptedStateBackup = require('../encrypted-state-backup');
 const encryptedStateRecovery = require('../encrypted-state-recovery');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 const secureDocumentStore = require('../secure-document-store');
 const stateRepository = require('../state-repository');
+
+const root = path.resolve(__dirname, '..');
+const restoreScript = path.join(__dirname, 'restore-encrypted-state-backup.js');
+
+function runRestoreCommand(environment) {
+  return spawnSync(process.execPath, [restoreScript], {
+    cwd: root,
+    env: environment,
+    encoding: 'utf8'
+  });
+}
 
 function fakeRepository(initialState, options = {}) {
   let state = JSON.parse(JSON.stringify(initialState));
@@ -50,6 +63,40 @@ async function main() {
     auditLogs: []
   };
   try {
+    const commandEnvironment = {
+      ...process.env,
+      DATA_DIR: temp,
+      WOA_DATA_BACKEND: 'postgres',
+      DATABASE_URL: 'postgres://unused:unused@127.0.0.1:1/unused',
+      WOA_MIGRATION_MAINTENANCE_MODE: '1',
+      WOA_ENCRYPTED_STATE_RESTORE_CONFIRM: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE,
+      WOA_SESSION_SECRET: 'encrypted-recovery-maintenance-lease-secret-2026',
+      WOA_SERVICE_ID: 'srv-encrypted-recovery-check',
+      WOA_DEPLOY_COMMIT: '1234567890abcdef1234567890abcdef12345678',
+      WOA_DOCUMENT_STORAGE_PROVIDER: 'local',
+      WOA_DOCUMENT_ENCRYPTION_KEY: key,
+      WOA_STATE_BACKUP_ENCRYPTION_KEY: key
+    };
+    const missingLease = runRestoreCommand(commandEnvironment);
+    assert.notStrictEqual(missingLease.status, 0, 'A restore command must reject a shell maintenance flag without a deployed-service lease.');
+    assert.match(missingLease.stderr, /has not published a migration-maintenance lease/i);
+
+    await migrationMaintenanceLease.publishLease({ environment: commandEnvironment, maintenanceMode: false });
+    const inactiveLease = runRestoreCommand(commandEnvironment);
+    assert.notStrictEqual(inactiveLease.status, 0, 'A restore command must reject an inactive deployed-service lease.');
+    assert.match(inactiveLease.stderr, /not in migration maintenance mode/i);
+
+    const staleAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    await migrationMaintenanceLease.publishLease({ environment: commandEnvironment, maintenanceMode: true, now: staleAt, startedAt: staleAt });
+    const staleLease = runRestoreCommand(commandEnvironment);
+    assert.notStrictEqual(staleLease.status, 0, 'A restore command must reject a stale deployed-service lease.');
+    assert.match(staleLease.stderr, /lease is stale/i);
+
+    await migrationMaintenanceLease.publishLease({ environment: commandEnvironment, maintenanceMode: true });
+    const activeLease = runRestoreCommand(commandEnvironment);
+    assert.notStrictEqual(activeLease.status, 0, 'Local object storage must remain insufficient for a production recovery even under a proven maintenance lease.');
+    assert.match(activeLease.stderr, /requires HTTPS S3-compatible encrypted offsite backup storage/i, 'An active lease must allow the command to advance to the independent production-storage guard.');
+
     await assert.rejects(
       () => encryptedStateRecovery.restoreLatestEncryptedStateBackup({ repository: fakeRepository(currentState), backupStore, maintenanceMode: false, confirmationPhrase: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE }),
       /maintenance/i,
@@ -61,17 +108,43 @@ async function main() {
       'Recovery must require the exact destructive confirmation phrase.'
     );
     await assert.rejects(
-      () => encryptedStateRecovery.restoreLatestEncryptedStateBackup({ repository: fakeRepository(currentState, { transactional: false }), backupStore, maintenanceMode: true, confirmationPhrase: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE }),
+      () => encryptedStateRecovery.restoreLatestEncryptedStateBackup({ repository: fakeRepository(currentState, { transactional: false }), backupStore, maintenanceMode: true, maintenanceAssertion: async () => {}, confirmationPhrase: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE }),
       /PostgreSQL/i,
       'Recovery must refuse the JSON fallback backend.'
     );
+    await assert.rejects(
+      () => encryptedStateRecovery.restoreLatestEncryptedStateBackup({ repository: fakeRepository(currentState), backupStore, maintenanceMode: true, confirmationPhrase: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE }),
+      /signed lease/i,
+      'The recovery core must require its caller to prove the deployed maintenance lease.'
+    );
+
+    const restartedRepository = fakeRepository(currentState);
+    let restartAssertions = 0;
+    await assert.rejects(
+      () => encryptedStateRecovery.restoreLatestEncryptedStateBackup({
+        repository: restartedRepository,
+        backupStore,
+        maintenanceMode: true,
+        maintenanceAssertion: async stage => {
+          restartAssertions += 1;
+          if (stage === 'before_state_write') throw new Error('The deployed maintenance process restarted during recovery.');
+        },
+        confirmationPhrase: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE
+      }),
+      /maintenance process restarted/i,
+      'A service restart after backup verification but before the PostgreSQL write must abort recovery.'
+    );
+    assert.strictEqual(restartAssertions, 2, 'The restart simulation must fail at the second maintenance assertion.');
+    assert.strictEqual(restartedRepository.writes.length, 0, 'A restarted maintenance process must not commit recovered state.');
 
     const repository = fakeRepository(currentState);
     const revokedAt = '2026-07-18T15:00:00.000Z';
+    const maintenanceStages = [];
     const result = await encryptedStateRecovery.restoreLatestEncryptedStateBackup({
       repository,
       backupStore,
       maintenanceMode: true,
+      maintenanceAssertion: async stage => { maintenanceStages.push(stage); },
       confirmationPhrase: encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE,
       actor: 'Recovery Check Owner',
       revokedAt
@@ -97,8 +170,9 @@ async function main() {
     assert.strictEqual(repository.writes[0].metadata.recoveryEvent.details.accessControlPreserved, true, 'Encrypted offsite recovery history must retain the access-control preservation proof.');
     assert.strictEqual(repository.writes[0].metadata.recoveryEvent.details.sessionsRevoked, true, 'Encrypted offsite recovery history must retain the session-revocation proof.');
     assert.strictEqual(result.restoredChecksum, stateRepository.checksum(restored), 'Recovery must verify the committed state through a second repository read.');
+    assert.deepStrictEqual(maintenanceStages, ['before_backup_read', 'before_state_write', 'after_readback_verification'], 'Recovery must re-prove the same maintenance process across backup read, PostgreSQL commit, and read-back verification.');
 
-    console.log('Encrypted state recovery check passed: maintenance guard, exact confirmation, PostgreSQL requirement, authenticated backup restore, access-control preservation, session revocation, audit trail, snapshot write, and read-back checksum verified.');
+    console.log('Encrypted state recovery check passed: signed live maintenance lease, inactive/stale/restart rejection, exact confirmation, PostgreSQL requirement, authenticated backup restore, access-control preservation, session revocation, audit trail, snapshot write, and read-back checksum verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

@@ -178,8 +178,10 @@ the controlled document migration has re-encrypted every matching object under
 the new version and authenticated read-back has passed.
 
 If legacy files exist, make a backup first and test migration with a copied
-state file. Run the production migration only in a maintenance window while
-application writes are paused. The document migrator creates an additional
+state file. Run the production migration only after the deployed Render service
+has entered maintenance and `/healthz` reports
+`migrationMaintenanceLease: active`. A command-line flag by itself does not
+prove that application writes are paused. The document migrator creates an additional
 immutable pre-migration backup, encrypts each file, reads the exact bytes back
 to verify them before changing its record, and never deletes originals unless
 an explicit delete flag is supplied:
@@ -187,11 +189,20 @@ an explicit delete flag is supplied:
 ```sh
 WOA_PRIVATE_DOCUMENT_MIGRATION_CONFIRM=1 \
 WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM=1 \
+WOA_MIGRATION_MAINTENANCE_MODE=1 \
 WOA_DOCUMENT_STORAGE_PROVIDER=s3 \
 WOA_DOCUMENT_ENCRYPTION_KEY='<base64 key>' \
 ...provider variables... \
 pnpm run migrate-private-documents -- /secure/path/to/copied-data.json
 ```
+
+The command authenticates the shared-disk HMAC lease and binds the operation to
+the exact Render service, deployed commit, and maintenance-process instance. It
+checks the same lease again immediately before replacing document metadata and
+after read-back verification. If the service restarts, the heartbeat expires,
+or the lease changes, the command restores its protected backup and removes the
+new uncommitted encrypted objects instead of guessing that maintenance is still
+active.
 
 Verify authenticated staff downloads before setting
 `WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1` in production.
@@ -259,8 +270,10 @@ production readiness. A changed key version, missing signed pointer, stale
 backup, altered ciphertext, or checksum mismatch fails closed.
 
 For disaster recovery, first deploy with
-`WOA_MIGRATION_MAINTENANCE_MODE=1`, verify `/healthz`, verify the database and
-bucket credentials, and keep every application instance frozen. Then run:
+`WOA_MIGRATION_MAINTENANCE_MODE=1`, verify `/healthz` reports both
+`migrationMaintenance: true` and `migrationMaintenanceLease: active`, verify
+the database and bucket credentials, and keep every application instance
+frozen. Then run:
 
 ```sh
 WOA_DATA_BACKEND=postgres \
@@ -271,7 +284,11 @@ pnpm run restore-encrypted-state-backup
 ```
 
 The command accepts only PostgreSQL and production-ready HTTPS object storage.
-It authenticates the backup before mutation, preserves the current owner,
+It authenticates the signed shared-disk lease before reading the backup and
+re-proves the same Render service, commit, and process immediately before the
+PostgreSQL write and after read-back verification. An absent, inactive, stale,
+forged, different-service, different-commit, or restarted-process lease fails
+closed. It authenticates the backup before mutation, preserves the current owner,
 staff, and customer login records, revokes all signed sessions, creates a new
 PostgreSQL recovery snapshot, and verifies the committed checksum through a
 second read. Keep maintenance mode active until customer/vehicle identities,

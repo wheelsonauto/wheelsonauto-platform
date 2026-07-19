@@ -3,8 +3,20 @@
 const path = require('path');
 const encryptedStateBackup = require('../encrypted-state-backup');
 const encryptedStateRecovery = require('../encrypted-state-recovery');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 const secureDocumentStore = require('../secure-document-store');
 const stateRepository = require('../state-repository');
+
+async function assertSameMaintenanceLease(expected) {
+  const current = await migrationMaintenanceLease.assertActiveLease({ environment: process.env });
+  if (current.serviceId !== expected.serviceId
+    || current.renderCommit !== expected.renderCommit
+    || current.instanceId !== expected.instanceId
+    || current.startedAt !== expected.startedAt) {
+    throw new Error('The deployed maintenance process restarted during encrypted state recovery. Keep maintenance enabled and restart the recovery review from the beginning.');
+  }
+  return current;
+}
 
 async function main() {
   if (process.env.WOA_DATA_BACKEND !== 'postgres') throw new Error('Set WOA_DATA_BACKEND=postgres before controlled encrypted state recovery.');
@@ -13,6 +25,7 @@ async function main() {
   if (process.env.WOA_ENCRYPTED_STATE_RESTORE_CONFIRM !== encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE) {
     throw new Error('Set WOA_ENCRYPTED_STATE_RESTORE_CONFIRM="' + encryptedStateRecovery.RESTORE_CONFIRMATION_PHRASE + '" to authorize this one recovery run.');
   }
+  const activeMaintenanceLease = await migrationMaintenanceLease.assertActiveLease({ environment: process.env });
 
   const organizationId = String(process.env.WOA_MAIN_ORGANIZATION_ID || 'org-wheelsonauto');
   const objectStore = secureDocumentStore.createSecureDocumentStore({
@@ -55,6 +68,7 @@ async function main() {
       repository,
       backupStore,
       maintenanceMode: true,
+      maintenanceAssertion: () => assertSameMaintenanceLease(activeMaintenanceLease),
       confirmationPhrase: process.env.WOA_ENCRYPTED_STATE_RESTORE_CONFIRM,
       actor: process.env.WOA_ENCRYPTED_STATE_RESTORE_ACTOR || 'maintenance recovery command'
     });
@@ -64,6 +78,11 @@ async function main() {
       previousVersion: result.previousVersion,
       restoredVersion: result.restoredVersion,
       restoredChecksum: result.restoredChecksum,
+      maintenanceRenderServiceId: activeMaintenanceLease.serviceId,
+      maintenanceRenderCommit: activeMaintenanceLease.renderCommit,
+      maintenanceInstanceId: activeMaintenanceLease.instanceId,
+      maintenanceStartedAt: activeMaintenanceLease.startedAt,
+      maintenanceLeaseSignatureChecksum: activeMaintenanceLease.signatureChecksum,
       reauthenticate: result.reauthenticate,
       message: 'Encrypted offsite state backup restored into a new PostgreSQL version. Keep maintenance mode active until owner login, checksums, customer/vehicle identity, and provider queues are reviewed.'
     }, null, 2));

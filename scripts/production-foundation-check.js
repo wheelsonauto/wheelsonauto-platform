@@ -91,8 +91,10 @@ async function main() {
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
     const objectStorageRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'object-storage-runtime-check.js'), 'utf8');
     const secureDocumentStoreSource = await fs.readFile(path.resolve(__dirname, '..', 'secure-document-store.js'), 'utf8');
+    const privateDocumentMigrationSource = await fs.readFile(path.resolve(__dirname, 'migrate-private-documents.js'), 'utf8');
     const encryptedBackupSource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-backup.js'), 'utf8');
     const encryptedRecoverySource = await fs.readFile(path.resolve(__dirname, '..', 'encrypted-state-recovery.js'), 'utf8');
+    const encryptedRecoveryCommandSource = await fs.readFile(path.resolve(__dirname, 'restore-encrypted-state-backup.js'), 'utf8');
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
     const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
     const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
@@ -235,7 +237,20 @@ async function main() {
       assert(serverSource.includes("reportBackgroundTaskFailure('" + sourceName + "'"), 'Scheduled worker ' + sourceName + ' must report failures through the durable monitor.');
     });
     assert(encryptedBackupSource.includes("encryption: 'AES-256-GCM'") && encryptedBackupSource.includes('pointer.signature = pointerSignature') && encryptedBackupSource.includes('previousPointerBytes'), 'Offsite state backups must use authenticated encryption, a signed latest pointer, and rollback to the previous known-good pointer after failed read-back.');
-    assert(encryptedRecoverySource.includes('preserveAccessControlAcrossRecovery') && encryptedRecoverySource.includes('repository.write(restored') && encryptedRecoverySource.includes('verifiedChecksum'), 'Offsite recovery must preserve current access control, commit through PostgreSQL, and verify the recovered state through a second read.');
+    assert(privateDocumentMigrationSource.includes('migrationMaintenanceLease.assertActiveLease')
+      && privateDocumentMigrationSource.includes('assertSameMaintenanceLease(activeMaintenanceLease)')
+      && privateDocumentMigrationSource.includes('maintenanceLeaseSignatureChecksum: activeMaintenanceLease.signatureChecksum')
+      && privateDocumentMigrationSource.indexOf('assertSameMaintenanceLease(activeMaintenanceLease)') < privateDocumentMigrationSource.indexOf('await fs.rename(temporary, dataFile)'), 'Private-document migration must require a signed deployed-service maintenance lease and re-prove the same process immediately before its atomic state replacement.');
+    assert(encryptedRecoverySource.includes('preserveAccessControlAcrossRecovery')
+      && encryptedRecoverySource.includes("maintenanceAssertion('before_backup_read')")
+      && encryptedRecoverySource.includes("maintenanceAssertion('before_state_write')")
+      && encryptedRecoverySource.indexOf("maintenanceAssertion('before_state_write')") < encryptedRecoverySource.indexOf('repository.write(restored')
+      && encryptedRecoverySource.includes("maintenanceAssertion('after_readback_verification')")
+      && encryptedRecoverySource.includes('verifiedChecksum'), 'Offsite recovery must preserve current access control, re-prove maintenance before mutation, commit through PostgreSQL, and verify the recovered state and maintenance process through a second read.');
+    assert(encryptedRecoveryCommandSource.includes('migrationMaintenanceLease.assertActiveLease')
+      && encryptedRecoveryCommandSource.includes('assertSameMaintenanceLease(activeMaintenanceLease)')
+      && encryptedRecoveryCommandSource.includes('maintenanceAssertion: () => assertSameMaintenanceLease(activeMaintenanceLease)')
+      && encryptedRecoveryCommandSource.includes('maintenanceLeaseSignatureChecksum: activeMaintenanceLease.signatureChecksum'), 'The production restore command must bind every recovery maintenance assertion and operator result to the exact signed Render service, commit, and process lease.');
     const recoveryTargetGuard = spawnSync(process.execPath, ['scripts/postgres-runtime-check.js'], {
       cwd: path.resolve(__dirname, '..'),
       env: {

@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const secureDocumentStore = require('../secure-document-store');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 const { firstUserArgument } = require('./cli-arguments');
 
 const root = path.resolve(__dirname, '..');
@@ -67,6 +68,17 @@ function backupPathFor(dataFile) {
   return dataFile + '.private-document-pre-migration-' + stamp + '-' + process.pid + '.bak';
 }
 
+async function assertSameMaintenanceLease(expected) {
+  const current = await migrationMaintenanceLease.assertActiveLease({ environment: process.env });
+  if (current.serviceId !== expected.serviceId
+    || current.renderCommit !== expected.renderCommit
+    || current.instanceId !== expected.instanceId
+    || current.startedAt !== expected.startedAt) {
+    throw new Error('The deployed maintenance process restarted during private-document migration. No state change may be committed; retry from a fresh maintenance window.');
+  }
+  return current;
+}
+
 async function resolveLegacyFile(dataDir, legacyRoot, sourcePath) {
   const absolute = path.resolve(dataDir, sourcePath);
   if (!inside(legacyRoot, absolute)) throw new Error('Refusing to migrate a document outside onboarding-uploads: ' + sourcePath);
@@ -83,6 +95,10 @@ async function main() {
   if (process.env.WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM !== '1') {
     throw new Error('Refusing to migrate private files without WOA_PRIVATE_DOCUMENT_MIGRATION_MAINTENANCE_CONFIRM=1. Run this only while production writes are paused so live customer records cannot change during the migration.');
   }
+  if (process.env.WOA_MIGRATION_MAINTENANCE_MODE !== '1') {
+    throw new Error('WOA_MIGRATION_MAINTENANCE_MODE=1 is required for private-document migration. A command confirmation does not pause the deployed application.');
+  }
+  const activeMaintenanceLease = await migrationMaintenanceLease.assertActiveLease({ environment: process.env });
   const sourceBytes = await fs.readFile(dataFile);
   const sourceChecksum = sha256(sourceBytes);
   const state = JSON.parse(sourceBytes.toString('utf8'));
@@ -230,6 +246,7 @@ async function main() {
     if (sha256(currentBytes) !== sourceChecksum) {
       throw new Error('Live customer data changed while private documents were being migrated. data.json was not changed; retry during a maintenance window.');
     }
+    await assertSameMaintenanceLease(activeMaintenanceLease);
     const temporary = dataFile + '.private-document-migration-' + process.pid + '.tmp';
     await fs.writeFile(temporary, JSON.stringify(state, null, 2), 'utf8');
     await fs.rename(temporary, dataFile);
@@ -241,6 +258,7 @@ async function main() {
       entry.row.storageProvider !== targetProvider || String(entry.row.encryption && entry.row.encryption.keyVersion || '') !== targetKeyVersion)) {
       throw new Error('Encrypted private-document metadata verification failed after the atomic state update. The protected backup will be restored before retrying.');
     }
+    await assertSameMaintenanceLease(activeMaintenanceLease);
     stateVerified = true;
     if (process.env.WOA_PRIVATE_DOCUMENT_LEGACY_DELETE === '1') {
       for (const file of migratedFiles) await fs.rm(file, { force: true });
@@ -262,6 +280,11 @@ async function main() {
       changed: true,
       backupPath,
       sourceChecksum,
+      maintenanceRenderServiceId: activeMaintenanceLease.serviceId,
+      maintenanceRenderCommit: activeMaintenanceLease.renderCommit,
+      maintenanceInstanceId: activeMaintenanceLease.instanceId,
+      maintenanceStartedAt: activeMaintenanceLease.startedAt,
+      maintenanceLeaseSignatureChecksum: activeMaintenanceLease.signatureChecksum,
       legacyFilesRetained: process.env.WOA_PRIVATE_DOCUMENT_LEGACY_DELETE !== '1',
       encryptedSourceObjectsRetained: process.env.WOA_PRIVATE_DOCUMENT_SOURCE_DELETE !== '1',
       sourceDeleteFailures,

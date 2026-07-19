@@ -58,7 +58,11 @@ async function restoreLatestEncryptedStateBackup(options = {}) {
   if (!backupStore || typeof backupStore.readLatest !== 'function') {
     throw recoveryError('Encrypted offsite backup storage is unavailable.', 'woa_encrypted_restore_storage_missing');
   }
+  if (typeof options.maintenanceAssertion !== 'function') {
+    throw recoveryError('Encrypted offsite recovery requires a signed lease from the deployed maintenance process.', 'woa_encrypted_restore_maintenance_lease_required');
+  }
 
+  await options.maintenanceAssertion('before_backup_read');
   const recovered = await backupStore.readLatest();
   const backup = safeBackupMetadata(recovered.metadata);
   if (stateRepository.checksum(recovered.state) !== backup.stateChecksum) {
@@ -87,6 +91,7 @@ async function restoreLatestEncryptedStateBackup(options = {}) {
   const recoveryEventId = 'encrypted-backup-' + crypto.createHash('sha256')
     .update([backup.stateChecksum, backup.createdAt, revokedAt].join('\u0000'), 'utf8')
     .digest('hex');
+  await options.maintenanceAssertion('before_state_write');
   const written = await repository.write(restored, {
     reason: 'controlled encrypted offsite state recovery',
     actor,
@@ -110,6 +115,7 @@ async function restoreLatestEncryptedStateBackup(options = {}) {
   if (written.checksum !== verifiedChecksum || verified.checksum && verified.checksum !== verifiedChecksum) {
     throw recoveryError('PostgreSQL read-back checksum failed after encrypted state recovery.', 'woa_encrypted_restore_readback_failed');
   }
+  await options.maintenanceAssertion('after_readback_verification');
   return {
     backup,
     previousVersion: current.version,
