@@ -46,6 +46,8 @@ const messagesView = finalFunctionSlice(app, 'Messages');
 const messageTemplateDefaults = finalFunctionSlice(app, 'messageTemplateDefaults');
 const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
 const emailDeliveryIdempotencyKey = finalFunctionSlice(server, 'emailDeliveryIdempotencyKey');
+const sendProviderSms = finalFunctionSlice(server, 'sendProviderSms');
+const smsDeliveryIdempotencyKey = finalFunctionSlice(server, 'smsDeliveryIdempotencyKey');
 const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
 const hydrateIncomingEmail = finalFunctionSlice(server, 'hydrateIncomingEmail');
 const verifyResendWebhook = finalFunctionSlice(server, 'verifyResendWebhook');
@@ -71,7 +73,7 @@ const configureTelnyxMessagingProfile = finalFunctionSlice(server, 'configureTel
 const applyTelnyxDeliveryEvent = finalFunctionSlice(server, 'applyTelnyxDeliveryEvent');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !sendProviderSms || !smsDeliveryIdempotencyKey || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging inbound SMS status', messagingStatus, 'smsWebhookConnected');
@@ -154,6 +156,17 @@ requireText('Messaging provider owner-only setup action', app, 'configure-sms-pr
 requireText('Telnyx profile setup', configureTelnyxMessagingProfile, '/messaging_profiles');
 requireText('Telnyx number assignment', configureTelnyxMessagingProfile, '/phone_numbers');
 requireText('Telnyx delivery matching', applyTelnyxDeliveryEvent, 'externalId');
+requireText('Durable SMS delivery claim', sendProviderSms, "claimIdempotencyKey(claimScope, idempotencyKey");
+requireText('Completed SMS delivery reuse', sendProviderSms, 'claim.completed');
+requireText('Ambiguous SMS retry block', sendProviderSms, "error.code = 'sms_confirmation_pending'");
+requireText('Deterministic SMS delivery key', smsDeliveryIdempotencyKey, "createHash('sha256')");
+requireText('Manual message UI delivery identity', app, "messageDeliveryId=b.dataset.deliveryId||('ui-message-'");
+requireText('Manual message delivery identity payload', app, 'deliveryId:messageDeliveryId');
+requireText('Manual message confirmation-pending UI', app, "if(sent.confirmationPending)");
+requireText('Payment receipt UI delivery identity', app, "receiptDeliveryId=b.dataset.deliveryId||('ui-payment-receipt-'");
+requireText('Toll receipt UI delivery identity', app, "tollDeliveryId=b.dataset.deliveryId||('ui-toll-receipt-'");
+requireText('Toll receipt server delivery identity', server, 'sendTollReceipt(data, claim, payload.channel, user, payload.deliveryId)');
+requireText('Star confirmation-pending guard', approveAiMessage, 'if (result.inProgress)');
 requireText('SMS scam credential protection', smsScamAssessment, 'verification code');
 requireText('SMS scam shortened-link protection', smsScamAssessment, 'tinyurl');
 requireText('Owner phone sensitive action protection', smsSensitiveActionAssessment, 'charge or payment action');

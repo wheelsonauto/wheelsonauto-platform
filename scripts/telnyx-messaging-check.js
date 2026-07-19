@@ -54,8 +54,10 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(inbound.externalId, 'telnyx-inbound-1');
 
   let outboundRequest = null;
+  let outboundRequestCount = 0;
   const originalFetch = global.fetch;
   global.fetch = async (url, options = {}) => {
+    outboundRequestCount += 1;
     outboundRequest = { url: String(url), options };
     return {
       ok: true,
@@ -65,14 +67,61 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
       }
     };
   };
-  const outbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test');
+  const outbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test', { deliveryId: 'telnyx-check-outbound-1' });
+  const duplicateOutbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test', { deliveryId: 'telnyx-check-outbound-1' });
   global.fetch = originalFetch;
   assert(outbound.sent && outbound.provider === 'telnyx' && outbound.externalId === 'telnyx-outbound-1');
+  assert(/^woa-sms-[a-f0-9]{64}$/.test(outbound.idempotencyKey), 'A Telnyx send must carry a deterministic WheelsonAuto delivery key.');
+  assert(duplicateOutbound.sent && duplicateOutbound.duplicate && duplicateOutbound.externalId === outbound.externalId, 'A completed Telnyx delivery retry must reuse the provider result.');
+  assert.strictEqual(outboundRequestCount, 1, 'A duplicate Telnyx delivery must not call the carrier twice.');
   const outboundBody = JSON.parse(outboundRequest.options.body);
   assert.strictEqual(outboundBody.webhook_url, 'https://wheelsonauto-platform.onrender.com/api/webhooks/messages?provider=telnyx');
   assert.strictEqual(outboundBody.use_profile_webhooks, true);
   assert.strictEqual(outboundBody.auto_detect, true);
   assert.strictEqual(outboundBody.encoding, 'auto');
+
+  let ambiguousAttempts = 0;
+  global.fetch = async () => {
+    ambiguousAttempts += 1;
+    throw new TypeError('Controlled transport interruption');
+  };
+  await assert.rejects(
+    () => sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' }),
+    error => error && error.code === 'sms_confirmation_pending' && error.ambiguous === true && /^woa-sms-/.test(error.idempotencyKey || '')
+  );
+  const ambiguousDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+  global.fetch = originalFetch;
+  assert(!ambiguousDuplicate.sent && ambiguousDuplicate.inProgress && ambiguousDuplicate.duplicate, 'An ambiguous Telnyx retry must remain confirmation pending instead of sending again.');
+  assert.strictEqual(ambiguousAttempts, 1, 'An ambiguous Telnyx retry must not call the carrier a second time.');
+
+  let rejectedAttempts = 0;
+  global.fetch = async () => {
+    rejectedAttempts += 1;
+    if (rejectedAttempts === 1) {
+      return {
+        ok: false,
+        status: 422,
+        async json() {
+          return { errors: [{ detail: 'Controlled provider rejection' }] };
+        }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { data: { id: 'telnyx-outbound-retry-1', to: [{ phone_number: '+16095550104', status: 'queued' }] } };
+      }
+    };
+  };
+  await assert.rejects(
+    () => sendProviderSms('+16095550104', 'WheelsonAuto rejected Telnyx test', { deliveryId: 'telnyx-check-rejected-1' }),
+    error => error && error.providerRejected === true && error.statusCode === 422
+  );
+  const rejectedRetry = await sendProviderSms('+16095550104', 'WheelsonAuto rejected Telnyx test', { deliveryId: 'telnyx-check-rejected-1' });
+  global.fetch = originalFetch;
+  assert(rejectedRetry.sent && rejectedRetry.externalId === 'telnyx-outbound-retry-1', 'A definitive provider rejection must release the delivery identity for a corrected retry.');
+  assert.strictEqual(rejectedAttempts, 2, 'A definitive provider rejection must allow one later provider retry.');
 
   const messageData = {
     messages: [{ id: 'message-local-1', externalId: 'telnyx-outbound-1', status: 'Queued', tone: 'blue' }]

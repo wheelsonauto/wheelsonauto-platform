@@ -221,7 +221,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-owner-access-204';
+const ASSET_VERSION = 'platform-20260719-sms-delivery-205';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -2285,6 +2285,19 @@ function emailWebhookAuthorized(req, url, rawBody, provider) {
   if (MESSAGING_WEBHOOK_SECRET || RESEND_WEBHOOK_SECRET) return false;
   return !['resend', 'sendgrid'].includes(provider);
 }
+function smsDeliveryIdempotencyKey(to, body, meta = {}) {
+  const deliveryId = String(meta.deliveryId || meta.idempotencyKey || '').trim().slice(0, 240);
+  const canonical = JSON.stringify({
+    version: 1,
+    provider: String(MESSAGING_PROVIDER || '').trim().toLowerCase(),
+    organizationId: String(meta.organizationId || MAIN_ORG_ID),
+    deliveryId: deliveryId || ('window:' + Math.floor(Date.now() / (10 * 60 * 1000))),
+    from: cleanPhone(MESSAGING_FROM_NUMBER || ''),
+    to: cleanPhone(to || ''),
+    body: String(body || '')
+  });
+  return 'woa-sms-' + crypto.createHash('sha256').update(canonical).digest('hex');
+}
 async function sendProviderSms(to, body, meta = {}) {
   const provider = MESSAGING_PROVIDER;
   if (!body) throw new Error('Message needs a message body.');
@@ -2309,42 +2322,98 @@ async function sendProviderSms(to, body, meta = {}) {
   const settings = meta.messagingSettings || { enabled: WOA_MESSAGING_ENABLED };
   if (!settings.enabled) return { sent: false, status: 'Messaging off', provider: provider || 'not_configured', message: 'Messaging is turned off in WheelsonAuto settings or Render.' };
   if (!MESSAGING_FROM_NUMBER) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Add the hosted SMS number in Render first.' };
-  if (provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
-    const form = new URLSearchParams({ From: MESSAGING_FROM_NUMBER, To: cleanPhone(to), Body: body });
-    const auth = Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64');
-    const response = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + encodeURIComponent(TWILIO_ACCOUNT_SID) + '/Messages.json', {
-      method: 'POST',
-      headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: form
-    });
-    const jsonBody = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(jsonBody.message || 'Twilio message failed.');
-    return { sent: true, status: jsonBody.status || 'Sent', provider: 'twilio', externalId: jsonBody.sid || '', response: jsonBody };
-  }
-  if (provider === 'telnyx' && TELNYX_API_KEY) {
-    const telnyxPayload = {
-      from: cleanPhone(MESSAGING_FROM_NUMBER),
-      to: cleanPhone(to),
-      text: body,
-      auto_detect: true,
-      encoding: 'auto',
-      webhook_url: PUBLIC_BASE_URL + '/api/webhooks/messages?provider=telnyx',
-      use_profile_webhooks: true
+  const providerReady = (provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) || (provider === 'telnyx' && TELNYX_API_KEY);
+  if (!providerReady) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+  const idempotencyKey = smsDeliveryIdempotencyKey(to, body, meta);
+  const claimScope = 'outbound_sms_delivery';
+  const request = {
+    provider,
+    organizationId: String(meta.organizationId || MAIN_ORG_ID),
+    from: cleanPhone(MESSAGING_FROM_NUMBER),
+    to: cleanPhone(to),
+    bodyHash: crypto.createHash('sha256').update(String(body)).digest('hex'),
+    deliveryId: String(meta.deliveryId || meta.idempotencyKey || '')
+  };
+  const claim = await STATE_REPOSITORY.claimIdempotencyKey(claimScope, idempotencyKey, request);
+  if (!claim.accepted) {
+    if (claim.completed) return { ...(claim.response || {}), idempotencyKey, duplicate: true };
+    return {
+      sent: false,
+      status: 'Send confirmation pending',
+      provider,
+      channel: 'SMS',
+      idempotencyKey,
+      duplicate: true,
+      inProgress: true,
+      message: 'This exact text is already being processed. WheelsonAuto did not send another copy.'
     };
-    const profileId = String(meta.messagingProfileId || TELNYX_MESSAGING_PROFILE_ID || '').trim();
-    if (profileId) telnyxPayload.messaging_profile_id = profileId;
-    const response = await fetch('https://api.telnyx.com/v2/messages', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TELNYX_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify(telnyxPayload)
-    });
-    const jsonBody = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error((jsonBody.errors && jsonBody.errors[0] && jsonBody.errors[0].detail) || jsonBody.message || 'Telnyx message failed.');
-    const telnyxData = jsonBody.data || {};
-    const destination = Array.isArray(telnyxData.to) ? telnyxData.to[0] || {} : {};
-    return { sent: true, status: destination.status || telnyxData.status || 'Queued', provider: 'telnyx', externalId: telnyxData.id || '', response: jsonBody };
   }
-  return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+  try {
+    let result;
+    if (provider === 'twilio') {
+      const form = new URLSearchParams({ From: MESSAGING_FROM_NUMBER, To: cleanPhone(to), Body: body });
+      const auth = Buffer.from(TWILIO_ACCOUNT_SID + ':' + TWILIO_AUTH_TOKEN).toString('base64');
+      const response = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + encodeURIComponent(TWILIO_ACCOUNT_SID) + '/Messages.json', {
+        method: 'POST',
+        headers: { Authorization: 'Basic ' + auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form
+      });
+      const jsonBody = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(jsonBody.message || 'Twilio message failed.');
+        error.providerRejected = true;
+        error.statusCode = response.status;
+        throw error;
+      }
+      result = { sent: true, status: jsonBody.status || 'Sent', provider: 'twilio', channel: 'SMS', externalId: jsonBody.sid || '', idempotencyKey, response: jsonBody };
+    } else {
+      const telnyxPayload = {
+        from: cleanPhone(MESSAGING_FROM_NUMBER),
+        to: cleanPhone(to),
+        text: body,
+        auto_detect: true,
+        encoding: 'auto',
+        webhook_url: PUBLIC_BASE_URL + '/api/webhooks/messages?provider=telnyx',
+        use_profile_webhooks: true
+      };
+      const profileId = String(meta.messagingProfileId || TELNYX_MESSAGING_PROFILE_ID || '').trim();
+      if (profileId) telnyxPayload.messaging_profile_id = profileId;
+      const response = await fetch('https://api.telnyx.com/v2/messages', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TELNYX_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify(telnyxPayload)
+      });
+      const jsonBody = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error((jsonBody.errors && jsonBody.errors[0] && jsonBody.errors[0].detail) || jsonBody.message || 'Telnyx message failed.');
+        error.providerRejected = true;
+        error.statusCode = response.status;
+        throw error;
+      }
+      const telnyxData = jsonBody.data || {};
+      const destination = Array.isArray(telnyxData.to) ? telnyxData.to[0] || {} : {};
+      result = { sent: true, status: destination.status || telnyxData.status || 'Queued', provider: 'telnyx', channel: 'SMS', externalId: telnyxData.id || '', idempotencyKey, response: jsonBody };
+    }
+    await STATE_REPOSITORY.completeIdempotencyKey(claimScope, idempotencyKey, {
+      sent: true,
+      status: result.status,
+      provider: result.provider,
+      channel: 'SMS',
+      externalId: result.externalId,
+      idempotencyKey
+    }, { claimToken: claim.claimToken });
+    return result;
+  } catch (error) {
+    if (error.providerRejected) {
+      await STATE_REPOSITORY.failIdempotencyKey(claimScope, idempotencyKey, error, { claimToken: claim.claimToken });
+    } else {
+      error.code = 'sms_confirmation_pending';
+      error.ambiguous = true;
+      error.statusCode = 503;
+      error.idempotencyKey = idempotencyKey;
+    }
+    throw error;
+  }
 }
 async function configureTwilioSmsWebhook(options = {}) {
   const accountSid = String(options.accountSid || TWILIO_ACCOUNT_SID || '').trim();
@@ -2945,11 +3014,21 @@ async function sendOwnerSmsMirror(data, payload = {}, settings = messageSettings
   let result;
   let error = '';
   try {
-    result = await sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER, body, { customer: 'WheelsonAuto owner', ownerMirror: true, messagingSettings: settings });
+    result = await sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER, body, {
+      customer: 'WheelsonAuto owner',
+      organizationId: payload.organizationId || MAIN_ORG_ID,
+      deliveryId: 'owner-mirror:' + String(payload.externalId || payload.id || thread.code),
+      ownerMirror: true,
+      messagingSettings: settings
+    });
   } catch (err) {
     error = String(err && err.message || err);
-    result = { sent: false, status: 'Mirror failed', provider: MESSAGING_PROVIDER || 'not_configured', message: error };
+    result = { sent: false, status: err && err.code === 'sms_confirmation_pending' ? 'Mirror confirmation pending' : 'Mirror failed', provider: MESSAGING_PROVIDER || 'not_configured', idempotencyKey: String(err && err.idempotencyKey || ''), message: error };
   }
+  const existingMirror = result.idempotencyKey && result.duplicate
+    ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && item.externalId)
+    : null;
+  if (existingMirror) return { ...result, record: existingMirror, bridgeCode: thread.code, error: '' };
   const record = {
     id: 'msg-mirror-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
     externalId: result.externalId || '',
@@ -2969,6 +3048,7 @@ async function sendOwnerSmsMirror(data, payload = {}, settings = messageSettings
     tone: scam.suspicious || error ? 'bad' : (result.sent ? 'good' : 'warn'),
     body,
     provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    providerIdempotencyKey: result.idempotencyKey || '',
     source: 'WheelsonAuto phone mirror',
     bridgeCode: thread.code,
     scamReasons: scam.reasons || [],
@@ -2990,10 +3070,19 @@ async function sendOwnerBridgeNotice(data, body, status = 'Owner bridge notice')
   if (!MESSAGING_OWNER_NOTIFY_NUMBER) return { sent: false, skipped: true };
   let result;
   try {
-    result = await sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER, body, { customer: 'WheelsonAuto owner', ownerBridgeNotice: true, messagingSettings: messageSettings(data) });
+    result = await sendProviderSms(MESSAGING_OWNER_NOTIFY_NUMBER, body, {
+      customer: 'WheelsonAuto owner',
+      deliveryId: 'owner-bridge-notice:' + crypto.createHash('sha256').update(String(status) + '\n' + String(body)).digest('hex'),
+      ownerBridgeNotice: true,
+      messagingSettings: messageSettings(data)
+    });
   } catch (err) {
-    result = { sent: false, status: 'Notice failed', provider: MESSAGING_PROVIDER || 'not_configured', message: String(err && err.message || err) };
+    result = { sent: false, status: err && err.code === 'sms_confirmation_pending' ? 'Notice confirmation pending' : 'Notice failed', provider: MESSAGING_PROVIDER || 'not_configured', idempotencyKey: String(err && err.idempotencyKey || ''), message: String(err && err.message || err) };
   }
+  const existingNotice = result.idempotencyKey && result.duplicate
+    ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && item.externalId)
+    : null;
+  if (existingNotice) return { ...result, record: existingNotice };
   data.messages.unshift({
     id: 'msg-owner-notice-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
     externalId: result.externalId || '',
@@ -3010,6 +3099,7 @@ async function sendOwnerBridgeNotice(data, body, status = 'Owner bridge notice')
     tone: result.sent ? 'warn' : 'bad',
     body,
     provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    providerIdempotencyKey: result.idempotencyKey || '',
     source: 'WheelsonAuto owner phone bridge',
     hiddenFromInbox: true
   });
@@ -3066,11 +3156,12 @@ async function handleOwnerSmsBridge(data, inbound) {
       organizationId: thread.organizationId || MAIN_ORG_ID,
       customerMessage: true,
       consentData: data,
+      deliveryId: 'owner-reply:' + String(inbound.externalId || ownerRecord.id),
       ownerPhoneBridge: true,
       messagingSettings: messageSettings(data)
     });
   } catch (err) {
-    result = { sent: false, status: 'Failed', provider: MESSAGING_PROVIDER || 'not_configured', message: String(err && err.message || err) };
+    result = { sent: false, status: err && err.code === 'sms_confirmation_pending' ? 'Send confirmation pending' : 'Failed', provider: MESSAGING_PROVIDER || 'not_configured', idempotencyKey: String(err && err.idempotencyKey || ''), message: String(err && err.message || err) };
   }
   const sentRecord = {
     id: 'msg-owner-out-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
@@ -3089,6 +3180,7 @@ async function handleOwnerSmsBridge(data, inbound) {
     tone: result.sent ? 'good' : 'bad',
     body: resolved.body,
     provider: result.provider || MESSAGING_PROVIDER || 'not_configured',
+    providerIdempotencyKey: result.idempotencyKey || '',
     source: 'Owner phone bridge',
     bridgeCode: thread.code,
     customerId: thread.customerId || '',
@@ -5546,8 +5638,16 @@ async function approveAiMessage(data, payload = {}) {
       customerMessage: true,
       consentData: data,
       ai: true,
+      deliveryId: 'star-draft:' + draft.id,
       messagingSettings: settings
     });
+  if (result.inProgress) {
+    const error = new Error(result.message || 'This Star reply is waiting for SMS provider confirmation.');
+    error.code = 'sms_confirmation_pending';
+    error.statusCode = 503;
+    error.idempotencyKey = result.idempotencyKey || '';
+    throw error;
+  }
   const channel = result.channel || (deliveryChannel === 'email' ? 'Email' : 'SMS');
   const sent = {
     id: 'msg-ai-sent-' + Date.now(),
@@ -11653,7 +11753,7 @@ function tollReceiptHtml(claim = {}) {
   const row = (label, value) => '<div class="receipt-row"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value || 'Not provided') + '</strong></div>';
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto toll reimbursement proof</title><style>:root{color-scheme:dark;--bg:#0b0b0c;--panel:#151517;--line:#3a3221;--gold:#d6ad5c;--muted:#aaa49a;--text:#f7f3ea;--good:#70d49b}*{box-sizing:border-box}body{margin:0;background:#080809;color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}.wrap{width:min(760px,calc(100% - 28px));margin:32px auto}.brand{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand b{font-size:22px;color:var(--gold)}.brand span{color:var(--muted);font-size:12px;text-transform:uppercase}.receipt{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.35)}.hero{padding:28px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.hero h1{font-size:25px;line-height:1.2;margin:4px 0 8px}.eyebrow{color:var(--gold);font-weight:800;text-transform:uppercase;font-size:11px}.amount{text-align:right}.amount span{display:block;color:var(--muted);font-size:12px}.amount strong{font-size:30px;color:var(--gold)}.grid{padding:8px 28px 24px}.receipt-row{display:grid;grid-template-columns:160px 1fr;gap:18px;padding:12px 0;border-bottom:1px solid rgba(214,173,92,.12)}.receipt-row span{color:var(--muted)}.receipt-row strong{text-align:right;overflow-wrap:anywhere}.proof{margin:0;padding:20px 28px;background:#111112;color:var(--muted);font-size:12px}.actions{display:flex;justify-content:flex-end;margin-top:16px}.actions button{border:1px solid var(--gold);background:var(--gold);color:#13100a;border-radius:7px;padding:12px 18px;font-weight:800;cursor:pointer}@media(max-width:560px){.wrap{margin:14px auto}.hero{padding:20px;display:block}.amount{text-align:left;margin-top:18px}.grid{padding:6px 20px 20px}.receipt-row{grid-template-columns:1fr;gap:3px}.receipt-row strong{text-align:left}.brand{align-items:flex-start}}@media print{body{background:#fff;color:#111}.wrap{width:100%;margin:0}.receipt{box-shadow:none;background:#fff;border-color:#bbb}.proof{background:#f5f5f5;color:#333}.actions{display:none}.brand b,.eyebrow,.amount strong{color:#8a651d}.receipt-row span{color:#555}}</style></head><body><main class="wrap"><header class="brand"><b>WheelsonAuto</b><span>Customer reimbursement record</span></header><article class="receipt"><section class="hero"><div><div class="eyebrow">E-ZPass transaction proof</div><h1>Toll reimbursement receipt</h1><div>' + escapeHtml(customer) + '</div></div><div class="amount"><span>Amount to reimburse</span><strong>' + escapeHtml(amount) + '</strong></div></section><section class="grid">' + row('Status', status) + row('Transaction date', transactionDate) + row('Posted date', postingDate) + row('Tag / plate', plate) + row('Vehicle', vehicle) + row('VIN', claim.vin || 'Not provided') + row('Agency', agency) + row('Description', evidence.description || claim.type || 'TOLL') + row('Entry', entry) + row('Exit', exit) + row('Vehicle type code', evidence.vehicleTypeCode || 'Not provided') + row('Plan / rate', evidence.planRate || 'Not provided') + row('Fare type', evidence.fareType || 'Not provided') + row('Reference', reference) + '</section><p class="proof">Generated by WheelsonAuto from the imported E-ZPass NJ transaction report. The transaction fields above are preserved from the source row. The private E-ZPass account number and account balance are intentionally excluded.</p></article><div class="actions"><button type="button" onclick="window.print()">Print receipt</button></div></main></body></html>';
 }
-async function sendTollReceipt(data, claim, channel, user) {
+async function sendTollReceipt(data, claim, channel, user, deliveryId = '') {
   const selectedChannel = String(channel || (claim.email ? 'Email' : 'SMS')).toLowerCase() === 'sms' ? 'SMS' : 'Email';
   const to = selectedChannel === 'Email' ? String(claim.email || '').trim() : String(claim.phone || '').trim();
   if (!claim.customer || weakClaimCustomer(claim.customer)) throw new Error('Match the exact customer before sending toll proof.');
@@ -11666,7 +11766,7 @@ async function sendTollReceipt(data, claim, channel, user) {
     result = selectedChannel === 'Email'
       ? await sendProviderEmail(to, 'WheelsonAuto E-ZPass toll reimbursement proof', body, {
         customer: claim.customer,
-        deliveryId: 'toll-receipt:' + claim.id,
+        deliveryId: deliveryId || ('toll-receipt:' + claim.id),
         messagingSettings: settings
       })
       : await sendProviderSms(to, body, {
@@ -11675,12 +11775,17 @@ async function sendTollReceipt(data, claim, channel, user) {
         organizationId: claim.organizationId || MAIN_ORG_ID,
         customerMessage: true,
         consentData: data,
+        deliveryId: deliveryId || ('toll-receipt:' + claim.id),
         messagingSettings: settings
       });
   } catch (err) {
-    result = { sent: false, status: selectedChannel + ' draft', provider: selectedChannel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER, message: String(err && err.message || err) };
+    result = { sent: false, status: err && err.code === 'sms_confirmation_pending' ? 'Send confirmation pending' : selectedChannel + ' draft', provider: selectedChannel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER, idempotencyKey: String(err && err.idempotencyKey || ''), message: String(err && err.message || err) };
   }
   data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const existingReceipt = result.idempotencyKey && result.duplicate
+    ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending'))
+    : null;
+  if (existingReceipt) return { sent: !!existingReceipt.externalId, duplicate: true, confirmationPending: !existingReceipt.externalId, status: existingReceipt.status || 'Sent', channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: existingReceipt };
   const now = new Date().toISOString();
   const record = {
     id: 'msg-toll-receipt-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
@@ -11725,7 +11830,7 @@ async function sendTollReceipt(data, claim, channel, user) {
   claim.portalVisible = !!result.sent;
   claim.updatedAt = now;
   appendAuditLog(data, user, result.sent ? 'Toll reimbursement proof sent' : 'Toll reimbursement proof saved', [claim.customer, claim.vehicle || claim.vin || claim.plate || '', moneyText(claim.amount || 0), selectedChannel, record.status]);
-  return { sent: !!result.sent, status: record.status, channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: record };
+  return { sent: !!result.sent, confirmationPending: record.status === 'Send confirmation pending', status: record.status, channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: record };
 }
 function rematchSavedTollClaims(data, user) {
   let updated = 0;
@@ -21057,7 +21162,7 @@ const server = http.createServer(async (req, res) => {
         claim.evidence = claim.evidence || claim.receiptUrl;
       }
       try {
-        const result = await sendTollReceipt(data, claim, payload.channel, user);
+        const result = await sendTollReceipt(data, claim, payload.channel, user, payload.deliveryId);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
         return json(res, 200, { ok: true, result, claim: { id: claim.id, receiptUrl: claim.receiptUrl, receiptStatus: claim.receiptStatus }, version: await dataVersion() });
@@ -21336,8 +21441,16 @@ const server = http.createServer(async (req, res) => {
             organizationId: messageFields.organizationId || userOrganizationId(user),
             customerMessage: true,
             consentData: data,
+            deliveryId: payload.deliveryId || payload.idempotencyKey || '',
             messagingSettings: settings
           });
+        const existingDelivery = result.idempotencyKey && result.duplicate
+          ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending'))
+          : null;
+        if (existingDelivery) {
+          const confirmationPending = !existingDelivery.externalId;
+          return json(res, confirmationPending ? 202 : 200, { ok: true, sent: !confirmationPending, duplicate: true, confirmationPending, message: existingDelivery, provider: result.provider, ownerMirror: null, warning: confirmationPending ? 'This message is still waiting for provider confirmation. WheelsonAuto did not send another copy.' : 'This message was already accepted by the provider. WheelsonAuto did not send another copy.' });
+        }
         const record = {
           id: 'msg-out-' + Date.now(),
           externalId: result.externalId || '',
@@ -21375,12 +21488,13 @@ const server = http.createServer(async (req, res) => {
           claimId: payload.claimId || ''
         };
         data.messages.unshift(record);
-        const ownerMirror = channel === 'SMS' ? await sendOwnerSmsMirror(data, { ...record, direction: 'Outbound', phone, body }, settings) : null;
+        const ownerMirror = channel === 'SMS' && result.sent && !result.duplicate ? await sendOwnerSmsMirror(data, { ...record, direction: 'Outbound', phone, body }, settings) : null;
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: ownerMirror && ownerMirror.error || '' };
-        appendAuditLog(data, user, result.sent ? 'Customer message sent' : 'Customer message drafted', [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
+        appendAuditLog(data, user, result.sent ? 'Customer message sent' : (result.inProgress ? 'Customer message confirmation pending' : 'Customer message drafted'), [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
         await writeData(data);
-        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, message: record, provider: result.provider, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
+        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, confirmationPending: !!result.inProgress, message: record, provider: result.provider, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
       } catch (err) {
+        const confirmationPending = err && err.code === 'sms_confirmation_pending';
         const record = {
           id: 'msg-out-failed-' + Date.now(),
           date: new Date().toLocaleString('en-US'),
@@ -21393,11 +21507,12 @@ const server = http.createServer(async (req, res) => {
           channel,
           template: payload.template || payload.subject || 'Manual message',
           subject: payload.subject || payload.template || 'Manual message',
-          status: 'Failed',
-          tone: 'bad',
+          status: confirmationPending ? 'Send confirmation pending' : 'Failed',
+          tone: confirmationPending ? 'warn' : 'bad',
           body,
           provider: channel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
-          source: channel + ' provider',
+          providerIdempotencyKey: String(err && err.idempotencyKey || ''),
+          source: confirmationPending ? channel + ' provider confirmation' : channel + ' provider',
           customerId: messageFields.customerId,
           contractId: messageFields.contractId,
           paymentId: payload.paymentId || '',
@@ -21414,10 +21529,15 @@ const server = http.createServer(async (req, res) => {
           error: String(err && err.message || err)
         };
         data.messages.unshift(record);
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastError: record.error, lastFailedAt: new Date().toISOString() };
-        appendAuditLog(data, user, 'Customer message failed', [customer, channel, record.vehicle || record.vin || 'No vehicle linked', record.error]);
+        data.integrations.messaging = {
+          ...(data.integrations.messaging || {}),
+          ...publicMessagingStatus(data),
+          lastError: record.error,
+          ...(confirmationPending ? { lastConfirmationPendingAt: new Date().toISOString() } : { lastFailedAt: new Date().toISOString() })
+        };
+        appendAuditLog(data, user, confirmationPending ? 'Customer message confirmation pending' : 'Customer message failed', [customer, channel, record.vehicle || record.vin || 'No vehicle linked', record.error]);
         await writeData(data);
-        return json(res, 502, { ok: false, error: record.error, message: record });
+        return json(res, confirmationPending ? 503 : 502, { ok: false, confirmationPending, retry: !confirmationPending, error: confirmationPending ? 'The SMS provider response was interrupted. WheelsonAuto blocked an automatic retry so the customer is not texted twice; review carrier delivery before retrying.' : record.error, message: record });
       }
     }
     if (url.pathname === '/api/messages/ai-reply' && req.method === 'POST') {
