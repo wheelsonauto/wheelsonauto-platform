@@ -10,13 +10,15 @@ const DURABLE_RATE_LIMIT_MIGRATION_ID = '20260718_durable_security_rate_limits_v
 const DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID = '20260718_document_tenant_primary_key_v4';
 const PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID = '20260718_provider_financial_identity_index_v5';
 const RECOVERY_HISTORY_MIGRATION_ID = '20260719_append_only_recovery_history_v6';
+const MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID = '20260719_signed_migration_source_provenance_v7';
 const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
   MIGRATION_ID,
   TRANSACTIONAL_INDEX_MIGRATION_ID,
   DURABLE_RATE_LIMIT_MIGRATION_ID,
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
-  RECOVERY_HISTORY_MIGRATION_ID
+  RECOVERY_HISTORY_MIGRATION_ID,
+  MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID
 ]);
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
@@ -74,6 +76,10 @@ function stableJson(value) {
 
 function checksum(value) {
   return crypto.createHash('sha256').update(stableJson(value || {}), 'utf8').digest('hex');
+}
+
+function validSha256(value) {
+  return /^[a-f0-9]{64}$/i.test(String(value || '').trim());
 }
 
 function jobErrorFingerprint(source, severity, message, context = {}, explicit = '') {
@@ -291,11 +297,27 @@ function migrationProofEvidence(proof) {
   const importedVersion = Number(row.importedVersion || row.imported_version || 0);
   const snapshotChecksum = String(row.snapshotChecksum || row.snapshot_checksum || '').trim();
   const verifiedAt = row.verifiedAt || row.verified_at || '';
-  const hasProof = !!(sourceChecksum && canonicalSourceChecksum && targetChecksum && importedVersion > 0 && snapshotChecksum && verifiedAt);
-  const canonicalChecksumMatchesTarget = hasProof && canonicalSourceChecksum === targetChecksum;
-  const countsMatch = hasProof && stableJson(sourceRecordCounts) === stableJson(targetRecordCounts);
-  const snapshotChecksumMatchesTarget = hasProof && snapshotChecksum === targetChecksum;
-  const ready = canonicalChecksumMatchesTarget && countsMatch && snapshotChecksumMatchesTarget;
+  const provenanceVersion = Number(row.provenanceVersion || row.provenance_version || 0);
+  const sourceOrigin = String(row.sourceOrigin || row.source_origin || '').trim();
+  const renderServiceId = String(row.renderServiceId || row.render_service_id || '').trim();
+  const sourcePreparedAt = row.sourcePreparedAt || row.source_prepared_at || '';
+  const liveSourceFileChecksum = String(row.liveSourceFileChecksum || row.live_source_file_checksum || '').trim();
+  const protectedSourceFileChecksum = String(row.protectedSourceFileChecksum || row.protected_source_file_checksum || '').trim();
+  const sourceManifestChecksum = String(row.sourceManifestChecksum || row.source_manifest_checksum || '').trim();
+  const sourceSignatureChecksum = String(row.sourceSignatureChecksum || row.source_signature_checksum || '').trim();
+  const hasCoreProof = !!(sourceChecksum && canonicalSourceChecksum && targetChecksum && importedVersion > 0 && snapshotChecksum && verifiedAt);
+  const sourceProvenanceReady = provenanceVersion === 1
+    && sourceOrigin === 'render-live-disk'
+    && !!renderServiceId
+    && Number.isFinite(Date.parse(String(sourcePreparedAt || '')))
+    && validSha256(liveSourceFileChecksum)
+    && validSha256(protectedSourceFileChecksum)
+    && validSha256(sourceManifestChecksum)
+    && validSha256(sourceSignatureChecksum);
+  const canonicalChecksumMatchesTarget = hasCoreProof && canonicalSourceChecksum === targetChecksum;
+  const countsMatch = hasCoreProof && stableJson(sourceRecordCounts) === stableJson(targetRecordCounts);
+  const snapshotChecksumMatchesTarget = hasCoreProof && snapshotChecksum === targetChecksum;
+  const ready = canonicalChecksumMatchesTarget && countsMatch && snapshotChecksumMatchesTarget && sourceProvenanceReady;
   return {
     importedVersion,
     importedAt: verifiedAt,
@@ -304,7 +326,16 @@ function migrationProofEvidence(proof) {
     targetChecksum,
     sourceRecordCounts,
     targetRecordCounts,
-    migrationProofIntegrity: !hasProof ? 'missing' : ready ? 'verified' : 'failed',
+    provenanceVersion,
+    sourceOrigin,
+    renderServiceId,
+    sourcePreparedAt,
+    liveSourceFileChecksum,
+    protectedSourceFileChecksum,
+    sourceManifestChecksum,
+    sourceSignatureChecksum,
+    migrationSourceProvenanceReady: sourceProvenanceReady,
+    migrationProofIntegrity: !hasCoreProof ? 'missing' : ready ? 'verified' : 'failed',
     migrationChecksumMatchesTarget: canonicalChecksumMatchesTarget,
     migrationRecordCountsMatch: countsMatch,
     migrationSnapshotMatchesTarget: snapshotChecksumMatchesTarget,
@@ -1022,6 +1053,7 @@ class JsonStateRepository {
       transactional: false,
       productionReady: false,
       migrationProofIntegrity: 'not_supported',
+      migrationSourceProvenanceReady: false,
       migrationProofReady: false,
       snapshotIntegrity: 'not_supported',
       snapshotRecoveryReady: false,
@@ -1515,9 +1547,25 @@ class PostgresStateRepository {
           imported_version BIGINT NOT NULL,
           snapshot_id BIGINT NOT NULL,
           snapshot_checksum TEXT NOT NULL,
+          provenance_version INTEGER NOT NULL DEFAULT 0,
+          source_origin TEXT NOT NULL DEFAULT '',
+          render_service_id TEXT NOT NULL DEFAULT '',
+          source_prepared_at TIMESTAMPTZ,
+          live_source_file_checksum TEXT NOT NULL DEFAULT '',
+          protected_source_file_checksum TEXT NOT NULL DEFAULT '',
+          source_manifest_checksum TEXT NOT NULL DEFAULT '',
+          source_signature_checksum TEXT NOT NULL DEFAULT '',
           actor TEXT NOT NULL DEFAULT '',
           verified_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )`);
+        await client.query('ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS provenance_version INTEGER NOT NULL DEFAULT 0');
+        await client.query("ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS source_origin TEXT NOT NULL DEFAULT ''");
+        await client.query("ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS render_service_id TEXT NOT NULL DEFAULT ''");
+        await client.query('ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS source_prepared_at TIMESTAMPTZ');
+        await client.query("ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS live_source_file_checksum TEXT NOT NULL DEFAULT ''");
+        await client.query("ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS protected_source_file_checksum TEXT NOT NULL DEFAULT ''");
+        await client.query("ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS source_manifest_checksum TEXT NOT NULL DEFAULT ''");
+        await client.query("ALTER TABLE woa_state_migration_proofs ADD COLUMN IF NOT EXISTS source_signature_checksum TEXT NOT NULL DEFAULT ''");
         await client.query(`CREATE TABLE IF NOT EXISTS woa_recovery_drills (
           organization_id TEXT PRIMARY KEY REFERENCES woa_state(organization_id) ON DELETE CASCADE,
           run_id TEXT NOT NULL,
@@ -1737,6 +1785,7 @@ class PostgresStateRepository {
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [RECOVERY_HISTORY_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID]);
         const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
@@ -2476,9 +2525,28 @@ class PostgresStateRepository {
     const importedVersion = Number(proof.importedVersion || 0);
     const sourceRecordCounts = proof.sourceRecordCounts || {};
     const targetRecordCounts = proof.targetRecordCounts || {};
+    const sourceProvenance = proof.sourceProvenance && typeof proof.sourceProvenance === 'object' ? proof.sourceProvenance : {};
+    const provenanceVersion = Number(sourceProvenance.version || 0);
+    const sourceOrigin = String(sourceProvenance.sourceOrigin || '').trim();
+    const renderServiceId = String(sourceProvenance.renderServiceId || '').trim().slice(0, 160);
+    const sourcePreparedAt = String(sourceProvenance.preparedAt || '').trim();
+    const liveSourceFileChecksum = String(sourceProvenance.sourceFileChecksum || '').trim().toLowerCase();
+    const protectedSourceFileChecksum = String(sourceProvenance.protectedCopyChecksum || '').trim().toLowerCase();
+    const sourceManifestChecksum = String(sourceProvenance.manifestChecksum || '').trim().toLowerCase();
+    const sourceSignatureChecksum = String(sourceProvenance.signatureChecksum || '').trim().toLowerCase();
     if (!sourceChecksum || !canonicalSourceChecksum || !targetChecksum || !Number.isInteger(importedVersion) || importedVersion < 1) {
       const error = new Error('PostgreSQL migration proof needs the source checksum, canonical checksum, target checksum, and imported version.');
       error.code = 'migration_proof_invalid';
+      throw error;
+    }
+    if (provenanceVersion !== 1 || sourceOrigin !== 'render-live-disk' || !renderServiceId
+      || !Number.isFinite(Date.parse(sourcePreparedAt))
+      || !validSha256(liveSourceFileChecksum)
+      || !validSha256(protectedSourceFileChecksum)
+      || !validSha256(sourceManifestChecksum)
+      || !validSha256(sourceSignatureChecksum)) {
+      const error = new Error('PostgreSQL migration proof requires the validated signed Render live-disk source provenance.');
+      error.code = 'migration_proof_provenance_invalid';
       throw error;
     }
     if (canonicalSourceChecksum !== targetChecksum || stableJson(sourceRecordCounts) !== stableJson(targetRecordCounts)) {
@@ -2514,8 +2582,11 @@ class PostgresStateRepository {
       await client.query(`INSERT INTO woa_state_migration_proofs (
         organization_id, source_checksum, canonical_source_checksum, target_checksum,
         source_record_counts, target_record_counts, imported_version, snapshot_id,
-        snapshot_checksum, actor, verified_at
-      ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, now())
+        snapshot_checksum, provenance_version, source_origin, render_service_id,
+        source_prepared_at, live_source_file_checksum, protected_source_file_checksum,
+        source_manifest_checksum, source_signature_checksum, actor, verified_at
+      ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11, $12,
+        $13::timestamptz, $14, $15, $16, $17, $18, now())
       ON CONFLICT (organization_id) DO UPDATE SET
         source_checksum = EXCLUDED.source_checksum,
         canonical_source_checksum = EXCLUDED.canonical_source_checksum,
@@ -2525,6 +2596,14 @@ class PostgresStateRepository {
         imported_version = EXCLUDED.imported_version,
         snapshot_id = EXCLUDED.snapshot_id,
         snapshot_checksum = EXCLUDED.snapshot_checksum,
+        provenance_version = EXCLUDED.provenance_version,
+        source_origin = EXCLUDED.source_origin,
+        render_service_id = EXCLUDED.render_service_id,
+        source_prepared_at = EXCLUDED.source_prepared_at,
+        live_source_file_checksum = EXCLUDED.live_source_file_checksum,
+        protected_source_file_checksum = EXCLUDED.protected_source_file_checksum,
+        source_manifest_checksum = EXCLUDED.source_manifest_checksum,
+        source_signature_checksum = EXCLUDED.source_signature_checksum,
         actor = EXCLUDED.actor,
         verified_at = now()`, [
         this.organizationId,
@@ -2536,11 +2615,21 @@ class PostgresStateRepository {
         importedVersion,
         Number(snapshotRow.id),
         String(snapshotRow.checksum || ''),
+        provenanceVersion,
+        sourceOrigin,
+        renderServiceId,
+        sourcePreparedAt,
+        liveSourceFileChecksum,
+        protectedSourceFileChecksum,
+        sourceManifestChecksum,
+        sourceSignatureChecksum,
         String(proof.actor || '').slice(0, 160)
       ]);
       const saved = await client.query(`SELECT source_checksum, canonical_source_checksum, target_checksum,
         source_record_counts, target_record_counts, imported_version, snapshot_id,
-        snapshot_checksum, actor, verified_at
+        snapshot_checksum, provenance_version, source_origin, render_service_id,
+        source_prepared_at, live_source_file_checksum, protected_source_file_checksum,
+        source_manifest_checksum, source_signature_checksum, actor, verified_at
         FROM woa_state_migration_proofs WHERE organization_id = $1`, [this.organizationId]);
       await client.query('COMMIT');
       return migrationProofEvidence(saved.rows[0]);
@@ -2762,6 +2851,14 @@ class PostgresStateRepository {
         migration.imported_version AS migration_imported_version,
         migration.snapshot_id AS migration_snapshot_id,
         migration.snapshot_checksum AS migration_snapshot_checksum,
+        migration.provenance_version AS migration_provenance_version,
+        migration.source_origin AS migration_source_origin,
+        migration.render_service_id AS migration_render_service_id,
+        migration.source_prepared_at AS migration_source_prepared_at,
+        migration.live_source_file_checksum AS migration_live_source_file_checksum,
+        migration.protected_source_file_checksum AS migration_protected_source_file_checksum,
+        migration.source_manifest_checksum AS migration_source_manifest_checksum,
+        migration.source_signature_checksum AS migration_source_signature_checksum,
         migration.actor AS migration_actor,
         migration.verified_at AS migration_verified_at,
         recovery_drill.run_id AS recovery_drill_run_id,
@@ -2798,6 +2895,7 @@ class PostgresStateRepository {
           stateImported: false,
           integrity: 'missing',
           migrationProofIntegrity: 'missing',
+          migrationSourceProvenanceReady: false,
           migrationProofReady: false,
           snapshotCount: 0,
           latestSnapshotId: 0,
@@ -2850,6 +2948,14 @@ class PostgresStateRepository {
         importedVersion: row.migration_imported_version,
         snapshotId: row.migration_snapshot_id,
         snapshotChecksum: row.migration_snapshot_checksum,
+        provenanceVersion: row.migration_provenance_version,
+        sourceOrigin: row.migration_source_origin,
+        renderServiceId: row.migration_render_service_id,
+        sourcePreparedAt: row.migration_source_prepared_at,
+        liveSourceFileChecksum: row.migration_live_source_file_checksum,
+        protectedSourceFileChecksum: row.migration_protected_source_file_checksum,
+        sourceManifestChecksum: row.migration_source_manifest_checksum,
+        sourceSignatureChecksum: row.migration_source_signature_checksum,
         actor: row.migration_actor,
         verifiedAt: row.migration_verified_at
       };
@@ -2901,7 +3007,9 @@ class PostgresStateRepository {
             : !migrationProof.migrationProofReady
               ? migrationProof.migrationProofIntegrity === 'missing'
                 ? 'PostgreSQL state is healthy but no verified JSON-to-PostgreSQL import proof exists.'
-                : 'The stored JSON-to-PostgreSQL import proof no longer matches its checksum or record-count evidence.'
+                : !migrationProof.migrationSourceProvenanceReady
+                  ? 'The stored PostgreSQL import proof is missing valid signed Render live-disk source provenance.'
+                  : 'The stored JSON-to-PostgreSQL import proof no longer matches its checksum or record-count evidence.'
               : !recoveryDrillEvidenceResult.ready
                 ? recoveryDrillEvidenceResult.error
                 : ''
@@ -2929,6 +3037,7 @@ module.exports = {
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
   RECOVERY_HISTORY_MIGRATION_ID,
+  MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID,
   REQUIRED_SCHEMA_MIGRATION_IDS,
   DEFAULT_ORGANIZATION_ID,
   RECOVERY_DRILL_SCRIPT_VERSION,

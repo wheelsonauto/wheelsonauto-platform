@@ -185,6 +185,11 @@ async function main() {
     assert(stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.includes(stateRepository.RECOVERY_HISTORY_MIGRATION_ID)
       && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_recovery_history')
       && stateRepositorySource.includes('UNIQUE (organization_id, event_type, event_id)'), 'PostgreSQL must retain append-only, company-scoped recovery history with a database-enforced event identity.');
+    assert(stateRepositorySource.includes('MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID')
+      && stateRepositorySource.includes('protected_source_file_checksum')
+      && stateRepositorySource.includes('source_manifest_checksum')
+      && stateRepositorySource.includes('source_signature_checksum')
+      && stateRepositorySource.includes('migrationSourceProvenanceReady'), 'PostgreSQL must retain signed live-source provenance in its durable import proof and fail readiness for legacy checksum-only evidence.');
     assert(stateRepositorySource.includes('pg_advisory_xact_lock') && stateRepositorySource.includes("advisoryLockKeys('wheelsonauto-platform', 'postgres-schema-migrations')"), 'PostgreSQL schema upgrades must be serialized across overlapping Render instances.');
     assert(stateRepositorySource.includes('PRIMARY KEY (organization_id, provider, event_id)') && stateRepositorySource.includes('$webhook_tenant_primary_key$'), 'Webhook uniqueness must be company-scoped for current and previously migrated PostgreSQL databases.');
     assert(serverSource.includes("claimWebhookEvent('clover'") && serverSource.includes("completeWebhookEvent('clover'") && serverSource.includes("failWebhookEvent('clover'"), 'Clover payment/dispute callbacks must use the durable PostgreSQL webhook ledger.');
@@ -419,10 +424,19 @@ async function main() {
       targetRecordCounts: sourceCounts,
       importedVersion: 4,
       snapshotChecksum: intactChecksum,
+      provenanceVersion: 1,
+      sourceOrigin: 'render-live-disk',
+      renderServiceId: 'srv-foundation-proof',
+      sourcePreparedAt: '2026-07-17T11:55:00.000Z',
+      liveSourceFileChecksum: '1'.repeat(64),
+      protectedSourceFileChecksum: '2'.repeat(64),
+      sourceManifestChecksum: '3'.repeat(64),
+      sourceSignatureChecksum: '4'.repeat(64),
       verifiedAt: '2026-07-17T12:00:00.000Z'
     };
     assert.strictEqual(stateRepository.migrationProofEvidence(migrationProofInput).migrationProofReady, true, 'A JSON-to-PostgreSQL import proof must retain matching canonical source, target, snapshot, and collection-count evidence.');
     assert.strictEqual(stateRepository.migrationProofEvidence({ ...migrationProofInput, targetRecordCounts: { vehicles: 0 } }).migrationProofIntegrity, 'failed', 'A migration proof with changed collection counts must fail closed before live launch.');
+    assert.strictEqual(stateRepository.migrationProofEvidence({ ...migrationProofInput, sourceManifestChecksum: '' }).migrationProofReady, false, 'A legacy checksum-only import proof without the signed manifest fingerprint must fail closed.');
     const first = await repository.read();
     assert.strictEqual(first.exists, false, 'A missing local data file must safely use the seed without writing it.');
     const next = {

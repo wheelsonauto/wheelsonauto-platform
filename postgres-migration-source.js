@@ -159,8 +159,10 @@ async function assertProvenanceManifest(dataFile, sourceFileChecksum, environmen
     throw new Error('Protected PostgreSQL source and provenance manifest must both remain inside DATA_DIR.');
   }
   let manifest;
+  let manifestBytes;
   try {
-    manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
+    manifestBytes = await fs.readFile(manifestFile);
+    manifest = JSON.parse(manifestBytes.toString('utf8'));
   } catch (error) {
     throw new Error('Could not read the signed PostgreSQL source provenance manifest: ' + String(error && error.message || error));
   }
@@ -202,7 +204,10 @@ async function assertProvenanceManifest(dataFile, sourceFileChecksum, environmen
     throw new Error('The protected PostgreSQL source provenance signature is invalid. Refusing a copied or modified snapshot.');
   }
   return {
+    version: Number(manifest.version),
     manifestFile,
+    manifestChecksum: sha256(manifestBytes),
+    signatureChecksum: sha256(Buffer.from(actualSignature, 'utf8')),
     preparedAt: new Date(preparedAt).toISOString(),
     sourceOrigin: manifest.sourceOrigin,
     sourceFileChecksum: manifest.sourceFileChecksum,

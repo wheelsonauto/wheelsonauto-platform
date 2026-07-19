@@ -49,6 +49,7 @@ async function main() {
       sourceRecordCounts,
       targetRecordCounts,
       importedVersion: target.version,
+      sourceProvenance,
       actor: 'read-only PostgreSQL migration verification'
     });
     const health = await repository.health();

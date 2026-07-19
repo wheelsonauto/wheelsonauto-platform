@@ -425,6 +425,16 @@ async function main() {
       sourceRecordCounts: stateRepository.migrationRecordCounts(firstState),
       targetRecordCounts: stateRepository.migrationRecordCounts(firstWrite.state),
       importedVersion: firstWrite.version,
+      sourceProvenance: {
+        version: 1,
+        sourceOrigin: 'render-live-disk',
+        renderServiceId: 'srv-postgres-runtime-proof',
+        preparedAt: new Date().toISOString(),
+        sourceFileChecksum: '1'.repeat(64),
+        protectedCopyChecksum: '2'.repeat(64),
+        manifestChecksum: '3'.repeat(64),
+        signatureChecksum: '4'.repeat(64)
+      },
       actor: 'runtime migration proof test'
     });
     assert.strictEqual(migrationProof.migrationProofReady, true, 'A matching source checksum/count proof must be recorded with the imported PostgreSQL snapshot.');
@@ -579,6 +589,8 @@ async function main() {
     assert(health.recoveryHistoryCount >= 4, 'PostgreSQL health must expose retained drill and restore history without loading private state payloads.');
     assert.strictEqual(health.migrationProofIntegrity, 'verified', 'The PostgreSQL import proof must retain the source-to-target checksum/count evidence.');
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
+    assert.strictEqual(health.migrationSourceProvenanceReady, true, 'The PostgreSQL import proof must retain validated signed Render live-disk source provenance after restart and recovery.');
+    assert.strictEqual(health.renderServiceId, 'srv-postgres-runtime-proof', 'Migration health must identify the Render service that captured the protected source.');
     const recoveryDrillProof = await recordRecoveryDrillProof(organizationId, {
       durableJobLock: true,
       durableRateLimit: true,

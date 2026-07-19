@@ -64,6 +64,7 @@ async function main() {
       sourceRecordCounts,
       targetRecordCounts,
       importedVersion: verified.version,
+      sourceProvenance,
       actor: 'production migration script'
     });
     const health = await repository.health();

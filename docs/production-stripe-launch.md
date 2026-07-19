@@ -373,8 +373,11 @@ The importer refuses to overwrite an existing PostgreSQL organization unless
 `WOA_POSTGRES_MIGRATION_REPLACE=1` is supplied for a deliberate recovery
 operation. It verifies the canonical checksum after import and never deletes
 the JSON source. It also records source-to-target checksum, collection-count,
-and import-snapshot evidence in PostgreSQL. If a proof needs to be regenerated
-without rewriting either state, use the exact protected source copy:
+import-snapshot evidence, plus the signed source version, Render service ID,
+capture time, live/protected file checksums, manifest fingerprint, and signature
+fingerprint in PostgreSQL. A legacy checksum-only proof cannot satisfy launch
+readiness. If a proof needs to be regenerated without rewriting either state,
+use the exact protected source copy:
 
 ```sh
 DATABASE_URL='postgresql://...' \
