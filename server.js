@@ -3670,6 +3670,17 @@ function reviewDocumentProof(data, user, payload = {}) {
   });
   return document;
 }
+function paidOutsideBillingPeriodContext(data, payment = {}) {
+  const recurring = findRecurringRow(data, payment.recurringPaymentId || payment.cloverSubscriptionId || '');
+  const directPeriod = String(payment.billingPeriodKey || '').trim().replace(/^due:/, '');
+  const dueDate = validCalendarDateKey(payment.scheduledDueDate || payment.dueDate || directPeriod)
+    || (recurring ? recurringDateKey(recurring) : '');
+  return {
+    recurring,
+    dueDate,
+    billingPeriodKey: stripeMigration.billingPeriodKey(dueDate)
+  };
+}
 function reviewPaidOutsideProof(data, user, payload = {}) {
   const id = verificationText(payload.paymentId || payload.id, 160);
   data.payments = Array.isArray(data.payments) ? data.payments : [];
@@ -3682,12 +3693,69 @@ function reviewPaidOutsideProof(data, user, payload = {}) {
   const approved = verificationText(payload.action || payload.decision).toLowerCase() !== 'reject';
   const reviewer = user && (user.name || user.username || user.role) || 'WheelsonAuto';
   const reviewDate = localDateKey();
+  const reviewedAt = new Date().toISOString();
+  const billing = paidOutsideBillingPeriodContext(data, payment);
+  if (approved && billing.recurring && billing.dueDate) {
+    const otherPayments = data.payments.filter(row => row && row.id !== payment.id);
+    const existing = stripeMigration.existingBillingPeriodPayment({ ...data, payments: otherPayments }, billing.recurring, billing.dueDate);
+    if (existing) {
+      const error = stripeMigration.duplicateChargeError(existing, billing.dueDate);
+      error.message = 'This billing period already has a ' + (existing.status || 'protected') + ' payment. The outside-payment report was left unverified so the same week is not counted twice.';
+      error.status = 409;
+      throw error;
+    }
+  }
   payment.requiresVerification = false;
   payment.verifiedBy = reviewer;
   payment.verifiedAt = reviewDate;
-  payment.reviewedAt = new Date().toISOString();
+  payment.reviewedAt = reviewedAt;
   payment.status = approved ? 'Paid outside app' : 'Paid outside app rejected';
   payment.tone = approved ? 'good' : 'bad';
+  payment.scheduledDueDate = billing.dueDate || payment.scheduledDueDate || '';
+  payment.dueDate = billing.dueDate || payment.dueDate || '';
+  payment.billingPeriodKey = billing.billingPeriodKey || payment.billingPeriodKey || '';
+  payment.billingPeriodStatus = approved
+    ? (billing.billingPeriodKey ? 'Verified - billing period paid' : 'Verified - billing period not linked')
+    : 'Rejected - billing period not paid';
+  payment.billingPeriodVerifiedAt = approved && billing.billingPeriodKey ? reviewedAt : '';
+  payment.billingPeriodVerifiedBy = approved && billing.billingPeriodKey ? reviewer : '';
+  if (approved && billing.recurring && billing.dueDate) {
+    const currentDueDate = recurringDateKey(billing.recurring);
+    const scheduleThrough = billing.dueDate > reviewDate ? billing.dueDate : reviewDate;
+    const nextRun = currentDueDate === billing.dueDate
+      ? nextFutureRecurringDate(billing.recurring, scheduleThrough, billing.dueDate)
+      : '';
+    const patch = {
+      lastPaymentAt: reviewedAt,
+      lastPaymentResult: 'Paid outside app',
+      lastPaymentNote: [
+        payment.notes || '',
+        'Verified by ' + reviewer + ' on ' + reviewDate,
+        verificationText(payload.note, 500)
+      ].filter(Boolean).join(' | '),
+      lastPaidOutsidePaymentId: payment.id,
+      lastPaidOutsideBillingPeriodKey: billing.billingPeriodKey,
+      retryCount: 0,
+      failedAttempts: 0,
+      updatedAt: reviewedAt
+    };
+    if (nextRun) Object.assign(patch, {
+      nextRun,
+      adminNextRun: nextRun,
+      paymentDay: /week/i.test(String(billing.recurring.frequency || '')) ? calendarDayName(nextRun) : billing.recurring.paymentDay,
+      chargeDay: /week/i.test(String(billing.recurring.frequency || '')) ? calendarDayName(nextRun) : billing.recurring.chargeDay,
+      status: 'Active',
+      tone: 'good',
+      lastScheduleAdvancedAt: reviewedAt,
+      lastScheduleAdvancedFrom: billing.dueDate,
+      lastScheduleAdvanceSource: 'Owner-verified paid outside app'
+    });
+    updateRecurringChargeState(data, billing.recurring.id || billing.recurring.cloverSubscriptionId, patch);
+    payment.appliedToRecurringSchedule = !!nextRun;
+    payment.resultingNextRun = nextRun || currentDueDate || '';
+  } else {
+    payment.appliedToRecurringSchedule = false;
+  }
   payment.notes = [
     payment.notes || '',
     (approved ? 'Verified by ' : 'Rejected by ') + reviewer + ' on ' + reviewDate,
@@ -14320,7 +14388,7 @@ function successfulRecurringPaymentEvidence(data, row, dueKey, throughDateKey) {
   const candidates = [];
   const paidStatus = value => {
     const status = String(value || '').trim().toLowerCase();
-    return !!status && !/(fail|declin|void|refund|dispute|not found|rejected)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
+    return !!status && !/(fail|declin|void|refund|dispute|not found|rejected|needs verification|awaiting verification)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
   };
   const add = (status, at, source, id) => {
     if (!paidStatus(status)) return;
@@ -19110,6 +19178,7 @@ const server = http.createServer(async (req, res) => {
       if (!vehicle.id) vehicle = (data.vehicles || []).find(row => row.id === (account.vehicleId || recurring.vehicleId || customerRecord.vehicleId || contractRecord.vehicleId || '')) || (data.vehicles || []).find(row => [recurring.vehicle, customerRecord.vehicle, contractRecord.vehicle, summary.vehicle].some(name => name && normKey(vehicleNameFromParts(row)) === normKey(name))) || {};
       const vehicleName = vehicle.id ? vehicleNameFromParts(vehicle) : (summary.vehicle || recurring.vehicle || '');
       const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
+      const scheduledDueDate = recurringDateKey(recurring) || (recurring.id ? validCalendarDateKey(paidDate) : '');
       const payment = {
         id: 'paid-outside-review-' + Date.now(),
         date: paidDate || new Date().toLocaleString('en-US'),
@@ -19126,6 +19195,10 @@ const server = http.createServer(async (req, res) => {
         tempTag: vehicle.tempTag || recurring.tempTag || '',
         tracker: summary.tracker || trackerName(vehicle) || trackerName(recurring),
         recurringPaymentId: recurring.id || account.recurringPaymentId || '',
+        scheduledDueDate,
+        dueDate: scheduledDueDate,
+        billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+        billingPeriodStatus: scheduledDueDate ? 'Needs owner verification' : 'Needs owner billing-period review',
         cloverCustomerId: recurring.cloverCustomerId || '',
         method: method + ' outside app',
         amount,

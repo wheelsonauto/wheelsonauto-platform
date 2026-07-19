@@ -58,6 +58,12 @@ function pngDataUrl() {
   return 'data:image/png;base64,' + Buffer.concat([header, Buffer.alloc(256, 1)]).toString('base64');
 }
 
+function futureDateKey(days) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
 class MockRequest extends Readable {
   constructor(method, url, headers, body) {
     super();
@@ -502,6 +508,8 @@ async function main() {
     assert(nextRecurringOccurrence({ frequency: 'Weekly' }, '2026-07-10') === '2026-07-17', 'Weekly autopay should advance by seven days.');
     assert(nextRecurringOccurrence({ frequency: 'Bi-weekly' }, '2026-07-10') === '2026-07-24', 'Bi-weekly autopay should advance by fourteen days.');
     assert(nextFutureRecurringDate({ frequency: 'Weekly', nextRun: '2026-07-10' }, '2026-07-16') === '2026-07-17', 'An overdue Friday schedule should advance to the next future Friday instead of drifting to the runner day.');
+    const unverifiedOutsideEvidence = successfulRecurringPaymentEvidence({ payments: [{ id: 'unverified-outside-evidence', recurringPaymentId: 'rec-unverified-outside', status: 'Paid outside app - needs verification', scheduledDueDate: '2026-07-10', createdAt: '2026-07-10T18:00:00.000Z' }] }, { id: 'rec-unverified-outside' }, '2026-07-10', '2026-07-10');
+    assert(unverifiedOutsideEvidence === null, 'Restart reconciliation must not skip or advance autopay because a customer merely reported an unverified outside payment.');
     const retryBoundary = new Date('2026-07-18T18:00:00.000Z');
     assert(retryDelayPassed({ retryCount: 1, lastAutoChargeAttemptAt: new Date(retryBoundary.getTime() - 59 * 60 * 1000).toISOString() }, retryBoundary) === false, 'A failed autopay must not retry before the full one-hour delay passes.');
     assert(retryDelayPassed({ retryCount: 1, lastAutoChargeAttemptAt: new Date(retryBoundary.getTime() - 60 * 60 * 1000).toISOString() }, retryBoundary) === true, 'A failed autopay must become retryable at the one-hour boundary.');
@@ -2275,6 +2283,8 @@ async function main() {
     assert(resetRequestedAccount && resetRequestedAccount.passwordResetStatus === 'Requested' && resetRequestedAccount.passwordResetRequestedAt, 'Customer reset request should mark the customer portal login for owner follow-up.');
 
     const portalPrivacyState = JSON.parse(JSON.stringify(resetRequestState.json));
+    const paidOutsideDueDate = futureDateKey(30);
+    const paidOutsideNextDate = futureDateKey(37);
     portalPrivacyState.recurringPayments = portalPrivacyState.recurringPayments || [];
     let portalPrivacyRecurring = portalPrivacyState.recurringPayments.find(row => row.id === 'rec-001');
     if (!portalPrivacyRecurring) {
@@ -2283,6 +2293,8 @@ async function main() {
     }
     Object.assign(portalPrivacyRecurring, {
       customer: 'Alicia Brown',
+      frequency: 'Weekly',
+      nextRun: paidOutsideDueDate,
       vehicle: '2015 Lincoln MKZ',
       vehicleId: 'veh-003',
       vin: '3LN6L2G91FR123456',
@@ -2464,7 +2476,7 @@ async function main() {
       form: {
         amount: '229',
         method: 'Cash',
-        paidDate: '2026-08-02',
+        paidDate: paidOutsideDueDate,
         proofUrl: 'https://proof.example/cash-receipt',
         note: 'Receipt handed to office during smoke test.'
       }
@@ -2472,16 +2484,54 @@ async function main() {
     assert(customerPaidOutside.status === 302 && customerPaidOutside.location === '/customer#portal-payments', 'Customer paid-outside report should return to Payments.');
     const customerPaidOutsideState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const paidOutsideCandidates = (customerPaidOutsideState.json.payments || []).filter(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown');
-    const paidOutsidePayment = paidOutsideCandidates.find(item => item.status === 'Paid outside app - needs verification' && item.date === '2026-08-02' && String(item.notes || '').includes('smoke test'));
-    assert(paidOutsidePayment && paidOutsidePayment.amount === 229 && paidOutsidePayment.vehicleId === 'veh-003' && paidOutsidePayment.vin === '3LN6L2G91FR123456' && paidOutsidePayment.requiresVerification === true && paidOutsidePayment.proofUrl === 'https://proof.example/cash-receipt', 'Customer paid-outside report should create a review-only linked payment record with proof: ' + JSON.stringify(paidOutsideCandidates));
+    const paidOutsidePayment = paidOutsideCandidates.find(item => item.status === 'Paid outside app - needs verification' && item.date === paidOutsideDueDate && String(item.notes || '').includes('smoke test'));
+    assert(paidOutsidePayment && paidOutsidePayment.amount === 229 && paidOutsidePayment.vehicleId === 'veh-003' && paidOutsidePayment.vin === '3LN6L2G91FR123456' && paidOutsidePayment.requiresVerification === true && paidOutsidePayment.proofUrl === 'https://proof.example/cash-receipt' && paidOutsidePayment.scheduledDueDate === paidOutsideDueDate && paidOutsidePayment.billingPeriodKey === 'due:' + paidOutsideDueDate, 'Customer paid-outside report should create a review-only linked payment record with proof and the exact scheduled billing period: ' + JSON.stringify(paidOutsideCandidates));
+    assert((customerPaidOutsideState.json.recurringPayments || []).find(item => item.id === 'rec-001').nextRun === paidOutsideDueDate, 'An unverified customer payment report must not move the recurring schedule.');
     assert((customerPaidOutsideState.json.messages || []).some(message => message.paymentId === paidOutsidePayment.id && message.customer === 'Alicia Brown' && message.status === 'Needs admin verification' && String(message.body || '').includes('Proof link/note: https://proof.example/cash-receipt')), 'Customer paid-outside report should be logged in Messages for staff review with proof context.');
     const managerPaidOutsideReview = await request(server, 'POST', '/api/verification/paid-outside', { cookie: managerCookie, json: { paymentId: paidOutsidePayment.id, action: 'verify' } });
     assert(managerPaidOutsideReview.status === 403, 'Manager should not be allowed to verify paid-outside money reports.');
     const paidOutsideReview = await request(server, 'POST', '/api/verification/paid-outside', { cookie: ownerCookie, json: { paymentId: paidOutsidePayment.id, action: 'verify', note: 'Verified against cash receipt in smoke test.' } });
     assert(paidOutsideReview.status === 200 && paidOutsideReview.json.ok && paidOutsideReview.json.payment.status === 'Paid outside app', 'Owner should be able to verify paid-outside proof.');
 	    const paidOutsideReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-	    assert((paidOutsideReviewRead.json.payments || []).some(item => item.id === paidOutsidePayment.id && item.requiresVerification === false && item.status === 'Paid outside app' && String(item.notes || '').includes('Verified by')), 'Verified paid-outside report should leave review mode and keep proof notes.');
+	    assert((paidOutsideReviewRead.json.payments || []).some(item => item.id === paidOutsidePayment.id && item.requiresVerification === false && item.status === 'Paid outside app' && item.billingPeriodStatus === 'Verified - billing period paid' && item.appliedToRecurringSchedule === true && item.resultingNextRun === paidOutsideNextDate && String(item.notes || '').includes('Verified by')), 'Verified paid-outside report should close the exact billing period, keep proof notes, and record its schedule effect.');
+	    const paidOutsideRecurring = (paidOutsideReviewRead.json.recurringPayments || []).find(item => item.id === 'rec-001');
+	    assert(paidOutsideRecurring && paidOutsideRecurring.nextRun === paidOutsideNextDate && paidOutsideRecurring.lastPaymentResult === 'Paid outside app' && paidOutsideRecurring.lastPaidOutsideBillingPeriodKey === 'due:' + paidOutsideDueDate && paidOutsideRecurring.retryCount === 0, 'Owner verification must advance the matching weekly schedule exactly once and clear failure state.');
 	    assert((paidOutsideReviewRead.json.auditLogs || []).some(item => item.action === 'Paid-outside payment verified' && String(item.details || '').includes('Alicia Brown')), 'Paid-outside verification should be audit logged.');
+
+    const duplicateOutsideReport = await request(server, 'POST', '/customer/paid-outside', {
+      cookie: customerCookie,
+      form: {
+        amount: '229',
+        method: 'Cash',
+        paidDate: paidOutsideNextDate,
+        proofUrl: 'https://proof.example/duplicate-cash-receipt',
+        note: 'Duplicate-period owner review regression.'
+      }
+    });
+    assert(duplicateOutsideReport.status === 302, 'A second customer report should enter review without changing the schedule.');
+    const duplicateOutsideState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const duplicateOutsidePayment = (duplicateOutsideState.json.payments || []).find(item => item.status === 'Paid outside app - needs verification' && item.proofUrl === 'https://proof.example/duplicate-cash-receipt');
+    assert(duplicateOutsidePayment && duplicateOutsidePayment.billingPeriodKey === 'due:' + paidOutsideNextDate, 'The second outside report must bind to the newly scheduled billing period.');
+    duplicateOutsideState.json.payments.unshift({
+      id: 'direct-provider-payment-before-outside-review',
+      organizationId: 'org-wheelsonauto',
+      customer: 'Alicia Brown',
+      recurringPaymentId: 'rec-001',
+      billingPeriodKey: 'due:' + paidOutsideNextDate,
+      scheduledDueDate: paidOutsideNextDate,
+      amount: 229,
+      status: 'Paid',
+      paymentProvider: 'stripe',
+      source: 'Signed Stripe webhook regression'
+    });
+    const duplicateOutsideSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: duplicateOutsideState.json });
+    assert(duplicateOutsideSeed.status === 200 && duplicateOutsideSeed.json.ok, 'The duplicate-period regression payment could not be seeded.');
+    const duplicateOutsideReview = await request(server, 'POST', '/api/verification/paid-outside', { cookie: ownerCookie, json: { paymentId: duplicateOutsidePayment.id, action: 'verify', note: 'Should remain unverified.' } });
+    assert(duplicateOutsideReview.status === 409 && /same week is not counted twice/i.test(duplicateOutsideReview.json && duplicateOutsideReview.json.error || ''), 'Owner review must reject an outside-payment report when a provider payment already owns the same billing period.');
+    const duplicateOutsideAfter = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const duplicateOutsideStillPending = (duplicateOutsideAfter.json.payments || []).find(item => item.id === duplicateOutsidePayment.id);
+    assert(duplicateOutsideStillPending && duplicateOutsideStillPending.status === 'Paid outside app - needs verification' && duplicateOutsideStillPending.requiresVerification === true, 'A duplicate-period review refusal must leave the outside report pending without mutating money truth.');
+    assert((duplicateOutsideAfter.json.recurringPayments || []).find(item => item.id === 'rec-001').nextRun === paidOutsideNextDate, 'A duplicate outside-payment review must not advance the recurring schedule again.');
 
 	    const customerReceiptNoAuth = await request(server, 'POST', '/customer/receipt-request');
 	    assert(customerReceiptNoAuth.status === 302 && customerReceiptNoAuth.location === '/customer/login', 'Customer receipt request should require customer login.');

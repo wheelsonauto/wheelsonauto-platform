@@ -38,7 +38,7 @@ function validDateKey(value) {
 
 function paymentIsPaid(value) {
   const status = text(value).toLowerCase();
-  return !!status && !/(fail|declin|void|refund|dispute|not found|rejected|cancel)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
+  return !!status && !/(fail|declin|void|refund|dispute|not found|rejected|cancel|needs verification|awaiting verification)/.test(status) && (/^paid\b/.test(status) || /succeed|success|captur|complete/.test(status));
 }
 
 function paymentConsumesBillingPeriod(value) {

@@ -945,6 +945,9 @@ async function main() {
     const periodState = { payments: [{ id: 'paid-clover-period', recurringPaymentId: recurring.id, paymentProvider: 'clover', billingPeriodKey: 'due:2026-07-24', status: 'Paid' }] };
     assert.throws(() => stripeMigration.assertBillingPeriodOpen(periodState, recurring, '2026-07-24'), /duplicate charge/i, 'A Stripe charge must be blocked when Clover already paid the same billing period.');
     assert.strictEqual(stripeMigration.existingPaidPayment(periodState, recurring, '2026-07-24').id, 'paid-clover-period', 'Cross-provider period lookup must retain the original payment record.');
+    const unverifiedOutsidePeriod = { payments: [{ id: 'unverified-outside-period', recurringPaymentId: recurring.id, billingPeriodKey: 'due:2026-07-24', status: 'Paid outside app - needs verification' }] };
+    assert.strictEqual(stripeMigration.existingBillingPeriodPayment(unverifiedOutsidePeriod, recurring, '2026-07-24'), null, 'A customer-reported outside payment must not block or satisfy the billing period before owner verification.');
+    assert.strictEqual(stripeMigration.assertBillingPeriodOpen(unverifiedOutsidePeriod, recurring, '2026-07-24'), null, 'An unverified outside-payment claim must not let a customer pause scheduled autopay merely by submitting the form.');
     ['Processing', 'Confirmation pending', 'Refunded', 'Partially refunded', 'Disputed', 'Chargeback'].forEach(status => {
       const protectedPeriod = { payments: [{ id: 'protected-' + status.toLowerCase().replace(/\s+/g, '-'), recurringPaymentId: recurring.id, billingPeriodKey: 'due:2026-07-25', status }] };
       assert.throws(() => stripeMigration.assertBillingPeriodOpen(protectedPeriod, recurring, '2026-07-25'), /duplicate charge/i, status + ' must keep the billing period closed until an owner deliberately reviews it.');
