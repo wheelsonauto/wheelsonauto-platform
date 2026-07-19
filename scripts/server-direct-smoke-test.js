@@ -1675,6 +1675,8 @@ async function main() {
     assert(!Object.prototype.hasOwnProperty.call(ownerStripeReadiness.json.stripeAccount, 'configurationFingerprint'), 'Stripe account readiness responses must not expose the server-only configuration fingerprint.');
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
+    const managerOwnerPinCutover = await request(server, 'POST', '/api/account/owner-access/disable-pin', { cookie: managerCookie, json: { currentPassword: 'DirectManager456!', confirmation: 'DISABLE PIN', acknowledged: true } });
+    assert(managerOwnerPinCutover.status === 403, 'Manager must not change owner recovery PIN access.');
     const ownerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
     assert(ownerLaunchPreflight.status === 200 && ownerLaunchPreflight.json, 'Owner must be able to read the controlled Stripe launch preflight.');
     assert(ownerLaunchPreflight.json.databaseCredentialIsolation && ownerLaunchPreflight.json.databaseCredentialIsolation.ready === true && ownerLaunchPreflight.json.databaseCredentialIsolation.configured === false, 'The owner launch preflight must prove that dedicated PostgreSQL drill credentials are absent from the long-running web runtime without exposing a database URL.');

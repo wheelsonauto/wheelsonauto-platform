@@ -220,7 +220,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-assignment-review-202';
+const ASSET_VERSION = 'platform-20260719-owner-access-204';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -7666,7 +7666,13 @@ function preserveStaffLoginSecrets(current, incoming) {
       passwordHash: (next.security.ownerLogin && next.security.ownerLogin.passwordHash) || current.security.ownerLogin.passwordHash || '',
       passwordSalt: (next.security.ownerLogin && next.security.ownerLogin.passwordSalt) || current.security.ownerLogin.passwordSalt || '',
       passwordUpdatedAt: (next.security.ownerLogin && next.security.ownerLogin.passwordUpdatedAt) || current.security.ownerLogin.passwordUpdatedAt || '',
-      username: (next.security.ownerLogin && next.security.ownerLogin.username) || current.security.ownerLogin.username || LOGIN_USERNAME || 'admin'
+      username: (next.security.ownerLogin && next.security.ownerLogin.username) || current.security.ownerLogin.username || LOGIN_USERNAME || 'admin',
+      passwordLoginVerifiedAt: current.security.ownerLogin.passwordLoginVerifiedAt || '',
+      passwordLoginVerifiedFingerprint: current.security.ownerLogin.passwordLoginVerifiedFingerprint || '',
+      passwordLoginVerifiedSource: current.security.ownerLogin.passwordLoginVerifiedSource || '',
+      pinFallbackDisabled: !!current.security.ownerLogin.pinFallbackDisabled,
+      pinFallbackDisabledAt: current.security.ownerLogin.pinFallbackDisabledAt || '',
+      pinFallbackDisabledBy: current.security.ownerLogin.pinFallbackDisabledBy || ''
     };
   }
   if (Array.isArray(next.staffAccounts)) {
@@ -7826,6 +7832,7 @@ function redactStaffSecrets(data) {
   if (safe.security && safe.security.ownerLogin) {
     delete safe.security.ownerLogin.passwordHash;
     delete safe.security.ownerLogin.passwordSalt;
+    delete safe.security.ownerLogin.passwordLoginVerifiedFingerprint;
   }
   if (safe.integrations && safe.integrations.stripe) {
     delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
@@ -8029,14 +8036,8 @@ function verifyPasswordRecord(password, record = {}) {
   if (record.passwordHash && !record.passwordSalt) return secureCompare(String(password), record.passwordHash);
   return false;
 }
-function ownerPinLoginAllowed() {
-  return authPolicy.ownerPinFallbackAllowed({
-    productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
-    ownerPinFallbackEnabled: WOA_OWNER_PIN_FALLBACK_ENABLED
-  });
-}
-function ownerAuthenticationReadiness(data) {
-  return authPolicy.ownerAuthenticationReadiness({
+function ownerAuthenticationOptions(data) {
+  return {
     environment: {
       loginPassword: LOGIN_PASSWORD,
       loginPasswordHash: LOGIN_PASSWORD_HASH,
@@ -8045,24 +8046,52 @@ function ownerAuthenticationReadiness(data) {
     state: data || {},
     productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     ownerPinFallbackEnabled: WOA_OWNER_PIN_FALLBACK_ENABLED
-  });
+  };
 }
-function ownerLoginMatches(username, password, pin) {
-  if (ownerPinLoginAllowed() && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return true;
+function ownerPinLoginAllowed(data) {
+  return authPolicy.ownerPinFallbackAllowed(ownerAuthenticationOptions(data));
+}
+function ownerAuthenticationReadiness(data) {
+  return authPolicy.ownerAuthenticationReadiness(ownerAuthenticationOptions(data));
+}
+function ownerPasswordRecordForSource(data, source) {
+  if (source === 'owner_stored') return data && data.security && data.security.ownerLogin || {};
+  if (source === 'owner_environment_hash') {
+    return { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT, passwordUpdatedAt: '' };
+  }
+  return {};
+}
+async function recordOwnerPasswordLoginVerification(data, source) {
+  const fingerprint = authPolicy.passwordRecordFingerprint(ownerPasswordRecordForSource(data, source));
+  if (!fingerprint) return false;
+  data.security = data.security || {};
+  data.security.ownerLogin = data.security.ownerLogin || { username: LOGIN_USERNAME || 'admin' };
+  const owner = data.security.ownerLogin;
+  if (owner.passwordLoginVerifiedFingerprint === fingerprint && owner.passwordLoginVerifiedAt) return false;
+  owner.passwordLoginVerifiedAt = new Date().toISOString();
+  owner.passwordLoginVerifiedFingerprint = fingerprint;
+  owner.passwordLoginVerifiedSource = source;
+  appendAuditLog(data, { id: 'owner', name: 'Owner admin', role: 'Owner' }, 'Owner password login verified', ['Password-backed sign-in proved before PIN fallback removal']);
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return true;
+}
+function ownerLoginMatches(username, password, pin, data = {}) {
+  if (ownerPinLoginAllowed(data) && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return true;
   if (!password) return false;
   const wantedUser = normalizeLogin(LOGIN_USERNAME || 'admin');
   const enteredUser = normalizeLogin(username || '');
   if (wantedUser && enteredUser && enteredUser !== wantedUser) return false;
   if (LOGIN_PASSWORD && secureCompare(password, LOGIN_PASSWORD)) return true;
   if (LOGIN_PASSWORD_HASH && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return true;
-  return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed() && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
+  return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed(data) && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
 }
-function ownerEnvironmentAuthSource(username, password, pin) {
-  if (!ownerLoginMatches(username, password, pin)) return '';
-  if (ownerPinLoginAllowed() && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return 'owner_environment_pin';
+function ownerEnvironmentAuthSource(username, password, pin, data = {}) {
+  if (!ownerLoginMatches(username, password, pin, data)) return '';
+  if (ownerPinLoginAllowed(data) && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return 'owner_environment_pin';
   if (LOGIN_PASSWORD && password && secureCompare(password, LOGIN_PASSWORD)) return 'owner_environment_password';
   if (LOGIN_PASSWORD_HASH && password && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return 'owner_environment_hash';
-  if (!LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed() && LOGIN_PIN && password && secureCompare(password, LOGIN_PIN)) return 'owner_environment_pin';
+  if (!LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed(data) && LOGIN_PIN && password && secureCompare(password, LOGIN_PIN)) return 'owner_environment_pin';
   return '';
 }
 function ownerEnvironmentCredentialVersion(source, ownerRecord = {}) {
@@ -8100,12 +8129,12 @@ function storedOwnerLoginMatches(data, username, password) {
 }
 function passwordMatchesCurrentUser(data, user, password) {
   if (!user || !password) return false;
-  if (isOwnerUser(user)) return ownerLoginMatches(user.username || LOGIN_USERNAME || 'admin', password, password) || storedOwnerLoginMatches(data, user.username || LOGIN_USERNAME || 'admin', password);
+  if (isOwnerUser(user)) return ownerLoginMatches(user.username || LOGIN_USERNAME || 'admin', password, password, data) || storedOwnerLoginMatches(data, user.username || LOGIN_USERNAME || 'admin', password);
   const staff = (data.staffAccounts || []).find(item => item.id === user.id);
   return !!(staff && verifyPasswordRecord(password, staff));
 }
-function loginPage(message = '') {
-  const pinFallback = ownerPinLoginAllowed() && !!LOGIN_PIN;
+function loginPage(message = '', data = {}) {
+  const pinFallback = ownerPinLoginAllowed(data) && !!LOGIN_PIN;
   const pinFields = pinFallback
     ? '<div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label>'
     : '';
@@ -9316,6 +9345,19 @@ async function appHtml({ publicMode = false, user = null } = {}) {
   let html = await fs.readFile(path.join(ROOT, 'index.html'), 'utf8');
   const currentUser = publicMode ? null : { ...(user || { id: 'owner', name: 'Owner admin', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' }) };
   if (currentUser) {
+    if (isOwnerUser(currentUser)) {
+      const ownerAccess = ownerAuthenticationReadiness(data);
+      const passwordSessionVerified = ['owner_stored', 'owner_environment_hash'].includes(String(currentUser.authSource || '')) && ownerAccess.passwordLoginVerified;
+      currentUser.ownerAccess = {
+        passwordLoginConfigured: ownerAccess.passwordLoginConfigured,
+        passwordLoginStrong: ownerAccess.passwordLoginStrong,
+        passwordLoginVerified: ownerAccess.passwordLoginVerified,
+        passwordLoginVerifiedAt: ownerAccess.passwordLoginVerifiedAt,
+        passwordSessionVerified,
+        pinFallbackAllowed: ownerAccess.pinFallbackAllowed,
+        canDisablePinFallback: passwordSessionVerified && ownerAccess.passwordLoginStrong && ownerAccess.pinFallbackAllowed
+      };
+    }
     delete currentUser.authSource;
     delete currentUser.credentialVersion;
     delete currentUser.iat;
@@ -9914,6 +9956,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!WOA_PRODUCTION_HARDENING_REQUIRED) missing.push('WOA_PRODUCTION_HARDENING_REQUIRED=1');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
+  else if (!ownerAuthentication.passwordLoginVerified) missing.push('verified owner password sign-in');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
   if (identityConflicts.length) missing.push('resolve duplicate provider identity conflicts');
   if (assignmentConflicts.length) missing.push('resolve active vehicle assignment conflicts');
@@ -19658,17 +19701,23 @@ const server = http.createServer(async (req, res) => {
       const password = form.get('password') || '';
       const pin = form.get('pin') || '';
       const throttleKey = loginThrottleKey(req, 'staff', username || (pin ? 'pin-login' : 'blank'));
-      const waitMs = await loginThrottleWaitMs(throttleKey);
-      if (waitMs) return send(res, 429, loginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const data = await readData();
+      const waitMs = await loginThrottleWaitMs(throttleKey);
+      if (waitMs) return send(res, 429, loginPage(loginThrottleMessage(waitMs), data), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const ownerRecord = data.security && data.security.ownerLogin || {};
-      const environmentOwnerSource = ownerEnvironmentAuthSource(username, password, pin);
+      const environmentOwnerSource = ownerEnvironmentAuthSource(username, password, pin, data);
       if (environmentOwnerSource) {
         await clearLoginFailure(throttleKey);
+        if (environmentOwnerSource === 'owner_environment_hash') {
+          try { await recordOwnerPasswordLoginVerification(data, environmentOwnerSource); }
+          catch (error) { reportBackgroundTaskFailure('owner-password-verification', error, { route: '/login', source: environmentOwnerSource }, 'Owner password verification'); }
+        }
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser(environmentOwnerSource, ownerRecord))), Location: '/' });
       }
       if (storedOwnerLoginMatches(data, username, password)) {
         await clearLoginFailure(throttleKey);
+        try { await recordOwnerPasswordLoginVerification(data, 'owner_stored'); }
+        catch (error) { reportBackgroundTaskFailure('owner-password-verification', error, { route: '/login', source: 'owner_stored' }, 'Owner password verification'); }
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser('owner_stored', ownerRecord))), Location: '/' });
       }
       const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
@@ -19679,13 +19728,13 @@ const server = http.createServer(async (req, res) => {
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(user)), Location: '/' });
       }
       await recordLoginFailure(throttleKey);
-      return send(res, 401, loginPage('That login did not match an active account.'));
+      return send(res, 401, loginPage('That login did not match an active account.', data));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });
     const user = await activeStaffSessionUser(sessionUser(req));
     if (!user) {
       if (url.pathname.startsWith('/api/')) return json(res, 401, { ok: false, error: 'Authentication required.' });
-      return send(res, 200, loginPage());
+      return send(res, 200, loginPage('', await readData()));
     }
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if (url.pathname === '/api/integrations/clover/reconciliation' && req.method === 'GET') {
@@ -21787,7 +21836,13 @@ const server = http.createServer(async (req, res) => {
         data.security = data.security || {};
         data.security.ownerLogin = {
           username: normalizeLogin(payload.username || user.username || LOGIN_USERNAME || 'admin'),
-          ...record
+          ...record,
+          passwordLoginVerifiedAt: '',
+          passwordLoginVerifiedFingerprint: '',
+          passwordLoginVerifiedSource: '',
+          pinFallbackDisabled: false,
+          pinFallbackDisabledAt: '',
+          pinFallbackDisabledBy: ''
         };
       } else {
         data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
@@ -21798,7 +21853,43 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, 'Password changed', [isOwnerUser(user) ? 'Owner login' : 'Staff login ' + (user.name || user.username || user.id), 'Password hash updated']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt, reauthenticate: true }, { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }) });
+      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt, reauthenticate: true, nextStep: isOwnerUser(user) ? 'Sign back in with the new password before disabling recovery PIN access.' : 'Sign back in with the new password.' }, { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }) });
+    }
+    if (url.pathname === '/api/account/owner-access/disable-pin' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can disable owner recovery PIN access.' });
+      const payload = await readJsonBody(req);
+      if (String(payload.confirmation || '').trim() !== 'DISABLE PIN' || payload.acknowledged !== true) {
+        return json(res, 400, { ok: false, error: 'Type DISABLE PIN and confirm the lockout warning.' });
+      }
+      const passwordSource = String(user.authSource || '');
+      if (!['owner_stored', 'owner_environment_hash'].includes(passwordSource)) {
+        return json(res, 409, { ok: false, error: 'Sign out, then sign in with the owner password before disabling the recovery PIN.' });
+      }
+      const data = await readData();
+      const currentPassword = String(payload.currentPassword || '');
+      if (!currentPassword || !passwordMatchesCurrentUser(data, user, currentPassword)) {
+        return json(res, 403, { ok: false, error: 'The current owner password did not match.' });
+      }
+      const readiness = ownerAuthenticationReadiness(data);
+      if (!readiness.passwordLoginStrong) return json(res, 409, { ok: false, error: 'Save a PBKDF2-backed owner password before disabling the recovery PIN.' });
+      const fingerprint = authPolicy.passwordRecordFingerprint(ownerPasswordRecordForSource(data, passwordSource));
+      const owner = data.security && data.security.ownerLogin || {};
+      if (!fingerprint || owner.passwordLoginVerifiedFingerprint !== fingerprint || !owner.passwordLoginVerifiedAt) {
+        return json(res, 409, { ok: false, error: 'This password version has not completed a verified sign-in yet. Sign out and sign back in with it first.' });
+      }
+      const disabledAt = new Date().toISOString();
+      owner.pinFallbackDisabled = true;
+      owner.pinFallbackDisabledAt = disabledAt;
+      owner.pinFallbackDisabledBy = user.username || 'owner';
+      appendAuditLog(data, user, 'Owner recovery PIN disabled', ['Verified password sign-in', 'Explicit owner confirmation', 'Password login remains active']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, {
+        ok: true,
+        disabledAt,
+        ownerAuthentication: ownerAuthenticationReadiness(data),
+        message: 'Recovery PIN access is disabled. The verified owner password remains active.'
+      });
     }
     if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });

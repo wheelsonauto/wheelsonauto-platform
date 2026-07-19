@@ -18,10 +18,16 @@ artifact and must never be committed as part of a code release.
 - Do not set `WOA_PRODUCTION_HARDENING_REQUIRED=1` until the owner-only
   infrastructure preflight is clear.
 - Before enabling production hardening, reset the owner password through
-  **Settings -> Account** so the platform stores the current PBKDF2 record,
-  and disable the owner PIN fallback. A legacy/plain environment password can
-  still be used for recovery, but it intentionally cannot clear the live
-  Stripe launch gate.
+  **Settings -> Account** so the platform stores the current PBKDF2 record.
+  Saving the password revokes the current session and temporarily keeps the
+  recovery PIN available. Sign back in with the new owner password, not the
+  PIN; the server records a non-secret fingerprint proving that exact password
+  version worked. Return to **Settings -> Account**, re-enter the password,
+  type `DISABLE PIN`, confirm the warning, and disable the owner PIN fallback.
+  The platform rejects this cutover from a PIN-backed session, an unverified
+  password version, a manager account, or an incorrect confirmation phrase.
+  A legacy/plain environment password can still be used for recovery, but it
+  intentionally cannot clear the live Stripe launch gate.
 - Never store card numbers, CVVs, API secrets, or private identity documents
   in the normal state JSON.
 - Treat card setup as complete only when the provider-backed record has a
@@ -383,6 +389,13 @@ WOA_OWNER_PIN_FALLBACK_ENABLED=0
 WOA_MIGRATION_MAINTENANCE_MODE=0
 # Set WOA_PRODUCTION_HARDENING_REQUIRED=1 only after the full preflight is clear.
 ```
+
+`WOA_OWNER_PIN_FALLBACK_ENABLED=0` is defense in depth after the owner has
+completed the in-app password verification and PIN cutover. Do not use an
+environment toggle as a substitute for testing the password first. The live
+preflight must report `passwordLoginStrong=true`,
+`passwordLoginVerified=true`, and `pinFallbackAllowed=false` before Stripe
+cutover work continues.
 
 Apply `DATABASE_URL`, `WOA_DATA_BACKEND=postgres`, and
 `WOA_MIGRATION_MAINTENANCE_MODE=0` in the same final deployment. Do not reopen

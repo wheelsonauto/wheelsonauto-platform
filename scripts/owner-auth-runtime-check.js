@@ -141,6 +141,56 @@ async function main() {
       assert(/^pbkdf2\$310000\$[a-f0-9]{64}$/i.test(String(ownerRecord.passwordHash || '')), 'The owner password must persist only as the current PBKDF2 record.');
       assert(ownerRecord.passwordSalt && ownerRecord.passwordUpdatedAt, 'The stored owner password needs a salt and revocation timestamp.');
       assert(!JSON.stringify(savedState).includes(newPassword), 'The plain owner password must never be written to state.');
+
+      const verifiedLogin = await request(server, 'POST', '/login', { username: 'owner', password: newPassword });
+      assert.strictEqual(verifiedLogin.status, 302, 'The owner must prove the newly stored password through a real sign-in before PIN removal.');
+      const verifiedSession = cookieHeader(verifiedLogin);
+      const verifiedState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      const verifiedOwner = verifiedState.security && verifiedState.security.ownerLogin || {};
+      assert(verifiedOwner.passwordLoginVerifiedAt, 'A successful owner password login must persist its verification time.');
+      assert.strictEqual(verifiedOwner.passwordLoginVerifiedFingerprint, authFingerprint(verifiedOwner), 'The verification proof must belong to the exact active password version.');
+
+      const verifiedApp = await request(server, 'GET', '/', null, { cookie: verifiedSession });
+      assert.strictEqual(verifiedApp.status, 200, 'The verified password session must open the owner platform.');
+      assert(verifiedApp.text.includes('"passwordLoginVerified":true') && verifiedApp.text.includes('"passwordSessionVerified":true'), 'The owner Account UI must receive only safe password-verification booleans.');
+      assert(!verifiedApp.text.includes(verifiedOwner.passwordHash) && !verifiedApp.text.includes(verifiedOwner.passwordSalt) && !verifiedApp.text.includes(verifiedOwner.passwordLoginVerifiedFingerprint), 'The owner page must not expose password records or proof fingerprints while showing cutover readiness.');
+
+      const unconfirmedDisable = await requestJson(server, 'POST', '/api/account/owner-access/disable-pin', {
+        currentPassword: newPassword,
+        confirmation: 'DISABLE',
+        acknowledged: true
+      }, { cookie: verifiedSession });
+      assert.strictEqual(unconfirmedDisable.status, 400, 'PIN removal must require the exact explicit confirmation phrase.');
+
+      const disablePin = await requestJson(server, 'POST', '/api/account/owner-access/disable-pin', {
+        currentPassword: newPassword,
+        confirmation: 'DISABLE PIN',
+        acknowledged: true
+      }, { cookie: verifiedSession });
+      assert.strictEqual(disablePin.status, 200, 'A verified password session plus current-password confirmation must disable the PIN safely.');
+      const disablePayload = JSON.parse(disablePin.text);
+      assert.strictEqual(disablePayload.ownerAuthentication.readyForProduction, true, 'The verified password-only owner account must clear its authentication launch gate.');
+
+      const passwordOnlyPage = await request(server, 'GET', '/login');
+      assert(!passwordOnlyPage.text.includes('Access PIN'), 'State-backed PIN removal must immediately hide the PIN field without waiting for a deploy.');
+      const rejectedDisabledPin = await request(server, 'POST', '/login', { username: 'owner', pin: '9999' });
+      assert.strictEqual(rejectedDisabledPin.status, 401, 'State-backed PIN removal must immediately reject the old PIN.');
+      const retainedPasswordSession = await request(server, 'GET', '/api/state', null, { cookie: verifiedSession });
+      assert.strictEqual(retainedPasswordSession.status, 200, 'Disabling the PIN must preserve the already verified password session.');
+
+      const passwordOnlyState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      assert(passwordOnlyState.security.ownerLogin.pinFallbackDisabledAt, 'The owner cutover must persist when and by whom PIN access was disabled.');
+      assert.strictEqual(passwordOnlyState.security.ownerLogin.pinFallbackDisabled, true, 'The durable owner record must reject PIN fallback after restart.');
+
+      const staleClientStateResponse = await request(server, 'GET', '/api/state', null, { cookie: verifiedSession });
+      const staleClientState = JSON.parse(staleClientStateResponse.text);
+      staleClientState.security.ownerLogin.pinFallbackDisabled = false;
+      staleClientState.security.ownerLogin.pinFallbackDisabledAt = '';
+      const staleClientSave = await requestJson(server, 'PUT', '/api/state', staleClientState, { cookie: verifiedSession });
+      assert.strictEqual(staleClientSave.status, 200, 'Normal owner state saves must remain usable after the PIN cutover.');
+      const protectedCutoverState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      assert.strictEqual(protectedCutoverState.security.ownerLogin.pinFallbackDisabled, true, 'A stale full-state save must not silently re-enable the recovery PIN.');
+      assert(protectedCutoverState.security.ownerLogin.pinFallbackDisabledAt, 'A stale full-state save must preserve the owner PIN cutover audit time.');
     } finally {
       try { server.close(); } catch (_) {}
     }
@@ -216,6 +266,10 @@ async function main() {
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+}
+
+function authFingerprint(owner) {
+  return require('../auth-policy').passwordRecordFingerprint(owner);
 }
 
 main().catch(error => {

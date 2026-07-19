@@ -239,6 +239,8 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Telnyx SMS',
   'Resend email',
   'Star AI',
+  'Owner access',
+  'open-owner-access-settings',
   'Recent job failures',
   'liveLaunchAssignmentReviewItem',
   'liveLaunchAssignmentSourceLabel',
@@ -268,9 +270,22 @@ assertIncludes('Owner recovery operator surface', app, [
 assertIncludes('Password-backed staff and owner guidance', app, [
   'Manager and mechanic username/password accounts.',
   'Manager and mechanic accounts use their own username and password',
-  'Before enabling hardened Stripe launch mode',
-  'Keep the PIN recovery path enabled until that password login is confirmed',
+  'Complete each owner-security step in order',
+  'Log out and sign back in with the owner password, not the PIN',
+  'open-owner-pin-cutover',
+  'confirm-owner-pin-disable',
+  '/api/account/owner-access/disable-pin',
+  'Type DISABLE PIN',
   '8+ characters with a letter and number'
+]);
+assertIncludes('Lockout-safe owner password cutover', server, [
+  'recordOwnerPasswordLoginVerification',
+  'passwordLoginVerifiedFingerprint',
+  'pinFallbackDisabledAt',
+  "url.pathname === '/api/account/owner-access/disable-pin'",
+  "['owner_stored', 'owner_environment_hash'].includes(passwordSource)",
+  'This password version has not completed a verified sign-in yet',
+  'Owner recovery PIN disabled'
 ]);
 if (app.includes('Manager and mechanic PIN accounts.') || app.includes('Manager and mechanic accounts use their own PIN')) {
   fail('Manager and mechanic access must not be described as PIN-based.');

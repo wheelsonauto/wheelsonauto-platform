@@ -173,12 +173,13 @@ if (!/authPolicy = require\('\.\/auth-policy'\)/.test(server) || !/WOA_OWNER_PIN
 const ownerLoginMatches = finalFunctionSlice(server, 'ownerLoginMatches');
 const staffLoginPage = finalFunctionSlice(server, 'loginPage');
 const productionInfrastructurePreflight = finalFunctionSlice(server, 'productionInfrastructurePreflight');
-if (!/ownerPinLoginAllowed\(\)/.test(ownerLoginMatches) || !/ownerPinLoginAllowed\(\)/.test(staffLoginPage)) {
+if (!/ownerPinLoginAllowed\(data\)/.test(ownerLoginMatches) || !/ownerPinLoginAllowed\(data\)/.test(staffLoginPage)) {
   fail('Owner PIN fallback must be policy-gated in both sign-in behavior and the login UI.');
 }
-if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginStrong/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
-  fail('The production Stripe launch gate must require password-backed owner access with owner PIN fallback disabled.');
+if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginStrong/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginVerified/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
+  fail('The production Stripe launch gate must require a verified password-backed owner sign-in with owner PIN fallback disabled.');
 }
+if (!/\/api\/account\/owner-access\/disable-pin/.test(server) || !/Only the owner can disable owner recovery PIN access/.test(server)) fail('Owner PIN cutover must remain an explicit owner-only API action.');
 if (!/cloverRecurringMigrationReadiness/.test(productionInfrastructurePreflight) || !/fresh Clover recurring roster for controlled cutover/.test(productionInfrastructurePreflight)) {
   fail('The production Stripe launch gate must require a fresh complete Clover recurring roster before cutover.');
 }

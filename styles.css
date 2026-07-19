@@ -6480,6 +6480,7 @@ body.fast-tab-switch .admin-shell .section{
   .account-settings-grid{grid-template-columns:1fr;margin:10px 0}
   .account-settings-actions{display:grid;grid-template-columns:1fr 1fr}
   .account-settings-actions .btn{width:100%}
+  .account-settings-actions .btn.danger:nth-child(3):last-child{grid-column:1/-1}
 }
 
 /* Native website, online fleet, and applicant review share one compact staff surface. */

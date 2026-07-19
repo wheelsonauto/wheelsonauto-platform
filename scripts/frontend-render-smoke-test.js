@@ -463,7 +463,7 @@ async function mechanicInteractionSmoke() {
 }
 
 function ownerSmoke() {
-  const context = makeContext({ name: 'Owner Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  const context = makeContext({ name: 'Owner Smoke', username: 'owner', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access', ownerAccess: { passwordLoginConfigured: true, passwordLoginStrong: true, passwordLoginVerified: true, passwordLoginVerifiedAt: '2026-07-19T09:30:00.000Z', passwordSessionVerified: true, pinFallbackAllowed: true, canDisablePinFallback: true } });
   assert(context.safeLink('https://wheelsonauto.com/toll-proof') === 'https://wheelsonauto.com/toll-proof' && context.safeLink('/toll-receipt/private-token') === '/toll-receipt/private-token', 'Trusted HTTP(S) and same-site proof links should remain clickable.');
   assert(context.safeLink('javascript:alert(1)') === '' && context.safeLink('//malicious.example/proof') === '', 'Script and protocol-relative proof links must not become clickable.');
   context.tollReceiptModal({ id: 'unsafe-proof', customer: 'Unsafe Proof Test', amount: 1, proofUrl: 'javascript:alert(1)' });
@@ -652,6 +652,9 @@ function ownerSmoke() {
   context.dashboardDetailState.Risk = 'Customers';
   assertHealthy('Dashboard customer risk', renderView(context, 'Dashboard', 'Risk'), ['Dashboard', 'Customer risk report', 'payment setup']);
   context.dashboardDetailState.Risk = 'Health';
+  const ownerAccount = renderView(context, 'Settings', 'Account');
+  assertHealthy('Owner Account cutover', ownerAccount, ['Account access', 'Strong password saved', 'Password login verified', 'Recovery PIN still active', 'Disable recovery PIN', 'Log out']);
+  assertNo('Owner Account cutover secret hygiene', ownerAccount, ['passwordHash', 'passwordSalt', 'passwordLoginVerifiedFingerprint']);
   const ownerClaimsOpen = renderView(context, 'Claims & Issues', 'Open');
   assertNo('Owner Claims duplicate boards', ownerClaimsOpen, ['Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge']);
   const ownerPickups = renderView(context, 'Applications', 'Pickups');
