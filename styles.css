@@ -7857,3 +7857,72 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .launch-assignment-gate{grid-column:1;grid-row:auto}
   .launch-assignment-action{grid-column:2;grid-row:3;align-self:end}
 }
+
+/* Mobile navigation stays complete without hiding the active destination off-screen. */
+@media(max-width:760px){
+  .admin-shell .quickbar{
+    display:grid!important;
+    grid-template-columns:repeat(5,minmax(0,1fr))!important;
+    grid-auto-flow:row!important;
+    grid-auto-columns:auto!important;
+    gap:6px!important;
+    overflow:visible!important;
+  }
+  .admin-shell .quickbar>button,
+  .admin-shell .quickbar>.quickbar-more{
+    width:100%!important;
+    min-width:0!important;
+  }
+  .admin-shell .quickbar>.quickbar-more{position:relative;display:grid}
+  .admin-shell .quickbar>.quickbar-more>summary{
+    min-height:58px;
+    padding:6px 3px;
+    display:grid;
+    place-items:center;
+    align-content:center;
+    gap:4px;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:7px;
+    background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.035));
+    color:#e3e5e6;
+    font-size:9.5px;
+    font-weight:900;
+    line-height:1.05;
+    list-style:none;
+    cursor:pointer;
+  }
+  .admin-shell .quickbar>.quickbar-more>summary::-webkit-details-marker{display:none}
+  .admin-shell .quickbar>.quickbar-more>summary .quick-icon{width:20px;height:20px;color:#f0d394}
+  .admin-shell .quickbar>.quickbar-more.active>summary,
+  .admin-shell .quickbar>.quickbar-more[open]>summary{
+    border-color:rgba(240,217,147,.48);
+    background:linear-gradient(180deg,rgba(213,177,95,.18),rgba(213,177,95,.09));
+    color:var(--staff-accent-bright);
+  }
+  .admin-shell .quickbar-more-panel{
+    position:fixed;
+    left:8px;
+    right:8px;
+    bottom:calc(78px + env(safe-area-inset-bottom));
+    z-index:40;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:7px;
+    padding:9px;
+    border:1px solid rgba(213,177,95,.32);
+    border-radius:10px;
+    background:#111315;
+    box-shadow:0 -18px 48px rgba(0,0,0,.42);
+  }
+  .admin-shell .quickbar-more-panel button{
+    width:100%!important;
+    min-width:0!important;
+    min-height:48px!important;
+  }
+  .admin-shell .health-grid{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    overflow:visible!important;
+    padding-bottom:0!important;
+  }
+}

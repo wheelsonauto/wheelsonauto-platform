@@ -889,6 +889,7 @@ assertIncludes('Star QA health panel', starHealth, ['Star QA', 'Missing VIN', 'U
 
 const quickbar = finalFunctionSlice(app, 'mobileQuickbar');
 assertStringsInclude('Mobile quickbar labels', quickbar, ['Dashboard', 'Payments', 'Operations', 'Messages', 'Settings', 'Manager Portal', 'Reports', 'Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
+assertStringsInclude('Mobile quickbar overflow menu', quickbar, ['More']);
 assertExcludes('Mobile quickbar raw letter labels', quickbar, ["['Dashboard','D']", "['Payments','P']", "['Mechanic Portal','M']"]);
 
 const nav = finalFunctionSlice(app, 'navForRole');
