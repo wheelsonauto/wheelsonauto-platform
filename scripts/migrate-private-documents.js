@@ -79,6 +79,42 @@ async function assertSameMaintenanceLease(expected) {
   return current;
 }
 
+async function restoreBackupIfCommittedStateUnchanged(options = {}) {
+  const target = path.resolve(options.dataFile || '');
+  const backup = path.resolve(options.backupPath || '');
+  const committedChecksum = String(options.committedChecksum || '').trim();
+  const sourceChecksum = String(options.sourceChecksum || '').trim();
+  const maintenanceAssertion = typeof options.maintenanceAssertion === 'function'
+    ? options.maintenanceAssertion
+    : async () => {};
+  const currentBytes = await fs.readFile(target);
+  if (!committedChecksum || sha256(currentBytes) !== committedChecksum) {
+    throw new Error('Private-document migration rollback was safely refused because live state changed after the migration commit. The newer state and encrypted objects were retained for operator review.');
+  }
+  const backupBytes = await fs.readFile(backup);
+  if (!sourceChecksum || sha256(backupBytes) !== sourceChecksum) {
+    throw new Error('Private-document migration rollback was safely refused because the protected backup checksum is invalid. The committed state and encrypted objects were retained for operator review.');
+  }
+  await maintenanceAssertion('before_rollback_prepare');
+  const temporary = target + '.private-document-rollback-' + process.pid + '-' + crypto.randomBytes(8).toString('hex') + '.tmp';
+  try {
+    await fs.writeFile(temporary, backupBytes, { flag: 'wx', mode: 0o600 });
+    await maintenanceAssertion('before_rollback_replace');
+    const immediatelyBeforeReplace = await fs.readFile(target);
+    if (sha256(immediatelyBeforeReplace) !== committedChecksum) {
+      throw new Error('Private-document migration rollback was safely refused because live state changed while rollback was being prepared. The newer state and encrypted objects were retained for operator review.');
+    }
+    await fs.rename(temporary, target);
+    const restoredBytes = await fs.readFile(target);
+    if (sha256(restoredBytes) !== sourceChecksum) {
+      throw new Error('Private-document migration rollback read-back verification failed. Keep production in maintenance mode and restore from the protected backup through the controlled recovery workflow.');
+    }
+    return { restored: true, sourceChecksum };
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
 async function resolveLegacyFile(dataDir, legacyRoot, sourcePath) {
   const absolute = path.resolve(dataDir, sourcePath);
   if (!inside(legacyRoot, absolute)) throw new Error('Refusing to migrate a document outside onboarding-uploads: ' + sourcePath);
@@ -181,6 +217,7 @@ async function main() {
   let migrated = 0;
   let stateCommitted = false;
   let stateVerified = false;
+  let committedStateChecksum = '';
   try {
     for (const candidate of candidates) {
       const { item, record, absolute } = candidate;
@@ -247,11 +284,26 @@ async function main() {
       throw new Error('Live customer data changed while private documents were being migrated. data.json was not changed; retry during a maintenance window.');
     }
     await assertSameMaintenanceLease(activeMaintenanceLease);
-    const temporary = dataFile + '.private-document-migration-' + process.pid + '.tmp';
-    await fs.writeFile(temporary, JSON.stringify(state, null, 2), 'utf8');
-    await fs.rename(temporary, dataFile);
+    const committedStateBytes = Buffer.from(JSON.stringify(state, null, 2), 'utf8');
+    committedStateChecksum = sha256(committedStateBytes);
+    const temporary = dataFile + '.private-document-migration-' + process.pid + '-' + crypto.randomBytes(8).toString('hex') + '.tmp';
+    try {
+      await fs.writeFile(temporary, committedStateBytes, { flag: 'wx', mode: 0o600 });
+      await assertSameMaintenanceLease(activeMaintenanceLease);
+      const immediatelyBeforeCommit = await fs.readFile(dataFile);
+      if (sha256(immediatelyBeforeCommit) !== sourceChecksum) {
+        throw new Error('Live customer data changed while the protected private-document update was being prepared. No migration state was committed.');
+      }
+      await fs.rename(temporary, dataFile);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
     stateCommitted = true;
-    const committed = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+    const committedBytes = await fs.readFile(dataFile);
+    if (sha256(committedBytes) !== committedStateChecksum) {
+      throw new Error('Encrypted private-document state checksum verification failed after the atomic update. The protected backup will be restored only if the committed state is still unchanged.');
+    }
+    const committed = JSON.parse(committedBytes.toString('utf8'));
     const candidateIdentities = new Set(candidates.map(candidate => rowIdentity(candidate.item)));
     const verifiedRows = privateRows(committed).filter(entry => candidateIdentities.has(rowIdentity(entry)));
     if (verifiedRows.length !== candidates.length || verifiedRows.some(entry => !store.isEncryptedDocument(entry.row) ||
@@ -293,8 +345,19 @@ async function main() {
     }, null, 2));
   } catch (error) {
     if (stateCommitted && !stateVerified) {
-      await fs.copyFile(backupPath, dataFile);
-      stateCommitted = false;
+      try {
+        await restoreBackupIfCommittedStateUnchanged({
+          dataFile,
+          backupPath,
+          committedChecksum: committedStateChecksum,
+          sourceChecksum,
+          maintenanceAssertion: () => assertSameMaintenanceLease(activeMaintenanceLease)
+        });
+        stateCommitted = false;
+      } catch (rollbackError) {
+        error.rollbackError = String(rollbackError && rollbackError.message || rollbackError);
+        error.message += ' ' + error.rollbackError;
+      }
     }
     if (!stateCommitted) {
       await Promise.all(storedKeys.map(storageKey => store.deleteObject(storageKey).catch(() => {})));
@@ -303,7 +366,13 @@ async function main() {
   }
 }
 
-main().catch(error => {
-  console.error(error.stack || error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(error.stack || error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  restoreBackupIfCommittedStateUnchanged
+};

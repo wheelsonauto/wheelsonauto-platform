@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const secureDocumentStore = require('../secure-document-store');
 const migrationMaintenanceLease = require('../migration-maintenance-lease');
+const { restoreBackupIfCommittedStateUnchanged } = require('./migrate-private-documents');
 
 const root = path.resolve(__dirname, '..');
 const migrationScript = path.join(__dirname, 'migrate-private-documents.js');
@@ -23,6 +24,69 @@ function runMigration(dataFile, env) {
 async function main() {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-private-document-migration-'));
   try {
+    const rollbackFile = path.join(temp, 'rollback-state.json');
+    const rollbackBackup = path.join(temp, 'rollback-state.backup.json');
+    const rollbackOriginal = Buffer.from('{"state":"original"}', 'utf8');
+    const rollbackCommitted = Buffer.from('{"state":"migration-committed"}', 'utf8');
+    const rollbackNewer = Buffer.from('{"state":"newer-live-write"}', 'utf8');
+    const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+    await fs.writeFile(rollbackBackup, rollbackOriginal, { mode: 0o600 });
+    await fs.writeFile(rollbackFile, rollbackCommitted, { mode: 0o600 });
+    const rollbackCheckpoints = [];
+    await restoreBackupIfCommittedStateUnchanged({
+      dataFile: rollbackFile,
+      backupPath: rollbackBackup,
+      committedChecksum: digest(rollbackCommitted),
+      sourceChecksum: digest(rollbackOriginal),
+      maintenanceAssertion: checkpoint => rollbackCheckpoints.push(checkpoint)
+    });
+    assert((await fs.readFile(rollbackFile)).equals(rollbackOriginal), 'A verified unchanged migration commit must restore its exact protected backup.');
+    assert.deepStrictEqual(rollbackCheckpoints, ['before_rollback_prepare', 'before_rollback_replace'], 'Rollback must recheck maintenance before preparing and immediately before replacing state.');
+    assert.strictEqual((await fs.stat(rollbackFile)).mode & 0o777, 0o600, 'A restored private state file must remain owner-readable only.');
+
+    await fs.writeFile(rollbackFile, rollbackNewer, { mode: 0o600 });
+    await assert.rejects(
+      () => restoreBackupIfCommittedStateUnchanged({
+        dataFile: rollbackFile,
+        backupPath: rollbackBackup,
+        committedChecksum: digest(rollbackCommitted),
+        sourceChecksum: digest(rollbackOriginal)
+      }),
+      /live state changed after the migration commit/i,
+      'Rollback must refuse to overwrite a newer state that existed before rollback started.'
+    );
+    assert((await fs.readFile(rollbackFile)).equals(rollbackNewer), 'A refused rollback must preserve the newer live state exactly.');
+
+    await fs.writeFile(rollbackFile, rollbackCommitted, { mode: 0o600 });
+    await assert.rejects(
+      () => restoreBackupIfCommittedStateUnchanged({
+        dataFile: rollbackFile,
+        backupPath: rollbackBackup,
+        committedChecksum: digest(rollbackCommitted),
+        sourceChecksum: digest(rollbackOriginal),
+        maintenanceAssertion: async checkpoint => {
+          if (checkpoint === 'before_rollback_replace') await fs.writeFile(rollbackFile, rollbackNewer, { mode: 0o600 });
+        }
+      }),
+      /live state changed while rollback was being prepared/i,
+      'Rollback must detect and preserve a state write that races with rollback preparation.'
+    );
+    assert((await fs.readFile(rollbackFile)).equals(rollbackNewer), 'A rollback race must preserve the newer state rather than restoring an old backup.');
+
+    await fs.writeFile(rollbackFile, rollbackCommitted, { mode: 0o600 });
+    await assert.rejects(
+      () => restoreBackupIfCommittedStateUnchanged({
+        dataFile: rollbackFile,
+        backupPath: rollbackBackup,
+        committedChecksum: digest(rollbackCommitted),
+        sourceChecksum: digest(rollbackOriginal),
+        maintenanceAssertion: () => { throw new Error('signed maintenance lease ended'); }
+      }),
+      /signed maintenance lease ended/i,
+      'Rollback must fail closed when the signed maintenance lease ends.'
+    );
+    assert((await fs.readFile(rollbackFile)).equals(rollbackCommitted), 'A maintenance failure must preserve the committed state and its encrypted objects for operator review.');
+
     const uploads = path.join(temp, 'onboarding-uploads');
     const dataFile = path.join(temp, 'data.json');
     const licenseBytes = Buffer.from('private driver license image bytes', 'utf8');
@@ -210,7 +274,7 @@ async function main() {
     assert.strictEqual(JSON.parse(rotationNoop.stdout).changed, false, 'A repeated key/provider migration must report no state change.');
     assert.strictEqual(await fs.readFile(dataFile, 'utf8'), beforeRotationNoop, 'A repeated key/provider migration must not rewrite protected state.');
 
-    console.log('Private document migration check passed: maintenance guard, immutable backup, encrypted read-back checksum/size proof, verified deletion, fail-closed key rotation, provider/key re-homing, source retention, and repeat-safe no-op are verified.');
+    console.log('Private document migration check passed: maintenance guard, immutable backup, non-clobbering rollback, encrypted read-back checksum/size proof, verified deletion, fail-closed key rotation, provider/key re-homing, source retention, and repeat-safe no-op are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

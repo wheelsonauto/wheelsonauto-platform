@@ -267,7 +267,10 @@ async function main() {
     assert(privateDocumentMigrationSource.includes('migrationMaintenanceLease.assertActiveLease')
       && privateDocumentMigrationSource.includes('assertSameMaintenanceLease(activeMaintenanceLease)')
       && privateDocumentMigrationSource.includes('maintenanceLeaseSignatureChecksum: activeMaintenanceLease.signatureChecksum')
-      && privateDocumentMigrationSource.indexOf('assertSameMaintenanceLease(activeMaintenanceLease)') < privateDocumentMigrationSource.indexOf('await fs.rename(temporary, dataFile)'), 'Private-document migration must require a signed deployed-service maintenance lease and re-prove the same process immediately before its atomic state replacement.');
+      && privateDocumentMigrationSource.indexOf('assertSameMaintenanceLease(activeMaintenanceLease)') < privateDocumentMigrationSource.indexOf('await fs.rename(temporary, dataFile)')
+      && privateDocumentMigrationSource.includes('restoreBackupIfCommittedStateUnchanged')
+      && privateDocumentMigrationSource.includes('sha256(immediatelyBeforeReplace) !== committedChecksum')
+      && privateDocumentMigrationSource.includes('The newer state and encrypted objects were retained for operator review'), 'Private-document migration must require a signed deployed-service maintenance lease, re-prove the same process immediately before its atomic state replacement, and refuse to overwrite newer state during rollback.');
     assert(encryptedRecoverySource.includes('preserveAccessControlAcrossRecovery')
       && encryptedRecoverySource.includes("maintenanceAssertion('before_backup_read')")
       && encryptedRecoverySource.includes("maintenanceAssertion('before_state_write')")
