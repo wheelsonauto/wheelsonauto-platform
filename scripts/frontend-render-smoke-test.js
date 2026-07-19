@@ -815,10 +815,10 @@ function starAutoSendDefaultSmoke() {
   context.db.integrations = context.db.integrations || {};
   context.db.integrations.messaging = {};
   const missing = context.messagingStatus();
-  assert(missing.enabled === false && missing.aiEnabled === false && missing.aiAutoSend === false && missing.aiDrafts === false && missing.emailEnabled === false, 'Messaging providers and Star must remain off when no saved server setting exists.');
-  Object.assign(context.db.integrations.messaging, { enabled: true, aiEnabled: true, aiAutoSend: true, aiDrafts: true, emailEnabled: true });
+  assert(missing.enabled === false && missing.aiEnabled === false && missing.aiAutoSend === false && missing.aiDrafts === false && missing.emailEnabled === false && missing.notificationsEnabled === false, 'Messaging providers, notifications, and Star must remain off when no saved server setting exists.');
+  Object.assign(context.db.integrations.messaging, { enabled: true, aiEnabled: true, aiAutoSend: true, aiDrafts: true, emailEnabled: true, notificationsEnabled: true });
   const explicit = context.messagingStatus();
-  assert(explicit.enabled === true && explicit.aiEnabled === true && explicit.aiAutoSend === true && explicit.aiDrafts === true && explicit.emailEnabled === true, 'Messaging providers and Star may turn on only after explicit saved settings.');
+  assert(explicit.enabled === true && explicit.aiEnabled === true && explicit.aiAutoSend === true && explicit.aiDrafts === true && explicit.emailEnabled === true && explicit.notificationsEnabled === true, 'Messaging providers, notifications, and Star may turn on only after explicit saved settings.');
 }
 
 function heavyMessagesReportsSmoke() {
