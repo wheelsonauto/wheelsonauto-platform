@@ -217,7 +217,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-storage-proof-176';
+const ASSET_VERSION = 'platform-20260718-launch-evidence-177';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -6915,11 +6915,27 @@ function mergeScopedCollection(currentRows, incomingRows, user) {
 function preserveRedactedDocumentMetadata(currentRows, incomingRows) {
   if (!Array.isArray(incomingRows)) return incomingRows;
   const currentById = new Map((Array.isArray(currentRows) ? currentRows : []).map(row => [String(row && row.id || ''), row || {}]));
+  const serverManagedFields = [
+    'privateArtifactId',
+    'sha256',
+    'storagePath',
+    'storageKey',
+    'storageProvider',
+    'storageSecurity',
+    'encryption',
+    'signatureImagePath',
+    'signatureData',
+    'privateArtifactStatus',
+    'privateArtifactStoredAt',
+    'privateArtifactLastAttemptAt',
+    'privateArtifactLastError'
+  ];
   return incomingRows.map(document => {
     const prior = currentById.get(String(document && document.id || '')) || {};
     const safe = { ...(document || {}) };
-    ['storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData'].forEach(field => {
+    serverManagedFields.forEach(field => {
       if (Object.prototype.hasOwnProperty.call(prior, field)) safe[field] = prior[field];
+      else delete safe[field];
     });
     delete safe.privateFileAvailable;
     return safe;
@@ -7536,57 +7552,112 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorMessages = Array.isArray(current && current.messages) ? current.messages : [];
   const priorMessagesById = new Map(priorMessages.filter(row => row && row.id).map(row => [String(row.id), row]));
   const priorMessagesByExternalId = new Map(priorMessages.filter(row => row && row.externalId).map(row => [String(row.externalId), row]));
+  // Full dashboard saves may change local display state, but never provider facts
+  // used as launch, delivery, budget, document, or recovery evidence.
+  const providerEvidenceRecord = row => {
+    if (!row || typeof row !== 'object') return false;
+    const provider = String(row.provider || '').trim().toLowerCase();
+    return !!(
+      row.providerConfigurationFingerprint ||
+      row.deliveryUpdatedAt ||
+      row.providerStatus ||
+      row.providerErrorCode ||
+      row.deliveredAt ||
+      row.failedAt ||
+      (row.externalId && ['resend', 'sendgrid', 'telnyx', 'twilio'].includes(provider)) ||
+      /webhook/i.test(String(row.source || ''))
+    );
+  };
+  const providerEvidenceFields = [
+    'id',
+    'organizationId',
+    'providerConfigurationFingerprint',
+    'externalId',
+    'provider',
+    'channel',
+    'direction',
+    'status',
+    'source',
+    'subject',
+    'body',
+    'text',
+    'html',
+    'to',
+    'from',
+    'phone',
+    'email',
+    'customer',
+    'customerId',
+    'customerName',
+    'threadId',
+    'receivedAt',
+    'sentAt',
+    'createdAt',
+    'date',
+    'deliveryUpdatedAt',
+    'providerStatus',
+    'providerErrorCode',
+    'providerErrorMessage',
+    'failedAt',
+    'deliveredAt'
+  ];
+  const providerEvidenceKey = row => row && row.id
+    ? 'id:' + String(row.id)
+    : (row && row.externalId ? 'external:' + String(row.externalId) : '');
+  const matchedProviderEvidenceKeys = new Set();
   if (Array.isArray(next.messages)) {
     next.messages = next.messages.map(row => {
       if (!row || typeof row !== 'object') return row;
       const clean = { ...row };
       const prior = priorMessagesById.get(String(clean.id || '')) || priorMessagesByExternalId.get(String(clean.externalId || ''));
-      if (prior && Object.prototype.hasOwnProperty.call(prior, 'providerConfigurationFingerprint')) {
-        clean.providerConfigurationFingerprint = prior.providerConfigurationFingerprint;
+      if (prior && providerEvidenceRecord(prior)) {
+        const matchedKey = providerEvidenceKey(prior);
+        if (matchedKey) matchedProviderEvidenceKeys.add(matchedKey);
+        providerEvidenceFields.forEach(field => {
+          if (Object.prototype.hasOwnProperty.call(prior, field)) clean[field] = prior[field];
+          else delete clean[field];
+        });
       } else {
-        delete clean.providerConfigurationFingerprint;
+        ['providerConfigurationFingerprint', 'providerStatus', 'providerErrorCode', 'providerErrorMessage', 'deliveryUpdatedAt', 'deliveredAt', 'failedAt'].forEach(field => delete clean[field]);
+        if (/webhook/i.test(String(clean.source || ''))) delete clean.source;
+        if (['resend', 'sendgrid', 'telnyx', 'twilio'].includes(String(clean.provider || '').trim().toLowerCase())) delete clean.externalId;
       }
       return clean;
     });
+    priorMessages.filter(providerEvidenceRecord).forEach(prior => {
+      const key = providerEvidenceKey(prior);
+      if (key && !matchedProviderEvidenceKeys.has(key)) {
+        next.messages.push(prior);
+        matchedProviderEvidenceKeys.add(key);
+      }
+    });
+  } else if (priorMessages.some(providerEvidenceRecord)) {
+    next.messages = priorMessages.slice();
   }
   const priorStripe = current && current.integrations && current.integrations.stripe || {};
   const priorDocumentStorage = current && current.integrations && current.integrations.documentStorage || {};
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const priorMessaging = current && current.integrations && current.integrations.messaging || {};
+  const priorClover = current && current.integrations && current.integrations.clover || {};
   const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
-  const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError'];
-  const preserveStripe = stripeProofFields.some(field => Object.prototype.hasOwnProperty.call(priorStripe, field));
-  const preserveDocumentStorage = documentStorageProofFields.some(field => Object.prototype.hasOwnProperty.call(priorDocumentStorage, field));
-  const preserveOperationalAlerts = operationalAlertProofFields.some(field => Object.prototype.hasOwnProperty.call(priorNotifications, field));
-  const preserveMessaging = messagingProofFields.some(field => Object.prototype.hasOwnProperty.call(priorMessaging, field));
-  if (!preserveStripe && !preserveDocumentStorage && !preserveOperationalAlerts && !preserveMessaging) return next;
+  const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError', 'telnyx10dlc', 'aiUsage', 'smsWebhookConnected', 'smsWebhookConfiguredAt'];
+  const cloverProofFields = ['lastRecurringPlanSyncAt', 'lastRecurringPlanSyncError', 'lastRecurringPlanSyncWarning', 'lastRecurringMemberSyncWarning', 'lastRecurringPlanSyncDegradedAt', 'lastRecurringPlanSyncDegradedStatus', 'lastRecurringPlanSyncPreservedPlans', 'lastRecurringPlanSyncPreservedMembers', 'lastRecurringRosterCoverage', 'lastRecurringSubscriptionSyncSource', 'lastRecurringPlanSyncSource', 'lastRecurringPlanSyncPaths', 'lastRecurringPlanSyncDetails', 'recurringPlanSummary'];
+  const preserveFields = (prior, candidate, fields) => {
+    const safe = { ...(candidate || {}) };
+    fields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(prior, field)) safe[field] = prior[field];
+      else delete safe[field];
+    });
+    return safe;
+  };
   next.integrations = { ...((incoming && incoming.integrations) || {}) };
-  if (preserveStripe) {
-    next.integrations.stripe = { ...((incoming && incoming.integrations && incoming.integrations.stripe) || {}) };
-    stripeProofFields.forEach(field => {
-      if (Object.prototype.hasOwnProperty.call(priorStripe, field)) next.integrations.stripe[field] = priorStripe[field];
-    });
-  }
-  if (preserveDocumentStorage) {
-    next.integrations.documentStorage = { ...((incoming && incoming.integrations && incoming.integrations.documentStorage) || {}) };
-    documentStorageProofFields.forEach(field => {
-      if (Object.prototype.hasOwnProperty.call(priorDocumentStorage, field)) next.integrations.documentStorage[field] = priorDocumentStorage[field];
-    });
-  }
-  if (preserveOperationalAlerts) {
-    next.integrations.notifications = { ...((incoming && incoming.integrations && incoming.integrations.notifications) || {}) };
-    operationalAlertProofFields.forEach(field => {
-      if (Object.prototype.hasOwnProperty.call(priorNotifications, field)) next.integrations.notifications[field] = priorNotifications[field];
-    });
-  }
-  if (preserveMessaging) {
-    next.integrations.messaging = { ...((incoming && incoming.integrations && incoming.integrations.messaging) || {}) };
-    messagingProofFields.forEach(field => {
-      if (Object.prototype.hasOwnProperty.call(priorMessaging, field)) next.integrations.messaging[field] = priorMessaging[field];
-    });
-  }
+  next.integrations.stripe = preserveFields(priorStripe, incoming && incoming.integrations && incoming.integrations.stripe, stripeProofFields);
+  next.integrations.documentStorage = preserveFields(priorDocumentStorage, incoming && incoming.integrations && incoming.integrations.documentStorage, documentStorageProofFields);
+  next.integrations.notifications = preserveFields(priorNotifications, incoming && incoming.integrations && incoming.integrations.notifications, operationalAlertProofFields);
+  next.integrations.messaging = preserveFields(priorMessaging, incoming && incoming.integrations && incoming.integrations.messaging, messagingProofFields);
+  next.integrations.clover = preserveFields(priorClover, incoming && incoming.integrations && incoming.integrations.clover, cloverProofFields);
   return next;
 }
 function redactStaffSecrets(data) {

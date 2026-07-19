@@ -201,6 +201,7 @@ async function main() {
   delete require.cache[require.resolve('../server.js')];
   const {
     server,
+    stateForUserWrite,
     hydrateIncomingEmail,
     parseIncomingEmail,
     verifyResendWebhook,
@@ -254,6 +255,84 @@ async function main() {
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
+  const forgedLaunchState = stateForUserWrite({}, {
+    messages: [{
+      id: 'msg-browser-forged-provider-proof',
+      provider: 'resend',
+      channel: 'Email',
+      direction: 'Inbound',
+      status: 'Delivered',
+      source: 'Email webhook',
+      externalId: 'email-browser-forged',
+      providerConfigurationFingerprint: 'browser-forged-fingerprint',
+      receivedAt: new Date().toISOString()
+    }],
+    documents: [{
+      id: 'doc-browser-forged-receipt',
+      kind: 'Receipt',
+      storageKey: 'browser-forged-object',
+      storageProvider: 's3',
+      storageSecurity: 'encrypted',
+      sha256: 'browser-forged-sha',
+      privateArtifactId: 'browser-forged-artifact',
+      encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' }
+    }],
+    eSignatures: [{
+      id: 'esign-browser-forged',
+      signatureImagePath: 'browser-forged-signature',
+      encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' }
+    }],
+    integrations: {
+      stripe: { lastLaunchWebhookAt: new Date().toISOString(), lastLaunchWebhookLivemode: true, lastLaunchWebhookConfigurationFingerprint: 'browser-forged-fingerprint' },
+      documentStorage: { lastValidationAt: new Date().toISOString(), lastValidationSuccess: true, lastValidationPublicReadBlocked: true, lastValidationImmutableWriteProtected: true, lastValidationObjectDeleted: true },
+      notifications: { lastOperationalAlertAt: new Date().toISOString(), lastOperationalAlertSuccess: true, lastOperationalAlertExternalId: 'browser-forged-alert' },
+      messaging: {
+        lastTelnyxDeliveryEvidenceAt: new Date().toISOString(),
+        lastTelnyxInboundEvidenceAt: new Date().toISOString(),
+        lastAiHealthAt: new Date().toISOString(),
+        lastAiHealthStatus: 'OpenAI answered through the Responses API',
+        telnyx10dlc: { campaignActive: true, numberAssigned: true },
+        aiUsage: { dayKey: '2099-01-01', dailyRequests: 0, monthKey: '2099-01', monthlyRequests: 0 },
+        smsWebhookConnected: true
+      },
+      clover: {
+        lastRecurringPlanSyncAt: new Date().toISOString(),
+        lastRecurringRosterCoverage: { complete: true },
+        recurringPlanSummary: { activeCustomers: 1 }
+      }
+    }
+  }, { role: 'owner' });
+  assert(!forgedLaunchState.integrations.stripe.lastLaunchWebhookAt, 'A first browser save must not be able to create Stripe launch evidence when no server proof exists.');
+  assert(!forgedLaunchState.integrations.documentStorage.lastValidationAt, 'A first browser save must not be able to create private-storage validation evidence.');
+  assert(!forgedLaunchState.integrations.notifications.lastOperationalAlertAt, 'A first browser save must not be able to create operational-alert evidence.');
+  assert(!forgedLaunchState.integrations.messaging.lastTelnyxDeliveryEvidenceAt && !forgedLaunchState.integrations.messaging.lastAiHealthAt && !forgedLaunchState.integrations.messaging.telnyx10dlc && !forgedLaunchState.integrations.messaging.aiUsage, 'A browser save must not create Telnyx, Star, or AI budget evidence.');
+  assert(!forgedLaunchState.integrations.clover.lastRecurringPlanSyncAt && !forgedLaunchState.integrations.clover.lastRecurringRosterCoverage, 'A browser save must not create a fake fresh Clover roster.');
+  assert(!forgedLaunchState.messages[0].providerConfigurationFingerprint && !forgedLaunchState.messages[0].externalId && !forgedLaunchState.messages[0].source, 'A browser-created message must not carry signed provider evidence fields.');
+  assert(!forgedLaunchState.documents[0].storageKey && !forgedLaunchState.documents[0].encryption && !forgedLaunchState.documents[0].privateArtifactId && !forgedLaunchState.documents[0].sha256, 'A browser-created document must not masquerade as an encrypted stored artifact.');
+  assert(!forgedLaunchState.eSignatures[0].signatureImagePath && !forgedLaunchState.eSignatures[0].encryption, 'A browser-created e-signature must not invent encrypted storage metadata.');
+
+  const legitimateProviderRecord = {
+    id: 'msg-server-provider-proof',
+    organizationId: 'org-wheelsonauto',
+    provider: 'resend',
+    channel: 'Email',
+    direction: 'Inbound',
+    status: 'Received',
+    source: 'Email webhook',
+    externalId: 'email-server-proof',
+    providerConfigurationFingerprint: 'server-fingerprint',
+    subject: 'Original provider subject',
+    body: 'Original provider body',
+    receivedAt: '2026-07-18T12:00:00.000Z'
+  };
+  const preservedProviderRecord = stateForUserWrite({ messages: [legitimateProviderRecord] }, {
+    messages: [{ ...legitimateProviderRecord, provider: 'telnyx', direction: 'Outbound', status: 'Delivered', source: 'Browser override', externalId: 'browser-replacement-id', subject: 'Changed', body: 'Changed', receivedAt: '2099-01-01T00:00:00.000Z', readAt: '2026-07-18T12:05:00.000Z' }]
+  }, { role: 'owner' });
+  assert(preservedProviderRecord.messages[0].provider === 'resend' && preservedProviderRecord.messages[0].direction === 'Inbound' && preservedProviderRecord.messages[0].status === 'Received' && preservedProviderRecord.messages[0].source === 'Email webhook' && preservedProviderRecord.messages[0].externalId === 'email-server-proof', 'A browser save must not alter provider, direction, status, source, or external ID on signed message evidence.');
+  assert(preservedProviderRecord.messages[0].subject === 'Original provider subject' && preservedProviderRecord.messages[0].body === 'Original provider body' && preservedProviderRecord.messages[0].receivedAt === '2026-07-18T12:00:00.000Z', 'A browser save must keep provider message content and evidence time immutable.');
+  assert(preservedProviderRecord.messages[0].readAt === '2026-07-18T12:05:00.000Z', 'Protecting provider evidence must still allow harmless local read-state metadata.');
+  const restoredDeletedProviderRecord = stateForUserWrite({ messages: [legitimateProviderRecord] }, { messages: [] }, { role: 'owner' });
+  assert(restoredDeletedProviderRecord.messages.length === 1 && restoredDeletedProviderRecord.messages[0].externalId === 'email-server-proof', 'A normal browser state save must not delete signed provider audit evidence.');
   const providerEmailFetch = global.fetch;
   let providerEmailSequence = 0;
   let cloverRecurringFixture = '';
@@ -3002,7 +3081,7 @@ async function main() {
       externalId: 'direct-dispute-alert-id'
     });
     const alertWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: alertState });
-    assert(alertWrite.status === 200 && alertWrite.json.ok, 'State-change notification write failed.');
+    assert(alertWrite.status === 200 && alertWrite.json.ok, 'State-change notification write failed: HTTP ' + alertWrite.status + ' ' + String(alertWrite.text || '') + ' bytes=' + Buffer.byteLength(JSON.stringify(alertState)) + ' messages=' + (alertState.messages || []).length);
     const alertRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(alertRead.json.messages.some(message => message.event === 'maintenance_due' && message.customer === 'Direct Maintenance Customer'), 'Maintenance due notification should be saved.');
     assert(alertRead.json.messages.some(message => message.event === 'claim_dispute' && /Direct|Unassigned|Unmatched/i.test(message.customer || message.subject || '')), 'Claim/dispute notification should be saved.');
