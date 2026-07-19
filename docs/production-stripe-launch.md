@@ -252,7 +252,9 @@ operate if that file changes, even if the JSON still parses.
 
 If preflight reports a duplicated critical record ID, do not edit the live
 JSON file and do not delete payment history by hand. First inspect the reported
-records. The guarded preparation tool may collapse only records that share the
+records. Preflight lists every exact duplicate group and every non-identical
+duplicate group in one report instead of stopping at the first ID. The guarded
+preparation tool may collapse only records that share the
 same critical ID **and** have identical canonical content. It never merges two
 different records and never resolves a customer/vehicle assignment by guessing:
 

@@ -17,17 +17,58 @@ async function main() {
   const encryptedDocuments = privateDocuments.filter(row => row.storageKey && row.encryption && row.encryption.algorithm === 'AES-256-GCM');
   const legacyDocuments = privateDocuments.filter(row => !encryptedDocuments.includes(row));
   const structuralErrors = [];
+  const duplicatePlan = stateRepository.exactDuplicateCriticalResourcePlan(state);
+  const repairableExactDuplicates = duplicatePlan.repairs.map(row => ({
+    collection: row.collection,
+    resourceType: row.resourceType,
+    resourceId: row.resourceId,
+    occurrenceCount: row.occurrenceCount,
+    removedCount: row.removedCount,
+    recordHash: row.recordHash
+  }));
+  const nonidenticalCriticalDuplicates = duplicatePlan.conflicts.map(row => ({
+    collection: row.collection,
+    resourceType: row.resourceType,
+    resourceId: row.resourceId,
+    occurrenceCount: row.occurrenceCount,
+    recordHashes: row.recordHashes
+  }));
+  if (repairableExactDuplicates.length) {
+    structuralErrors.push({
+      kind: 'woa_resource_exact_duplicate_set',
+      message: repairableExactDuplicates.length + ' critical record ID group(s) contain canonical-identical copies. PostgreSQL import remains blocked until a checksum-locked protected source copy removes only those duplicate copies.',
+      repairable: true,
+      duplicateGroups: repairableExactDuplicates.length,
+      duplicateCopies: repairableExactDuplicates.reduce((sum, row) => sum + row.removedCount, 0)
+    });
+  }
+  nonidenticalCriticalDuplicates.forEach(row => {
+    structuralErrors.push({
+      kind: 'woa_resource_nonidentical_duplicate',
+      message: 'Critical ' + row.resourceType + ' id ' + row.resourceId + ' appears more than once with different content. Owner review is required.',
+      repairable: false,
+      resourceType: row.resourceType,
+      resourceId: row.resourceId,
+      occurrenceCount: row.occurrenceCount,
+      recordHashes: row.recordHashes
+    });
+  });
   let criticalResources = [];
   let activeAssignments = [];
-  try {
-    criticalResources = stateRepository.criticalResourceIndexRows(state);
-  } catch (error) {
-    structuralErrors.push({
-      kind: String(error && error.code || 'woa_resource_index_error'),
-      message: String(error && error.message || error || 'Critical resource index failed.').slice(0, 1000),
-      resourceType: String(error && error.resourceType || ''),
-      resourceId: String(error && error.resourceId || '')
-    });
+  if (!nonidenticalCriticalDuplicates.length) {
+    try {
+      const indexState = repairableExactDuplicates.length
+        ? stateRepository.collapseExactDuplicateCriticalResources(state).state
+        : state;
+      criticalResources = stateRepository.criticalResourceIndexRows(indexState);
+    } catch (error) {
+      structuralErrors.push({
+        kind: String(error && error.code || 'woa_resource_index_error'),
+        message: String(error && error.message || error || 'Critical resource index failed.').slice(0, 1000),
+        resourceType: String(error && error.resourceType || ''),
+        resourceId: String(error && error.resourceId || '')
+      });
+    }
   }
   try {
     activeAssignments = stateRepository.activeAssignmentIndexRows(state);
@@ -50,6 +91,8 @@ async function main() {
     postgresqlImportAllowed,
     conflicts,
     structuralErrors,
+    repairableExactDuplicates,
+    nonidenticalCriticalDuplicates,
     warnings,
     counts: {
       vehicles: Array.isArray(state.vehicles) ? state.vehicles.length : 0,
@@ -59,12 +102,21 @@ async function main() {
       privateDocuments: privateDocuments.length,
       encryptedDocuments: encryptedDocuments.length,
       legacyDocuments: legacyDocuments.length,
+      repairableExactDuplicateGroups: repairableExactDuplicates.length,
+      repairableExactDuplicateCopies: repairableExactDuplicates.reduce((sum, row) => sum + row.removedCount, 0),
+      nonidenticalCriticalDuplicateGroups: nonidenticalCriticalDuplicates.length,
       criticalResources: criticalResources.length,
       activeAssignments: activeAssignments.length,
       immutableProviderIdentities: immutableProviderIdentities.length
     },
     nextSteps: !postgresqlImportAllowed
-      ? ['Resolve every listed immutable VIN, plate, portal-username, provider transaction/subscription, critical-record, and active vehicle-assignment conflict without deleting business history.', 'Run this preflight again until postgresqlImportAllowed is true.']
+      ? [
+          ...(repairableExactDuplicates.length ? ['Create a separate checksum-locked source with prepare-postgres-migration-source; never edit the live JSON or delete payment history by hand.'] : []),
+          ...(nonidenticalCriticalDuplicates.length ? ['Review every non-identical duplicate with the owner. The preparation tool will not guess which record is authoritative.'] : []),
+          ...(structuralErrors.some(row => row.kind === 'woa_assignment_identity_conflict') ? ['Resolve each customer-name assignment in Operations / Assigned. Confirm an alias only when both names are truly the same person.'] : []),
+          'Resolve every listed immutable VIN, plate, portal-username, provider transaction/subscription, critical-record, and active vehicle-assignment conflict without deleting business history.',
+          'Run this preflight again until postgresqlImportAllowed is true.'
+        ]
       : (warnings.length
         ? ['Review and complete each missing vehicle VIN before enabling a controlled Stripe launch. PostgreSQL import remains available, but launch readiness stays blocked until these identity warnings are cleared.', 'Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
         : ['Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'])

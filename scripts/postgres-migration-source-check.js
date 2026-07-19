@@ -48,6 +48,22 @@ async function main() {
     assert.strictEqual(providerConflictPreflight.status, 2, 'A duplicated provider transaction identity must block PostgreSQL preflight.');
     const providerConflictReport = JSON.parse(providerConflictPreflight.stdout);
     assert(providerConflictReport.conflicts.some(conflict => conflict.kind === 'stripe_charge'), 'Preflight must expose which immutable provider identity is duplicated.');
+    await fs.writeFile(dataFile, JSON.stringify({
+      payments: [
+        { id: 'payment-exact-a', cloverPaymentId: 'exact-a', status: 'Paid' },
+        { id: 'payment-exact-a', cloverPaymentId: 'exact-a', status: 'Paid' },
+        { id: 'payment-exact-b', cloverPaymentId: 'exact-b', status: 'FAIL' },
+        { id: 'payment-exact-b', cloverPaymentId: 'exact-b', status: 'FAIL' }
+      ]
+    }, null, 2), 'utf8');
+    const exactDuplicatePreflight = run(preflight, dataFile, process.env);
+    assert.strictEqual(exactDuplicatePreflight.status, 2, 'Canonical-identical critical records must remain blocked until a protected repair copy is prepared.');
+    const exactDuplicateReport = JSON.parse(exactDuplicatePreflight.stdout);
+    assert.strictEqual(exactDuplicateReport.repairableExactDuplicates.length, 2, 'Preflight must report every exact duplicate group in one run instead of stopping at the first ID.');
+    assert.strictEqual(exactDuplicateReport.counts.repairableExactDuplicateGroups, 2);
+    assert.strictEqual(exactDuplicateReport.counts.repairableExactDuplicateCopies, 2);
+    assert.strictEqual(exactDuplicateReport.nonidenticalCriticalDuplicates.length, 0);
+    assert(exactDuplicateReport.nextSteps.some(step => /prepare-postgres-migration-source/.test(step)), 'Exact duplicate preflight must direct the operator to the checksum-locked protected-copy tool.');
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
     const snapshot = await source.readSource(dataFile);
     assert(source.validChecksum(snapshot.sourceFileChecksum), 'The protected-source checksum must be SHA-256.');

@@ -83,6 +83,7 @@ async function main() {
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const postgresSourceRepairSource = await fs.readFile(path.resolve(__dirname, 'prepare-postgres-migration-source.js'), 'utf8');
     const postgresSourceRepairCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-source-repair-check.js'), 'utf8');
+    const postgresPreflightSource = await fs.readFile(path.resolve(__dirname, 'postgres-preflight.js'), 'utf8');
     const postgresImporterSource = await fs.readFile(path.resolve(__dirname, 'migrate-json-to-postgres.js'), 'utf8');
     const postgresVerifierSource = await fs.readFile(path.resolve(__dirname, 'verify-json-to-postgres.js'), 'utf8');
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
@@ -162,6 +163,9 @@ async function main() {
       && postgresSourceRepairSource.includes('assertSourceUnchanged(sourceFile, source.sourceFileChecksum)')
       && postgresSourceRepairCheckSource.includes('Protected-copy preparation must never rewrite the live source')
       && packageSource.includes('node scripts/postgres-source-repair-check.js'), 'Production migration repair must be checksum-locked, exact-duplicate-only, non-overwriting, owner-readable, live-source preserving, and mandatory in the main gate.');
+    assert(postgresPreflightSource.includes('repairableExactDuplicates')
+      && postgresPreflightSource.includes('nonidenticalCriticalDuplicates')
+      && postgresPreflightSource.includes('prepare-postgres-migration-source'), 'PostgreSQL preflight must report every exact and non-identical duplicate group in one run and direct safe duplicates to the protected-copy workflow.');
     assert(postgresImporterSource.includes('assertTransactionalSourceReady(state)')
       && postgresVerifierSource.includes('assertTransactionalSourceReady(state)'), 'PostgreSQL import and migration proof must reject provider identity, critical record, and active assignment conflicts before a database connection.');
     assert(launchRunbook.includes('prepare-postgres-migration-source')
