@@ -58,6 +58,10 @@ artifact and must never be committed as part of a code release.
 - The verified importer writes an owner-only persistent cutover sentinel beside
   the live data directory. After that point, a missing or misspelled
   `WOA_DATA_BACKEND` cannot silently reopen the retained JSON rollback file.
+  Sentinel format v2 also binds the signed source origin, Render service,
+  capture time, live/protected file checksums, manifest fingerprint, and
+  signature fingerprint to PostgreSQL health on every restart. Missing or
+  different provenance fails closed instead of selecting either backend.
 - Run `pnpm run secret-hygiene-check` before a release. It rejects committed
   production-key signatures and private key blocks without printing the secret
   value if one is found.

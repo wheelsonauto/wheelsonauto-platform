@@ -16,10 +16,19 @@ function readyHealth(overrides = {}) {
     stateImported: true,
     snapshotRecoveryReady: true,
     migrationProofReady: true,
+    migrationSourceProvenanceReady: true,
     sourceChecksum: '1'.repeat(64),
     canonicalSourceChecksum: '2'.repeat(64),
     targetChecksum: '2'.repeat(64),
     importedVersion: 1,
+    provenanceVersion: 1,
+    sourceOrigin: 'render-live-disk',
+    renderServiceId: 'srv-wheelsonauto-cutover-test',
+    sourcePreparedAt: '2026-07-18T11:55:00.000Z',
+    liveSourceFileChecksum: '4'.repeat(64),
+    protectedSourceFileChecksum: '3'.repeat(64),
+    sourceManifestChecksum: '5'.repeat(64),
+    sourceSignatureChecksum: '6'.repeat(64),
     ...overrides
   };
 }
@@ -56,6 +65,9 @@ async function main() {
     assert.strictEqual(first.created, true, 'The first verified PostgreSQL cutover must create the persistent sentinel.');
     const saved = JSON.parse(await fs.readFile(cutover.sentinelPath(temp), 'utf8'));
     assert.strictEqual(saved.protectedSourceFileChecksum, protectedSourceFileChecksum, 'The sentinel must retain the exact protected source-file checksum when the importer provides it.');
+    assert.strictEqual(saved.sourceManifestChecksum, '5'.repeat(64), 'The sentinel must retain the signed source-manifest fingerprint.');
+    assert.strictEqual(saved.sourceSignatureChecksum, '6'.repeat(64), 'The sentinel must retain the verified provenance-signature fingerprint.');
+    assert.strictEqual(saved.renderServiceId, 'srv-wheelsonauto-cutover-test', 'The sentinel must retain the Render service that captured the live source.');
     assert(!JSON.stringify(saved).includes('postgresql://') && !JSON.stringify(saved).includes('secret'), 'The cutover sentinel must not contain database credentials or secrets.');
     if (process.platform !== 'win32') {
       const mode = (await fs.stat(cutover.sentinelPath(temp))).mode & 0o777;
@@ -90,11 +102,23 @@ async function main() {
       'A reachable but unrecoverable PostgreSQL database must not retire JSON or start serving.'
     );
     await assert.rejects(() => fs.access(cutover.sentinelPath(unreadyDir)), error => error && error.code === 'ENOENT', 'A failed PostgreSQL validation must not leave a cutover sentinel.');
+    const unsignedDir = path.join(temp, 'unsigned');
+    await assert.rejects(
+      () => cutover.assertBackendTransition({ backend: 'postgres', dataDir: unsignedDir, repository: { health: async () => readyHealth({ migrationSourceProvenanceReady: false, sourceManifestChecksum: '' }) } }),
+      error => error && error.code === 'woa_postgres_cutover_not_ready',
+      'A checksum-only migration proof without signed source provenance must not retire JSON.'
+    );
+    await assert.rejects(() => fs.access(cutover.sentinelPath(unsignedDir)), error => error && error.code === 'ENOENT', 'A provenance failure must not leave a cutover sentinel.');
 
     await assert.rejects(
       () => cutover.assertBackendTransition({ backend: 'postgres', dataDir: temp, repository: { health: async () => readyHealth({ targetChecksum: '4'.repeat(64), canonicalSourceChecksum: '4'.repeat(64) }) }, organizationId: 'org-wheelsonauto' }),
       error => error && error.code === 'woa_cutover_sentinel_conflict',
       'Different migration evidence must never overwrite the retained cutover sentinel.'
+    );
+    await assert.rejects(
+      () => cutover.assertBackendTransition({ backend: 'postgres', dataDir: temp, repository: { health: async () => readyHealth({ sourceManifestChecksum: '7'.repeat(64) }) }, organizationId: 'org-wheelsonauto' }),
+      error => error && error.code === 'woa_cutover_sentinel_conflict',
+      'A different signed source manifest must not be accepted against the retained cutover sentinel.'
     );
 
     const corruptDir = path.join(temp, 'corrupt');

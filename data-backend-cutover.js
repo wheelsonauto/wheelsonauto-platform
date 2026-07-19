@@ -4,7 +4,7 @@ const fs = require('fs/promises');
 const path = require('path');
 
 const SENTINEL_FORMAT = 'wheelsonauto-postgres-cutover';
-const SENTINEL_VERSION = 1;
+const SENTINEL_VERSION = 2;
 const SENTINEL_FILENAME = '.wheelsonauto-postgres-cutover.json';
 const JSON_ROLLBACK_REVIEW_CONFIRMATION = 'REVIEW JSON ROLLBACK IN MAINTENANCE MODE';
 
@@ -38,22 +38,34 @@ function validateSentinel(value, file = SENTINEL_FILENAME) {
     && !!safeChecksum(sentinel.sourceStateChecksum)
     && !!safeChecksum(sentinel.canonicalSourceChecksum)
     && !!safeChecksum(sentinel.targetChecksum)
+    && Number(sentinel.provenanceVersion) === 1
+    && sentinel.sourceOrigin === 'render-live-disk'
+    && !!String(sentinel.renderServiceId || '').trim()
+    && String(sentinel.renderServiceId || '').trim().length <= 160
+    && Number.isFinite(Date.parse(String(sentinel.sourcePreparedAt || '')))
+    && !!safeChecksum(sentinel.liveSourceFileChecksum)
+    && !!safeChecksum(sentinel.protectedSourceFileChecksum)
+    && !!safeChecksum(sentinel.sourceManifestChecksum)
+    && !!safeChecksum(sentinel.sourceSignatureChecksum)
     && Number.isInteger(Number(sentinel.importedVersion))
     && Number(sentinel.importedVersion) > 0
     && Number.isFinite(Date.parse(String(sentinel.createdAt || '')));
   if (!valid) {
     throw cutoverError('The PostgreSQL cutover sentinel at ' + file + ' is invalid. Refusing to choose a data backend until the retained migration evidence is reviewed.', 'woa_cutover_sentinel_invalid');
   }
-  const protectedSourceFileChecksum = String(sentinel.protectedSourceFileChecksum || '').trim().toLowerCase();
-  if (protectedSourceFileChecksum && !safeChecksum(protectedSourceFileChecksum)) {
-    throw cutoverError('The PostgreSQL cutover sentinel contains an invalid protected-source checksum. Refusing to choose a data backend.', 'woa_cutover_sentinel_invalid');
-  }
   return {
     format: SENTINEL_FORMAT,
     version: SENTINEL_VERSION,
     backend: 'postgres',
     organizationId,
-    protectedSourceFileChecksum,
+    provenanceVersion: 1,
+    sourceOrigin: 'render-live-disk',
+    renderServiceId: String(sentinel.renderServiceId || '').trim(),
+    sourcePreparedAt: new Date(sentinel.sourcePreparedAt).toISOString(),
+    liveSourceFileChecksum: safeChecksum(sentinel.liveSourceFileChecksum),
+    protectedSourceFileChecksum: safeChecksum(sentinel.protectedSourceFileChecksum),
+    sourceManifestChecksum: safeChecksum(sentinel.sourceManifestChecksum),
+    sourceSignatureChecksum: safeChecksum(sentinel.sourceSignatureChecksum),
     sourceStateChecksum: safeChecksum(sentinel.sourceStateChecksum),
     canonicalSourceChecksum: safeChecksum(sentinel.canonicalSourceChecksum),
     targetChecksum: safeChecksum(sentinel.targetChecksum),
@@ -84,15 +96,27 @@ function sentinelEvidence(health = {}, options = {}) {
   if (!health || health.backend !== 'postgres' || health.connected !== true || health.transactional !== true || health.stateImported !== true) {
     throw cutoverError('PostgreSQL is not connected with imported WheelsonAuto state. Refusing to retire the JSON backend.', 'woa_postgres_cutover_not_ready');
   }
-  if (health.productionReady !== true || health.snapshotRecoveryReady !== true || health.migrationProofReady !== true) {
-    throw cutoverError('PostgreSQL must pass state integrity, transactional indexes, recovery snapshot, and import-proof checks before the JSON backend is retired.', 'woa_postgres_cutover_not_ready');
+  if (health.productionReady !== true || health.snapshotRecoveryReady !== true || health.migrationProofReady !== true || health.migrationSourceProvenanceReady !== true) {
+    throw cutoverError('PostgreSQL must pass state integrity, transactional indexes, recovery snapshot, signed source provenance, and import-proof checks before the JSON backend is retired.', 'woa_postgres_cutover_not_ready');
+  }
+  const protectedSourceFileChecksum = safeChecksum(health.protectedSourceFileChecksum);
+  const suppliedProtectedChecksum = safeChecksum(options.protectedSourceFileChecksum);
+  if (suppliedProtectedChecksum && suppliedProtectedChecksum !== protectedSourceFileChecksum) {
+    throw cutoverError('The importer protected-source checksum does not match PostgreSQL signed provenance. Refusing to retire JSON.', 'woa_postgres_cutover_not_ready');
   }
   const evidence = {
     format: SENTINEL_FORMAT,
     version: SENTINEL_VERSION,
     backend: 'postgres',
     organizationId: safeOrganizationId(options.organizationId),
-    protectedSourceFileChecksum: safeChecksum(options.protectedSourceFileChecksum),
+    provenanceVersion: Number(health.provenanceVersion || 0),
+    sourceOrigin: String(health.sourceOrigin || '').trim(),
+    renderServiceId: String(health.renderServiceId || '').trim(),
+    sourcePreparedAt: health.sourcePreparedAt,
+    liveSourceFileChecksum: safeChecksum(health.liveSourceFileChecksum),
+    protectedSourceFileChecksum,
+    sourceManifestChecksum: safeChecksum(health.sourceManifestChecksum),
+    sourceSignatureChecksum: safeChecksum(health.sourceSignatureChecksum),
     sourceStateChecksum: safeChecksum(health.sourceChecksum),
     canonicalSourceChecksum: safeChecksum(health.canonicalSourceChecksum),
     targetChecksum: safeChecksum(health.targetChecksum),
@@ -108,7 +132,14 @@ function sameMigration(left, right) {
     && left.canonicalSourceChecksum === right.canonicalSourceChecksum
     && left.targetChecksum === right.targetChecksum
     && left.importedVersion === right.importedVersion
-    && (!left.protectedSourceFileChecksum || !right.protectedSourceFileChecksum || left.protectedSourceFileChecksum === right.protectedSourceFileChecksum);
+    && left.provenanceVersion === right.provenanceVersion
+    && left.sourceOrigin === right.sourceOrigin
+    && left.renderServiceId === right.renderServiceId
+    && left.sourcePreparedAt === right.sourcePreparedAt
+    && left.liveSourceFileChecksum === right.liveSourceFileChecksum
+    && left.protectedSourceFileChecksum === right.protectedSourceFileChecksum
+    && left.sourceManifestChecksum === right.sourceManifestChecksum
+    && left.sourceSignatureChecksum === right.sourceSignatureChecksum;
 }
 
 async function writePostgresSentinel(options = {}) {
