@@ -45,6 +45,7 @@ const openComposeMessage = finalFunctionSlice(app, 'openComposeMessage');
 const messagesView = finalFunctionSlice(app, 'Messages');
 const messageTemplateDefaults = finalFunctionSlice(app, 'messageTemplateDefaults');
 const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
+const emailDeliveryIdempotencyKey = finalFunctionSlice(server, 'emailDeliveryIdempotencyKey');
 const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
 const hydrateIncomingEmail = finalFunctionSlice(server, 'hydrateIncomingEmail');
 const verifyResendWebhook = finalFunctionSlice(server, 'verifyResendWebhook');
@@ -70,7 +71,7 @@ const configureTelnyxMessagingProfile = finalFunctionSlice(server, 'configureTel
 const applyTelnyxDeliveryEvent = finalFunctionSlice(server, 'applyTelnyxDeliveryEvent');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging inbound SMS status', messagingStatus, 'smsWebhookConnected');
@@ -171,6 +172,8 @@ requireText('Internal mirror records hidden from inbox', app, '!m.hiddenFromInbo
 requireText('Message-history contact fallback', messageContactCandidates, 'message history');
 requireText('Message-history contact phone', messageContactCandidates, 'row.phone || row.from || row.to');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
+requireText('Resend provider idempotency header', sendProviderEmail, "'Idempotency-Key': idempotencyKey");
+requireText('Deterministic email delivery key', emailDeliveryIdempotencyKey, "createHash('sha256')");
 requireText('Resend reply-to support', sendProviderEmail, 'emailPayload.reply_to');
 requireText('Resend owner-copy support', sendProviderEmail, 'emailPayload.bcc');
 requireText('SendGrid support', sendProviderEmail, 'api.sendgrid.com/v3/mail/send');
@@ -206,6 +209,8 @@ requireText('Daily closeout assignment conflict body', server, 'Vehicle assignme
 requireText('Daily closeout audit row summary', server, 'auditRows');
 requireText('Card setup completion notification', server, 'card_setup_completed');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
+requireText('Star approval delivery identity', approveAiMessage, "deliveryId: 'star-draft:' + draft.id");
+requireText('Completed Star delivery server guard', approveAiMessage, 'existingSent');
 requireText('Message context helper vehicle id', messageContextFields, 'vehicleId');
 requireText('Message context helper company scope', messageContextFields, 'organizationId');
 requireText('Message context helper VIN', messageContextFields, 'vin');

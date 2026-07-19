@@ -3109,6 +3109,20 @@ async function handleOwnerSmsBridge(data, inbound) {
   appendAuditLog(data, { name: 'Owner phone', role: 'Owner', organizationId: thread.organizationId || MAIN_ORG_ID }, result.sent ? 'Owner phone reply sent' : 'Owner phone reply saved', [thread.customer || thread.phone, thread.vehicle || thread.vin || 'No vehicle linked', sentRecord.status]);
   return { handled: true, sent: !!result.sent, status: sentRecord.status, customer: thread.customer || '', bridgeCode: thread.code, message: sentRecord };
 }
+function emailDeliveryIdempotencyKey(emailPayload = {}, meta = {}) {
+  const deliveryId = String(meta.deliveryId || meta.idempotencyKey || '').trim().slice(0, 240);
+  const canonical = JSON.stringify({
+    version: 1,
+    deliveryId,
+    from: String(emailPayload.from || '').trim().toLowerCase(),
+    to: (Array.isArray(emailPayload.to) ? emailPayload.to : [emailPayload.to]).map(value => String(value || '').trim().toLowerCase()).filter(Boolean).sort(),
+    bcc: (Array.isArray(emailPayload.bcc) ? emailPayload.bcc : [emailPayload.bcc]).map(value => String(value || '').trim().toLowerCase()).filter(Boolean).sort(),
+    replyTo: String(emailPayload.reply_to || '').trim().toLowerCase(),
+    subject: String(emailPayload.subject || '').trim(),
+    text: String(emailPayload.text || '')
+  });
+  return 'woa-email-' + crypto.createHash('sha256').update(canonical).digest('hex');
+}
 async function sendProviderEmail(to, subject, body, meta = {}) {
   const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
   if (!body) throw new Error('Email needs a message body.');
@@ -3123,14 +3137,15 @@ async function sendProviderEmail(to, subject, body, meta = {}) {
     const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body };
     if (WOA_EMAIL_REPLY_TO) emailPayload.reply_to = WOA_EMAIL_REPLY_TO;
     if (ownerCopy) emailPayload.bcc = [ownerCopy];
+    const idempotencyKey = emailDeliveryIdempotencyKey(emailPayload, meta);
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
       body: JSON.stringify(emailPayload)
     });
     const jsonBody = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(jsonBody.message || jsonBody.error || 'Resend email failed.');
-    return { sent: true, status: 'Sent', provider: 'resend', channel: 'Email', externalId: jsonBody.id || '', response: jsonBody };
+    return { sent: true, status: 'Sent', provider: 'resend', channel: 'Email', externalId: jsonBody.id || '', idempotencyKey, response: jsonBody };
   }
   if (provider === 'sendgrid' && SENDGRID_API_KEY) {
     const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
@@ -3162,7 +3177,11 @@ async function queueEmailNotification(data, payload = {}) {
   const customer = String(payload.customer || 'WheelsonAuto').trim();
   let result;
   try {
-    result = await sendProviderEmail(to, subject, body, { customer, messagingSettings: { emailEnabled: settings.emailEnabled } });
+    result = await sendProviderEmail(to, subject, body, {
+      customer,
+      deliveryId: payload.deliveryId || payload.eventId || '',
+      messagingSettings: { emailEnabled: settings.emailEnabled }
+    });
   } catch (err) {
     result = { sent: false, status: 'Email failed', provider: WOA_EMAIL_PROVIDER || 'not_configured', channel: 'Email', message: String(err && err.message || err) };
   }
@@ -3182,6 +3201,7 @@ async function queueEmailNotification(data, payload = {}) {
     tone: result.sent ? 'good' : 'warn',
     body,
     provider: result.provider || WOA_EMAIL_PROVIDER || 'not_configured',
+    providerIdempotencyKey: result.idempotencyKey || '',
     providerConfigurationFingerprint: result.sent && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
     source: 'WheelsonAuto email notification',
     event
@@ -5486,13 +5506,39 @@ async function approveAiMessage(data, payload = {}) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const draft = data.messages.find(item => item.id === id);
   if (!draft) throw new Error('AI draft was not found.');
+  const existingSent = data.messages.find(item => item.aiDraftId === id && item.externalId && /outbound/i.test(String(item.direction || '')));
+  if (existingSent) {
+    draft.status = 'Approved + sent';
+    draft.tone = 'good';
+    draft.approvedAt = draft.approvedAt || existingSent.aiApprovedAt || existingSent.createdAt || '';
+    return {
+      sent: existingSent,
+      result: {
+        sent: true,
+        status: existingSent.status || 'Sent',
+        provider: existingSent.provider || '',
+        channel: existingSent.channel || '',
+        externalId: existingSent.externalId,
+        idempotencyKey: existingSent.providerIdempotencyKey || '',
+        duplicate: true
+      },
+      draft,
+      ownerMirror: null,
+      duplicate: true
+    };
+  }
   const plan = draft.aiPlan || {};
   if (plan.needsHuman) throw new Error('This AI item needs a human reply first.');
   if (plan.approvalRequired && payload.approveMoneyAction !== true) throw new Error('This AI item prepares a money or account change. Open the customer/payment action and approve it there.');
   const deliveryChannel = String(payload.channel || draft.deliveryChannel || (draft.email && !draft.phone ? 'Email' : 'SMS')).toLowerCase();
   const settings = messageSettings(data);
   const result = deliveryChannel === 'email'
-    ? await sendProviderEmail(draft.email, draft.subject || 'WheelsonAuto message', draft.body, { customer: draft.customer, ai: true, messagingSettings: settings })
+    ? await sendProviderEmail(draft.email, draft.subject || 'WheelsonAuto message', draft.body, {
+      customer: draft.customer,
+      ai: true,
+      deliveryId: 'star-draft:' + draft.id,
+      messagingSettings: settings
+    })
     : await sendProviderSms(draft.phone, draft.body, {
       customer: draft.customer,
       customerId: draft.customerId || '',
@@ -5520,6 +5566,7 @@ async function approveAiMessage(data, payload = {}) {
     tone: result.sent ? 'good' : 'warn',
     body: draft.body,
     provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+    providerIdempotencyKey: result.idempotencyKey || '',
     providerConfigurationFingerprint: result.sent && channel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
     source: result.sent ? ('Star AI + ' + channel + ' provider') : 'Star AI draft',
     aiApprovedAt: new Date().toISOString(),
@@ -11617,7 +11664,11 @@ async function sendTollReceipt(data, claim, channel, user) {
   let result;
   try {
     result = selectedChannel === 'Email'
-      ? await sendProviderEmail(to, 'WheelsonAuto E-ZPass toll reimbursement proof', body, { customer: claim.customer, messagingSettings: settings })
+      ? await sendProviderEmail(to, 'WheelsonAuto E-ZPass toll reimbursement proof', body, {
+        customer: claim.customer,
+        deliveryId: 'toll-receipt:' + claim.id,
+        messagingSettings: settings
+      })
       : await sendProviderSms(to, body, {
         customer: claim.customer,
         customerId: claim.customerId || '',
@@ -11655,6 +11706,7 @@ async function sendTollReceipt(data, claim, channel, user) {
     tone: result.sent ? 'good' : 'warn',
     body,
     provider: result.provider || '',
+    providerIdempotencyKey: result.idempotencyKey || '',
     providerConfigurationFingerprint: result.sent && selectedChannel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
     source: 'WheelsonAuto toll receipt',
     claimId: claim.id,
@@ -18562,7 +18614,11 @@ const server = http.createServer(async (req, res) => {
                 '',
                 inbound.body || '(No message body)'
               ].join('\n'),
-              { ownerCopy: false, messagingSettings: { emailEnabled: settings.emailEnabled } }
+              {
+                ownerCopy: false,
+                deliveryId: 'inbound-owner-alert:' + webhookEventId,
+                messagingSettings: { emailEnabled: settings.emailEnabled }
+              }
             );
           } catch (err) {
             ownerNotification = { sent: false, status: 'Owner notification failed', message: String(err && err.message || err) };
@@ -21269,7 +21325,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const settings = messageSettings(data);
         result = channel === 'Email'
-          ? await sendProviderEmail(to, payload.subject || payload.template || 'WheelsonAuto message', body, { customer, messagingSettings: settings })
+          ? await sendProviderEmail(to, payload.subject || payload.template || 'WheelsonAuto message', body, {
+            customer,
+            deliveryId: payload.deliveryId || payload.idempotencyKey || '',
+            messagingSettings: settings
+          })
           : await sendProviderSms(to, body, {
             customer,
             customerId: messageFields.customerId,
@@ -21296,6 +21356,7 @@ const server = http.createServer(async (req, res) => {
           tone: result.sent ? 'good' : 'warn',
           body,
           provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+          providerIdempotencyKey: result.idempotencyKey || '',
           providerConfigurationFingerprint: result.sent && channel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
           source: result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
           ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER,

@@ -345,6 +345,7 @@ async function main() {
   assert(restoredDeletedProviderRecord.messages.length === 1 && restoredDeletedProviderRecord.messages[0].externalId === 'email-server-proof', 'A normal browser state save must not delete signed provider audit evidence.');
   const providerEmailFetch = global.fetch;
   let providerEmailSequence = 0;
+  const providerEmailCalls = [];
   let cloverRecurringFixture = '';
   const cloverRecurringRequests = [];
   const providerResponse = (status, body) => ({
@@ -387,6 +388,7 @@ async function main() {
       return providerResponse(404, { message: 'Unexpected recurring fixture request' });
     }
     if (String(url).includes('api.resend.com/emails')) {
+      providerEmailCalls.push({ url: String(url), options });
       providerEmailSequence += 1;
       const id = 'direct-resend-outbound-' + providerEmailSequence;
       return {
@@ -4321,6 +4323,15 @@ async function main() {
     });
     assert([200, 202].includes(managerEmail.status) && managerEmail.json.ok, 'Manager email draft/send failed.');
     assert(managerEmail.json.message.channel === 'Email', 'Email message should be saved as Email channel.');
+    const managerEmailCall = providerEmailCalls.find(call => String(call.options && call.options.body || '').includes('Direct smoke email message.'));
+    assert(managerEmailCall && /^woa-email-[a-f0-9]{64}$/.test(String(managerEmailCall.options.headers && managerEmailCall.options.headers['Idempotency-Key'] || '')), 'Resend customer email requests must carry a deterministic provider idempotency key.');
+    assert(managerEmail.json.message.providerIdempotencyKey === managerEmailCall.options.headers['Idempotency-Key'], 'The customer message audit row must retain the exact Resend idempotency key.');
+    const duplicateManagerEmail = await request(server, 'POST', '/api/messages/send', {
+      cookie: managerCookie,
+      json: { customer: 'Direct Customer', email: 'direct-customer@example.com', channel: 'Email', body: 'Direct smoke email message.' }
+    });
+    const managerEmailCalls = providerEmailCalls.filter(call => String(call.options && call.options.body || '').includes('Direct smoke email message.'));
+    assert([200, 202].includes(duplicateManagerEmail.status) && managerEmailCalls.length === 2 && managerEmailCalls[0].options.headers['Idempotency-Key'] === managerEmailCalls[1].options.headers['Idempotency-Key'], 'Retrying the same email payload must reuse one Resend idempotency key instead of creating a duplicate delivery.');
 
     const blockedInboundSms = await request(server, 'POST', '/api/webhooks/messages', {
       json: { MessageSid: 'direct-sms-blocked', From: '+13135550199', To: '+13135550000', Body: 'Unsigned inbound text.' }
@@ -4412,6 +4423,14 @@ async function main() {
       json: { draftId: starDraft.json.draft.id, channel: 'Email' }
     });
     assert([200, 202].includes(starSend.status) && starSend.json.ok, 'Star email approval failed.');
+    const starProviderCallsBeforeDuplicate = providerEmailCalls.length;
+    const duplicateStarSend = await request(server, 'POST', '/api/messages/ai-action', {
+      cookie: managerCookie,
+      json: { draftId: starDraft.json.draft.id, channel: 'Email' }
+    });
+    assert(duplicateStarSend.status === 200 && duplicateStarSend.json.ok && duplicateStarSend.json.message.externalId === starSend.json.message.externalId, 'A completed Star email approval must return the existing provider delivery.');
+    assert(providerEmailCalls.length === starProviderCallsBeforeDuplicate, 'A completed Star email approval must not call Resend a second time.');
+    assert(starSend.json.message.providerIdempotencyKey && starSend.json.message.providerIdempotencyKey === duplicateStarSend.json.message.providerIdempotencyKey, 'Star email audit history must retain one stable Resend delivery key.');
 
     const starChargeDraft = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
