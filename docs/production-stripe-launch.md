@@ -544,9 +544,16 @@ WOA_MESSAGING_PROVIDER=telnyx
 TELNYX_API_KEY=<private API key>
 TELNYX_PUBLIC_KEY=<webhook public key>
 TELNYX_MESSAGING_PROFILE_ID=<profile id>
+TELNYX_10DLC_USECASE=CUSTOMER_CARE
 WOA_MESSAGING_FROM_NUMBER=+1...
 WOA_MESSAGING_WEBHOOK_SECRET=<shared secret when used>
 ```
+
+`CUSTOMER_CARE` matches WheelsonAuto's support, account management, payment
+reminder, receipt, document-request, maintenance, and scheduling conversations.
+The owner readiness check verifies that intended replacement use case through
+Telnyx before another paid campaign review. The rejected campaign remains
+history and cannot be mistaken for the new campaign.
 
 Do not turn on automatic customer messaging until 10DLC approval, number
 assignment, inbound signing, and one carrier-delivered outbound test are all

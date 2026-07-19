@@ -239,16 +239,36 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
       if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
       if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-failed', identityStatus: 'VERIFIED' }] }; } };
       if (href.includes('/10dlc/campaign?brandId=brand-failed')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-failed', status: 'ACTIVE', campaignStatus: 'TCR_FAILED', usecase: 'LOW_VOLUME', failureReasons: 'Brand does not qualify for submitted campaign use-case.' }] }; } };
-      if (href.includes('/10dlc/campaignBuilder/brand/brand-failed/usecase/LOW_VOLUME')) return { ok: false, status: 422, async json() { return { errors: [{ detail: 'Brand does not qualify for LOW_VOLUME.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder/brand/brand-failed/usecase/CUSTOMER_CARE')) return { ok: false, status: 422, async json() { return { errors: [{ detail: 'Brand does not qualify for CUSTOMER_CARE.' }] }; } };
       throw new Error('Unexpected failed readiness URL: ' + url);
     }
   });
   assert(!failedRegistration.campaignActive && failedRegistration.campaignStatus === 'Not found' && failedRegistration.historicalCampaignStatus === 'TCR_FAILED', 'A rejected campaign must remain history instead of becoming the current campaign.');
   assert.strictEqual(failedRegistration.historicalCampaignUsecase, 'LOW_VOLUME', 'The rejected campaign use case must be retained for the official qualification check.');
+  assert.strictEqual(failedRegistration.intendedUsecase, 'CUSTOMER_CARE', 'WheelsonAuto should qualify the intended Customer Care replacement instead of retrying the rejected Low Volume campaign.');
+  assert.strictEqual(failedRegistration.usecaseQualificationUsecase, 'CUSTOMER_CARE');
   assert(failedRegistration.registrationStage === 'campaign_qualification' && failedRegistration.resubmissionBlocked, 'A rejected brand/use-case combination must fail closed before another paid submission.');
   assert(failedRegistration.usecaseQualificationChecked && !failedRegistration.usecaseQualified, 'A Telnyx 422 qualification result must remain a failed qualification, not a generic provider error.');
   assert(/does not qualify/.test(failedRegistration.historicalFailureReason), 'Historical Telnyx failure reasons must remain available for diagnosis.');
   assert(/does not qualify/.test(failedRegistration.summary) && /Do not resubmit/.test(failedRegistration.nextAction), 'A rejected Telnyx campaign must show its carrier reason and explicitly block resubmission.');
+  const replacementQualifiedRegistration = await checkTelnyx10dlcReadiness({
+    apiKey: 'KEY-test',
+    phoneNumber: '+16095550199',
+    intendedUsecase: 'CUSTOMER_CARE',
+    fetchImpl: async url => {
+      const href = String(url);
+      if (href.includes('/10dlc/phone_number_campaigns/%2B16095550199')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'Phone number campaign assignment not found.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder?')) return { ok: false, status: 404, async json() { return { errors: [{ detail: 'The requested resource or URL could not be found.' }] }; } };
+      if (href.includes('/10dlc/brand?')) return { ok: true, status: 200, async json() { return { records: [{ brandId: 'brand-replacement-qualified', identityStatus: 'VERIFIED' }] }; } };
+      if (href.includes('/10dlc/campaign?brandId=brand-replacement-qualified')) return { ok: true, status: 200, async json() { return { records: [{ campaignId: 'campaign-low-volume-rejected', campaignStatus: 'TCR_FAILED', usecase: 'LOW_VOLUME', failureReasons: 'Brand does not qualify for submitted campaign use-case.' }] }; } };
+      if (href.includes('/10dlc/campaignBuilder/brand/brand-replacement-qualified/usecase/CUSTOMER_CARE')) return { ok: true, status: 200, async json() { return { usecase: 'CUSTOMER_CARE', monthlyFee: 10, quarterlyFee: 30, annualFee: 120 }; } };
+      throw new Error('Unexpected replacement qualification URL: ' + url);
+    }
+  });
+  assert(replacementQualifiedRegistration.usecaseQualified && !replacementQualifiedRegistration.resubmissionBlocked, 'A qualified Customer Care replacement should unlock campaign creation without retrying the rejected use case.');
+  assert.strictEqual(replacementQualifiedRegistration.historicalCampaignUsecase, 'LOW_VOLUME');
+  assert.strictEqual(replacementQualifiedRegistration.usecaseQualificationUsecase, 'CUSTOMER_CARE');
+  assert(/CUSTOMER_CARE/.test(replacementQualifiedRegistration.nextAction) && /LOW_VOLUME/.test(replacementQualifiedRegistration.summary), 'The readiness result should distinguish the qualified replacement from rejected campaign history.');
   const qualifiedRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',
