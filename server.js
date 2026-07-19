@@ -218,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-public-links-188';
+const ASSET_VERSION = 'platform-20260719-live-link-probes-189';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -17175,7 +17175,7 @@ const server = http.createServer(async (req, res) => {
       const publicToken = decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || '');
       const data = await readData();
       const context = await nativeOnboardingContext(data, publicToken);
-      if (!context) return send(res, 404, paymentResultHtml('Onboarding link not found', 'This secure link is invalid, expired, or replaced. Contact WheelsonAuto for a fresh link.'));
+      if (!context) return send(res, 404, paymentResultHtml('Onboarding link not found', 'This secure link is invalid, expired, or replaced. Contact WheelsonAuto for a fresh link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       const identityReturned = url.searchParams.get('identity') === 'returned';
       const identityLastChecked = Date.parse(context.session.identityVerificationLastCheckedAt || '') || 0;
       const identityPollDue = context.session.identityVerificationStatus === 'processing' && Date.now() - identityLastChecked >= 30000;

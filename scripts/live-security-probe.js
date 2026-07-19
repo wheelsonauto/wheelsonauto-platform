@@ -66,6 +66,16 @@ async function expectAnonymousApiBoundary(method, pathname, label) {
   assert.deepEqual(Object.keys(body).sort(), ['error', 'ok'], label + ' anonymous response must not leak route or business metadata.');
 }
 
+async function expectMissingBearerLink(pathname, label, token) {
+  const response = await expectStatus(pathname, 404, label);
+  assert.match(String(response.headers.get('cache-control') || ''), /private.*no-store|no-store.*private/i, label + ' must never be cached.');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer', label + ' must not send its bearer token in a referrer.');
+  assert.match(String(response.headers.get('x-robots-tag') || ''), /noindex.*nofollow/i, label + ' must stay out of search indexes.');
+  const body = await response.text();
+  assert.equal(body.includes(token), false, label + ' must not echo the attempted bearer token.');
+  assert.doesNotMatch(body, /customer|vehicle|vin|card ending|amount due/i, label + ' missing-link response must not expose business details.');
+}
+
 async function main() {
   const health = await expectStatus('/healthz', 200, 'Health route');
   const healthBody = await health.json();
@@ -85,11 +95,20 @@ async function main() {
     await expectAnonymousApiBoundary(method, pathname, label);
   }
 
+  const paymentToken = 'plink-' + 'a'.repeat(48);
+  const setupToken = 'setup-' + 'b'.repeat(48);
+  const onboardingToken = 'c'.repeat(56);
+  const tollToken = 'd'.repeat(48);
+  await expectMissingBearerLink('/pay/' + paymentToken, 'Missing payment bearer link', paymentToken);
+  await expectMissingBearerLink('/setup-card/' + setupToken, 'Missing card-setup bearer link', setupToken);
+  await expectMissingBearerLink('/onboard/' + onboardingToken, 'Missing onboarding bearer link', onboardingToken);
+  await expectMissingBearerLink('/toll-receipt/' + tollToken, 'Missing toll-receipt bearer link', tollToken);
+
   const customerDocument = await expectStatus('/customer/documents/security-probe-does-not-exist', 302, 'Customer private document');
   assert.equal(customerDocument.headers.get('location'), '/customer/login', 'An unauthenticated customer document request must return to customer login.');
   assert.equal(customerDocument.headers.get('cache-control'), 'no-store', 'The customer document redirect must not be cached.');
 
-  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous access across ' + anonymousProtectedRoutes.length + ' staff/customer API boundaries plus state, preflight, recovery, contract, identity-document, signature, and customer-document routes with hardened response headers.');
+  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous access across ' + anonymousProtectedRoutes.length + ' staff/customer API boundaries, protects four public bearer-link families, and guards state, preflight, recovery, contract, identity-document, signature, and customer-document routes with hardened response headers.');
 }
 
 main().catch(error => {

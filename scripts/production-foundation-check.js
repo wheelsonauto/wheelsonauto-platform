@@ -102,6 +102,9 @@ async function main() {
     ['Customer portal state', 'Star approval action', 'Deep business report', 'Accounting ledger', 'Verification and insurance cases', 'Clover reconciliation', 'Refund execution', 'Payment-provider cutover', 'Autopay execution'].forEach(label => {
       assert(liveSecurityProbeSource.includes(label), 'The live anonymous-access probe must cover the ' + label + ' boundary.');
     });
+    ['Missing payment bearer link', 'Missing card-setup bearer link', 'Missing onboarding bearer link', 'Missing toll-receipt bearer link'].forEach(label => {
+      assert(liveSecurityProbeSource.includes(label), 'The live security probe must cover the ' + label + ' boundary.');
+    });
     assert(liveSecurityProbeSource.includes("assert.deepEqual(Object.keys(body).sort(), ['error', 'ok']"), 'Anonymous API failures must be checked for metadata leakage, not only an HTTP status.');
     assert(packageSource.includes('node scripts/public-link-security-check.js')
       && publicLinkSecurityCheckSource.includes('Unsigned failure returns must not mutate payment or recurring status')

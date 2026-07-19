@@ -163,8 +163,10 @@ async function main() {
 
     const activeToll = await request(server, 'GET', '/toll-receipt/' + '2'.repeat(48));
     const revokedToll = await request(server, 'GET', '/toll-receipt/' + '3'.repeat(48));
+    const missingOnboarding = await request(server, 'GET', '/onboard/' + '4'.repeat(56));
     assert(activeToll.status === 200 && activeToll.text.includes('Toll Customer') && publicHeaders(activeToll), 'Active toll proof should remain privately accessible.');
     assert(revokedToll.status === 404 && !revokedToll.text.includes('Revoked Toll Customer') && publicHeaders(revokedToll), 'Revoked toll proof must fail closed without leaking customer details.');
+    assert(missingOnboarding.status === 404 && publicHeaders(missingOnboarding) && !missingOnboarding.text.includes('4'.repeat(56)), 'Missing onboarding bearer links must fail privately without echoing the attempted token.');
 
     const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
     const cookie = String(login.cookie || '').split(';')[0];
