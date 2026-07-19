@@ -217,7 +217,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-telnyx-usecase-171';
+const ASSET_VERSION = 'platform-20260718-preflight-telnyx-172';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1197,6 +1197,13 @@ function telnyxCarrierReadiness(data = {}, provider = '') {
     carrierBrandVerified: !!registration.brandVerified,
     carrierCampaignStatus: registration.campaignStatus || '',
     carrierHistoricalCampaignStatus: registration.historicalCampaignStatus || '',
+    carrierHistoricalCampaignUsecase: String(registration.historicalCampaignUsecase || '').trim().slice(0, 80),
+    carrierIntendedUsecase: String(registration.intendedUsecase || '').trim().slice(0, 80),
+    carrierUsecaseQualificationChecked: registration.usecaseQualificationChecked === true,
+    carrierUsecaseQualified: registration.usecaseQualified === true,
+    carrierUsecaseQualificationUsecase: String(registration.usecaseQualificationUsecase || '').trim().slice(0, 80),
+    carrierUsecaseQualificationReason: String(registration.usecaseQualificationReason || '').trim().slice(0, 800),
+    carrierResubmissionBlocked: registration.resubmissionBlocked === true,
     carrierHistoricalFailureReason: String(registration.historicalFailureReason || '').trim().slice(0, 800),
     carrierFailureReason: String(registration.failureReason || registration.historicalFailureReason || '').trim().slice(0, 800),
     carrierDeliveryStatus: status || (records.length ? 'unconfirmed' : 'not_tested'),
@@ -1454,10 +1461,18 @@ function telnyxLiveLaunchEvidence(data = {}) {
   else if (!MESSAGING_FROM_NUMBER || !TELNYX_API_KEY || !TELNYX_PUBLIC_KEY) error = 'Configure the Telnyx number, API key, and signed webhook public key in Render.';
   else if (!(saved.telnyxMessagingProfileId || TELNYX_MESSAGING_PROFILE_ID) || saved.smsWebhookConnected !== true) error = 'Connect the Telnyx messaging profile and signed inbound webhook from Messages setup.';
   else if (!carrier.carrierRegistrationVerified) {
+    const qualifiedReplacement = !!(carrier.carrierUsecaseQualificationChecked && carrier.carrierUsecaseQualified && !carrier.carrierResubmissionBlocked);
+    const qualificationUsecase = String(carrier.carrierUsecaseQualificationUsecase || carrier.carrierIntendedUsecase || '').trim();
     const rejectionReason = String(carrier.carrierFailureReason || carrier.carrierHistoricalFailureReason || '').trim().slice(0, 500);
-    error = rejectionReason
-      ? 'Telnyx 10DLC is blocked by the carrier rejection: ' + rejectionReason + ' Review it with Telnyx before resubmitting or assigning the number.'
-      : 'Finish Telnyx 10DLC approval and assign the number to an active campaign.';
+    if (qualifiedReplacement) {
+      error = 'Telnyx confirms the brand qualifies for ' + (qualificationUsecase || 'the corrected use case') + '. Create and receive approval for the corrected campaign, then assign the SMS number before delivery testing.';
+    } else if (carrier.carrierResubmissionBlocked) {
+      error = 'Telnyx campaign resubmission is locked' + (carrier.carrierUsecaseQualificationReason ? ': ' + carrier.carrierUsecaseQualificationReason : '.') + ' Do not pay another campaign fee until the intended use case qualifies.';
+    } else {
+      error = rejectionReason
+        ? 'Telnyx 10DLC is blocked by the carrier rejection: ' + rejectionReason + ' Review it with Telnyx before resubmitting or assigning the number.'
+        : 'Finish Telnyx 10DLC approval and assign the number to an active campaign.';
+    }
   }
   else if (!deliveryVerified) error = deliveryConfigurationMatched && delivery.fresh ? 'Send a Telnyx test text and wait for a delivered carrier receipt.' : 'Run a fresh Telnyx delivery test after the current Render messaging configuration is deployed.';
   else if (!inboundVerified) error = inboundConfigurationMatched && inbound.fresh ? 'Reply to the Telnyx test text so WheelsonAuto records a signed inbound proof.' : 'Send a fresh signed inbound Telnyx reply after the current Render messaging configuration is deployed.';
@@ -1475,6 +1490,10 @@ function telnyxLiveLaunchEvidence(data = {}) {
     error,
     carrierRegistrationStatus: carrier.carrierRegistrationStatus || '',
     carrierRegistrationStage: carrier.carrierRegistrationStage || '',
+    carrierIntendedUsecase: carrier.carrierIntendedUsecase || '',
+    carrierUsecaseQualificationUsecase: carrier.carrierUsecaseQualificationUsecase || '',
+    carrierUsecaseQualified: carrier.carrierUsecaseQualified === true,
+    carrierResubmissionBlocked: carrier.carrierResubmissionBlocked === true,
     carrierFailureReason: carrier.carrierFailureReason || carrier.carrierHistoricalFailureReason || ''
   };
 }

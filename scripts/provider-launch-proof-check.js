@@ -175,6 +175,31 @@ assert.strictEqual(rejectedTelnyxEvidence.live, false, 'A rejected 10DLC campaig
 assert.match(rejectedTelnyxEvidence.error, /Brand does not qualify for submitted campaign use-case/, 'The live launch gate must preserve the actionable Telnyx carrier rejection reason.');
 assert.strictEqual(rejectedTelnyxEvidence.carrierRegistrationStage, 'campaign_creation', 'The Telnyx launch evidence must expose the current corrective stage without exposing secrets.');
 
+const qualifiedReplacementTelnyx = clone(data);
+qualifiedReplacementTelnyx.integrations.messaging.telnyx10dlc = {
+  checkedAt: new Date().toISOString(),
+  numberAssigned: false,
+  campaignActive: false,
+  campaignStatus: 'Not found',
+  brandStatus: 'VERIFIED',
+  brandVerified: true,
+  historicalCampaignStatus: 'TCR_FAILED',
+  historicalCampaignUsecase: 'LOW_VOLUME',
+  historicalFailureReason: 'Brand does not qualify for submitted campaign use-case.',
+  intendedUsecase: 'CUSTOMER_CARE',
+  usecaseQualificationChecked: true,
+  usecaseQualified: true,
+  usecaseQualificationUsecase: 'CUSTOMER_CARE',
+  resubmissionBlocked: false,
+  registrationStage: 'campaign_creation'
+};
+const qualifiedReplacementTelnyxEvidence = telnyxLiveLaunchEvidence(qualifiedReplacementTelnyx);
+assert.strictEqual(qualifiedReplacementTelnyxEvidence.live, false, 'A qualified replacement use case still needs an approved campaign, assigned number, and delivery proof.');
+assert.match(qualifiedReplacementTelnyxEvidence.error, /qualifies for CUSTOMER_CARE.*corrected campaign/i, 'The launch gate should show the qualified corrective path instead of repeating the historical rejection.');
+assert.doesNotMatch(qualifiedReplacementTelnyxEvidence.error, /blocked by the carrier rejection/i, 'Historical rejection text must not contradict a passed replacement-use-case qualification.');
+assert.strictEqual(qualifiedReplacementTelnyxEvidence.carrierUsecaseQualified, true);
+assert.strictEqual(qualifiedReplacementTelnyxEvidence.carrierUsecaseQualificationUsecase, 'CUSTOMER_CARE');
+
 const resend = resendLiveLaunchEvidence(data);
 assert.strictEqual(resend.live, true, 'Resend launch proof must require the verified WheelsonAuto sender plus fresh outbound and inbound provider evidence.');
 assert.strictEqual(resend.senderDomainVerified, true);
