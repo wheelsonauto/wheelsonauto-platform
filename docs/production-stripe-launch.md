@@ -30,6 +30,18 @@ artifact and must never be committed as part of a code release.
   intentionally cannot clear the live Stripe launch gate.
 - Never store card numbers, CVVs, API secrets, or private identity documents
   in the normal state JSON.
+- Connect the Render web service with the PostgreSQL **internal** URL. Do not
+  leave the permanent production database open to `0.0.0.0/0`; external access
+  should be disabled or narrowed after any short-lived operator drill. The
+  free drill database is not the production database and its network settings
+  must not be copied into the live resource.
+- Before changing the Render service to PostgreSQL or enabling hardening, run
+  `pnpm run validate-production-environment` in a shell with the proposed
+  production variables. The validator reports key names and safe status only;
+  it never prints configured values. It rejects test Stripe keys, drill
+  database credentials, HTTP/private-local object endpoints, shared document
+  and backup keys, a premature Stripe default-provider switch, and incomplete
+  Telnyx, Resend, Star-limit, alert, session, or hardening settings.
 - Treat card setup as complete only when the provider-backed record has a
   completion timestamp or an explicit positive terminal status. Legacy text
   such as `card not linked`, `setup needed`, `waiting`, `failed`, or `pending`
