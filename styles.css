@@ -7818,3 +7818,41 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .modal .launch-preflight-stats .stat{padding:10px}
   .modal .launch-preflight-stats .stat b{font-size:22px;margin-top:4px}
 }
+
+/* Each launch conflict opens its exact owner review instead of a broad workspace. */
+.launch-assignment-review-list{display:grid;gap:7px}
+.launch-assignment-review-row{
+  display:grid;
+  grid-template-columns:minmax(230px,1.25fr) minmax(190px,1fr) minmax(145px,.65fr) auto;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+  padding:10px 11px;
+  border:1px solid rgba(207,211,214,.14);
+  border-radius:8px;
+  background:rgba(229,232,234,.035);
+}
+.launch-assignment-identity,
+.launch-assignment-claim,
+.launch-assignment-gate{display:grid;gap:3px;min-width:0}
+.launch-assignment-identity strong,
+.launch-assignment-claim strong{color:#f0ede5;font-size:11px;overflow-wrap:anywhere}
+.launch-assignment-identity span,
+.launch-assignment-claim span,
+.launch-assignment-gate small{color:#9fa4a8;font-size:9px;line-height:1.4;overflow-wrap:anywhere}
+.launch-assignment-review-btn{min-width:76px;height:34px;padding:0 12px}
+.modal .compact-list{min-width:0;margin:0;padding-left:18px}
+.modal .compact-list li{min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
+
+@media(max-width:880px){
+  .launch-assignment-review-row{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) auto}
+  .launch-assignment-gate{grid-column:1/3;grid-row:2}
+  .launch-assignment-action{grid-column:3;grid-row:1/3;align-self:center}
+}
+@media(max-width:560px){
+  .launch-assignment-review-row{grid-template-columns:minmax(0,1fr) auto;gap:7px 9px}
+  .launch-assignment-identity,
+  .launch-assignment-claim{grid-column:1/-1}
+  .launch-assignment-gate{grid-column:1;grid-row:auto}
+  .launch-assignment-action{grid-column:2;grid-row:3;align-self:end}
+}

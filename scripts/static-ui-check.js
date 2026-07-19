@@ -6,6 +6,7 @@ const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const cardSetup = fs.readFileSync(path.join(root, 'card-setup.js'), 'utf8');
+const stylesCss = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -239,10 +240,16 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Resend email',
   'Star AI',
   'Recent job failures',
+  'liveLaunchAssignmentReviewItem',
+  'liveLaunchAssignmentSourceLabel',
+  'WheelsonAuto autopay',
+  'data-action="resolve-assignment-conflict"',
+  'Saved assignment review',
   'Vehicle identity review',
   'VIN review'
 ]);
 assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "ready?'Clear':'Blocked'", 'Keep Clover live until every gate is verified.']);
+assertIncludes('Launch modal long-blocker wrapping', stylesCss, ['.modal .compact-list li', 'overflow-wrap:anywhere', 'word-break:break-word']);
 assertIncludes('Owner recovery operator surface', app, [
   'open-recovery-console',
   '/api/system/recovery/snapshots',

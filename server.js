@@ -220,7 +220,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-drill-isolation-200';
+const ASSET_VERSION = 'platform-20260719-assignment-review-201';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -5922,16 +5922,20 @@ function assignmentConflictRows(data = {}) {
   });
 }
 function assignmentConflictPreflightRows(data = {}) {
-  return assignmentConflictRows(data).map(vehicle => ({
-    vehicleId: String(vehicle.id || '').trim(),
-    vehicle: vehicleNameFromParts(vehicle),
-    vin: String(vehicle.vin || '').trim(),
-    plate: String(vehicle.plate || vehicle.stock || '').trim(),
-    tracker: trackerName(vehicle),
-    status: String(vehicle.status || '').trim(),
-    currentCustomer: String(vehicle.currentCustomer || '').trim(),
-    claimedBy: String(vehicle.assignmentConflict || '').trim()
-  }));
+  return assignmentConflictRows(data).map(vehicle => {
+    const sources = [...new Set(activeAssignmentClaimsForVehicle(data, vehicle.id).map(claim => claim.source).filter(Boolean))];
+    return {
+      vehicleId: String(vehicle.id || '').trim(),
+      vehicle: vehicleNameFromParts(vehicle),
+      vin: String(vehicle.vin || '').trim(),
+      plate: String(vehicle.plate || vehicle.stock || '').trim(),
+      tracker: trackerName(vehicle),
+      status: String(vehicle.status || '').trim(),
+      currentCustomer: String(vehicle.currentCustomer || '').trim(),
+      claimedBy: String(vehicle.assignmentConflict || '').trim(),
+      sources
+    };
+  });
 }
 function structuralAssignmentConflictPreflightRows(data = {}) {
   const vehicleById = new Map((Array.isArray(data.vehicles) ? data.vehicles : []).map(vehicle => [String(vehicle.id || '').trim(), vehicle]));
@@ -5956,7 +5960,16 @@ function assignmentConflictPreflightClassification(data = {}) {
   const structuralVehicleIds = new Set(structuralRows.map(row => row.vehicleId));
   const rowsByVehicleId = new Map(broadRows.map(row => [row.vehicleId, row]));
   structuralRows.forEach(row => {
-    if (!rowsByVehicleId.has(row.vehicleId)) rowsByVehicleId.set(row.vehicleId, row);
+    const existing = rowsByVehicleId.get(row.vehicleId);
+    if (!existing) {
+      rowsByVehicleId.set(row.vehicleId, row);
+      return;
+    }
+    rowsByVehicleId.set(row.vehicleId, {
+      ...existing,
+      claimedBy: existing.claimedBy || row.claimedBy,
+      sources: [...new Set([...(existing.sources || []), ...(row.sources || [])])]
+    });
   });
   const all = [...rowsByVehicleId.values()].sort((left, right) => String(left.vehicle || left.vehicleId).localeCompare(String(right.vehicle || right.vehicleId)));
   return {
