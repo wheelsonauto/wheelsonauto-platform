@@ -22,6 +22,7 @@
     "live-data-check": "node scripts/data-consistency-check.js data.json && node scripts/workflow-integrity-check.js data.json",
     "live-security-probe": "node scripts/live-security-probe.js",
     "repair-data": "node scripts/repair-data.js",
+    "repair-data-check": "node scripts/repair-data-check.js",
     "direct-smoke": "node scripts/server-direct-smoke-test.js",
     "ui-check": "node scripts/static-ui-check.js && node scripts/ui-polish-regression-check.js",
     "polish-check": "node scripts/ui-polish-regression-check.js",

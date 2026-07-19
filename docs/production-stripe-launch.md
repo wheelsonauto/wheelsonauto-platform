@@ -49,6 +49,18 @@ artifact and must never be committed as part of a code release.
   customer's secure setup link.
 - Keep a dated, access-controlled copy of the current `data.json` before any
   intentional data migration. Do not add that file to a commit.
+- Never run an in-place repair against `data.json`. `pnpm run repair-data`
+  requires an explicit source and a different, nonexistent output path:
+
+  ```sh
+  pnpm run repair-data -- /absolute/path/to/source.json /absolute/path/to/new-protected-repair.json
+  ```
+
+  It checksums the source before and after repair, creates the output with
+  owner-only mode `0600`, refuses to replace an existing file, and leaves the
+  source byte-for-byte unchanged. Run consistency and migration preflight
+  checks against that protected copy before an operator considers it for a
+  maintenance-window migration.
 - Never take a migration snapshot while the application is writable. Set
   `WOA_MIGRATION_MAINTENANCE_MODE=1`, deploy, and confirm `/healthz` reports
   `"migrationMaintenance":true` and `"migrationMaintenanceLease":"active"`

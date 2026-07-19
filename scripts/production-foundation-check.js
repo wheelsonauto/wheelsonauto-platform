@@ -79,6 +79,8 @@ async function main() {
     const fatalProcessMonitorSource = await fs.readFile(path.resolve(__dirname, '..', 'fatal-process-monitor.js'), 'utf8');
     const dependencyVulnerabilityCheckSource = await fs.readFile(path.resolve(__dirname, 'dependency-vulnerability-check.js'), 'utf8');
     const packageSource = await fs.readFile(path.resolve(__dirname, '..', 'package.json'), 'utf8');
+    const repairDataSource = await fs.readFile(path.resolve(__dirname, 'repair-data.js'), 'utf8');
+    const repairDataCheckSource = await fs.readFile(path.resolve(__dirname, 'repair-data-check.js'), 'utf8');
     const onboardingSource = await fs.readFile(path.resolve(__dirname, '..', 'onboarding-service.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const postgresSourceRepairSource = await fs.readFile(path.resolve(__dirname, 'prepare-postgres-migration-source.js'), 'utf8');
@@ -108,6 +110,19 @@ async function main() {
     assert(packageSource.includes('scripts/dependency-vulnerability-check.js')
       && dependencyVulnerabilityCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && dependencyVulnerabilityCheckSource.includes("['audit', '--omit=dev', '--audit-level=high']"), 'The mandatory CI precheck must reject known high-severity runtime dependency vulnerabilities before Render deploys main.');
+    assert(packageSource.includes('"repair-data-check": "node scripts/repair-data-check.js"')
+      && repairDataSource.includes('const [sourceArgument, outputArgument] = userArguments()')
+      && repairDataSource.includes("fs.open(temporary, 'wx', 0o600)")
+      && repairDataSource.includes('await fs.link(temporary, file)')
+      && repairDataSource.includes('checksum(sourceAfterWrite) !== sourceChecksum')
+      && repairDataCheckSource.includes('Successful repair must never change its source')
+      && repairDataCheckSource.includes('Repair must refuse to replace an existing protected copy'), 'Manual JSON repair must require an explicit separate output, preserve the source checksum, create an owner-only non-overwriting copy, and retain regression coverage.');
+    const repairDataCheck = spawnSync(process.execPath, [path.resolve(__dirname, 'repair-data-check.js')], {
+      cwd: path.resolve(__dirname, '..'),
+      env: process.env,
+      encoding: 'utf8'
+    });
+    assert.strictEqual(repairDataCheck.status, 0, 'The copy-only repair regression check must pass inside the mandatory production foundation gate: ' + (repairDataCheck.stderr || repairDataCheck.stdout));
     ['Customer portal state', 'Star approval action', 'Deep business report', 'Accounting ledger', 'Verification and insurance cases', 'Clover reconciliation', 'Refund execution', 'Payment-provider cutover', 'Autopay execution'].forEach(label => {
       assert(liveSecurityProbeSource.includes(label), 'The live anonymous-access probe must cover the ' + label + ' boundary.');
     });
