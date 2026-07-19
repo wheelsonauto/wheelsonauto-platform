@@ -221,6 +221,12 @@ assertIncludes('Owner live launch preflight surface', app, [
   '/api/system/infrastructure/preflight',
   'Controlled Stripe launch preflight',
   'Clover cutover roster',
+  'Clover cutover review',
+  'liveLaunchCloverQuarantineReview',
+  'missing_clover_subscription_id',
+  'duplicate_clover_subscription_id',
+  'missing_customer_identity',
+  'WheelsonAuto will not stop Clover, merge plans, or guess a customer assignment from a name.',
   'PostgreSQL recovery drill',
   'Encrypted offsite backup',
   'create-state-backup',
@@ -235,6 +241,16 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Vehicle identity review',
   'VIN review'
 ]);
+assertIncludes('Password-backed staff and owner guidance', app, [
+  'Manager and mechanic username/password accounts.',
+  'Manager and mechanic accounts use their own username and password',
+  'Before enabling hardened Stripe launch mode',
+  'Keep the PIN recovery path enabled until that password login is confirmed',
+  '8+ characters with a letter and number'
+]);
+if (app.includes('Manager and mechanic PIN accounts.') || app.includes('Manager and mechanic accounts use their own PIN')) {
+  fail('Manager and mechanic access must not be described as PIN-based.');
+}
 assertIncludes('Actionable Telnyx carrier rejection surface', app, [
   'Previous carrier rejection:',
   'historicalFailureReason',
