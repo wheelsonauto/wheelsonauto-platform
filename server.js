@@ -217,7 +217,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-recovery-contract-175';
+const ASSET_VERSION = 'platform-20260718-storage-proof-176';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -7554,7 +7554,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const priorMessaging = current && current.integrations && current.integrations.messaging || {};
   const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError'];
-  const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
+  const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError'];
   const preserveStripe = stripeProofFields.some(field => Object.prototype.hasOwnProperty.call(priorStripe, field));
@@ -9373,7 +9373,7 @@ function stripeIdentityLiveWebhookEvidence(data = {}) {
 function documentStorageConfigurationFingerprint() {
   const storage = PRIVATE_DOCUMENT_STORE;
   const material = [
-    'document-storage-proof-v2-private-and-https',
+    secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
     storage.provider,
     storage.key ? storage.key.toString('base64') : '',
     storage.keyVersion,
@@ -9406,18 +9406,29 @@ function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STO
   const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
   const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS;
   const verified = storageState.lastValidationSuccess === true;
+  const proofVersion = String(storageState.lastValidationProofVersion || '');
+  const proofVersionMatched = proofVersion === secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION;
   const publicReadBlocked = storageState.lastValidationPublicReadBlocked === true;
-  const live = !!status.productionReady && verified && publicReadBlocked && configurationMatched && fresh;
+  const immutableWriteProtected = storageState.lastValidationImmutableWriteProtected === true;
+  const objectDeleted = storageState.lastValidationObjectDeleted === true;
+  const live = !!status.productionReady && verified && proofVersionMatched && publicReadBlocked && immutableWriteProtected && objectDeleted && configurationMatched && fresh;
   let error = '';
   if (!status.productionReady) error = status.message;
   else if (!verified) error = String(storageState.lastValidationError || 'Run the owner-only private storage validation after configuring the bucket.');
+  else if (!proofVersionMatched) error = 'The recorded private-storage validation used an older safety contract. Run the current owner validation before launch.';
   else if (!publicReadBlocked) error = 'Run the current private-storage validation to prove anonymous object reads are blocked.';
+  else if (!immutableWriteProtected) error = 'Run the current private-storage validation to prove existing encrypted objects cannot be overwritten.';
+  else if (!objectDeleted) error = 'Run the current private-storage validation to prove deleted test objects are no longer readable.';
   else if (!configurationMatched) error = 'The recorded private-storage validation belongs to an older or unknown storage configuration. Run a new validation after the current Render settings are deployed.';
   else if (!fresh) error = 'The private-storage validation is stale. Run a new owner validation before the controlled Stripe launch.';
   return {
     checkedAt,
     verified,
+    proofVersion,
+    proofVersionMatched,
     publicReadBlocked,
+    immutableWriteProtected,
+    objectDeleted,
     configurationMatched,
     fresh,
     maxAgeHours: Math.round(WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000)),
@@ -9644,7 +9655,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!stateBackup.verified) missing.push('verified encrypted offsite state backup');
   else if (!stateBackup.fresh) missing.push('fresh encrypted offsite state backup');
   if (!documentStorage.productionReady) missing.push('S3-compatible AES-256-GCM private document storage');
-  if (!documentStorageValidation.live) missing.push('private object storage write/read/delete proof');
+  if (!documentStorageValidation.live) missing.push('private object storage write/read/private/immutable/delete proof');
   if (!documentEncryptionKeys.ready) missing.push('decryption keys for every encrypted private document');
   if (!privateArtifacts.ready) missing.push('encrypted payment receipt and dispute evidence artifact backfill');
   if (!WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) missing.push('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1');
@@ -20845,7 +20856,9 @@ const server = http.createServer(async (req, res) => {
           lastValidationSuccess: true,
           lastValidationProvider: result.provider,
           lastValidationPublicReadBlocked: result.publicReadBlocked === true,
-          lastValidationProofVersion: 'v2-private-and-https',
+          lastValidationImmutableWriteProtected: result.immutableWriteProtected === true,
+          lastValidationObjectDeleted: result.objectDeleted === true,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
           lastValidationConfigurationFingerprint: documentStorageConfigurationFingerprint(),
           lastValidationError: ''
         });
@@ -20878,7 +20891,9 @@ const server = http.createServer(async (req, res) => {
           lastValidationSuccess: false,
           lastValidationProvider: PRIVATE_DOCUMENT_STORE.status().provider,
           lastValidationPublicReadBlocked: false,
-          lastValidationProofVersion: 'v2-private-and-https',
+          lastValidationImmutableWriteProtected: false,
+          lastValidationObjectDeleted: false,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
           lastValidationConfigurationFingerprint: documentStorageConfigurationFingerprint(),
           lastValidationError: message.slice(0, 500)
         });

@@ -153,9 +153,13 @@ POST /api/system/infrastructure/document-storage/validate
 ```
 
 It encrypts a random probe, writes it to the private bucket, reads and
-authenticates it, verifies that an anonymous request cannot read the object,
-then deletes it and proves an authenticated read returns not-found. A provider
-that acknowledges deletion while retaining the object fails the proof.
+authenticates it, rejects an attempted overwrite of that exact immutable
+object, verifies the original bytes remain unchanged, verifies that an
+anonymous request cannot read the object, then deletes it and proves an
+authenticated read returns not-found. A provider that allows replacement or
+acknowledges deletion while retaining the object fails the proof. Validation
+results and their safety-contract version are server-controlled and cannot be
+changed by a normal browser state save.
 Production readiness also rejects non-HTTPS endpoints. The
 launch gate requires this proof to match the current encryption key and
 object-storage configuration and refreshes it after 30 days by default. If the

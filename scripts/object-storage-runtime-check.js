@@ -157,7 +157,7 @@ async function main() {
     assert((await store.readObject(immutableKey)).equals(original), 'A rejected object-key collision must preserve the original bytes.');
 
     const storageProbe = await store.probe({ organizationId });
-    assert(storageProbe.ok && storageProbe.encrypted && storageProbe.publicReadBlocked === true && storageProbe.objectDeleted, 'The real S3-compatible probe must prove encryption, anonymous-read denial, read-back, and deletion.');
+    assert(storageProbe.ok && storageProbe.encrypted && storageProbe.immutableWriteProtected === true && storageProbe.publicReadBlocked === true && storageProbe.objectDeleted, 'The real S3-compatible probe must prove encryption, immutable-write protection, original-byte preservation, anonymous-read denial, read-back, and deletion.');
 
     const backups = encryptedStateBackup.createEncryptedStateBackupStore({
       objectStore: store,

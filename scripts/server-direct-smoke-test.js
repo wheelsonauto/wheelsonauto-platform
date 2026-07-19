@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const onboarding = require('../onboarding-service.js');
+const secureDocumentStore = require('../secure-document-store.js');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
@@ -1683,15 +1684,18 @@ async function main() {
     });
     assert(changedOperationalAlertEvidence.live === false && changedOperationalAlertEvidence.configurationMatched === false && /older or unknown/i.test(changedOperationalAlertEvidence.error), 'Changing email/provider/recipient configuration must require a fresh operational-alert test.');
     const ownerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: ownerCookie, json: {} });
-    assert(ownerStorageValidation.status === 200 && ownerStorageValidation.json.ok && ownerStorageValidation.json.result && ownerStorageValidation.json.result.encrypted && ownerStorageValidation.json.result.objectDeleted, 'Owner private document-storage validation must prove encrypted write, read, and cleanup.');
-    assert(ownerStorageValidation.json.documentStorageValidation && ownerStorageValidation.json.documentStorageValidation.verified === true && ownerStorageValidation.json.documentStorageValidation.configurationMatched === true && ownerStorageValidation.json.documentStorageValidation.fresh === true && ownerStorageValidation.json.documentStorageValidation.live === false, 'Development-local storage validation may prove I/O but must never masquerade as live private object storage.');
+    assert(ownerStorageValidation.status === 200 && ownerStorageValidation.json.ok && ownerStorageValidation.json.result && ownerStorageValidation.json.result.encrypted && ownerStorageValidation.json.result.immutableWriteProtected === true && ownerStorageValidation.json.result.objectDeleted, 'Owner private document-storage validation must prove encrypted write, immutable collision protection, original-byte preservation, read, and cleanup.');
+    assert(ownerStorageValidation.json.documentStorageValidation && ownerStorageValidation.json.documentStorageValidation.verified === true && ownerStorageValidation.json.documentStorageValidation.proofVersionMatched === true && ownerStorageValidation.json.documentStorageValidation.immutableWriteProtected === true && ownerStorageValidation.json.documentStorageValidation.objectDeleted === true && ownerStorageValidation.json.documentStorageValidation.configurationMatched === true && ownerStorageValidation.json.documentStorageValidation.fresh === true && ownerStorageValidation.json.documentStorageValidation.live === false, 'Development-local storage validation may prove the current storage contract but must never masquerade as live private object storage.');
     const documentStorageFingerprint = documentStorageConfigurationFingerprint();
     const currentDocumentStorageEvidence = privateDocumentStorageEvidence({
       integrations: {
         documentStorage: {
           lastValidationAt: new Date().toISOString(),
           lastValidationSuccess: true,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
           lastValidationPublicReadBlocked: true,
+          lastValidationImmutableWriteProtected: true,
+          lastValidationObjectDeleted: true,
           lastValidationConfigurationFingerprint: documentStorageFingerprint
         }
       }
@@ -1702,17 +1706,50 @@ async function main() {
         documentStorage: {
           lastValidationAt: new Date().toISOString(),
           lastValidationSuccess: true,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
+          lastValidationImmutableWriteProtected: true,
+          lastValidationObjectDeleted: true,
           lastValidationConfigurationFingerprint: documentStorageFingerprint
         }
       }
     }, { productionReady: true, message: '' });
     assert(legacyDocumentStorageEvidence.live === false && legacyDocumentStorageEvidence.publicReadBlocked === false && /anonymous object reads/i.test(legacyDocumentStorageEvidence.error), 'Legacy storage evidence without an anonymous-read denial proof must fail closed.');
+    const oldContractStorageEvidence = privateDocumentStorageEvidence({
+      integrations: {
+        documentStorage: {
+          lastValidationAt: new Date().toISOString(),
+          lastValidationSuccess: true,
+          lastValidationProofVersion: 'v2-private-and-https',
+          lastValidationPublicReadBlocked: true,
+          lastValidationImmutableWriteProtected: true,
+          lastValidationObjectDeleted: true,
+          lastValidationConfigurationFingerprint: documentStorageFingerprint
+        }
+      }
+    }, { productionReady: true, message: '' });
+    assert(oldContractStorageEvidence.live === false && oldContractStorageEvidence.proofVersionMatched === false && /older safety contract/i.test(oldContractStorageEvidence.error), 'A private-storage proof from an older safety contract must require a fresh owner validation.');
+    const mutableStorageEvidence = privateDocumentStorageEvidence({
+      integrations: {
+        documentStorage: {
+          lastValidationAt: new Date().toISOString(),
+          lastValidationSuccess: true,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
+          lastValidationPublicReadBlocked: true,
+          lastValidationObjectDeleted: true,
+          lastValidationConfigurationFingerprint: documentStorageFingerprint
+        }
+      }
+    }, { productionReady: true, message: '' });
+    assert(mutableStorageEvidence.live === false && mutableStorageEvidence.immutableWriteProtected === false && /cannot be overwritten/i.test(mutableStorageEvidence.error), 'A provider without proven immutable object writes must fail the private-storage launch gate.');
     const staleDocumentStorageEvidence = privateDocumentStorageEvidence({
       integrations: {
         documentStorage: {
           lastValidationAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString(),
           lastValidationSuccess: true,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
           lastValidationPublicReadBlocked: true,
+          lastValidationImmutableWriteProtected: true,
+          lastValidationObjectDeleted: true,
           lastValidationConfigurationFingerprint: documentStorageFingerprint
         }
       }
@@ -1723,7 +1760,10 @@ async function main() {
         documentStorage: {
           lastValidationAt: new Date().toISOString(),
           lastValidationSuccess: true,
+          lastValidationProofVersion: secureDocumentStore.STORAGE_VALIDATION_PROOF_VERSION,
           lastValidationPublicReadBlocked: true,
+          lastValidationImmutableWriteProtected: true,
+          lastValidationObjectDeleted: true,
           lastValidationConfigurationFingerprint: 'old-object-storage-configuration'
         }
       }
@@ -1847,13 +1887,13 @@ async function main() {
     const proofTamperState = JSON.parse(JSON.stringify(stripeRefundWebhookState.json));
     proofTamperState.integrations = proofTamperState.integrations || {};
     proofTamperState.integrations.stripe = { ...(proofTamperState.integrations.stripe || {}), lastWebhookAt: '2099-01-01T00:00:00.000Z', lastWebhookLivemode: false, lastWebhookError: 'Browser override attempt', lastLaunchWebhookAt: '2099-01-01T00:00:00.000Z', lastLaunchWebhookType: 'customer.updated', lastLaunchWebhookEventId: 'evt_browser_override', lastLaunchWebhookLivemode: false, lastLaunchWebhookError: 'Browser override attempt' };
-    proofTamperState.integrations.documentStorage = { ...(proofTamperState.integrations.documentStorage || {}), lastValidationAt: '2099-01-01T00:00:00.000Z', lastValidationSuccess: false, lastValidationError: 'Browser override attempt' };
+    proofTamperState.integrations.documentStorage = { ...(proofTamperState.integrations.documentStorage || {}), lastValidationAt: '2099-01-01T00:00:00.000Z', lastValidationSuccess: false, lastValidationPublicReadBlocked: true, lastValidationImmutableWriteProtected: false, lastValidationObjectDeleted: false, lastValidationProofVersion: 'browser-forged-proof', lastValidationError: 'Browser override attempt' };
     proofTamperState.integrations.notifications = { ...(proofTamperState.integrations.notifications || {}), lastOperationalAlertAt: '2099-01-01T00:00:00.000Z', lastOperationalAlertSuccess: false, lastOperationalAlertError: 'Browser override attempt' };
     const proofTamperWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: proofTamperState });
     assert(proofTamperWrite.status === 200 && proofTamperWrite.json.ok, 'A normal owner state save should succeed without gaining control over provider proof fields.');
     const proofTamperPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
     assert(proofTamperPreflight.status === 200 && proofTamperPreflight.json.stripeWebhook.live === true && proofTamperPreflight.json.stripeWebhook.configurationMatched === true, 'A browser state write must not be able to alter signed Stripe webhook evidence.');
-    assert(proofTamperPreflight.json.documentStorageValidation && proofTamperPreflight.json.documentStorageValidation.verified === true && proofTamperPreflight.json.documentStorageValidation.configurationMatched === true && proofTamperPreflight.json.documentStorageValidation.fresh === true, 'A browser state write must not be able to alter private-storage validation evidence.');
+    assert(proofTamperPreflight.json.documentStorageValidation && proofTamperPreflight.json.documentStorageValidation.verified === true && proofTamperPreflight.json.documentStorageValidation.proofVersionMatched === true && proofTamperPreflight.json.documentStorageValidation.immutableWriteProtected === true && proofTamperPreflight.json.documentStorageValidation.objectDeleted === true && proofTamperPreflight.json.documentStorageValidation.configurationMatched === true && proofTamperPreflight.json.documentStorageValidation.fresh === true, 'A browser state write must not be able to alter private-storage validation evidence.');
     assert(proofTamperPreflight.json.operationalAlerts && proofTamperPreflight.json.operationalAlerts.live === true && proofTamperPreflight.json.operationalAlerts.configurationMatched === true, 'A browser state write must not be able to alter verified operational-alert evidence.');
 
     const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });

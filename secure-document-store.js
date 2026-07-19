@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const fs = require('fs/promises');
 const path = require('path');
 
+const STORAGE_VALIDATION_PROOF_VERSION = 'v3-private-https-immutable-delete';
+
 function decodeEncryptionKey(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -286,6 +288,17 @@ class SecureDocumentStore {
       });
       const recovered = await this.read(stored);
       if (!recovered.equals(expected)) throw new Error('Private object storage validation read did not match the encrypted write.');
+      let immutableWriteProtected = false;
+      try {
+        await this.writeObject(stored.storageKey, Buffer.from('forbidden private storage overwrite', 'utf8'));
+      } catch (error) {
+        const collision = error && (error.code === 'EEXIST' || error.code === 'private_object_already_exists' || error.statusCode === 409 || error.statusCode === 412);
+        if (!collision) throw error;
+        immutableWriteProtected = true;
+      }
+      if (!immutableWriteProtected) throw new Error('Private object storage validation failed because an existing immutable object could be overwritten.');
+      const preserved = await this.read(stored);
+      if (!preserved.equals(expected)) throw new Error('Private object storage validation failed because a rejected overwrite changed the original encrypted object.');
       let publicReadBlocked = null;
       if (this.provider === 's3') {
         const publicResponse = await this.fetchObject(s3ObjectUrl(this.s3, stored.storageKey), { method: 'GET', redirect: 'follow' });
@@ -306,6 +319,7 @@ class SecureDocumentStore {
         checkedAt: new Date().toISOString(),
         provider: this.provider,
         encrypted: true,
+        immutableWriteProtected,
         publicReadBlocked,
         objectDeleted: true
       };
@@ -400,6 +414,7 @@ function createSecureDocumentStore(options = {}) {
 }
 
 module.exports = {
+  STORAGE_VALIDATION_PROOF_VERSION,
   decodeEncryptionKey,
   parseDecryptionKeys,
   normalizeObjectKey,
