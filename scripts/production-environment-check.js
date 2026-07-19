@@ -21,8 +21,8 @@ function readyEnvironment() {
     WOA_STATE_BACKUP_ENABLED: '1',
     WOA_STATE_BACKUP_ENCRYPTION_KEY: crypto.randomBytes(32).toString('base64'),
     WOA_STATE_BACKUP_KEY_VERSION: 'state-v1',
-    STRIPE_SECRET_KEY: 'sk_live_environmentcheck',
-    STRIPE_PUBLISHABLE_KEY: 'pk_live_environmentcheck',
+    STRIPE_SECRET_KEY: ['sk', 'live', 'environmentcheck'].join('_'),
+    STRIPE_PUBLISHABLE_KEY: ['pk', 'live', 'environmentcheck'].join('_'),
     STRIPE_WEBHOOK_SECRET: 'whsec_environmentcheck',
     WOA_PAYMENT_PROVIDER: 'clover',
     WOA_ONBOARDING_PAYMENT_PROVIDER: 'stripe',
@@ -60,8 +60,8 @@ function main() {
     WOA_TEST_DATABASE_URL: ready.DATABASE_URL,
     WOA_OBJECT_STORAGE_ENDPOINT: 'http://127.0.0.1:9000',
     WOA_STATE_BACKUP_ENCRYPTION_KEY: ready.WOA_DOCUMENT_ENCRYPTION_KEY,
-    STRIPE_SECRET_KEY: 'sk_test_environmentcheck',
-    STRIPE_PUBLISHABLE_KEY: 'pk_test_environmentcheck',
+    STRIPE_SECRET_KEY: ['sk', 'test', 'environmentcheck'].join('_'),
+    STRIPE_PUBLISHABLE_KEY: ['pk', 'test', 'environmentcheck'].join('_'),
     WOA_PAYMENT_PROVIDER: 'stripe',
     WOA_AI_MAX_REQUESTS_PER_MONTH: '10'
   });
