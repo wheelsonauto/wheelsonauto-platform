@@ -433,7 +433,7 @@ var __woaMessageStatusStripBase=messageStatusStrip;messageStatusStrip=function(s
 var __woaMessageSetupProviderBase=messageSetupPanel;messageSetupPanel=function(status){var html=__woaMessageSetupProviderBase(status),provider=String(status.provider||'').toLowerCase(),supported=provider==='twilio'||provider==='telnyx',ready=supported&&status.configured,secure=provider!=='telnyx'||status.telnyxSignatureReady,connected=ready&&secure&&status.smsInboundConnected,polling=connected&&status.smsPollingConnected&&!status.smsWebhookConnected,title=connected?(polling?'Connected by secure sync':'Connected to WheelsonAuto'):(ready&&!secure?'Telnyx security key needed':(ready?'Ready for connection':(provider==='telnyx'?'Telnyx setup needed':'SMS setup needed'))),detail=connected?(polling?'Customer replies sync into this inbox about every five seconds, mirror to the owner phone, and follow Star/scam safeguards.':(provider==='telnyx'?'Telnyx signed webhooks route customer replies and delivery results into this inbox.':'Customer texts route into this inbox and mirror to the owner phone.')):(ready&&!secure?'Add TELNYX_PUBLIC_KEY in Render before connecting inbound messages.':(ready?'WheelsonAuto will connect the assigned '+provider+' number automatically.':'Save the '+(provider==='telnyx'?'Telnyx API key, public key, and test number':'provider credentials and SMS number')+' in Render first.')),action=connected?'':('<div class="actions"><button class="btn gold" data-action="configure-sms-provider" data-provider="'+esc(provider)+'" '+(ready&&secure?'':'disabled')+'>Connect '+esc(provider==='telnyx'?'Telnyx':'SMS')+' inbox</button></div>'),webhookCard='<div class="item provider-webhook-setup-card"><strong>Inbound SMS connection</strong><div>'+esc(title)+'</div><small>'+esc(detail)+'</small>'+action+'</div>';return html.replace('<div class="item"><strong>Email</strong>',webhookCard+'<div class="item"><strong>Email</strong>')}
 
 function hydrateLocalSearches(){document.querySelectorAll('.card.section').forEach(function(section){if(section.matches('.message-setup,.message-status-strip,.no-auto-search'))return;if(section.querySelector('.local-search'))return;if(!section.querySelector('.table-wrap,.list,.ops-list,.due-list,.mini-list,.kanban,.lead-card,.item,.mechanic-cards,.customer-pay-list,.message-thread-grid,.message-history-list'))return;var h=section.querySelector('h2,h3'),label=(h&&h.textContent?h.textContent.trim():'this section');var holder=document.createElement('div');holder.innerHTML=localSearch('Search '+label.toLowerCase());var insertAfter=section.querySelector('.section-head');if(insertAfter)insertAfter.insertAdjacentElement('afterend',holder.firstElementChild);else section.insertAdjacentElement('afterbegin',holder.firstElementChild)})}
-function openModal(title,body){var backdrop=document.getElementById('modalBackdrop'),modalTitle=document.getElementById('modalTitle'),modalBody=document.getElementById('modalBody');if(modalTitle)modalTitle.textContent=title||'';if(modalBody)modalBody.innerHTML=body||'';if(backdrop){backdrop.style.display='grid';backdrop.removeAttribute('aria-hidden')}}
+function openModal(title,body){var backdrop=document.getElementById('modalBackdrop'),modal=backdrop&&backdrop.querySelector('.modal'),modalTitle=document.getElementById('modalTitle'),modalBody=document.getElementById('modalBody');if(modalTitle)modalTitle.textContent=title||'';if(modalBody)modalBody.innerHTML=body||'';if(backdrop){backdrop.style.display='grid';backdrop.removeAttribute('aria-hidden')}if(modal){modal.scrollTop=0;if(typeof requestAnimationFrame==='function')requestAnimationFrame(function(){modal.scrollTop=0})}}
 function closeModal(){var backdrop=document.getElementById('modalBackdrop'),modalTitle=document.getElementById('modalTitle'),modalBody=document.getElementById('modalBody');if(backdrop){backdrop.style.display='none';backdrop.setAttribute('aria-hidden','true')}if(modalTitle)modalTitle.textContent='';if(modalBody)modalBody.innerHTML=''}
 function savedNavGroups(){try{var saved=JSON.parse(localStorage.getItem('woa-nav-groups-'+roleName())||'{}');return saved&&typeof saved==='object'?saved:{}}catch(e){return{}}}
 function navSections(){var role=roleName(),saved=savedNavGroups();var groups=role==='mechanic'?[['Today',['Mechanic Portal']],['Service',['Maintenance']],['Fleet',['Fleet']],['Issues',['Claims & Issues']],['Account',['Settings']]]:role==='manager'?[['Home',['Manager Portal']],['Customers',['Customers']],['Operations',['Operations']],['Office',['Messages','Reports']],['Account',['Settings']]]:[['Home',['Dashboard']],['Money & Customers',['Payments']],['Operations',['Operations']],['Office',['Messages','Reports']],['Admin',['Website','Settings','Companies','API Roadmap']]];var html=groups.map(function(g){var items=g[1].filter(function(n){return nav.indexOf(n)>=0});if(!items.length)return'';if(items.length===1)return '<div class="nav-single">'+navButton(items[0])+'</div>';var active=items.indexOf(view)>=0,open=active||saved[g[0]]===true||(saved[g[0]]===undefined&&g[0]==='Home');return '<details class="nav-group" data-nav-group="'+esc(g[0])+'" '+(open?'open':'')+'><summary>'+esc(g[0])+'<small>'+items.length+'</small></summary><div>'+items.map(navButton).join('')+'</div></details>'}).join('');return html}
@@ -3314,14 +3314,39 @@ function liveLaunchPreflightModal(preflight){
     liveLaunchGateRow('Owner access',ownerReady,liveLaunchGateDetail(owner,ownerReady,'Password-only owner access with a stable signed session secret is required.'))
   ];
   var conflicts=Array.isArray(preflight.identityConflicts)?preflight.identityConflicts:[],identityWarnings=Array.isArray(preflight.identityWarnings)?preflight.identityWarnings:[],jobErrors=Array.isArray(preflight.openJobErrors)?preflight.openJobErrors:[],missing=Array.isArray(preflight.missing)?preflight.missing:[],ready=preflight.ok===true;
-  var summary='<div class="grid stats"><div class="stat '+(ready?'good':'warn')+'"><span>Controlled Stripe launch</span><strong>'+esc(ready?'Clear':'Blocked')+'</strong><small>'+esc(ready?'All required live evidence is current.':'Keep Clover live until every gate is verified.')+'</small></div>'+stat('Blocked gates',missing.length,'Current launch requirements')+stat('Identity conflicts',conflicts.length,'Customer / vehicle items')+stat('VIN review',identityWarnings.length,'Vehicle identity records')+stat('Open job errors',jobErrors.length,'Failed jobs or webhooks')+'</div>';
+  var summary='<div class="grid stats"><div class="stat '+(ready?'good':'warn')+'"><span>Controlled Stripe launch</span><b>'+esc(ready?'Clear':'Blocked')+'</b><small>'+esc(ready?'All required live evidence is current.':'Keep Clover live until every gate is verified.')+'</small></div>'+stat('Blocked gates',missing.length,'Current launch requirements')+stat('Identity conflicts',conflicts.length,'Customer / vehicle items')+stat('VIN review',identityWarnings.length,'Vehicle identity records')+stat('Open job errors',jobErrors.length,'Failed jobs or webhooks')+'</div>';
   var missingHtml=missing.length?'<ul class="list compact-list">'+missing.map(function(item){return '<li>'+esc(item)+'</li>'}).join('')+'</ul>':'<div class="notice good">All server-side launch safeguards report current evidence.</div>';
   var issues=[];
   if(conflicts.length)issues.push('Resolve '+conflicts.length+' identity conflict'+(conflicts.length===1?'':'s')+' before cutover.');
   if(identityWarnings.length)issues.push('Complete VIN review for '+identityWarnings.length+' vehicle'+(identityWarnings.length===1?'':'s')+' before cutover.');
   if(jobErrors.length)issues.push('Review '+jobErrors.length+' open job error'+(jobErrors.length===1?'':'s')+' before cutover.');
   var warningHtml=identityWarnings.length?'<ul class="list compact-list">'+identityWarnings.map(function(item){var details=[item.plate?'Tag '+item.plate:'',item.customer?'Customer '+item.customer:'',item.tracker?'Tracker '+item.tracker:'',item.status?'Status '+item.status:''].filter(Boolean);return '<li><strong>'+esc(item.message||item.label||'Vehicle identity review required')+'</strong>'+(details.length?'<div class="muted">'+esc(details.join(' | '))+'</div>':'')+'</li>'}).join('')+'</ul>':'<div class="notice good">Vehicle VIN identity review is clear.</div>';
-  return summary+'<section class="section" style="padding:0;margin-top:12px"><div class="section-head"><h2>Launch evidence</h2><button class="btn" data-action="create-state-backup">Create &amp; verify backup</button></div>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Clover cutover review</h2>'+liveLaunchCloverQuarantineReview(cloverRecurring)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Recent job failures</h2>'+liveLaunchJobErrorReview(jobErrors)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check never sends a charge, changes a customer, or turns on a provider. Marking a job failure reviewed only closes that durable monitoring record.</div>'
+  return summary+'<section class="section" style="padding:0;margin-top:12px"><div class="section-head"><h2>Launch evidence</h2><div class="actions"><button class="btn" data-action="open-recovery-console">Recovery log</button><button class="btn" data-action="create-state-backup">Create &amp; verify backup</button></div></div>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Clover cutover review</h2>'+liveLaunchCloverQuarantineReview(cloverRecurring)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Recent job failures</h2>'+liveLaunchJobErrorReview(jobErrors)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check never sends a charge, changes a customer, or turns on a provider. Marking a job failure reviewed only closes that durable monitoring record.</div>'
+}
+function recoveryConsoleDate(value){
+  if(!value)return'Unknown time';
+  var date=new Date(value);
+  return Number.isNaN(date.getTime())?String(value):date.toLocaleString();
+}
+function recoveryConsoleChecksum(value){
+  value=String(value||'').trim();
+  return value?value.slice(0,12)+'...':'Not recorded';
+}
+function recoveryEventLabel(value){
+  return String(value||'Recovery event').replace(/_/g,' ').replace(/\b\w/g,function(letter){return letter.toUpperCase()});
+}
+function recoveryConsoleModal(result){
+  result=result||{};
+  var snapshots=Array.isArray(result.snapshots)?result.snapshots:[],history=Array.isArray(result.history)?result.history:[],latest=snapshots[0]||{},lastEvent=history[0]||{};
+  var summary='<div class="recovery-console-summary"><div><span>Restore points</span><strong>'+snapshots.length+'</strong><small>Newest 50 loaded</small></div><div><span>Recovery events</span><strong>'+history.length+'</strong><small>Append-only history</small></div><div><span>Latest version</span><strong>'+esc(latest.version||'None')+'</strong><small>'+esc(recoveryConsoleChecksum(latest.checksum))+'</small></div><div><span>Last recovery</span><strong>'+esc(lastEvent.result||'None')+'</strong><small>'+esc(recoveryConsoleDate(lastEvent.createdAt))+'</small></div></div>';
+  var picker=snapshots.length?'<div class="recovery-snapshot-picker"><label for="recoverySnapshotSelect">Choose a protected restore point</label><select id="recoverySnapshotSelect">'+snapshots.map(function(row){return'<option value="'+esc(row.id)+'" data-version="'+esc(row.version||0)+'" data-reason="'+esc(row.reason||'Protected state snapshot')+'" data-actor="'+esc(row.actor||'System')+'" data-created="'+esc(row.createdAt||'')+'" data-checksum-prefix="'+esc(recoveryConsoleChecksum(row.checksum))+'">Version '+esc(row.version||0)+' | '+esc(recoveryConsoleDate(row.createdAt))+' | '+esc(row.reason||'Protected state snapshot')+'</option>'}).join('')+'</select><button class="btn" data-action="review-selected-snapshot">Review restore</button></div>':'<div class="notice warn">No PostgreSQL restore point exists yet. Complete the controlled import and verified snapshot before cutover.</div>';
+  var snapshotRows=snapshots.slice(0,8).map(function(row){return[esc('v'+Number(row.version||0)),esc(recoveryConsoleDate(row.createdAt)),esc(row.reason||'Protected state snapshot')+'<div class="muted">'+esc(row.actor||'System')+'</div>',esc(recoveryConsoleChecksum(row.checksum))]});
+  var historyRows=history.slice(0,12).map(function(row){var details=row.details||{},detail=[details.reason,details.accessControlPreserved===true?'Access controls preserved':'',details.sessionsRevoked===true?'Sessions revoked':''].filter(Boolean).join(' | ');return[esc(recoveryConsoleDate(row.createdAt)),'<strong>'+esc(recoveryEventLabel(row.eventType))+'</strong>'+(detail?'<div class="muted">'+esc(detail)+'</div>':''),badge(row.result||'Recorded',String(row.result||'').toLowerCase()==='completed'?'good':'warn'),esc('v'+Number(row.previousVersion||0)+' to v'+Number(row.targetVersion||0))+'<div class="muted">'+esc(row.actor||'System')+'</div>']});
+  return'<div class="recovery-console">'+summary+'<div class="notice">'+esc(result.message||'Every controlled restore creates a new snapshot and permanent recovery-history event.')+'</div>'+picker+(snapshotRows.length?'<section class="section recovery-console-section"><h2>Recent restore points</h2>'+table(['Version','Created','Reason','Checksum'],snapshotRows)+'</section>':'')+'<section class="section recovery-console-section"><h2>Recovery history</h2>'+(historyRows.length?table(['When','Event','Result','State change'],historyRows):'<div class="notice good">No restore has been performed for this company.</div>')+'</section></div>'
+}
+function snapshotRestoreConfirmationModal(option){
+  var id=Number(option&&option.value||0),phrase='RESTORE SNAPSHOT '+id,reason=option&&option.dataset.reason||'Protected state snapshot',created=option&&option.dataset.created||'',version=option&&option.dataset.version||'0',actor=option&&option.dataset.actor||'System',checksumPrefix=option&&option.dataset.checksumPrefix||'Not recorded';
+  return'<div class="snapshot-restore-confirmation"><div class="notice bad"><strong>This replaces current PostgreSQL business state.</strong><br>The selected snapshot is verified before mutation. Current staff/customer access controls are preserved, a new safety snapshot is created, the restore is permanently audited, and every signed-in session is revoked.</div><div class="recovery-restore-facts"><div><span>Snapshot</span><strong>#'+esc(id)+' / version '+esc(version)+'</strong></div><div><span>Created</span><strong>'+esc(recoveryConsoleDate(created))+'</strong></div><div><span>Reason</span><strong>'+esc(reason)+'</strong></div><div><span>Actor</span><strong>'+esc(actor)+'</strong></div><div><span>Checksum</span><strong>'+esc(checksumPrefix)+'</strong></div></div><div class="field"><label for="recoveryConfirmationPhrase">Type exactly '+esc(phrase)+'</label><input id="recoveryConfirmationPhrase" autocomplete="off" spellcheck="false" placeholder="'+esc(phrase)+'"></div><label class="check recovery-confirm-check"><input id="recoveryConfirmationChecked" type="checkbox"> <span>I understand that this restores an older business-state snapshot and signs everyone out.</span></label><div class="actions"><button class="btn" data-action="open-recovery-console">Back to recovery log</button><button class="btn danger" data-action="confirm-snapshot-restore" data-snapshot-id="'+esc(id)+'">Restore snapshot</button></div></div>'
 }
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="open-live-launch-preflight"]');
@@ -3342,6 +3367,52 @@ document.addEventListener('click',async function(event){
     button.disabled=false;
     button.classList.remove('is-loading');
   }
+},true);
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="open-recovery-console"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can view recovery history');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  try{
+    var response=await fetch('/api/system/recovery/snapshots',{headers:{Accept:'application/json'},cache:'no-store'}),result=await response.json().catch(function(){return{}});
+    if(!response.ok||!result.ok){notify(result.error||'Recovery history is unavailable');return}
+    openModal('PostgreSQL recovery log',recoveryConsoleModal(result));
+  }catch(error){notify('Recovery history could not reach the server')}
+  finally{button.disabled=false;button.classList.remove('is-loading')}
+},true);
+document.addEventListener('click',function(event){
+  var button=event.target.closest('button[data-action="review-selected-snapshot"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can restore recovery snapshots');return}
+  var select=document.getElementById('recoverySnapshotSelect'),option=select&&select.options[select.selectedIndex];
+  if(!option||!Number(option.value)){notify('Choose a valid recovery snapshot');return}
+  openModal('Review PostgreSQL restore',snapshotRestoreConfirmationModal(option));
+  setTimeout(function(){var input=document.getElementById('recoveryConfirmationPhrase');if(input)input.focus()},0);
+},true);
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="confirm-snapshot-restore"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can restore recovery snapshots');return}
+  var snapshotId=Number(button.getAttribute('data-snapshot-id')||0),phrase='RESTORE SNAPSHOT '+snapshotId,entered=String(val('recoveryConfirmationPhrase')||'').trim(),confirmed=!!(document.getElementById('recoveryConfirmationChecked')&&document.getElementById('recoveryConfirmationChecked').checked);
+  if(!snapshotId||entered!==phrase||!confirmed){notify('Type the exact restore phrase and confirm the checkbox');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  button.textContent='Restoring...';
+  var result=await post('/api/system/recovery/restore',{snapshotId:snapshotId,confirmationPhrase:entered,confirmed:true});
+  if(!result||!result.ok){button.disabled=false;button.classList.remove('is-loading');button.textContent='Restore snapshot';notify(result&&result.error||'Snapshot restore failed');return}
+  closeModal();
+  notify(result.message||'Snapshot restored. Sign in again to continue.');
+  setTimeout(function(){window.location.assign('/login?recovery=complete')},600);
 },true);
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="create-state-backup"]');

@@ -55,6 +55,11 @@ requireText('Closed progressive action menu guard', '.action-menu:not([open])>.a
 requireText('Tablet message compose fit guard', '@media(min-width:761px) and (max-width:900px)');
 requireText('Tablet API provider card guard', 'Tablet API provider rows stay actionable without a hidden horizontal table.');
 requireText('Tablet API provider action fit', '.admin-shell .view-api-roadmap .api-provider-focused .table td:last-child{grid-template-columns:repeat(2,minmax(0,1fr))}');
+requireText('Compact owner recovery console', 'Recovery stays inside the owner launch preflight instead of becoming another workspace.');
+requireAnyBlock('Recovery desktop summary', '.recovery-console-summary{', ['grid-template-columns:repeat(4,minmax(0,1fr))', 'gap:7px']);
+requireAnyBlock('Recovery snapshot picker', '.recovery-snapshot-picker{', ['grid-template-columns:minmax(0,1fr) auto', 'align-items:end']);
+requireAnyBlock('Recovery phone summary', '.recovery-console-summary{', ['grid-template-columns:repeat(2,minmax(0,1fr))']);
+requireAnyBlock('Recovery phone picker', '.recovery-snapshot-picker{', ['grid-template-columns:1fr']);
 requireText('Mobile tabs wrap guard', 'Mobile tab fit guard: section tabs wrap instead of clipping off-screen.');
 requireText('Mobile Operations tab grid', '.admin-shell .view-operations>.staff-tabs');
 requireText('Mobile manager tab grid', '.admin-shell .view-manager-portal>.staff-tabs');

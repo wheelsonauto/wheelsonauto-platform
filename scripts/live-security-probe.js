@@ -7,15 +7,17 @@ if (!/^https:\/\//i.test(target)) {
   process.exit(2);
 }
 
-async function request(pathname) {
+async function request(pathname, method = 'GET') {
   const separator = pathname.includes('?') ? '&' : '?';
   return fetch(target + pathname + separator + 'security_probe=' + Date.now(), {
-    method: 'GET',
+    method,
     redirect: 'manual',
     headers: {
       Accept: 'application/json,text/html;q=0.9,*/*;q=0.8',
+      ...(method === 'GET' ? {} : { 'Content-Type': 'application/json' }),
       'User-Agent': 'WheelsonAuto-Live-Security-Probe/1.0'
     },
+    ...(method === 'GET' ? {} : { body: '{}' }),
     signal: AbortSignal.timeout(15000)
   });
 }
@@ -29,8 +31,8 @@ function assertSecurityHeaders(response, label) {
   assert.ok(response.headers.get('referrer-policy'), label + ' must define a referrer policy.');
 }
 
-async function expectStatus(pathname, expected, label) {
-  const response = await request(pathname);
+async function expectStatus(pathname, expected, label, method = 'GET') {
+  const response = await request(pathname, method);
   assert.equal(response.status, expected, label + ' returned HTTP ' + response.status + ' instead of ' + expected + '.');
   assertSecurityHeaders(response, label);
   return response;
@@ -46,6 +48,8 @@ async function main() {
   await expectStatus('/login', 200, 'Staff login');
   await expectStatus('/api/state', 401, 'Dashboard state');
   await expectStatus('/api/system/infrastructure/preflight', 401, 'Owner launch preflight');
+  await expectStatus('/api/system/recovery/snapshots', 401, 'Owner recovery history');
+  await expectStatus('/api/system/recovery/restore', 401, 'Owner recovery restore', 'POST');
   await expectStatus('/api/onboarding/documents/security-probe-does-not-exist', 401, 'Private identity document');
   await expectStatus('/api/onboarding/signatures/security-probe-does-not-exist', 401, 'Private signature');
   await expectStatus('/api/contract-template', 401, 'Editable contract template');
@@ -54,7 +58,7 @@ async function main() {
   assert.equal(customerDocument.headers.get('location'), '/customer/login', 'An unauthenticated customer document request must return to customer login.');
   assert.equal(customerDocument.headers.get('cache-control'), 'no-store', 'The customer document redirect must not be cached.');
 
-  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous state, preflight, contract, identity-document, signature, and customer-document access with hardened response headers.');
+  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous state, preflight, recovery history/restore, contract, identity-document, signature, and customer-document access with hardened response headers.');
 }
 
 main().catch(error => {

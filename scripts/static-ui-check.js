@@ -241,6 +241,22 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Vehicle identity review',
   'VIN review'
 ]);
+assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "ready?'Clear':'Blocked'", 'Keep Clover live until every gate is verified.']);
+assertIncludes('Owner recovery operator surface', app, [
+  'open-recovery-console',
+  '/api/system/recovery/snapshots',
+  'PostgreSQL recovery log',
+  'recoveryConsoleModal',
+  'Append-only history',
+  'review-selected-snapshot',
+  'confirm-snapshot-restore',
+  '/api/system/recovery/restore',
+  "phrase='RESTORE SNAPSHOT '+snapshotId",
+  'recoveryConfirmationChecked',
+  "window.location.assign('/login?recovery=complete')",
+  'Current staff/customer access controls are preserved',
+  'every signed-in session is revoked'
+]);
 assertIncludes('Password-backed staff and owner guidance', app, [
   'Manager and mechanic username/password accounts.',
   'Manager and mechanic accounts use their own username and password',
@@ -305,7 +321,7 @@ if (unhandled.length) {
   fail('Unhandled data-action button(s): ' + unhandled.join(', '));
 }
 
-assertIncludes('Open modal active definition', functionSlice('openModal'), ['aria-hidden', "style.display='grid'"]);
+assertIncludes('Open modal active definition', functionSlice('openModal'), ['aria-hidden', "style.display='grid'", "querySelector('.modal')", 'modal.scrollTop=0', "typeof requestAnimationFrame==='function'"]);
 assertIncludes('Close modal active definition', functionSlice('closeModal'), ['aria-hidden', "textContent=''", "innerHTML=''"]);
 assertIncludes('Auto refresh modal guard', app, ["if(modal&&modal.style.display==='grid')return"]);
 assertIncludes('Post-save refresh wrapper', app, ['var __wheelsonBaseSave=save', 'reconcileFleetCustomerLinks()', 'if(ok)await refreshData(true)']);

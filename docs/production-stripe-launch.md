@@ -696,6 +696,14 @@ The owner can list PostgreSQL snapshots with:
 GET /api/system/recovery/snapshots
 ```
 
+The same owner-only workflow is available in the app without adding another
+navigation tab: open **Settings → Connections → Live launch preflight → Recovery
+log**. The compact console shows the newest protected restore points and the
+append-only recovery ledger. The owner chooses one snapshot, reviews its
+version, timestamp, reason, actor, and checksum prefix, then must type the exact
+restore phrase and check the destructive-action confirmation. Successful
+restore revokes the current browser session and returns the owner to login.
+
 A restore requires both `confirmed: true` and the exact phrase
 `RESTORE SNAPSHOT <id>`. Restore creates a new audited version; it does not
 erase historical snapshots or the retained JSON rollback artifact.

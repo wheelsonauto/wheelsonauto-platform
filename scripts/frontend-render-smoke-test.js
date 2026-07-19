@@ -692,6 +692,29 @@ function publicSmoke() {
   assertHealthy('Public apply', html(context), ['Apply', 'WheelsonAuto', 'public']);
 }
 
+function recoveryConsoleSmoke() {
+  const context = makeContext({ name: 'Owner Recovery', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  const recovery = context.recoveryConsoleModal({
+    ok: true,
+    message: 'Controlled recovery fixture.',
+    snapshots: [
+      { id: 91, version: 184, checksum: 'f36a97584815d79ad622ee1a70b73438d57c7012c4816a8fc0f40f691071cb4a', reason: 'pre-cutover safety snapshot', actor: 'Owner', createdAt: '2026-07-18T22:14:00.000Z' },
+      { id: 90, version: 180, checksum: '3bc1d765fe4c9d2de5aba728223d7f02d20bf1bda10c2676c10ccb476fb12345', reason: 'verified JSON import', actor: 'Migration worker', createdAt: '2026-07-18T19:30:00.000Z' }
+    ],
+    history: [
+      { id: 12, eventType: 'snapshot_restore', result: 'completed', previousVersion: 180, targetVersion: 181, actor: 'Owner', createdAt: '2026-07-18T20:15:00.000Z', details: { reason: 'owner-confirmed snapshot recovery', accessControlPreserved: true, sessionsRevoked: true } }
+    ]
+  });
+  assertHealthy('Owner recovery console', recovery, ['recovery-console-summary', 'Append-only history', 'recoverySnapshotSelect', 'Version 184', 'pre-cutover safety snapshot', 'Snapshot Restore', 'Access controls preserved', 'Sessions revoked', 'review-selected-snapshot']);
+  assert(!recovery.includes('f36a97584815d79ad622ee1a70b73438d57c7012c4816a8fc0f40f691071cb4a'), 'Recovery UI must display only a short checksum prefix, not the complete database checksum.');
+  const confirmation = context.snapshotRestoreConfirmationModal({
+    value: '91',
+    dataset: { version: '184', reason: 'pre-cutover safety snapshot', actor: 'Owner', created: '2026-07-18T22:14:00.000Z', checksumPrefix: 'f36a97584815...' }
+  });
+  assertHealthy('Owner recovery confirmation', confirmation, ['RESTORE SNAPSHOT 91', 'recoveryConfirmationPhrase', 'recoveryConfirmationChecked', 'Current staff/customer access controls are preserved', 'every signed-in session is revoked', 'confirm-snapshot-restore']);
+  assert(!confirmation.includes('f36a97584815d79ad622ee1a70b73438d57c7012c4816a8fc0f40f691071cb4a'), 'Recovery confirmation must not expose the complete database checksum.');
+}
+
 async function refreshCoordinationSmoke() {
   const context = makeContext({ name: 'Owner Refresh', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
   context.__woaLastDataVersion = 'same-version';
@@ -793,9 +816,10 @@ async function main() {
   mechanicSmoke();
   await mechanicInteractionSmoke();
   publicSmoke();
+  recoveryConsoleSmoke();
   await refreshCoordinationSmoke();
   heavyMessagesReportsSmoke();
-  console.log('Frontend render smoke passed: owner, manager, mechanic, public, heavy Messages/Reports, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
+  console.log('Frontend render smoke passed: owner, manager, mechanic, public, recovery console, heavy Messages/Reports, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
 }
 
 main().catch(err => {

@@ -7679,3 +7679,69 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .admin-shell .view-api-roadmap .api-provider-focused .table td:last-child::before{grid-column:1/-1}
   .admin-shell .view-api-roadmap .api-provider-focused .table td:last-child .btn{width:100%;min-width:0}
 }
+
+/* Recovery stays inside the owner launch preflight instead of becoming another workspace. */
+.recovery-console{display:grid;gap:12px}
+.recovery-console-summary{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:7px;
+}
+.recovery-console-summary>div,
+.recovery-restore-facts>div{
+  display:grid;
+  gap:3px;
+  min-width:0;
+  padding:10px;
+  border:1px solid rgba(191,195,200,.16);
+  border-radius:8px;
+  background:rgba(230,233,236,.045);
+}
+.recovery-console-summary span,
+.recovery-restore-facts span,
+.recovery-snapshot-picker label{
+  color:#aaa9a5;
+  font-size:10px;
+  font-weight:800;
+  text-transform:uppercase;
+}
+.recovery-console-summary strong{color:#f0ece2;font-size:19px;line-height:1.15;overflow-wrap:anywhere}
+.recovery-console-summary small{color:#aaa9a5;font-size:10px;overflow-wrap:anywhere}
+.recovery-snapshot-picker{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:end;
+  gap:7px;
+  padding:11px;
+  border:1px solid rgba(214,177,101,.2);
+  border-radius:8px;
+  background:rgba(214,177,101,.05);
+}
+.recovery-snapshot-picker label{grid-column:1/-1;color:#d5c18d}
+.recovery-snapshot-picker select{
+  width:100%;
+  min-width:0;
+  min-height:36px;
+  padding:8px 10px;
+  border:1px solid rgba(203,207,211,.2);
+  border-radius:7px;
+  background:#171a1e;
+  color:#ece9e1;
+}
+.recovery-console-section{display:grid;gap:8px;padding:0!important;margin:2px 0 0!important;border:0!important;background:transparent!important}
+.recovery-console-section h2{font-size:13px}
+.snapshot-restore-confirmation{display:grid;gap:12px}
+.recovery-restore-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.recovery-restore-facts>div:last-child{grid-column:1/-1}
+.recovery-restore-facts strong{color:#ece9e1;font-size:12px;overflow-wrap:anywhere}
+.recovery-confirm-check{display:grid!important;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:8px}
+.recovery-confirm-check input{margin-top:3px}
+.recovery-confirm-check span{color:#d5d1c7;line-height:1.45}
+
+@media(max-width:680px){
+  .recovery-console-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .recovery-snapshot-picker{grid-template-columns:1fr}
+  .recovery-snapshot-picker label{grid-column:auto}
+  .recovery-snapshot-picker .btn{width:100%}
+  .recovery-restore-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
