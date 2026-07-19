@@ -489,6 +489,57 @@ async function main() {
     assert.strictEqual(restored.state.documents.length, 1, 'Recovery must restore the selected snapshot private-document record.');
     assert(restored.state.auditLogs.some(row => row.action === 'Runtime recovery verification'), 'Recovery must allow an audit entry in the new restored snapshot.');
     assert.strictEqual(stateRepository.checksum(restored.state), restored.checksum, 'Recovered state checksum must verify after the transaction commits.');
+    assert(restored.recoveryHistoryEvent && restored.recoveryHistoryEvent.eventType === 'snapshot_restore', 'A controlled snapshot restore must append its durable recovery-history event in the same PostgreSQL transaction.');
+    const snapshotRecoveryHistory = await repository.listRecoveryHistory(20);
+    assert(snapshotRecoveryHistory.some(row => row.eventId === restored.recoveryHistoryEvent.eventId && row.sourceSnapshotId === firstSnapshots[0].id && row.targetVersion === restored.version), 'PostgreSQL recovery history must retain the selected snapshot and committed target version.');
+    const offsiteRecoveryEvent = {
+      eventType: 'encrypted_offsite_restore',
+      eventId: 'runtime-encrypted-backup-history',
+      sourceVersion: 8,
+      sourceChecksum: stateRepository.checksum(firstState),
+      result: 'completed',
+      actor: 'runtime recovery owner',
+      details: { accessControlPreserved: true, sessionsRevoked: true }
+    };
+    const offsiteHistoryWrite = await repository.write(restored.state, {
+      reason: 'runtime encrypted recovery history proof',
+      actor: 'runtime recovery owner',
+      recoveryEvent: offsiteRecoveryEvent
+    });
+    assert(offsiteHistoryWrite.recoveryHistoryEvent && offsiteHistoryWrite.recoveryHistoryEvent.eventId === offsiteRecoveryEvent.eventId, 'A transactional state write must return its committed recovery-history identity.');
+    const beforeDuplicateRecoveryWrite = await repository.read();
+    await assert.rejects(
+      () => repository.write(offsiteHistoryWrite.state, {
+        reason: 'duplicate runtime recovery event must roll back',
+        actor: 'runtime recovery owner',
+        recoveryEvent: offsiteRecoveryEvent
+      }),
+      error => error && error.code === '23505',
+      'A reused PostgreSQL recovery event identity must fail closed at the database unique constraint.'
+    );
+    const afterDuplicateRecoveryWrite = await repository.read();
+    assert.strictEqual(afterDuplicateRecoveryWrite.version, beforeDuplicateRecoveryWrite.version, 'A duplicate recovery-history event must roll back the authoritative state version.');
+    assert.strictEqual(afterDuplicateRecoveryWrite.checksum, beforeDuplicateRecoveryWrite.checksum, 'A duplicate recovery-history event must roll back the authoritative state checksum.');
+    const recoveryChecks = Object.fromEntries(stateRepository.RECOVERY_DRILL_REQUIRED_CHECKS.map(check => [check, true]));
+    const recoveryConfigurationFingerprint = stateRepository.recoveryDrillConfigurationFingerprint('runtime-recovery-history-secret', databaseUrl, organizationId);
+    const recoveryTestFingerprint = stateRepository.recoveryDrillConfigurationFingerprint('runtime-recovery-history-secret', databaseUrl, organizationId + '-drill');
+    for (const runId of ['runtime-recovery-drill-1', 'runtime-recovery-drill-2']) {
+      const savedDrill = await repository.recordRecoveryDrill({
+        runId,
+        result: 'passed',
+        testDatabaseFingerprint: recoveryTestFingerprint,
+        configurationFingerprint: recoveryConfigurationFingerprint,
+        checks: recoveryChecks,
+        scriptVersion: stateRepository.RECOVERY_DRILL_SCRIPT_VERSION,
+        actor: 'runtime recovery owner'
+      });
+      assert.strictEqual(savedDrill.ready, true, 'Every controlled runtime recovery drill must satisfy the current recovery contract before it is recorded.');
+    }
+    const durableRecoveryHistory = await repository.listRecoveryHistory(20);
+    assert(durableRecoveryHistory.some(row => row.eventType === 'snapshot_restore'), 'Recovery history must retain snapshot restores.');
+    assert(durableRecoveryHistory.some(row => row.eventType === 'encrypted_offsite_restore'), 'Recovery history must retain encrypted offsite restores.');
+    assert(durableRecoveryHistory.some(row => row.eventType === 'recovery_drill' && row.eventId === 'runtime-recovery-drill-1'), 'Recording a newer recovery drill must not overwrite the previous drill history.');
+    assert(durableRecoveryHistory.some(row => row.eventType === 'recovery_drill' && row.eventId === 'runtime-recovery-drill-2'), 'Recovery history must retain the latest recovery drill as a separate immutable event.');
     const restoredDocumentMetadata = await repository.pool.query('SELECT id FROM woa_documents WHERE organization_id = $1 AND id = $2', [organizationId, 'document-runtime-1']);
     assert.strictEqual(restoredDocumentMetadata.rowCount, 1, 'Controlled snapshot recovery must transactionally restore private-document metadata.');
     const restartedRepository = stateRepository.createStateRepository({
@@ -502,8 +553,8 @@ async function main() {
     });
     try {
       const restarted = await restartedRepository.read();
-      assert.strictEqual(restarted.version, restored.version, 'A new PostgreSQL repository after a simulated server restart must read the restored version.');
-      assert.strictEqual(restarted.checksum, restored.checksum, 'A new PostgreSQL repository after a simulated server restart must verify the restored checksum.');
+      assert.strictEqual(restarted.version, offsiteHistoryWrite.version, 'A new PostgreSQL repository after a simulated server restart must read the latest recovered version.');
+      assert.strictEqual(restarted.checksum, offsiteHistoryWrite.checksum, 'A new PostgreSQL repository after a simulated server restart must verify the latest recovered checksum.');
       assert.strictEqual(restarted.state.customers[0].name, 'Version One Customer', 'A server restart must retain the restored customer state.');
     } finally {
       await restartedRepository.close();
@@ -525,6 +576,7 @@ async function main() {
     assert.strictEqual(health.snapshotVersionMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state version.');
     assert.strictEqual(health.snapshotChecksumMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state checksum.');
     assert.strictEqual(health.snapshotRecoveryReady, true, 'A production-ready PostgreSQL repository must expose a verified current recovery snapshot.');
+    assert(health.recoveryHistoryCount >= 4, 'PostgreSQL health must expose retained drill and restore history without loading private state payloads.');
     assert.strictEqual(health.migrationProofIntegrity, 'verified', 'The PostgreSQL import proof must retain the source-to-target checksum/count evidence.');
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
     const recoveryDrillProof = await recordRecoveryDrillProof(organizationId, {

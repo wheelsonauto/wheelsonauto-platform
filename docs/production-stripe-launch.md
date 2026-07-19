@@ -700,6 +700,14 @@ A restore requires both `confirmed: true` and the exact phrase
 `RESTORE SNAPSHOT <id>`. Restore creates a new audited version; it does not
 erase historical snapshots or the retained JSON rollback artifact.
 
+The same owner route returns an append-only `history` ledger beside the
+snapshot list. PostgreSQL records each controlled recovery drill, snapshot
+restore, and encrypted offsite restore with a unique event identity, source
+version/checksum, previous version/checksum, committed target version/checksum,
+actor, result, and safe recovery metadata. The ledger write is part of the same
+database transaction as the recovered state, so a duplicate event or failed
+history insert rolls back the recovery instead of leaving an unaudited state.
+
 Recovery is serialized with the normal state-write queue. The transaction
 verifies the current-state checksum and the selected snapshot checksum before
 changing anything, preserves the current owner/staff/customer access-control

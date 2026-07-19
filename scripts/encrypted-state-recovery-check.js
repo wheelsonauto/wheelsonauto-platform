@@ -91,6 +91,11 @@ async function main() {
     assert.strictEqual(restored.customerAccounts[0].passwordUpdatedAt, revokedAt, 'Recovery must revoke customer sessions.');
     assert(restored.auditLogs.some(row => row.action === 'Encrypted offsite state backup restored'), 'Recovery must leave an auditable state record.');
     assert.strictEqual(repository.writes[0].metadata.reason, 'controlled encrypted offsite state recovery');
+    assert.strictEqual(repository.writes[0].metadata.recoveryEvent.eventType, 'encrypted_offsite_restore', 'Encrypted offsite recovery must append a normalized PostgreSQL recovery-history event in the same write.');
+    assert(/^encrypted-backup-[a-f0-9]{64}$/.test(repository.writes[0].metadata.recoveryEvent.eventId), 'Encrypted offsite recovery history must use a stable opaque event identity.');
+    assert.strictEqual(repository.writes[0].metadata.recoveryEvent.sourceChecksum, result.backup.stateChecksum, 'Encrypted offsite recovery history must retain the authenticated source checksum.');
+    assert.strictEqual(repository.writes[0].metadata.recoveryEvent.details.accessControlPreserved, true, 'Encrypted offsite recovery history must retain the access-control preservation proof.');
+    assert.strictEqual(repository.writes[0].metadata.recoveryEvent.details.sessionsRevoked, true, 'Encrypted offsite recovery history must retain the session-revocation proof.');
     assert.strictEqual(result.restoredChecksum, stateRepository.checksum(restored), 'Recovery must verify the committed state through a second repository read.');
 
     console.log('Encrypted state recovery check passed: maintenance guard, exact confirmation, PostgreSQL requirement, authenticated backup restore, access-control preservation, session revocation, audit trail, snapshot write, and read-back checksum verified.');

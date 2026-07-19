@@ -9,12 +9,14 @@ const TRANSACTIONAL_INDEX_MIGRATION_ID = '20260718_transactional_resource_assign
 const DURABLE_RATE_LIMIT_MIGRATION_ID = '20260718_durable_security_rate_limits_v3';
 const DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID = '20260718_document_tenant_primary_key_v4';
 const PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID = '20260718_provider_financial_identity_index_v5';
+const RECOVERY_HISTORY_MIGRATION_ID = '20260719_append_only_recovery_history_v6';
 const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
   MIGRATION_ID,
   TRANSACTIONAL_INDEX_MIGRATION_ID,
   DURABLE_RATE_LIMIT_MIGRATION_ID,
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
-  PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID
+  PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
+  RECOVERY_HISTORY_MIGRATION_ID
 ]);
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
@@ -242,6 +244,32 @@ function recoverySnapshotEvidence(snapshot, current = {}) {
     snapshotChecksumMatchesCurrent: checksumMatchesCurrent,
     snapshotVersionMatchesCurrent: versionMatchesCurrent,
     snapshotRecoveryReady: ready
+  };
+}
+
+function normalizedRecoveryHistoryEvent(event = {}, context = {}) {
+  const eventType = String(event.eventType || event.type || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 80);
+  const eventId = String(event.eventId || event.id || '').trim().slice(0, 200);
+  if (!eventType || !eventId) {
+    const error = new Error('A durable recovery-history event type and event ID are required.');
+    error.code = 'woa_recovery_history_identity_required';
+    throw error;
+  }
+  const sourceSnapshotId = Number(event.sourceSnapshotId || 0);
+  const details = event.details && typeof event.details === 'object' && !Array.isArray(event.details) ? clone(event.details) : {};
+  return {
+    eventType,
+    eventId,
+    sourceSnapshotId: Number.isInteger(sourceSnapshotId) && sourceSnapshotId > 0 ? sourceSnapshotId : null,
+    sourceVersion: Math.max(0, Number(event.sourceVersion || context.sourceVersion || 0)),
+    sourceChecksum: String(event.sourceChecksum || context.sourceChecksum || '').trim().slice(0, 128),
+    previousVersion: Math.max(0, Number(context.previousVersion || event.previousVersion || 0)),
+    previousChecksum: String(context.previousChecksum || event.previousChecksum || '').trim().slice(0, 128),
+    targetVersion: Math.max(0, Number(context.targetVersion || event.targetVersion || 0)),
+    targetChecksum: String(context.targetChecksum || event.targetChecksum || '').trim().slice(0, 128),
+    result: String(event.result || 'completed').trim().toLowerCase().slice(0, 40) || 'completed',
+    actor: String(event.actor || context.actor || '').trim().slice(0, 160),
+    details
   };
 }
 
@@ -1185,6 +1213,10 @@ class JsonStateRepository {
     return [];
   }
 
+  async listRecoveryHistory() {
+    return [];
+  }
+
   async restoreSnapshot() {
     const error = new Error('Snapshot recovery requires PostgreSQL transactional storage.');
     error.code = 'snapshot_recovery_requires_postgres';
@@ -1364,6 +1396,25 @@ class PostgresStateRepository {
           actor TEXT NOT NULL DEFAULT '',
           verified_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )`);
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_recovery_history (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          source_snapshot_id BIGINT,
+          source_version BIGINT NOT NULL DEFAULT 0 CHECK (source_version >= 0),
+          source_checksum TEXT NOT NULL DEFAULT '',
+          previous_version BIGINT NOT NULL DEFAULT 0 CHECK (previous_version >= 0),
+          previous_checksum TEXT NOT NULL DEFAULT '',
+          target_version BIGINT NOT NULL DEFAULT 0 CHECK (target_version >= 0),
+          target_checksum TEXT NOT NULL DEFAULT '',
+          result TEXT NOT NULL DEFAULT 'completed',
+          actor TEXT NOT NULL DEFAULT '',
+          details JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(details) = 'object'),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          UNIQUE (organization_id, event_type, event_id)
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS woa_recovery_history_org_created_idx ON woa_recovery_history (organization_id, created_at DESC, id DESC)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_webhook_events (
           provider TEXT NOT NULL,
           event_id TEXT NOT NULL,
@@ -1552,6 +1603,7 @@ class PostgresStateRepository {
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DURABLE_RATE_LIMIT_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [RECOVERY_HISTORY_MIGRATION_ID]);
         const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
@@ -1678,6 +1730,34 @@ class PostgresStateRepository {
       FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(rows)]);
   }
 
+  async appendRecoveryHistory(client, event, context = {}) {
+    const row = normalizedRecoveryHistoryEvent(event, context);
+    const saved = await client.query(`INSERT INTO woa_recovery_history (
+      organization_id, event_type, event_id, source_snapshot_id, source_version, source_checksum,
+      previous_version, previous_checksum, target_version, target_checksum, result, actor, details
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+    RETURNING id, created_at`, [
+      this.organizationId,
+      row.eventType,
+      row.eventId,
+      row.sourceSnapshotId,
+      row.sourceVersion,
+      row.sourceChecksum,
+      row.previousVersion,
+      row.previousChecksum,
+      row.targetVersion,
+      row.targetChecksum,
+      row.result,
+      row.actor,
+      JSON.stringify(row.details)
+    ]);
+    return {
+      ...row,
+      id: Number(saved.rows[0].id),
+      createdAt: saved.rows[0].created_at
+    };
+  }
+
   async applyStateTransactionEffects(client, options = {}) {
     const effects = normalizedStateTransactionEffects(options);
     const appliedEffects = { webhookCompletions: [], idempotencySettlements: [] };
@@ -1748,13 +1828,22 @@ class PostgresStateRepository {
         ON CONFLICT (organization_id, version) DO NOTHING`, [
         this.organizationId, nextVersion, nextChecksum, String(options.reason || 'state mutation').slice(0, 160), String(options.actor || '').slice(0, 160), JSON.stringify(next)
       ]);
+      const recoveryHistoryEvent = options.recoveryEvent
+        ? await this.appendRecoveryHistory(client, options.recoveryEvent, {
+          previousVersion: existing.rowCount ? Number(existing.rows[0].version || 0) : 0,
+          previousChecksum: existing.rowCount ? String(existing.rows[0].checksum || '') : checksum(previous),
+          targetVersion: nextVersion,
+          targetChecksum: nextChecksum,
+          actor: String(options.actor || '')
+        })
+        : null;
       await client.query(`DELETE FROM woa_state_snapshots
         WHERE organization_id = $1 AND id IN (
           SELECT id FROM woa_state_snapshots WHERE organization_id = $1 ORDER BY version DESC OFFSET $2
         )`, [this.organizationId, this.snapshotLimit]);
       const transactionEffects = await this.applyStateTransactionEffects(client, options);
       await client.query('COMMIT');
-      return { state: next, version: nextVersion, checksum: nextChecksum, transactionEffects };
+      return { state: next, version: nextVersion, checksum: nextChecksum, transactionEffects, recoveryHistoryEvent };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
@@ -2219,6 +2308,33 @@ class PostgresStateRepository {
     }));
   }
 
+  async listRecoveryHistory(limit = 50) {
+    await this.ensureSchema();
+    const result = await this.pool.query(`SELECT id, event_type, event_id, source_snapshot_id,
+      source_version, source_checksum, previous_version, previous_checksum,
+      target_version, target_checksum, result, actor, details, created_at
+      FROM woa_recovery_history
+      WHERE organization_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`, [this.organizationId, Math.max(1, Math.min(200, Number(limit || 50)))]);
+    return result.rows.map(row => ({
+      id: Number(row.id),
+      eventType: row.event_type || '',
+      eventId: row.event_id || '',
+      sourceSnapshotId: row.source_snapshot_id === null ? null : Number(row.source_snapshot_id),
+      sourceVersion: Number(row.source_version || 0),
+      sourceChecksum: row.source_checksum || '',
+      previousVersion: Number(row.previous_version || 0),
+      previousChecksum: row.previous_checksum || '',
+      targetVersion: Number(row.target_version || 0),
+      targetChecksum: row.target_checksum || '',
+      result: row.result || '',
+      actor: row.actor || '',
+      details: clone(row.details || {}),
+      createdAt: row.created_at
+    }));
+  }
+
   async recordMigrationProof(proof = {}) {
     await this.ensureSchema();
     const sourceChecksum = String(proof.sourceChecksum || '').trim();
@@ -2329,12 +2445,28 @@ class PostgresStateRepository {
     const client = await this.connect();
     try {
       await client.query('BEGIN');
-      const current = await client.query('SELECT version FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+      const current = await client.query('SELECT version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
       if (!current.rowCount) {
         const error = new Error('PostgreSQL state must be imported before a production recovery drill record can be stored.');
         error.code = 'recovery_drill_state_missing';
         throw error;
       }
+      const currentVersion = Number(current.rows[0].version || 0);
+      const currentChecksum = String(current.rows[0].checksum || '');
+      await this.appendRecoveryHistory(client, {
+        eventType: 'recovery_drill',
+        eventId: runId,
+        sourceVersion: currentVersion,
+        sourceChecksum: currentChecksum,
+        result,
+        actor: String(proof.actor || '').slice(0, 160),
+        details: { checks: clone(checks), scriptVersion }
+      }, {
+        previousVersion: currentVersion,
+        previousChecksum: currentChecksum,
+        targetVersion: currentVersion,
+        targetChecksum: currentChecksum
+      });
       await client.query(`INSERT INTO woa_recovery_drills (
         organization_id, run_id, result, test_database_fingerprint,
         configuration_fingerprint, checks, script_version, actor, verified_at
@@ -2433,6 +2565,21 @@ class PostgresStateRepository {
         String(options.actor || '').slice(0, 160),
         JSON.stringify(next)
       ]);
+      const recoveryHistoryEvent = await this.appendRecoveryHistory(client, {
+        eventType: 'snapshot_restore',
+        eventId: 'snapshot-' + Number(snapshot.id) + '-target-version-' + nextVersion,
+        sourceSnapshotId: Number(snapshot.id),
+        sourceVersion: Number(snapshot.version || 0),
+        sourceChecksum: String(snapshot.checksum || ''),
+        result: 'completed',
+        actor: String(options.actor || '').slice(0, 160),
+        details: { reason: String(options.reason || 'controlled snapshot recovery').slice(0, 160) }
+      }, {
+        previousVersion: Number(current.version || 0),
+        previousChecksum: String(current.checksum || ''),
+        targetVersion: nextVersion,
+        targetChecksum: nextChecksum
+      });
       await client.query(`DELETE FROM woa_state_snapshots
         WHERE organization_id = $1 AND id IN (
           SELECT id FROM woa_state_snapshots WHERE organization_id = $1 ORDER BY version DESC OFFSET $2
@@ -2442,7 +2589,8 @@ class PostgresStateRepository {
         state: next,
         version: nextVersion,
         checksum: nextChecksum,
-        restoredSnapshot: { id: Number(snapshot.id), version: Number(snapshot.version || 0), checksum: snapshot.checksum || '' }
+        restoredSnapshot: { id: Number(snapshot.id), version: Number(snapshot.version || 0), checksum: snapshot.checksum || '' },
+        recoveryHistoryEvent
       };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -2492,6 +2640,7 @@ class PostgresStateRepository {
         recovery_drill.actor AS recovery_drill_actor,
         recovery_drill.verified_at AS recovery_drill_verified_at,
         (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count,
+        (SELECT COUNT(*)::int FROM woa_recovery_history WHERE organization_id = $1) AS recovery_history_count,
         (SELECT COUNT(*)::int FROM woa_resource_index WHERE organization_id = $1) AS resource_index_count,
         (SELECT COUNT(*)::int FROM woa_active_assignments WHERE organization_id = $1) AS assignment_index_count,
         (SELECT COUNT(*)::int FROM woa_identity_index WHERE organization_id = $1) AS identity_index_count,
@@ -2527,6 +2676,7 @@ class PostgresStateRepository {
           snapshotRecoveryReady: false,
           recoveryDrill: recoveryDrillEvidence(null),
           recoveryDrillReady: false,
+          recoveryHistoryCount: 0,
           resourceIndexReady: false,
           resourceIndexCount: 0,
           expectedResourceIndexCount: 0,
@@ -2595,6 +2745,7 @@ class PostgresStateRepository {
         ...migrationProof,
         recoveryDrill: recoveryDrillEvidenceResult,
         recoveryDrillReady: recoveryDrillEvidenceResult.ready,
+        recoveryHistoryCount: Math.max(0, Number(row.recovery_history_count || 0)),
         ...indexes,
         version: Number(row.version || 0),
         updatedAt: row.updated_at,
@@ -2644,6 +2795,7 @@ module.exports = {
   DURABLE_RATE_LIMIT_MIGRATION_ID,
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
+  RECOVERY_HISTORY_MIGRATION_ID,
   REQUIRED_SCHEMA_MIGRATION_IDS,
   DEFAULT_ORGANIZATION_ID,
   RECOVERY_DRILL_SCRIPT_VERSION,

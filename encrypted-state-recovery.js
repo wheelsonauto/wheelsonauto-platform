@@ -84,9 +84,26 @@ async function restoreLatestEncryptedStateBackup(options = {}) {
     backupVersion: backup.stateVersion,
     backupChecksum: backup.stateChecksum
   });
+  const recoveryEventId = 'encrypted-backup-' + crypto.createHash('sha256')
+    .update([backup.stateChecksum, backup.createdAt, revokedAt].join('\u0000'), 'utf8')
+    .digest('hex');
   const written = await repository.write(restored, {
     reason: 'controlled encrypted offsite state recovery',
-    actor
+    actor,
+    recoveryEvent: {
+      eventType: 'encrypted_offsite_restore',
+      eventId: recoveryEventId,
+      sourceVersion: Math.max(0, Number(backup.stateVersion || 0)),
+      sourceChecksum: backup.stateChecksum,
+      result: 'completed',
+      actor,
+      details: {
+        backupCreatedAt: backup.createdAt,
+        backupKeyVersion: backup.keyVersion,
+        accessControlPreserved: true,
+        sessionsRevoked: true
+      }
+    }
   });
   const verified = await repository.read();
   const verifiedChecksum = stateRepository.checksum(verified.state);
