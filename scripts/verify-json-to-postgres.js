@@ -42,6 +42,7 @@ async function main() {
       throw new Error('The supplied JSON source does not exactly match the current PostgreSQL state. No state was changed and no proof was recorded. Use the exact protected migration copy, not a later or earlier data.json.');
     }
     await migrationSource.assertSourceUnchanged(dataFile, source.sourceFileChecksum);
+    await migrationSource.assertSameProvenanceManifest(dataFile, source.sourceFileChecksum, sourceProvenance);
     const proof = await repository.recordMigrationProof({
       sourceChecksum,
       canonicalSourceChecksum,
@@ -56,6 +57,7 @@ async function main() {
     if (!proof.migrationProofReady || !health.migrationProofReady || !health.snapshotRecoveryReady) {
       throw new Error('PostgreSQL import proof or current recovery snapshot verification failed. No state was changed.');
     }
+    await migrationSource.assertSameProvenanceManifest(dataFile, source.sourceFileChecksum, sourceProvenance);
     const cutoverSentinel = await dataBackendCutover.writePostgresSentinel({
       dataDir: process.env.WOA_DATA_BACKEND_SENTINEL_DIR || process.env.DATA_DIR || path.dirname(dataFile),
       health,

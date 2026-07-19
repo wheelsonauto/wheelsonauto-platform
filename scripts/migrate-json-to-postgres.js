@@ -50,6 +50,7 @@ async function main() {
     const canonicalSourceChecksum = stateRepository.checksum(canonicalSource);
     const sourceRecordCounts = stateRepository.migrationRecordCounts(canonicalSource);
     await migrationSource.assertSourceUnchanged(dataFile, source.sourceFileChecksum);
+    await migrationSource.assertSameProvenanceManifest(dataFile, source.sourceFileChecksum, sourceProvenance);
     const written = await repository.write(state, { reason: 'controlled JSON-to-PostgreSQL import', actor: 'production migration script' });
     const verified = await repository.read();
     const targetRecordCounts = stateRepository.migrationRecordCounts(verified.state);
@@ -57,6 +58,7 @@ async function main() {
       throw new Error('PostgreSQL checksum verification failed after import. JSON source was not changed.');
     }
     await migrationSource.assertSourceUnchanged(dataFile, source.sourceFileChecksum);
+    await migrationSource.assertSameProvenanceManifest(dataFile, source.sourceFileChecksum, sourceProvenance);
     const migrationProof = await repository.recordMigrationProof({
       sourceChecksum,
       canonicalSourceChecksum,
@@ -71,6 +73,7 @@ async function main() {
     if (!migrationProof.migrationProofReady || !health.migrationProofReady || !health.snapshotRecoveryReady) {
       throw new Error('PostgreSQL import proof or current recovery snapshot verification failed. JSON source was not changed.');
     }
+    await migrationSource.assertSameProvenanceManifest(dataFile, source.sourceFileChecksum, sourceProvenance);
     const cutoverSentinel = await dataBackendCutover.writePostgresSentinel({
       dataDir: process.env.WOA_DATA_BACKEND_SENTINEL_DIR || process.env.DATA_DIR || path.dirname(dataFile),
       health,

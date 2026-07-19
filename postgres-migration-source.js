@@ -255,6 +255,30 @@ async function assertProvenanceManifest(dataFile, sourceFileChecksum, environmen
   };
 }
 
+async function assertSameProvenanceManifest(dataFile, sourceFileChecksum, expected, environment = process.env) {
+  const current = await assertProvenanceManifest(dataFile, sourceFileChecksum, environment);
+  const fields = [
+    'version',
+    'manifestFile',
+    'manifestChecksum',
+    'signatureChecksum',
+    'preparedAt',
+    'sourceOrigin',
+    'sourceFileChecksum',
+    'protectedCopyChecksum',
+    'renderServiceId',
+    'maintenanceInstanceId',
+    'maintenanceRenderCommit',
+    'maintenanceLeaseStartedAt',
+    'maintenanceLeaseChecksum',
+    'maintenanceLeaseSignatureChecksum'
+  ];
+  if (!expected || fields.some(field => String(current[field] ?? '') !== String(expected[field] ?? ''))) {
+    throw new Error('The signed PostgreSQL source or deployed maintenance process changed during cutover. Keep maintenance enabled, capture a fresh protected source, and restart the cutover review.');
+  }
+  return current;
+}
+
 module.exports = {
   sha256,
   validChecksum,
@@ -264,6 +288,7 @@ module.exports = {
   assertSourceUnchanged,
   createProvenanceManifest,
   assertProvenanceManifest,
+  assertSameProvenanceManifest,
   PROVENANCE_VERSION,
   SOURCE_ORIGIN_CONFIRMATION,
   MIGRATION_PROVENANCE_CONFIRMATION

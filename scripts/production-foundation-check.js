@@ -187,8 +187,11 @@ async function main() {
       && serverSource.includes('migrationMaintenanceLease.assertActiveLease({ dataDir: DATA_DIR')
       && postgresSourceRepairSource.includes('migrationMaintenanceLease.assertActiveLease')
       && postgresSourceRepairSource.includes('createProvenanceManifest')
+      && postgresMigrationSource.includes('assertSameProvenanceManifest')
       && postgresImporterSource.includes('assertProvenanceManifest')
-      && postgresVerifierSource.includes('assertProvenanceManifest'), 'Production PostgreSQL import and proof must require a fresh HMAC-signed lease from the exact deployed maintenance process plus a service-bound Render live-disk snapshot instead of trusting a command flag or stale developer checkout.');
+      && (postgresImporterSource.match(/assertSameProvenanceManifest/g) || []).length >= 3
+      && postgresVerifierSource.includes('assertProvenanceManifest')
+      && (postgresVerifierSource.match(/assertSameProvenanceManifest/g) || []).length >= 2, 'Production PostgreSQL import and proof must repeatedly require the same fresh HMAC-signed lease and service-bound Render live-disk snapshot across the database write, proof record, and sentinel instead of trusting a command flag, one startup check, or stale developer checkout.');
     assert(launchRunbook.includes('prepare-postgres-migration-source')
       && launchRunbook.includes('never resolves a customer/vehicle assignment by guessing')
       && launchRunbook.includes('repository-checkout `data.json` is **not** authoritative')

@@ -179,6 +179,28 @@ async function main() {
     const verifiedProvenance = await source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment);
     assert.strictEqual(verifiedProvenance.renderServiceId, renderServiceId, 'Valid provenance must remain bound to the Render service that captured it.');
     assert.strictEqual(verifiedProvenance.maintenanceInstanceId, activeMaintenanceLease.instanceId, 'Valid provenance must remain bound to the exact deployed maintenance process.');
+    const repeatedProvenance = await source.assertSameProvenanceManifest(dataFile, exact, verifiedProvenance, provenanceEnvironment);
+    assert.strictEqual(repeatedProvenance.manifestChecksum, verifiedProvenance.manifestChecksum, 'Repeated cutover checks must authenticate the exact same signed source manifest.');
+    const replacementManifest = {
+      ...source.createProvenanceManifest({
+        source: liveSourceFile,
+        sourceFileChecksum: liveSourceChecksum,
+        protectedCopy: dataFile,
+        protectedCopyChecksum: exact,
+        maintenanceLease: activeMaintenanceLease,
+        preparedAt: new Date(Date.now() + 1000).toISOString(),
+        policy: 'replacement manifest during cutover test',
+        repairs: []
+      }, captureEnvironment),
+      repairs: []
+    };
+    await fs.writeFile(provenanceManifestFile, JSON.stringify(replacementManifest, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    await assert.rejects(
+      () => source.assertSameProvenanceManifest(dataFile, exact, verifiedProvenance, provenanceEnvironment),
+      /source or deployed maintenance process changed during cutover/i,
+      'A newly signed but different source manifest must not replace the one reviewed at cutover start.'
+    );
+    await fs.writeFile(provenanceManifestFile, JSON.stringify(provenanceManifest, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
     await migrationMaintenanceLease.publishLease({
       environment: captureEnvironment,
       maintenanceMode: false,
@@ -281,7 +303,13 @@ async function main() {
     assert.match(verifierSource, /assertTransactionalSourceReady/, 'Migration proof must reject critical resource and assignment conflicts before opening PostgreSQL.');
     assert.match(importerSource, /assertProvenanceManifest/, 'The importer must verify signed Render live-disk provenance before opening PostgreSQL.');
     assert.match(verifierSource, /assertProvenanceManifest/, 'Migration proof must verify signed Render live-disk provenance before opening PostgreSQL.');
-    console.log('PostgreSQL protected-source check passed: exact checksum, signed Render live-disk provenance, service binding, freshness, tamper rejection, immutable source guard, write lock, stale-lock recovery, and changed-source rejection are verified.');
+    assert((importerSource.match(/assertSameProvenanceManifest/g) || []).length >= 3
+      && importerSource.indexOf('assertSameProvenanceManifest') < importerSource.indexOf('repository.write(state')
+      && importerSource.lastIndexOf('assertSameProvenanceManifest') < importerSource.indexOf('writePostgresSentinel'), 'The importer must re-authenticate the same source and maintenance process before the state write, proof record, and cutover sentinel.');
+    assert((verifierSource.match(/assertSameProvenanceManifest/g) || []).length >= 2
+      && verifierSource.indexOf('assertSameProvenanceManifest') < verifierSource.indexOf('recordMigrationProof')
+      && verifierSource.lastIndexOf('assertSameProvenanceManifest') < verifierSource.indexOf('writePostgresSentinel'), 'The verifier must re-authenticate the same source and maintenance process before recording proof and creating the cutover sentinel.');
+    console.log('PostgreSQL protected-source check passed: exact checksum, signed Render live-disk provenance, service binding, repeated cutover authentication, freshness, tamper rejection, immutable source guard, write lock, stale-lock recovery, and changed-source rejection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }

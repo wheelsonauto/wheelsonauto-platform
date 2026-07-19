@@ -411,8 +411,12 @@ the JSON source. It also records source-to-target checksum, collection-count,
 import-snapshot evidence, plus the signed source version, Render service ID,
 capture time, live/protected file checksums, manifest fingerprint, and signature
 fingerprint in PostgreSQL. A legacy checksum-only proof cannot satisfy launch
-readiness. If a proof needs to be regenerated without rewriting either state,
-use the exact protected source copy:
+readiness. The importer re-authenticates the exact same signed source and live
+maintenance-process lease immediately before the state write, again before
+recording migration proof, and again before creating the persistent cutover
+sentinel. A replaced manifest, service restart, changed commit, or expired
+heartbeat stops the cutover instead of claiming success. If a proof needs to be
+regenerated without rewriting either state, use the exact protected source copy:
 
 ```sh
 DATABASE_URL='postgresql://...' \
@@ -425,10 +429,12 @@ pnpm run verify-json-to-postgres -- "$DATA_DIR/postgres-migration-<timestamp>.js
 ```
 
 The verifier refuses a source that differs from the current database and only
-writes the matching migration-proof metadata. The launch preflight rejects a
-reachable-but-empty database, a missing import proof, and any state or
-recovery snapshot whose checksum no longer matches; recover from a verified
-snapshot instead of manually editing production rows.
+writes the matching migration-proof metadata. It re-authenticates the same
+signed source and maintenance process before recording proof and again before
+creating the sentinel. The launch preflight rejects a reachable-but-empty
+database, a missing import proof, and any state or recovery snapshot whose
+checksum no longer matches; recover from a verified snapshot instead of
+manually editing production rows.
 
 The importer creates a shared application write lock and releases it after
 success or handled failure. If the process or host is killed and the lock is
