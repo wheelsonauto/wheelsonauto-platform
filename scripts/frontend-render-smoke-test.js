@@ -569,6 +569,20 @@ function ownerSmoke() {
   assertCompactBoard('Owner dashboard', ownerDashboard, ['Dashboard', 'Business overview', 'Customer intake', 'Money today', 'Ready fleet', 'quickbar']);
   assertNo('Owner dashboard', ownerDashboard, ['Today&rsquo;s dues & contact', 'Today action list', 'Star command queue', 'Platform readiness map', 'Core system board', 'Launch readiness']);
 
+  context.db.vehicles.unshift({
+    id: 'veh-owner-resolver-reachability',
+    year: 2025,
+    make: 'Resolver',
+    model: 'Reachability',
+    vin: 'RESOLVERREACHVIN',
+    plate: 'RES-OLVE',
+    status: 'Rented',
+    currentCustomer: 'Resolver Primary',
+    assignmentConflict: 'Resolver Primary / Resolver Alias'
+  });
+  const assignmentResolverBoard = renderView(context, 'Operations', 'Assigned');
+  assert(assignmentResolverBoard.includes('data-action="resolve-assignment-conflict"') && assignmentResolverBoard.includes('data-id="veh-owner-resolver-reachability"'), 'Operations / Assigned must render the owner conflict resolver after all fleet-card decorators are applied.');
+
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payments & customers', 'customer-pay-list']],
     ['Payments today', 'Payments', 'Today', ['Payments & Customers', 'Today action list', 'payment-command', 'customer-pay-list']],
