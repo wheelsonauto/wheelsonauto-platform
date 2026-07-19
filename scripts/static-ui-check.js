@@ -355,7 +355,7 @@ const criticalActionRequirements = [
   ['Provider-neutral refund preparation flow', 'integrated-prepare-refund', ['/api/integrations/payments/refunds/prepare', 'amount:Number', 'await refreshData(true)', 'integratedOpenRefundRecord']],
   ['Provider-neutral refund execution flow', 'integrated-execute-refund', ['/api/integrations/payments/refunds/execute', 'confirmed:true', 'await refreshData(true)', 'closeModal()']],
   ['Manual provider refund completion flow', 'integrated-complete-refund', ['/api/integrations/payments/refunds/complete-manual', 'providerRefundId', 'confirmed:true', 'await refreshData(true)']],
-  ['Provider-neutral dispute review flow', 'integrated-save-dispute', ['/api/integrations/payments/disputes/action', 'claimId', 'confirmed:confirmed', 'await refreshData(true)']],
+  ['Provider-neutral dispute review flow', 'integrated-save-dispute', ['/api/integrations/payments/disputes/action', 'claimId', 'providerSubmissionReference:val', 'confirmed:confirmed', "disputeAction==='submitted'", 'await refreshData(true)']],
   ['Verification case creation flow', 'integrated-create-verification', ['/api/verification/cases', 'reference:val', 'expiresAt:val', 'await refreshData(true)']],
   ['Verification review flow', 'integrated-review-verification', ['/api/verification/cases/review', 'caseId', 'decision:', 'await refreshData(true)']],
   ['Accounting ledger rebuild flow', 'integrated-rebuild-accounting', ['/api/accounting/ledger/rebuild', 'await refreshData(true)', '/api/accounting/ledger']],
@@ -370,6 +370,7 @@ assertIncludes('Clover reconciliation review count', app, ["localReview=refundab
 assertIncludes('Missing Clover detail queue fallback', app, ['function integratedCloverQueueGapRow(count)', 'Clover record needs resync', 'Payment detail missing', 'integrated-refresh-clover', 'unmatched-serverUnmatched.length']);
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
+assertIncludes('Stripe dispute provider-truth UI', functionSlice('integratedOpenDispute'), ['Submit evidence to Stripe', 'signed Stripe webhooks', 'cannot be entered manually', 'encrypted evidence packet']);
 ['repairAshleyDodgeTransfer', 'Ashley restored', 'Dodge Journey WHITE', 'Felicia V Gadson'].forEach(text => {
   if (app.includes(text)) fail('Customer-specific frontend repair code must not ship: ' + text);
 });

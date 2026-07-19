@@ -472,6 +472,17 @@ The production guard also requires `WOA_ONBOARDING_PAYMENT_PROVIDER=stripe`,
 onboarding file within the same freshness window. A generic payment, refund,
 or unrelated Stripe event cannot stand in for the license-and-selfie test.
 
+Stripe dispute responses are provider-backed, not editable labels. The owner
+must first mark a complete packet evidence-ready, which freezes the exact
+packet in encrypted private storage. A second confirmed action submits only
+the approved text evidence to Stripe with a durable idempotency key; raw
+license/selfie bytes and private document contents are never copied into that
+request. A timeout stays `Submission confirmation pending` and reuses the same
+key until Stripe retrieval or a signed webhook reconciles it. A definitive
+validation rejection returns the case to evidence review with a new revision
+key available after correction. Only signed Stripe dispute webhooks can mark a
+case won or lost; neither the owner UI nor Star can manufacture that outcome.
+
 Run one complete controlled test record:
 
 1. Choose an online vehicle.

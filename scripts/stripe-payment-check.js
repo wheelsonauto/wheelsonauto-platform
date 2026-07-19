@@ -89,6 +89,12 @@ async function run() {
   await client.createIdentityVerificationSession({ type: 'document', options: { document: { allowed_types: ['driving_license'], require_live_capture: true, require_matching_selfie: true } } }, 'woa-identity-test');
   assert(captured.url.endsWith('/identity/verification_sessions'), 'Stripe Identity sessions must use the provider-hosted verification endpoint.');
   assert(new URLSearchParams(captured.options.body).get('options[document][require_matching_selfie]') === 'true', 'Stripe Identity sessions must require a matching selfie.');
+  await client.retrieveDispute('dp_test');
+  assert(captured.url.endsWith('/disputes/dp_test') && captured.options.method === 'GET', 'Stripe dispute reconciliation must retrieve the exact provider case without changing it.');
+  await client.submitDisputeEvidence('dp_test', { evidence: { customer_name: 'Test Customer', product_description: 'Test rental service' }, submit: true }, 'woa-dispute-key');
+  const disputeForm = new URLSearchParams(captured.options.body);
+  assert(captured.url.endsWith('/disputes/dp_test') && captured.options.method === 'POST', 'Stripe evidence submission must update the exact provider dispute.');
+  assert(captured.options.headers['Idempotency-Key'] === 'woa-dispute-key' && disputeForm.get('submit') === 'true' && disputeForm.get('evidence[customer_name]') === 'Test Customer', 'Stripe evidence submission must preserve nested evidence, explicit submit, and idempotency.');
 
   const uncertainClient = stripeAdapter.stripeClient({
     secretKey: 'sk_test_private',
@@ -127,6 +133,11 @@ async function run() {
     'stripePaymentMethodId',
     'chargeStripeSavedCard',
     'stripeDisputeEvidencePacket',
+    'stripeDisputeSubmissionPayload',
+    'executeStripeDisputeEvidenceSubmission',
+    'submitDisputeEvidence',
+    'retrieveDispute',
+    'stripe_dispute_confirmation_pending',
     'createRefund',
     "'/api/integrations/payments/refunds/execute'",
     'refund\\.(created|updated|failed)',

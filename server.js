@@ -218,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-card-status-truth-190';
+const ASSET_VERSION = 'platform-20260719-stripe-dispute-truth-191';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -16225,7 +16225,13 @@ function stripeDisputeEvidencePacket(data, claim, payment, recurring) {
   const contract = (data.contracts || []).find(row => customerName && normKey(row.customer || row.name) === normKey(customerName) && (!vehicle.id || !row.vehicleId || row.vehicleId === vehicle.id)) || {};
   const signature = (data.eSignatures || []).find(row => row.id === contract.signatureId || row.onboardingSessionId && row.onboardingSessionId === contract.onboardingSessionId) || {};
   const pickup = (data.pickupAppointments || []).find(row => row.id === contract.pickupAppointmentId || row.onboardingSessionId && row.onboardingSessionId === contract.onboardingSessionId || customerName && normKey(row.customer) === normKey(customerName) && /picked up|completed/i.test(String(row.status || ''))) || {};
-  const documents = (data.documents || []).filter(row => customerName && normKey(row.customer) === normKey(customerName) && /license|insurance|contract|receipt|payment/i.test(String([row.kind, row.type, row.title].filter(Boolean).join(' ')))).slice(0, 20);
+  const documents = (data.documents || []).filter(row =>
+    customerName
+    && normKey(row.customer) === normKey(customerName)
+    && row.documentKind !== 'dispute_evidence_packet'
+    && row.privateArtifactKind !== 'dispute_evidence'
+    && /license|insurance|contract|receipt|payment/i.test(String([row.kind, row.type, row.title].filter(Boolean).join(' ')))
+  ).slice(0, 20);
   const messages = (data.messages || []).filter(row => customerName && normKey(row.customer) === normKey(customerName)).slice(0, 30);
   const priorPayments = (data.payments || []).filter(row => row !== payment && customerName && normKey(row.customer) === normKey(customerName) && /^paid\b/i.test(String(row.status || ''))).slice(0, 12);
   const proof = [
@@ -16267,6 +16273,225 @@ function stripeDisputeEvidencePacket(data, claim, payment, recurring) {
     priorPaymentIds: priorPayments.map(row => row.id),
     guardrail: 'Owner must review reason-specific evidence and approve submission. Stripe and Star do not decide the outcome; the card issuer does.'
   };
+}
+function stripeDisputeEvidenceDate(value) {
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : '';
+}
+function stripeDisputeSubmissionPayload(data, claim, payment, recurring) {
+  const packet = claim.evidencePacket || stripeDisputeEvidencePacket(data, claim, payment, recurring);
+  const customerName = claim.customer || payment && payment.customer || recurring && recurring.customer || '';
+  const email = claim.email || payment && payment.email || recurring && recurring.email || '';
+  const vehicle = reportVehicleFor(data, customerName, claim.vehicleId || payment && payment.vehicleId || recurring && recurring.vehicleId || '');
+  const pickup = (data.pickupAppointments || []).find(row => row.id === packet.pickupAppointmentId) || {};
+  const serviceDate = [pickup.completedAt, pickup.date, payment && payment.serviceDate, payment && payment.createdAt, payment && payment.date]
+    .map(stripeDisputeEvidenceDate)
+    .find(Boolean) || '';
+  const vehicleName = vehicleNameFromParts(vehicle) || claim.vehicle || payment && payment.vehicle || recurring && recurring.vehicle || 'WheelsonAuto vehicle';
+  const identity = [vehicleName, vehicle.vin || claim.vin ? 'VIN ' + (vehicle.vin || claim.vin) : '', vehicle.plate || vehicle.stock || claim.plate ? 'tag ' + (vehicle.plate || vehicle.stock || claim.plate) : ''].filter(Boolean).join(' | ');
+  const timeline = (packet.timeline || []).slice(0, 20).map(row => [stripeDisputeEvidenceDate(row.at) || artifactSafeValue(row.at, 40), artifactSafeValue(row.event, 160)].filter(Boolean).join(' - '));
+  const summary = [
+    'WheelsonAuto long-term vehicle rental service.',
+    'Customer: ' + artifactSafeValue(customerName, 220) + '.',
+    'Vehicle: ' + artifactSafeValue(identity, 500) + '.',
+    'Disputed payment: ' + moneyText(payment && payment.amount || claim.amount || 0) + ' (' + artifactSafeValue(claim.stripePaymentIntentId || payment && payment.stripePaymentIntentId || '', 220) + ').',
+    'Signed agreement: ' + (packet.contractId && packet.signatureId ? 'verified in WheelsonAuto records' : 'not included') + '.',
+    'Autopay authorization: ' + ((packet.proof || []).some(row => row.key === 'autopay_authorization' && row.ready) ? 'recorded before the charge' : 'not included') + '.',
+    'Vehicle pickup/handoff: ' + (packet.pickupAppointmentId ? 'recorded' + (serviceDate ? ' on ' + serviceDate : '') : 'not included') + '.',
+    'Prior successful payments: ' + (packet.priorPaymentIds || []).length + '.',
+    'Linked customer communications: ' + (packet.messageIds || []).length + '.',
+    timeline.length ? 'Timeline:\n' + timeline.join('\n') : ''
+  ].filter(Boolean).join('\n');
+  const evidence = {
+    customer_name: artifactSafeValue(customerName, 500),
+    product_description: artifactSafeValue('Long-term vehicle rental service for ' + identity + '.', 20000),
+    uncategorized_text: artifactSafeValue(summary, 20000)
+  };
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())) evidence.customer_email_address = String(email).trim().slice(0, 500);
+  if (serviceDate) evidence.service_date = serviceDate;
+  return { evidence, submit: true };
+}
+function stripeDisputeSubmissionConfirmed(dispute = {}, baselineCount = 0) {
+  const status = String(dispute.status || '').toLowerCase();
+  const count = Number(dispute.evidence_details && dispute.evidence_details.submission_count || 0);
+  return /under_review|won|lost/.test(status) || count > Number(baselineCount || 0);
+}
+function stripeDisputeWorkflowHistory(claim, entry = {}) {
+  claim.workflowHistory = Array.isArray(claim.workflowHistory) ? claim.workflowHistory : [];
+  claim.workflowHistory.push(entry);
+  if (claim.workflowHistory.length > 200) claim.workflowHistory = claim.workflowHistory.slice(-200);
+}
+function applyStripeDisputeSubmissionResult(claim, result = {}, user = {}, options = {}) {
+  const now = new Date().toISOString();
+  const state = claim.stripeEvidenceSubmission && typeof claim.stripeEvidenceSubmission === 'object' ? claim.stripeEvidenceSubmission : {};
+  const providerStatus = String(result.status || 'submitted');
+  const submissionCount = Number(result.evidence_details && result.evidence_details.submission_count || state.baselineSubmissionCount || claim.stripeEvidenceSubmissionCount || 0);
+  Object.assign(state, {
+    status: 'Submitted',
+    providerStatus,
+    providerDisputeId: String(result.id || claim.stripeDisputeId || claim.disputeId || ''),
+    providerSubmissionCount: submissionCount,
+    submittedAt: state.submittedAt || now,
+    confirmedAt: now,
+    confirmationSource: options.reconciled ? 'Stripe dispute retrieval' : 'Stripe evidence submission response',
+    lastError: ''
+  });
+  claim.stripeEvidenceSubmission = state;
+  claim.stripeEvidenceSubmissionCount = submissionCount;
+  claim.providerSubmissionReference = state.providerDisputeId;
+  claim.providerSubmissionAt = state.submittedAt;
+  claim.stripeProviderStatus = providerStatus;
+  claim.status = 'Response submitted';
+  claim.disputeWorkflowStatus = 'Response submitted';
+  claim.disputeUpdatedAt = now;
+  claim.disputeUpdatedBy = String(user.name || user.username || 'Owner');
+  stripeDisputeWorkflowHistory(claim, {
+    at: now,
+    action: options.reconciled ? 'stripe_submission_reconciled' : 'stripe_submission_confirmed',
+    status: claim.status,
+    by: claim.disputeUpdatedBy,
+    providerStatus,
+    providerSubmissionReference: state.providerDisputeId
+  });
+  return claim;
+}
+async function executeStripeDisputeEvidenceSubmission(data, claim, user = {}, options = {}) {
+  if (!claim) throw Object.assign(new Error('Stripe dispute case was not found.'), { statusCode: 404 });
+  if (stripeDisputeTerminalStatus(claim.disputeWorkflowStatus || claim.status)) throw Object.assign(new Error('Stripe already closed this dispute. Final outcomes can only come from signed Stripe webhooks.'), { statusCode: 409 });
+  const disputeId = String(claim.stripeDisputeId || claim.disputeId || '').trim();
+  if (!disputeId) throw Object.assign(new Error('This Stripe case has no provider dispute ID.'), { statusCode: 409 });
+  assertStripeMoneyActionsArmed();
+  assertStripeLiveResult(claim.stripeLivemode === true, 'Stripe dispute');
+  const payment = options.payment || (data.payments || []).find(row => row.id === claim.paymentId || claim.stripePaymentIntentId && row.stripePaymentIntentId === claim.stripePaymentIntentId) || null;
+  const recurring = options.recurring || findRecurringRow(data, payment && payment.recurringPaymentId || claim.recurringPaymentId || '');
+  claim.evidencePacket = claim.evidencePacket && typeof claim.evidencePacket === 'object'
+    ? claim.evidencePacket
+    : stripeDisputeEvidencePacket(data, claim, payment, recurring);
+  claim.evidenceReadiness = claim.evidencePacket.missing.length ? 'Needs evidence' : 'Ready for owner review';
+  if (claim.evidencePacket.missing.length) throw Object.assign(new Error('Evidence is still missing: ' + claim.evidencePacket.missing.join(', ') + '.'), { statusCode: 409 });
+  const existingState = claim.stripeEvidenceSubmission && typeof claim.stripeEvidenceSubmission === 'object' ? claim.stripeEvidenceSubmission : {};
+  if (existingState.status === 'Submitted' && existingState.submittedAt) return { claim, alreadySubmitted: true, reconciled: false };
+  const submissionPayload = stripeDisputeSubmissionPayload(data, claim, payment, recurring);
+  const payloadHash = crypto.createHash('sha256').update(JSON.stringify(submissionPayload)).digest('hex');
+  const confirmationPending = /submitting|confirmation pending/i.test(String(existingState.status || ''));
+  if (confirmationPending && existingState.payloadHash && existingState.payloadHash !== payloadHash) {
+    throw Object.assign(new Error('Stripe confirmation is still pending for the previously reviewed evidence packet. Reconcile that exact submission before changing evidence.'), { statusCode: 409, code: 'stripe_dispute_confirmation_pending' });
+  }
+  const sequence = confirmationPending ? Number(existingState.sequence || 1) : Number(existingState.sequence || 0) + 1;
+  const idempotencyKey = confirmationPending && existingState.idempotencyKey
+    ? existingState.idempotencyKey
+    : integrationEngine.stableId('woa-dispute-evidence', [disputeId, claim.id, sequence]);
+  const baselineSubmissionCount = confirmationPending
+    ? Number(existingState.baselineSubmissionCount || 0)
+    : Number(claim.stripeEvidenceSubmissionCount || 0);
+  const now = new Date().toISOString();
+  claim.stripeEvidenceSubmission = {
+    ...existingState,
+    status: 'Submitting',
+    sequence,
+    idempotencyKey,
+    payloadHash,
+    baselineSubmissionCount,
+    startedAt: existingState.startedAt || now,
+    lastAttemptAt: now,
+    attemptCount: Number(existingState.attemptCount || 0) + 1,
+    lastError: ''
+  };
+  claim.status = 'Submission in progress';
+  claim.disputeWorkflowStatus = 'Submission in progress';
+  claim.disputeUpdatedAt = now;
+  claim.disputeUpdatedBy = String(user.name || user.username || 'Owner');
+  stripeDisputeWorkflowHistory(claim, { at: now, action: 'stripe_submission_started', status: claim.status, by: claim.disputeUpdatedBy });
+  appendAuditLog(data, user, 'Stripe dispute evidence submission started', [claim.customer || 'Unassigned', disputeId, idempotencyKey]);
+  let providerAttemptBaseState = null;
+  try {
+    await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'persist Stripe dispute evidence submission intent' });
+    await writeData(data);
+    claim = (data.claims || []).find(row => row.id === claim.id) || claim;
+    providerAttemptBaseState = cloneConcurrentValue(data);
+  } catch (error) {
+    if (options.storedEvidenceArtifact) throw await attachPrivateDocumentRollback(error, options.storedEvidenceArtifact);
+    throw error;
+  }
+
+  if (confirmationPending) {
+    try {
+      const current = await stripe.retrieveDispute(disputeId);
+      if (stripeDisputeSubmissionConfirmed(current, baselineSubmissionCount)) {
+        applyStripeDisputeSubmissionResult(claim, current, user, { reconciled: true });
+        appendAuditLog(data, user, 'Stripe dispute evidence submission reconciled', [claim.customer || 'Unassigned', disputeId, claim.stripeProviderStatus]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, baseState: providerAttemptBaseState, reason: 'persist reconciled Stripe dispute submission' });
+        await writeData(data);
+        return { claim, alreadySubmitted: false, reconciled: true };
+      }
+    } catch (error) {
+      if (!error.ambiguous && Number(error.statusCode || 0) === 404) {
+        const failedAt = new Date().toISOString();
+        Object.assign(claim.stripeEvidenceSubmission, {
+          status: 'Confirmation pending',
+          lastAttemptAt: failedAt,
+          lastError: 'Stripe could not retrieve this dispute during reconciliation. Provider review is required before another submission.'
+        });
+        claim.status = 'Submission confirmation pending';
+        claim.disputeWorkflowStatus = claim.status;
+        claim.disputeUpdatedAt = failedAt;
+        stripeDisputeWorkflowHistory(claim, {
+          at: failedAt,
+          action: 'stripe_submission_reconciliation_required',
+          status: claim.status,
+          by: claim.disputeUpdatedBy,
+          error: claim.stripeEvidenceSubmission.lastError
+        });
+        appendAuditLog(data, user, 'Stripe dispute submission reconciliation required', [claim.customer || 'Unassigned', disputeId, claim.stripeEvidenceSubmission.lastError]);
+        try {
+          await protectConcurrentLocalWrites(data, { preferIncoming: true, baseState: providerAttemptBaseState, reason: 'persist Stripe dispute reconciliation-required state' });
+          await writeData(data);
+        } catch {}
+        error.code = 'stripe_dispute_reconciliation_required';
+        error.statusCode = 409;
+        error.ambiguous = true;
+        error.dispute = claim;
+        throw error;
+      }
+    }
+  }
+
+  let result;
+  try {
+    result = await stripe.submitDisputeEvidence(disputeId, submissionPayload, idempotencyKey);
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    const pending = error.ambiguous === true;
+    Object.assign(claim.stripeEvidenceSubmission, {
+      status: pending ? 'Confirmation pending' : 'Failed',
+      lastAttemptAt: failedAt,
+      lastError: artifactSafeValue(error && error.message || error, 500)
+    });
+    claim.status = pending ? 'Submission confirmation pending' : 'Evidence ready';
+    claim.disputeWorkflowStatus = claim.status;
+    claim.disputeUpdatedAt = failedAt;
+    stripeDisputeWorkflowHistory(claim, { at: failedAt, action: pending ? 'stripe_submission_confirmation_pending' : 'stripe_submission_failed', status: claim.status, by: claim.disputeUpdatedBy, error: claim.stripeEvidenceSubmission.lastError });
+    appendAuditLog(data, user, pending ? 'Stripe dispute submission confirmation pending' : 'Stripe dispute evidence submission failed', [claim.customer || 'Unassigned', disputeId, claim.stripeEvidenceSubmission.lastError]);
+    try {
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, baseState: providerAttemptBaseState, reason: 'persist Stripe dispute submission failure state' });
+      await writeData(data);
+    } catch {}
+    error.dispute = claim;
+    throw error;
+  }
+  applyStripeDisputeSubmissionResult(claim, result, user);
+  appendAuditLog(data, user, 'Stripe dispute evidence submitted', [claim.customer || 'Unassigned', disputeId, claim.stripeProviderStatus]);
+  try {
+    await protectConcurrentLocalWrites(data, { preferIncoming: true, baseState: providerAttemptBaseState, reason: 'persist confirmed Stripe dispute submission' });
+    await writeData(data);
+  } catch (error) {
+    error.code = error.code || 'stripe_dispute_confirmation_pending';
+    error.statusCode = Number(error.statusCode || 503);
+    error.ambiguous = true;
+    error.dispute = claim;
+    throw error;
+  }
+  return { claim, alreadySubmitted: false, reconciled: false };
 }
 function stripeWebhookEventCreated(event = {}) {
   const created = Number(event.created || 0);
@@ -16342,6 +16567,8 @@ async function stripeDisputeClaim(data, dispute = {}, event = {}) {
     tracker: identity.tracker || payment && payment.tracker || recurring && recurring.tracker || '',
     amount: Number(dispute.amount || 0) / 100,
     currency: String(dispute.currency || 'usd').toUpperCase(),
+    stripeLivemode: dispute.livemode === true || event.livemode === true,
+    stripeEvidenceSubmissionCount: Number(dispute.evidence_details && dispute.evidence_details.submission_count || claim && claim.stripeEvidenceSubmissionCount || 0),
     reason: dispute.reason || '',
     status: incomingStatus,
     disputeWorkflowStatus: incomingStatus,
@@ -19425,19 +19652,25 @@ const server = http.createServer(async (req, res) => {
       const statuses = { evidence_ready: 'Evidence ready', submitted: 'Response submitted', won: 'Won', lost: 'Lost', closed: 'Closed' };
       if (!statuses[action]) return json(res, 400, { ok: false, error: 'Choose evidence_ready, submitted, won, lost, or closed.' });
       const stripeClaim = /stripe/i.test(String([claim.type, claim.source, claim.provider].filter(Boolean).join(' ')));
+      if (stripeClaim && ['won', 'lost', 'closed'].includes(action)) return json(res, 409, { ok: false, error: 'Stripe outcomes are provider-controlled. Wait for the signed Stripe dispute webhook instead of setting a final result manually.' });
+      let payment = null;
+      let recurring = null;
       if (stripeClaim) {
-        const payment = (data.payments || []).find(row => row.id === claim.paymentId || claim.stripePaymentIntentId && row.stripePaymentIntentId === claim.stripePaymentIntentId) || null;
-        const recurring = findRecurringRow(data, payment && payment.recurringPaymentId || claim.recurringPaymentId || '');
-        claim.evidencePacket = stripeDisputeEvidencePacket(data, claim, payment, recurring);
+        payment = (data.payments || []).find(row => row.id === claim.paymentId || claim.stripePaymentIntentId && row.stripePaymentIntentId === claim.stripePaymentIntentId) || null;
+        recurring = findRecurringRow(data, payment && payment.recurringPaymentId || claim.recurringPaymentId || '');
+        if (action === 'evidence_ready' || !claim.evidencePacket) claim.evidencePacket = stripeDisputeEvidencePacket(data, claim, payment, recurring);
         claim.evidenceReadiness = claim.evidencePacket.missing.length ? 'Needs evidence' : 'Ready for owner review';
       }
-      if (action === 'evidence_ready' && (String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !claim.customer || !claim.paymentId && !claim.cloverPaymentId && !claim.stripePaymentIntentId)) return json(res, 409, { ok: false, error: 'Match the customer and provider payment before marking the evidence package ready.' });
-      if (action === 'evidence_ready' && stripeClaim && claim.evidencePacket && claim.evidencePacket.missing.length) return json(res, 409, { ok: false, error: 'Evidence is still missing: ' + claim.evidencePacket.missing.join(', ') + '.' });
-      if (action === 'submitted' && !String(payload.providerSubmissionReference || '').trim()) return json(res, 409, { ok: false, error: 'Enter the Stripe/Clover submission confirmation reference before marking this dispute submitted.' });
+      const evidenceAction = action === 'evidence_ready' || action === 'submitted';
+      if (evidenceAction && (String(claim.customerMatchStatus || '') === 'Needs payment/customer match' || !claim.customer || !claim.paymentId && !claim.cloverPaymentId && !claim.stripePaymentIntentId)) return json(res, 409, { ok: false, error: 'Match the customer and provider payment before reviewing or submitting the evidence package.' });
+      if (evidenceAction && stripeClaim && claim.evidencePacket && claim.evidencePacket.missing.length) return json(res, 409, { ok: false, error: 'Evidence is still missing: ' + claim.evidencePacket.missing.join(', ') + '.' });
+      if (action === 'submitted' && stripeClaim && !/evidence ready|submission|response submitted/i.test(String(claim.disputeWorkflowStatus || claim.status || ''))) return json(res, 409, { ok: false, error: 'Mark the complete evidence packet ready and review its encrypted snapshot before submitting it to Stripe.' });
+      if (action === 'submitted' && !stripeClaim && !String(payload.providerSubmissionReference || '').trim()) return json(res, 409, { ok: false, error: 'Enter the Clover submission confirmation reference before marking this dispute submitted.' });
       let storedEvidenceArtifact = null;
-      if (action === 'evidence_ready') {
-        if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
-        const evidenceDocument = ensureDisputeEvidenceDocument(data, claim, user);
+      let evidenceDocument = null;
+      if (action === 'evidence_ready' || stripeClaim && action === 'submitted') {
+        if ((WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED || stripeClaim && action === 'submitted') && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
+        evidenceDocument = ensureDisputeEvidenceDocument(data, claim, user);
         if (PRIVATE_DOCUMENT_STORE.isConfigured() && !PRIVATE_DOCUMENT_STORE.isEncryptedDocument(evidenceDocument)) {
           try {
             storedEvidenceArtifact = await storePrivateArtifactForDocument(data, evidenceDocument);
@@ -19445,16 +19678,25 @@ const server = http.createServer(async (req, res) => {
             return json(res, 502, { ok: false, error: 'The evidence packet could not be written to private encrypted storage. No dispute status was changed.', detail: artifactSafeValue(error && error.message || error, 300) });
           }
         }
+        if (stripeClaim && action === 'submitted' && !PRIVATE_DOCUMENT_STORE.isEncryptedDocument(evidenceDocument)) return json(res, 503, { ok: false, error: 'Store the reviewed dispute packet in encrypted private storage before submitting it to Stripe.' });
+      }
+      const reviewNote = String(payload.notes || '').trim();
+      if (reviewNote && !String(claim.notes || '').includes(reviewNote)) claim.notes = [claim.notes, reviewNote].filter(Boolean).join(' | ');
+      if (stripeClaim && action === 'submitted') {
+        try {
+          const result = await executeStripeDisputeEvidenceSubmission(data, claim, user, { payment, recurring, storedEvidenceArtifact });
+          return json(res, 200, { ok: true, dispute: result.claim, alreadySubmitted: result.alreadySubmitted, reconciled: result.reconciled });
+        } catch (error) {
+          return json(res, Number(error && error.statusCode || (error && error.ambiguous ? 503 : 400)), { ok: false, code: String(error && error.code || ''), error: String(error && error.message || error), dispute: error && error.dispute || claim });
+        }
       }
       const now = new Date().toISOString();
       claim.status = statuses[action];
       claim.disputeWorkflowStatus = statuses[action];
       claim.disputeUpdatedAt = now;
       claim.disputeUpdatedBy = String(user.name || user.username || 'Owner');
-      claim.notes = [claim.notes, String(payload.notes || '').trim()].filter(Boolean).join(' | ');
       if (payload.providerSubmissionReference) claim.providerSubmissionReference = String(payload.providerSubmissionReference).trim();
-      claim.workflowHistory = Array.isArray(claim.workflowHistory) ? claim.workflowHistory : [];
-      claim.workflowHistory.push({ at: now, action, status: claim.status, by: claim.disputeUpdatedBy, notes: String(payload.notes || '').trim() });
+      stripeDisputeWorkflowHistory(claim, { at: now, action, status: claim.status, by: claim.disputeUpdatedBy, notes: reviewNote });
       appendAuditLog(data, user, paymentProviderLabel(claim.provider || (stripeClaim ? 'stripe' : 'clover')) + ' dispute status updated', [claim.customer || 'Unassigned', claim.reference || claim.disputeId || claim.id, claim.status, claim.providerSubmissionReference || 'No provider reference']);
       try {
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
