@@ -655,6 +655,19 @@ commit. This is the required crash boundary for live payment cutover.
    as verified. A provider showing `Blocked` has not passed the live evidence
    requirement yet, even if its keys are saved in Render.
 
+The same durable incident and owner-alert path covers background jobs,
+provider webhooks, autopay, HTTP 5xx responses, uncaught process exceptions,
+and unhandled promise rejections. A fatal process error is never treated as a
+recoverable warning: WheelsonAuto records one critical incident when possible,
+drains active requests and queued state writes, then exits non-zero so Render
+can restart it. A second fatal error or a stalled shutdown forces immediate
+termination instead of allowing a damaged process to keep serving payments.
+
+GitHub also runs `npm audit --omit=dev --audit-level=high` before the complete
+production gate. A known high-severity runtime dependency vulnerability blocks
+Render's checks-passed deployment path until the dependency is corrected and
+the full regression suite passes again.
+
 For Stripe, the final evidence comes from the controlled onboarding record:
 complete the test application, Stripe Identity verification, card setup,
 separate deposit and first-week charges, e-sign, and pickup scheduling. Keep

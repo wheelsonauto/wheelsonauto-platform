@@ -20,6 +20,7 @@ const recoveryGuard = require('./recovery-guard');
 const encryptedStateBackup = require('./encrypted-state-backup');
 const messagingConsent = require('./messaging-consent');
 const dataBackendCutover = require('./data-backend-cutover');
+const fatalProcessMonitor = require('./fatal-process-monitor');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -217,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-recovery-console-185';
+const ASSET_VERSION = 'platform-20260719-fatal-monitor-186';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -22109,8 +22110,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 let gracefulShutdownStarted = false;
+let gracefulShutdownExitCode = 0;
 
-async function gracefulShutdown(signal) {
+async function gracefulShutdown(signal, exitCode = 0) {
+  gracefulShutdownExitCode = Math.max(gracefulShutdownExitCode, Number(exitCode || 0));
   if (gracefulShutdownStarted) return;
   gracefulShutdownStarted = true;
   console.log('WheelsonAuto received ' + signal + '; draining active requests and state writes.');
@@ -22133,10 +22136,17 @@ async function gracefulShutdown(signal) {
     await STATE_REPOSITORY.close().catch(() => {});
   }
   clearTimeout(forceExit);
-  process.exit(closeError ? 1 : 0);
+  process.exit(closeError ? 1 : gracefulShutdownExitCode);
 }
 
 if (require.main === module) {
+  const fatalMonitor = fatalProcessMonitor.createFatalProcessMonitor({
+    reportFailure: recordOperationalFailure,
+    shutdown: gracefulShutdown,
+    exit: code => process.exit(code),
+    logger: console
+  });
+  fatalProcessMonitor.installFatalProcessHandlers(process, fatalMonitor);
   process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
   process.once('SIGINT', () => { void gracefulShutdown('SIGINT'); });
   assertDataBackendTransition()

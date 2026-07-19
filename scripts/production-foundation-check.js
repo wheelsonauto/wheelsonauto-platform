@@ -76,6 +76,9 @@ async function main() {
     await fs.writeFile(seedFile, JSON.stringify({ vehicles: [], customers: [], payments: [], documents: [], eSignatures: [] }), 'utf8');
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+    const fatalProcessMonitorSource = await fs.readFile(path.resolve(__dirname, '..', 'fatal-process-monitor.js'), 'utf8');
+    const dependencyVulnerabilityCheckSource = await fs.readFile(path.resolve(__dirname, 'dependency-vulnerability-check.js'), 'utf8');
+    const packageSource = await fs.readFile(path.resolve(__dirname, '..', 'package.json'), 'utf8');
     const onboardingSource = await fs.readFile(path.resolve(__dirname, '..', 'onboarding-service.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
@@ -91,6 +94,9 @@ async function main() {
     assert(/healthCheckPath:\s*\/healthz/.test(renderBlueprint), 'Render must probe the dedicated health route instead of treating an open port as application readiness.');
     assert(/autoDeployTrigger:\s*checksPass/.test(renderBlueprint), 'Render must wait for the repository production gate before deploying main.');
     assert(/branches:\s*\[main\]/.test(productionWorkflow) && /npm run check/.test(productionWorkflow) && /timeout-minutes:\s*20/.test(productionWorkflow), 'The main production gate must run the complete regression suite with a bounded timeout.');
+    assert(packageSource.includes('scripts/dependency-vulnerability-check.js')
+      && dependencyVulnerabilityCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
+      && dependencyVulnerabilityCheckSource.includes("['audit', '--omit=dev', '--audit-level=high']"), 'The mandatory CI precheck must reject known high-severity runtime dependency vulnerabilities before Render deploys main.');
     assert(postgresRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && postgresRuntimeCheckSource.includes("'postgres:16-alpine'")
       && postgresRuntimeCheckSource.includes("'pg_isready'")
@@ -109,6 +115,11 @@ async function main() {
       && serverSource.includes('lastValidationObjectDeleted'), 'The deployed owner validation must prove immutable object writes and deletion, and those proof fields must remain server-controlled.');
     assert(/maxShutdownDelaySeconds:\s*60/.test(renderBlueprint), 'Render must allow enough time for active money actions and state writes to drain.');
     assert(serverSource.includes('async function gracefulShutdown') && serverSource.includes("process.once('SIGTERM'") && serverSource.includes('await writeDataQueue.catch'), 'Production shutdown must stop accepting requests and drain queued state writes before exit.');
+    assert(serverSource.includes("fatalProcessMonitor.installFatalProcessHandlers(process, fatalMonitor)")
+      && fatalProcessMonitorSource.includes("processRef.on('uncaughtException'")
+      && fatalProcessMonitorSource.includes("processRef.on('unhandledRejection'")
+      && fatalProcessMonitorSource.includes("severity: 'critical'")
+      && fatalProcessMonitorSource.includes("shutdown('fatal-' + sourceKind, 1)"), 'Top-level process failures must persist one critical incident, attempt the owner-alert path, drain writes, and exit non-zero.');
     await verifyGracefulShutdown(path.resolve(__dirname, '..'), path.join(temp, 'graceful-runtime'));
     assert(serverSource.includes('function reportBackgroundTaskFailure') && serverSource.includes("recordOperationalFailure(source, error, context, { alert: true })"), 'Every scheduled worker failure must use the shared durable monitor and owner-alert path.');
     assert(onboardingSource.includes('async function saveSignedContractArtifact')
