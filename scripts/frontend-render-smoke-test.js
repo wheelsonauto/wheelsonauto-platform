@@ -585,9 +585,14 @@ function ownerSmoke() {
   const launchAssignmentReview = context.liveLaunchPreflightModal({
     ok: false,
     missing: ['resolve active vehicle assignment conflicts'],
-    assignmentConflicts: [{ vehicleId: 'veh-owner-resolver-reachability', vehicle: '2025 Resolver Reachability', vin: 'RESOLVERREACHVIN', plate: 'RES-OLVE', claimedBy: 'Resolver Primary / Resolver Alias' }]
+    assignmentConflicts: [
+      { vehicleId: 'veh-owner-resolver-reachability', vehicle: '2025 Resolver Reachability', vin: 'RESOLVERREACHVIN', plate: 'RES-OLVE', claimedBy: 'Resolver Primary / Resolver Alias' },
+      { vehicleId: 'veh-owner-review-warning', vehicle: '2024 Resolver Review', vin: 'RESOLVERREVIEWVIN', plate: 'RES-WARN', claimedBy: 'Saved Customer / Imported Name' }
+    ],
+    structuralAssignmentConflicts: [{ vehicleId: 'veh-owner-resolver-reachability', vehicle: '2025 Resolver Reachability', vin: 'RESOLVERREACHVIN', plate: 'RES-OLVE', claimedBy: 'Resolver Primary / Resolver Alias', sources: ['customer', 'customer_file'] }],
+    assignmentReviewWarnings: [{ vehicleId: 'veh-owner-review-warning', vehicle: '2024 Resolver Review', vin: 'RESOLVERREVIEWVIN', plate: 'RES-WARN', claimedBy: 'Saved Customer / Imported Name' }]
   });
-  assert(launchAssignmentReview.includes('Data conflicts') && launchAssignmentReview.includes('Vehicle assignment review') && launchAssignmentReview.includes('RESOLVERREACHVIN') && launchAssignmentReview.includes('Resolver Primary / Resolver Alias') && launchAssignmentReview.includes('data-view="Operations" data-tab="Assigned"'), 'Controlled Stripe preflight must count active vehicle assignment conflicts and route the owner to the exact review workspace.');
+  assert(launchAssignmentReview.includes('Data conflicts') && launchAssignmentReview.includes('1 transactional / 1 review') && launchAssignmentReview.includes('Vehicle assignment review') && launchAssignmentReview.includes('PostgreSQL conflict') && launchAssignmentReview.includes('Owner review') && launchAssignmentReview.includes('RESOLVERREACHVIN') && launchAssignmentReview.includes('Resolver Primary / Resolver Alias') && launchAssignmentReview.includes('data-view="Operations" data-tab="Assigned"'), 'Controlled Stripe preflight must classify transactional and broader assignment warnings while routing the owner to the exact review workspace.');
 
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payments & customers', 'customer-pay-list']],

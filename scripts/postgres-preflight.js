@@ -55,6 +55,7 @@ async function main() {
   });
   let criticalResources = [];
   let activeAssignments = [];
+  const assignmentIdentityConflicts = stateRepository.activeAssignmentIdentityConflicts(state);
   if (!nonidenticalCriticalDuplicates.length) {
     try {
       const indexState = repairableExactDuplicates.length
@@ -70,15 +71,26 @@ async function main() {
       });
     }
   }
-  try {
-    activeAssignments = stateRepository.activeAssignmentIndexRows(state);
-  } catch (error) {
+  assignmentIdentityConflicts.forEach(conflict => {
     structuralErrors.push({
-      kind: String(error && error.code || 'woa_assignment_index_error'),
-      message: String(error && error.message || error || 'Active assignment index failed.').slice(0, 1000),
-      vehicleId: String(error && error.vehicleId || ''),
-      customers: Array.isArray(error && error.customers) ? error.customers.slice(0, 10) : []
+      kind: conflict.kind,
+      message: 'Vehicle ' + conflict.vehicleId + ' has active records for multiple customers: ' + conflict.customers.join(' / ') + '. Refusing an ambiguous assignment write.',
+      vehicleId: conflict.vehicleId,
+      customers: conflict.customers.slice(0, 10),
+      sources: [...new Set(conflict.claims.map(claim => claim.source).filter(Boolean))]
     });
+  });
+  if (!assignmentIdentityConflicts.length) {
+    try {
+      activeAssignments = stateRepository.activeAssignmentIndexRows(state);
+    } catch (error) {
+      structuralErrors.push({
+        kind: String(error && error.code || 'woa_assignment_index_error'),
+        message: String(error && error.message || error || 'Active assignment index failed.').slice(0, 1000),
+        vehicleId: String(error && error.vehicleId || ''),
+        customers: Array.isArray(error && error.customers) ? error.customers.slice(0, 10) : []
+      });
+    }
   }
   const immutableProviderIdentities = stateRepository.identityEntries(state);
   const postgresqlImportAllowed = conflicts.length === 0 && structuralErrors.length === 0;
@@ -107,6 +119,7 @@ async function main() {
       nonidenticalCriticalDuplicateGroups: nonidenticalCriticalDuplicates.length,
       criticalResources: criticalResources.length,
       activeAssignments: activeAssignments.length,
+      activeAssignmentConflicts: assignmentIdentityConflicts.length,
       immutableProviderIdentities: immutableProviderIdentities.length
     },
     nextSteps: !postgresqlImportAllowed

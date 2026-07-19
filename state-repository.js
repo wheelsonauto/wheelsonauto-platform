@@ -732,6 +732,63 @@ function activeAssignmentCandidate(row = {}) {
   return { customer, vehicleId };
 }
 
+function activeAssignmentIdentityConflicts(state = {}) {
+  const vehicles = Array.isArray(state.vehicles) ? state.vehicles : [];
+  const vehicleById = new Map();
+  vehicles.forEach(vehicle => {
+    const id = String(vehicle && vehicle.id || '').trim();
+    if (id && !vehicleById.has(id)) vehicleById.set(id, vehicle);
+  });
+  const claimsByVehicle = new Map();
+  const addClaims = (records, source) => {
+    (Array.isArray(records) ? records : []).forEach((record, index) => {
+      const candidate = activeAssignmentCandidate(record);
+      if (!candidate || !vehicleById.has(candidate.vehicleId)) return;
+      const list = claimsByVehicle.get(candidate.vehicleId) || [];
+      list.push({
+        ...candidate,
+        source,
+        id: rowId(record, source + '-' + index),
+        status: String(record && (record.status || record.stage) || 'Active').trim().slice(0, 160)
+      });
+      claimsByVehicle.set(candidate.vehicleId, list);
+    });
+  };
+  addClaims(state.recurringPayments, 'recurring_payment');
+  addClaims((((state.integrations || {}).clover || {}).recurringPlanMembers), 'clover_recurring');
+  addClaims(state.contracts, 'customer_file');
+  addClaims(state.customers, 'customer');
+
+  const conflicts = [];
+  vehicles.forEach(vehicle => {
+    const vehicleId = String(vehicle && vehicle.id || '').trim();
+    if (!vehicleId || vehicleById.get(vehicleId) !== vehicle) return;
+    let claims = claimsByVehicle.get(vehicleId) || [];
+    if (!claims.length) {
+      const currentCustomer = String(vehicle.currentCustomer || '').trim();
+      const status = String(vehicle.status || '').trim();
+      if (currentCustomer && !AVAILABLE_VEHICLE_PATTERN.test(status) && !INACTIVE_ASSIGNMENT_PATTERN.test(status)) {
+        claims = [{ customer: currentCustomer, vehicleId, source: 'vehicle', id: vehicleId, status: status || 'Assigned' }];
+      }
+    }
+    if (claims.length < 2) return;
+    const groups = [];
+    claims.forEach(claim => {
+      const group = groups.find(names => names.some(name => sameApprovedAssignmentCustomer(state, vehicleId, name, claim.customer)));
+      if (group) group.push(claim.customer);
+      else groups.push([claim.customer]);
+    });
+    if (groups.length === 1) return;
+    conflicts.push({
+      kind: 'woa_assignment_identity_conflict',
+      vehicleId,
+      customers: [...new Set(claims.map(claim => claim.customer).filter(Boolean))],
+      claims: claims.slice(0, 50)
+    });
+  });
+  return conflicts.sort((left, right) => left.vehicleId.localeCompare(right.vehicleId));
+}
+
 function activeAssignmentIndexRows(state = {}) {
   const vehicles = Array.isArray(state.vehicles) ? state.vehicles : [];
   const vehicleById = new Map();
@@ -2901,6 +2958,7 @@ module.exports = {
   sameAssignmentCustomer,
   sameApprovedAssignmentCustomer,
   activeAssignmentCandidate,
+  activeAssignmentIdentityConflicts,
   activeAssignmentIndexRows,
   assertTransactionalSourceReady,
   transactionalIndexReadiness,

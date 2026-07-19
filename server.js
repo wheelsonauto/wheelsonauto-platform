@@ -5931,6 +5931,38 @@ function assignmentConflictPreflightRows(data = {}) {
     claimedBy: String(vehicle.assignmentConflict || '').trim()
   }));
 }
+function structuralAssignmentConflictPreflightRows(data = {}) {
+  const vehicleById = new Map((Array.isArray(data.vehicles) ? data.vehicles : []).map(vehicle => [String(vehicle.id || '').trim(), vehicle]));
+  return stateRepository.activeAssignmentIdentityConflicts(data).map(conflict => {
+    const vehicle = vehicleById.get(conflict.vehicleId) || {};
+    return {
+      vehicleId: conflict.vehicleId,
+      vehicle: vehicleNameFromParts(vehicle),
+      vin: String(vehicle.vin || '').trim(),
+      plate: String(vehicle.plate || vehicle.stock || '').trim(),
+      tracker: trackerName(vehicle),
+      status: String(vehicle.status || '').trim(),
+      currentCustomer: String(vehicle.currentCustomer || '').trim(),
+      claimedBy: conflict.customers.join(' / '),
+      sources: [...new Set(conflict.claims.map(claim => claim.source).filter(Boolean))]
+    };
+  });
+}
+function assignmentConflictPreflightClassification(data = {}) {
+  const broadRows = assignmentConflictPreflightRows(data);
+  const structuralRows = structuralAssignmentConflictPreflightRows(data);
+  const structuralVehicleIds = new Set(structuralRows.map(row => row.vehicleId));
+  const rowsByVehicleId = new Map(broadRows.map(row => [row.vehicleId, row]));
+  structuralRows.forEach(row => {
+    if (!rowsByVehicleId.has(row.vehicleId)) rowsByVehicleId.set(row.vehicleId, row);
+  });
+  const all = [...rowsByVehicleId.values()].sort((left, right) => String(left.vehicle || left.vehicleId).localeCompare(String(right.vehicle || right.vehicleId)));
+  return {
+    all,
+    structural: structuralRows,
+    review: all.filter(row => !structuralVehicleIds.has(row.vehicleId))
+  };
+}
 function customerVehicleTextGapRows(data = {}) {
   const fleetNames = new Set((Array.isArray(data.vehicles) ? data.vehicles : []).map(vehicle => normKey(vehicleNameFromParts(vehicle))).filter(Boolean));
   const rows = [];
@@ -9821,7 +9853,8 @@ async function productionInfrastructurePreflight(data = null) {
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const cloverRecurring = cloverRecurringMigrationReadiness(state);
   const identityConflicts = stateRepository.identityConflicts(state);
-  const assignmentConflicts = assignmentConflictRows(state);
+  const assignmentClassification = assignmentConflictPreflightClassification(state);
+  const assignmentConflicts = assignmentClassification.all;
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
@@ -9883,6 +9916,8 @@ async function productionInfrastructurePreflight(data = null) {
     cloverRecurring,
     identityConflictCount: identityConflicts.length,
     assignmentConflictCount: assignmentConflicts.length,
+    structuralAssignmentConflictCount: assignmentClassification.structural.length,
+    assignmentReviewWarningCount: assignmentClassification.review.length,
     identityWarnings,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
@@ -21255,10 +21290,13 @@ const server = http.createServer(async (req, res) => {
       if (isOwnerUser(user)) {
         const infrastructure = await productionInfrastructurePreflight(data);
         const identityConflicts = stateRepository.identityConflicts(data);
+        const assignmentClassification = assignmentConflictPreflightClassification(data);
         health.infrastructure = {
           ...infrastructure,
           identityConflicts: identityConflicts.slice(0, 20),
-          assignmentConflicts: assignmentConflictPreflightRows(data).slice(0, 20),
+          assignmentConflicts: assignmentClassification.all.slice(0, 20),
+          structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 20),
+          assignmentReviewWarnings: assignmentClassification.review.slice(0, 20),
           identityWarnings: stateRepository.identityWarnings(data).slice(0, 20),
           openJobErrors: await STATE_REPOSITORY.recentJobErrors(12)
         };
@@ -21270,13 +21308,16 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const infrastructure = await productionInfrastructurePreflight(data);
       const conflicts = stateRepository.identityConflicts(data);
-      const assignmentConflicts = assignmentConflictPreflightRows(data);
+      const assignmentClassification = assignmentConflictPreflightClassification(data);
+      const assignmentConflicts = assignmentClassification.all;
       const warnings = stateRepository.identityWarnings(data);
       return json(res, 200, {
         ok: infrastructure.readyForLiveStripe && conflicts.length === 0 && assignmentConflicts.length === 0 && warnings.length === 0,
         ...infrastructure,
         identityConflicts: conflicts.slice(0, 50),
         assignmentConflicts: assignmentConflicts.slice(0, 50),
+        structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 50),
+        assignmentReviewWarnings: assignmentClassification.review.slice(0, 50),
         identityWarnings: warnings.slice(0, 50),
         openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
         requiredBeforeLiveStripe: [

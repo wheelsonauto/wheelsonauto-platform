@@ -631,6 +631,22 @@ async function main() {
       error => error && error.code === 'woa_assignment_identity_conflict',
       'Two active customers claiming the same vehicle must fail the entire database write.'
     );
+    const enumeratedAssignmentConflicts = stateRepository.activeAssignmentIdentityConflicts({
+      vehicles: [
+        { id: 'vehicle-conflict-a', status: 'Rented' },
+        { id: 'vehicle-conflict-b', status: 'Rented' }
+      ],
+      customers: [
+        { id: 'customer-conflict-a1', name: 'Alex North', vehicleId: 'vehicle-conflict-a', status: 'Active' },
+        { id: 'customer-conflict-a2', name: 'Jordan South', vehicleId: 'vehicle-conflict-a', status: 'Active' },
+        { id: 'customer-conflict-b1', name: 'Taylor East', vehicleId: 'vehicle-conflict-b', status: 'Active' }
+      ],
+      contracts: [
+        { id: 'file-conflict-b2', customer: 'Morgan West', vehicleId: 'vehicle-conflict-b', status: 'Active' }
+      ]
+    });
+    assert.deepStrictEqual(enumeratedAssignmentConflicts.map(row => row.vehicleId), ['vehicle-conflict-a', 'vehicle-conflict-b'], 'The owner and PostgreSQL preflight must enumerate every transactional assignment conflict instead of stopping after the first vehicle.');
+    assert.deepStrictEqual(enumeratedAssignmentConflicts.map(row => row.customers.length), [2, 2], 'Each transactional conflict must preserve the exact competing customer identities for owner review.');
     assert.throws(
       () => stateRepository.activeAssignmentIndexRows({
         vehicles: [{ id: 'vehicle-present', status: 'Ready' }],

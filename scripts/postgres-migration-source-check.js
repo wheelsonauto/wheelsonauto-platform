@@ -27,17 +27,23 @@ async function main() {
     assert.strictEqual(validPreflight.status, 0, 'A structurally coherent protected source must pass PostgreSQL preflight.');
     assert.strictEqual(JSON.parse(validPreflight.stdout).postgresqlImportAllowed, true, 'A passing preflight must explicitly authorize the protected source for import.');
     await fs.writeFile(dataFile, JSON.stringify({
-      vehicles: [{ id: 'vehicle-assignment-conflict', vin: 'ASSIGNMENTVIN0001', status: 'Rented' }],
+      vehicles: [
+        { id: 'vehicle-assignment-conflict', vin: 'ASSIGNMENTVIN0001', status: 'Rented' },
+        { id: 'vehicle-assignment-conflict-2', vin: 'ASSIGNMENTVIN0002', status: 'Rented' }
+      ],
       customers: [
         { id: 'customer-assignment-a', name: 'Customer Alpha', vehicleId: 'vehicle-assignment-conflict', status: 'Active' },
-        { id: 'customer-assignment-b', name: 'Customer Beta', vehicleId: 'vehicle-assignment-conflict', status: 'Active' }
+        { id: 'customer-assignment-b', name: 'Customer Beta', vehicleId: 'vehicle-assignment-conflict', status: 'Active' },
+        { id: 'customer-assignment-c', name: 'Customer Gamma', vehicleId: 'vehicle-assignment-conflict-2', status: 'Active' },
+        { id: 'customer-assignment-d', name: 'Customer Delta', vehicleId: 'vehicle-assignment-conflict-2', status: 'Active' }
       ]
     }, null, 2), 'utf8');
     const assignmentConflictPreflight = run(preflight, dataFile, process.env);
     assert.strictEqual(assignmentConflictPreflight.status, 2, 'Two active customers claiming one vehicle must block PostgreSQL preflight before migration starts.');
     const assignmentConflictReport = JSON.parse(assignmentConflictPreflight.stdout);
     assert.strictEqual(assignmentConflictReport.postgresqlImportAllowed, false);
-    assert(assignmentConflictReport.structuralErrors.some(error => error.kind === 'woa_assignment_identity_conflict'), 'Preflight must identify the active vehicle-assignment conflict directly.');
+    assert.strictEqual(assignmentConflictReport.structuralErrors.filter(error => error.kind === 'woa_assignment_identity_conflict').length, 2, 'Preflight must enumerate every active vehicle-assignment conflict in one run instead of stopping at the first car.');
+    assert.strictEqual(assignmentConflictReport.counts.activeAssignmentConflicts, 2, 'Preflight counts must distinguish transactional assignment conflicts from valid assignment index rows.');
     await fs.writeFile(dataFile, JSON.stringify({
       payments: [
         { id: 'payment-provider-a', stripeChargeId: 'ch_preflight_duplicate' },
