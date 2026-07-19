@@ -4,7 +4,7 @@ const fs = require('fs/promises');
 const path = require('path');
 
 const SENTINEL_FORMAT = 'wheelsonauto-postgres-cutover';
-const SENTINEL_VERSION = 2;
+const SENTINEL_VERSION = 3;
 const SENTINEL_FILENAME = '.wheelsonauto-postgres-cutover.json';
 const JSON_ROLLBACK_REVIEW_CONFIRMATION = 'REVIEW JSON ROLLBACK IN MAINTENANCE MODE';
 
@@ -38,7 +38,7 @@ function validateSentinel(value, file = SENTINEL_FILENAME) {
     && !!safeChecksum(sentinel.sourceStateChecksum)
     && !!safeChecksum(sentinel.canonicalSourceChecksum)
     && !!safeChecksum(sentinel.targetChecksum)
-    && Number(sentinel.provenanceVersion) === 1
+    && Number(sentinel.provenanceVersion) === 2
     && sentinel.sourceOrigin === 'render-live-disk'
     && !!String(sentinel.renderServiceId || '').trim()
     && String(sentinel.renderServiceId || '').trim().length <= 160
@@ -58,7 +58,7 @@ function validateSentinel(value, file = SENTINEL_FILENAME) {
     version: SENTINEL_VERSION,
     backend: 'postgres',
     organizationId,
-    provenanceVersion: 1,
+    provenanceVersion: 2,
     sourceOrigin: 'render-live-disk',
     renderServiceId: String(sentinel.renderServiceId || '').trim(),
     sourcePreparedAt: new Date(sentinel.sourcePreparedAt).toISOString(),

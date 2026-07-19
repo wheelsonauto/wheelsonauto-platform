@@ -306,7 +306,7 @@ function migrationProofEvidence(proof) {
   const sourceManifestChecksum = String(row.sourceManifestChecksum || row.source_manifest_checksum || '').trim();
   const sourceSignatureChecksum = String(row.sourceSignatureChecksum || row.source_signature_checksum || '').trim();
   const hasCoreProof = !!(sourceChecksum && canonicalSourceChecksum && targetChecksum && importedVersion > 0 && snapshotChecksum && verifiedAt);
-  const sourceProvenanceReady = provenanceVersion === 1
+  const sourceProvenanceReady = provenanceVersion === 2
     && sourceOrigin === 'render-live-disk'
     && !!renderServiceId
     && Number.isFinite(Date.parse(String(sourcePreparedAt || '')))
@@ -2539,7 +2539,7 @@ class PostgresStateRepository {
       error.code = 'migration_proof_invalid';
       throw error;
     }
-    if (provenanceVersion !== 1 || sourceOrigin !== 'render-live-disk' || !renderServiceId
+    if (provenanceVersion !== 2 || sourceOrigin !== 'render-live-disk' || !renderServiceId
       || !Number.isFinite(Date.parse(sourcePreparedAt))
       || !validSha256(liveSourceFileChecksum)
       || !validSha256(protectedSourceFileChecksum)

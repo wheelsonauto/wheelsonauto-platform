@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const migrationSource = require('../postgres-migration-source');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 
 const root = path.resolve(__dirname, '..');
 const repairScript = path.join(__dirname, 'prepare-postgres-migration-source.js');
@@ -38,8 +39,10 @@ async function main() {
       WOA_MIGRATION_MAINTENANCE_MODE: '1',
       WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM: migrationSource.SOURCE_ORIGIN_CONFIRMATION,
       WOA_SESSION_SECRET: 'postgres-source-repair-test-secret-2026',
-      RENDER_SERVICE_ID: 'srv-wheelsonauto-source-repair-test'
+      RENDER_SERVICE_ID: 'srv-wheelsonauto-source-repair-test',
+      RENDER_GIT_COMMIT: 'abcdef1234567890abcdef1234567890abcdef12'
     };
+    const activeLease = await migrationMaintenanceLease.publishLease({ environment: captureEnvironment, maintenanceMode: true });
     const sourceFile = path.join(temp, 'live-source.json');
     const outputFile = path.join(temp, 'protected-source.json');
     const exactPayment = {
@@ -67,6 +70,7 @@ async function main() {
     assert.strictEqual(await exists(outputFile), false, 'An unconfirmed repair must not create an output file.');
 
     const wrongChecksum = run(repairScript, [sourceFile, outputFile], {
+      ...captureEnvironment,
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
       WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
       WOA_POSTGRES_SOURCE_REPAIR_SHA256: '0'.repeat(64)
@@ -77,6 +81,8 @@ async function main() {
 
     const missingOriginOutput = path.join(temp, 'missing-origin-output.json');
     const missingOrigin = run(repairScript, [sourceFile, missingOriginOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM: '',
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
       WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
       WOA_POSTGRES_SOURCE_REPAIR_SHA256: sourceChecksum
@@ -109,7 +115,10 @@ async function main() {
     assert.strictEqual(manifest.sourceFileChecksum, sourceChecksum);
     assert.strictEqual(manifest.protectedCopyChecksum, report.protectedCopyChecksum);
     assert.strictEqual(manifest.sourceOrigin, 'render-live-disk');
+    assert.strictEqual(manifest.version, migrationSource.PROVENANCE_VERSION);
     assert.strictEqual(manifest.renderServiceId, captureEnvironment.RENDER_SERVICE_ID);
+    assert.strictEqual(manifest.maintenanceInstanceId, activeLease.instanceId);
+    assert.strictEqual(manifest.maintenanceRenderCommit, captureEnvironment.RENDER_GIT_COMMIT);
     assert.strictEqual(manifest.signature.algorithm, 'HMAC-SHA256');
     assert.strictEqual((await fs.stat(manifestFile)).mode & 0o777, 0o600, 'The repair manifest must be owner-readable only.');
     const verifiedProvenance = await migrationSource.assertProvenanceManifest(outputFile, report.protectedCopyChecksum, {
@@ -137,6 +146,7 @@ async function main() {
     }, null, 2) + '\n', 'utf8');
     const conflictChecksum = (await migrationSource.readSource(conflictSource)).sourceFileChecksum;
     const nonidentical = run(repairScript, [conflictSource, conflictOutput], {
+      ...captureEnvironment,
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
       WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
       WOA_POSTGRES_SOURCE_REPAIR_SHA256: conflictChecksum

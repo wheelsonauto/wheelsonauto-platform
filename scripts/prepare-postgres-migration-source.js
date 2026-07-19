@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const stateRepository = require('../state-repository');
 const migrationSource = require('../postgres-migration-source');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 const stateMigrationLock = require('../state-migration-lock');
 const { userArguments } = require('./cli-arguments');
 
@@ -74,6 +75,7 @@ async function main() {
   const outputFile = path.resolve(args[1]);
   const manifestFile = outputFile + '.repair-manifest.json';
   if (sourceFile === outputFile) throw new Error('The protected output must be a new file. Refusing to rewrite the live source.');
+  const captureLease = await migrationMaintenanceLease.assertActiveLease({ environment: process.env });
   const source = await migrationSource.readSource(sourceFile);
   const expectedChecksum = migrationSource.requiredExpectedChecksum(process.env, 'WOA_POSTGRES_SOURCE_REPAIR_SHA256');
   migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedChecksum, 'Live JSON source selected for protected-copy preparation');
@@ -128,6 +130,7 @@ async function main() {
       sourceFileChecksum: source.sourceFileChecksum,
       protectedCopy: outputFile,
       protectedCopyChecksum: prepared.sourceFileChecksum,
+      maintenanceLease: captureLease,
       policy: 'Only canonical byte-equivalent records sharing one critical resource ID were collapsed. Non-identical duplicates and assignment conflicts are never guessed.',
       repairs: collapsed.repairs
     });
@@ -139,6 +142,12 @@ async function main() {
     await writeExclusive(manifestFile, Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'));
     manifestCreated = true;
     await migrationSource.assertSourceUnchanged(sourceFile, source.sourceFileChecksum);
+    const completionLease = await migrationMaintenanceLease.assertActiveLease({ environment: process.env });
+    if (completionLease.instanceId !== captureLease.instanceId
+      || completionLease.renderCommit !== captureLease.renderCommit
+      || completionLease.startedAt !== captureLease.startedAt) {
+      throw new Error('The deployed maintenance process restarted while the protected PostgreSQL source was being prepared. The incomplete source was removed; capture a fresh copy.');
+    }
     console.log(JSON.stringify({
       ok: readiness.postgresqlImportAllowed,
       source: sourceFile,
@@ -148,6 +157,8 @@ async function main() {
       repairManifest: manifestFile,
       sourceOrigin: manifest.sourceOrigin,
       renderServiceId: manifest.renderServiceId,
+      maintenanceRenderCommit: manifest.maintenanceRenderCommit,
+      maintenanceInstanceId: manifest.maintenanceInstanceId,
       provenanceSignatureAlgorithm: manifest.signature.algorithm,
       exactDuplicateRepairs: collapsed.repairs,
       ...readiness,

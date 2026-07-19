@@ -4,6 +4,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 
 const root = path.join(__dirname, '..');
 const serverFile = path.join(root, 'server.js');
@@ -52,28 +53,31 @@ async function main() {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-migration-maintenance-'));
   const port = 44000 + Math.floor(Math.random() * 1000);
   const output = { text: '' };
+  const childEnvironment = {
+    ...process.env,
+    HOST: '127.0.0.1',
+    PORT: String(port),
+    DATA_DIR: temp,
+    WOA_DATA_BACKEND: 'json',
+    WOA_MIGRATION_MAINTENANCE_MODE: '1',
+    WOA_PRODUCTION_HARDENING_REQUIRED: '0',
+    WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED: '0',
+    WOA_SESSION_SECRET: 'maintenance-check-session-secret-2026',
+    WOA_SERVICE_ID: 'srv-maintenance-runtime-check',
+    WOA_DEPLOY_COMMIT: 'abcdef1234567890abcdef1234567890abcdef12',
+    WOA_ADMIN_USERNAME: 'maintenance-owner',
+    WOA_ADMIN_PASSWORD: 'maintenance-owner-password',
+    WOA_ADMIN_PIN: '',
+    WOA_OWNER_PIN_FALLBACK_ENABLED: '0',
+    CLOVER_ACCESS_TOKEN: '',
+    STRIPE_SECRET_KEY: '',
+    TELNYX_API_KEY: '',
+    RESEND_API_KEY: '',
+    OPENAI_API_KEY: ''
+  };
   const child = spawn(process.execPath, [serverFile], {
     cwd: root,
-    env: {
-      ...process.env,
-      HOST: '127.0.0.1',
-      PORT: String(port),
-      DATA_DIR: temp,
-      WOA_DATA_BACKEND: 'json',
-      WOA_MIGRATION_MAINTENANCE_MODE: '1',
-      WOA_PRODUCTION_HARDENING_REQUIRED: '0',
-      WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED: '0',
-      WOA_SESSION_SECRET: 'maintenance-check-session-secret-2026',
-      WOA_ADMIN_USERNAME: 'maintenance-owner',
-      WOA_ADMIN_PASSWORD: 'maintenance-owner-password',
-      WOA_ADMIN_PIN: '',
-      WOA_OWNER_PIN_FALLBACK_ENABLED: '0',
-      CLOVER_ACCESS_TOKEN: '',
-      STRIPE_SECRET_KEY: '',
-      TELNYX_API_KEY: '',
-      RESEND_API_KEY: '',
-      OPENAI_API_KEY: ''
-    },
+    env: childEnvironment,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   child.stdout.on('data', chunk => { output.text += chunk.toString('utf8'); });
@@ -82,6 +86,10 @@ async function main() {
   try {
     const health = await waitForHealth(port, child, output);
     assert.strictEqual(health.json && health.json.migrationMaintenance, true, 'Health must disclose the active migration write freeze without exposing state.');
+    assert.strictEqual(health.json && health.json.migrationMaintenanceLease, 'active', 'Health must confirm the deployed process published its signed shared-disk maintenance lease before accepting reads.');
+    const activeLease = await migrationMaintenanceLease.assertActiveLease({ environment: childEnvironment });
+    assert.strictEqual(activeLease.serviceId, childEnvironment.WOA_SERVICE_ID, 'The deployed maintenance server must publish a signed shared-disk lease under its exact service identity.');
+    assert.strictEqual(activeLease.renderCommit, childEnvironment.WOA_DEPLOY_COMMIT, 'The maintenance lease must identify the exact deployed commit.');
 
     const blockedState = await request(port, 'PUT', '/api/state', '{}', { 'Content-Type': 'application/json' });
     assert.strictEqual(blockedState.status, 503, 'State writes must be rejected during a protected migration window.');
@@ -113,6 +121,11 @@ async function main() {
       child.kill('SIGTERM');
       await exited;
     }
+    await assert.rejects(
+      () => migrationMaintenanceLease.assertActiveLease({ environment: childEnvironment }),
+      /not in migration maintenance mode/i,
+      'Graceful shutdown must immediately invalidate the maintenance lease.'
+    );
     await fs.rm(temp, { recursive: true, force: true });
   }
 }

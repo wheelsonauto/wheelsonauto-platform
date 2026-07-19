@@ -21,7 +21,7 @@ function readyHealth(overrides = {}) {
     canonicalSourceChecksum: '2'.repeat(64),
     targetChecksum: '2'.repeat(64),
     importedVersion: 1,
-    provenanceVersion: 1,
+    provenanceVersion: 2,
     sourceOrigin: 'render-live-disk',
     renderServiceId: 'srv-wheelsonauto-cutover-test',
     sourcePreparedAt: '2026-07-18T11:55:00.000Z',

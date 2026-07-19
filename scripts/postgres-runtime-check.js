@@ -426,7 +426,7 @@ async function main() {
       targetRecordCounts: stateRepository.migrationRecordCounts(firstWrite.state),
       importedVersion: firstWrite.version,
       sourceProvenance: {
-        version: 1,
+        version: 2,
         sourceOrigin: 'render-live-disk',
         renderServiceId: 'srv-postgres-runtime-proof',
         preparedAt: new Date().toISOString(),

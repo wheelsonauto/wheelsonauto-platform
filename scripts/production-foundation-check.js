@@ -84,6 +84,7 @@ async function main() {
     const postgresSourceRepairSource = await fs.readFile(path.resolve(__dirname, 'prepare-postgres-migration-source.js'), 'utf8');
     const postgresSourceRepairCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-source-repair-check.js'), 'utf8');
     const postgresMigrationSource = await fs.readFile(path.resolve(__dirname, '..', 'postgres-migration-source.js'), 'utf8');
+    const migrationMaintenanceLeaseSource = await fs.readFile(path.resolve(__dirname, '..', 'migration-maintenance-lease.js'), 'utf8');
     const postgresPreflightSource = await fs.readFile(path.resolve(__dirname, 'postgres-preflight.js'), 'utf8');
     const postgresImporterSource = await fs.readFile(path.resolve(__dirname, 'migrate-json-to-postgres.js'), 'utf8');
     const postgresVerifierSource = await fs.readFile(path.resolve(__dirname, 'verify-json-to-postgres.js'), 'utf8');
@@ -172,13 +173,25 @@ async function main() {
     assert(postgresMigrationSource.includes('RENDER_LIVE_DISK_SNAPSHOT')
       && postgresMigrationSource.includes("createHmac('sha256'")
       && postgresMigrationSource.includes('RENDER_SERVICE_ID')
+      && postgresMigrationSource.includes('migrationMaintenanceLease.assertActiveLease')
+      && postgresMigrationSource.includes('maintenanceInstanceId')
       && postgresMigrationSource.includes('source provenance is stale')
+      && migrationMaintenanceLeaseSource.includes('HMAC-SHA256')
+      && migrationMaintenanceLeaseSource.includes('renderCommit')
+      && migrationMaintenanceLeaseSource.includes('heartbeatAt')
+      && serverSource.includes('startMigrationMaintenanceLease()')
+      && serverSource.includes('migrationMaintenanceLeaseController.stop()')
+      && serverSource.includes("maintenanceLeaseStatus = 'invalid'")
+      && serverSource.includes('migrationMaintenanceLease.assertActiveLease({ dataDir: DATA_DIR')
+      && postgresSourceRepairSource.includes('migrationMaintenanceLease.assertActiveLease')
       && postgresSourceRepairSource.includes('createProvenanceManifest')
       && postgresImporterSource.includes('assertProvenanceManifest')
-      && postgresVerifierSource.includes('assertProvenanceManifest'), 'Production PostgreSQL import and proof must require a fresh HMAC-signed, service-bound Render live-disk snapshot instead of trusting a stale developer checkout.');
+      && postgresVerifierSource.includes('assertProvenanceManifest'), 'Production PostgreSQL import and proof must require a fresh HMAC-signed lease from the exact deployed maintenance process plus a service-bound Render live-disk snapshot instead of trusting a command flag or stale developer checkout.');
     assert(launchRunbook.includes('prepare-postgres-migration-source')
       && launchRunbook.includes('never resolves a customer/vehicle assignment by guessing')
       && launchRunbook.includes('repository-checkout `data.json` is **not** authoritative')
+      && launchRunbook.includes('migrationMaintenanceLease')
+      && launchRunbook.includes('.wheelsonauto-migration-maintenance-lease.json')
       && launchRunbook.includes('WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM=RENDER_LIVE_DISK_SNAPSHOT')
       && launchRunbook.includes('**new**\n`protectedCopyChecksum`'), 'The launch runbook must document the signed live-disk audit trail and the protected-copy checksum required after exact duplicate collapse.');
     assert.strictEqual(new Set(stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS).size, stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.length, 'Every required PostgreSQL schema migration ID must be unique so readiness cannot silently collapse duplicate requirements.');
@@ -424,7 +437,7 @@ async function main() {
       targetRecordCounts: sourceCounts,
       importedVersion: 4,
       snapshotChecksum: intactChecksum,
-      provenanceVersion: 1,
+      provenanceVersion: 2,
       sourceOrigin: 'render-live-disk',
       renderServiceId: 'srv-foundation-proof',
       sourcePreparedAt: '2026-07-17T11:55:00.000Z',

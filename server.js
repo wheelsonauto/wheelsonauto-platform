@@ -21,6 +21,7 @@ const encryptedStateBackup = require('./encrypted-state-backup');
 const messagingConsent = require('./messaging-consent');
 const dataBackendCutover = require('./data-backend-cutover');
 const fatalProcessMonitor = require('./fatal-process-monitor');
+const migrationMaintenanceLease = require('./migration-maintenance-lease');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -17541,7 +17542,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) {
       const repository = await STATE_REPOSITORY.readiness();
-      const ready = repository.connected === true && repository.stateAvailable === true;
+      let maintenanceLeaseStatus = 'inactive';
+      if (WOA_MIGRATION_MAINTENANCE_MODE) {
+        try {
+          await migrationMaintenanceLease.assertActiveLease({ dataDir: DATA_DIR, environment: process.env });
+          maintenanceLeaseStatus = 'active';
+        } catch {
+          maintenanceLeaseStatus = 'invalid';
+        }
+      }
+      const ready = repository.connected === true && repository.stateAvailable === true && maintenanceLeaseStatus !== 'invalid';
       const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
       if (req.method === 'HEAD') return send(res, ready ? 200 : 503, '', 'application/json; charset=utf-8', headers);
       return json(res, ready ? 200 : 503, {
@@ -17549,7 +17559,8 @@ const server = http.createServer(async (req, res) => {
         service: 'wheelsonauto-platform',
         release: ASSET_VERSION,
         commit: WOA_DEPLOY_COMMIT,
-        migrationMaintenance: WOA_MIGRATION_MAINTENANCE_MODE
+        migrationMaintenance: WOA_MIGRATION_MAINTENANCE_MODE,
+        migrationMaintenanceLease: maintenanceLeaseStatus
       }, headers);
     }
     if (await staticFile(req, res, url.pathname, url.searchParams)) return;
@@ -22667,6 +22678,24 @@ const server = http.createServer(async (req, res) => {
 
 let gracefulShutdownStarted = false;
 let gracefulShutdownExitCode = 0;
+let migrationMaintenanceLeaseController = null;
+
+async function startMigrationMaintenanceLease() {
+  const configured = migrationMaintenanceLease.isConfigured({ dataDir: DATA_DIR, environment: process.env });
+  const renderDeployment = !!String(process.env.RENDER_SERVICE_ID || '').trim();
+  if (!configured) {
+    if (WOA_MIGRATION_MAINTENANCE_MODE || renderDeployment) {
+      throw new Error('The deployed service cannot prove migration maintenance state without DATA_DIR, Render service/commit identity, and a stable WOA_SESSION_SECRET.');
+    }
+    return { skipped: true, reason: 'local runtime has no shared Render lease configuration' };
+  }
+  migrationMaintenanceLeaseController = migrationMaintenanceLease.createLeaseController({
+    dataDir: DATA_DIR,
+    environment: process.env,
+    maintenanceMode: WOA_MIGRATION_MAINTENANCE_MODE
+  });
+  return migrationMaintenanceLeaseController.start();
+}
 
 async function gracefulShutdown(signal, exitCode = 0) {
   gracefulShutdownExitCode = Math.max(gracefulShutdownExitCode, Number(exitCode || 0));
@@ -22678,6 +22707,12 @@ async function gracefulShutdown(signal, exitCode = 0) {
     process.exit(1);
   }, 55000);
   forceExit.unref();
+  if (migrationMaintenanceLeaseController) {
+    await migrationMaintenanceLeaseController.stop().catch(error => {
+      console.error('Could not invalidate migration-maintenance lease during shutdown:', error && error.message || error);
+      gracefulShutdownExitCode = Math.max(gracefulShutdownExitCode, 1);
+    });
+  }
   const closeError = await new Promise(resolve => {
     server.close(error => resolve(error || null));
     if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
@@ -22705,7 +22740,8 @@ if (require.main === module) {
   fatalProcessMonitor.installFatalProcessHandlers(process, fatalMonitor);
   process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
   process.once('SIGINT', () => { void gracefulShutdown('SIGINT'); });
-  assertDataBackendTransition()
+  startMigrationMaintenanceLease()
+    .then(() => assertDataBackendTransition())
     .then(() => assertProductionInfrastructure())
     .then(() => server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
@@ -22795,7 +22831,8 @@ if (require.main === module) {
         .catch(err => reportBackgroundTaskFailure('passtime-gps-sync', err, { route: 'PassTime read-only GPS sync', source: 'background' }, 'PassTime GPS background sync')), PASSTIME_SYNC_MS);
     }
     }))
-    .catch(error => {
+    .catch(async error => {
+      if (migrationMaintenanceLeaseController) await migrationMaintenanceLeaseController.stop().catch(() => {});
       console.error('WheelsonAuto refused to start with incomplete production safeguards:', error && error.message || error);
       process.exitCode = 1;
     });
@@ -22894,6 +22931,7 @@ module.exports = {
   currentRecoveryDrillEvidence,
   dataBackendCutoverEvidence,
   assertDataBackendTransition,
+  startMigrationMaintenanceLease,
   runEncryptedStateBackup,
   encryptedStateBackupEvidence,
   documentStorageConfigurationFingerprint,

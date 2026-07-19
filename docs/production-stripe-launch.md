@@ -51,14 +51,17 @@ artifact and must never be committed as part of a code release.
   intentional data migration. Do not add that file to a commit.
 - Never take a migration snapshot while the application is writable. Set
   `WOA_MIGRATION_MAINTENANCE_MODE=1`, deploy, and confirm `/healthz` reports
-  `"migrationMaintenance":true` first. The mode keeps reads and staff login
+  `"migrationMaintenance":true` and `"migrationMaintenanceLease":"active"`
+  first. The deployed process writes a signed heartbeat to the shared Render
+  disk; a command-line environment flag by itself cannot authorize capture or
+  import. The mode keeps reads and staff login
   available, returns retryable `503` responses for business writes and
   provider webhooks, and does not start autopay, sync, messaging, or monitoring
   background writers.
 - The verified importer writes an owner-only persistent cutover sentinel beside
   the live data directory. After that point, a missing or misspelled
   `WOA_DATA_BACKEND` cannot silently reopen the retained JSON rollback file.
-  Sentinel format v2 also binds the signed source origin, Render service,
+  Sentinel format v3 also binds the signed source origin, Render service,
   capture time, live/protected file checksums, manifest fingerprint, and
   signature fingerprint to PostgreSQL health on every restart. Missing or
   different provenance fails closed instead of selecting either backend.
@@ -278,11 +281,12 @@ payment queues, provider webhooks, and owner login have been reviewed.
 
 After the test database has passed, provision the production PostgreSQL
 database. Then set `WOA_MIGRATION_MAINTENANCE_MODE=1` in Render and deploy the
-current tested commit. Confirm all three conditions before copying live state:
+current tested commit. Confirm all four conditions before copying live state:
 
 ```text
 GET /healthz returns 200
 migrationMaintenance is true
+migrationMaintenanceLease is active
 POST /api/state returns 503 with code migration_maintenance
 ```
 
@@ -304,8 +308,12 @@ pnpm run postgres-preflight -- "$DATA_DIR/data.json"
 
 Record the diagnostic `sourceFileChecksum`, resolve any owner-review conflicts,
 then create a separate signed mode-`0600` copy on that same persistent disk.
-`RENDER_SERVICE_ID` is supplied by Render; `WOA_SESSION_SECRET` must be the
-stable production secret already used by the deployed service:
+`RENDER_SERVICE_ID` and `RENDER_GIT_COMMIT` are supplied by Render;
+`WOA_SESSION_SECRET` must be the stable production secret already used by the
+deployed service. The server publishes
+`$DATA_DIR/.wheelsonauto-migration-maintenance-lease.json` with mode `0600`.
+It is HMAC-signed and refreshes every 30 seconds by default. Capture refuses an inactive,
+stale, forged, different-service, different-commit, or restarted-process lease:
 
 If preflight reports a duplicated critical record ID, do not edit the live
 JSON file and do not delete payment history by hand. First inspect the reported
@@ -332,11 +340,17 @@ mode-`0600` `.repair-manifest.json`. It uses exclusive creation and will not
 overwrite either the live source or an existing protected copy. The manifest is
 HMAC-signed with the stable session secret and binds the live source path,
 protected-copy path, both checksums, repair evidence, `DATA_DIR`, Render service
-ID, capture time, and maintenance-mode policy. If any signed field changes, the
-service ID differs, the copy leaves `DATA_DIR`, or the capture is more than six
-hours old, import and verification fail before opening PostgreSQL. The freshness
-window may be shortened with `WOA_POSTGRES_MIGRATION_SOURCE_MAX_AGE_MS`; accepted
-values are one minute through 24 hours.
+ID, exact deployed commit, maintenance-process instance, maintenance start time,
+lease fingerprint, capture time, and maintenance-mode policy. The preparation
+tool checks the lease before reading the live source and again after writing the
+copy; a service restart removes the incomplete output. If any signed field
+changes, the service or process differs, the copy leaves `DATA_DIR`, the lease
+heartbeat expires, or the capture is more than six hours old, import and
+verification fail before opening PostgreSQL. The source freshness window may be
+shortened with `WOA_POSTGRES_MIGRATION_SOURCE_MAX_AGE_MS`; accepted values are
+one minute through 24 hours. The lease heartbeat age is independently bounded by
+`WOA_MIGRATION_MAINTENANCE_LEASE_MAX_AGE_MS`, accepted from 30 seconds through
+ten minutes and defaulting to two minutes.
 
 If any duplicated ID contains different data, no copy is written. If an
 unrelated assignment or identity conflict remains, the review copy is retained

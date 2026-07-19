@@ -3,8 +3,9 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const migrationMaintenanceLease = require('./migration-maintenance-lease');
 
-const PROVENANCE_VERSION = 1;
+const PROVENANCE_VERSION = 2;
 const SOURCE_ORIGIN_CONFIRMATION = 'RENDER_LIVE_DISK';
 const MIGRATION_PROVENANCE_CONFIRMATION = 'RENDER_LIVE_DISK_SNAPSHOT';
 
@@ -98,6 +99,11 @@ function provenancePayload(manifest = {}) {
     sourceDataDir: path.resolve(String(manifest.sourceDataDir || '')),
     renderServiceId: String(manifest.renderServiceId || ''),
     maintenanceMode: manifest.maintenanceMode === true,
+    maintenanceInstanceId: String(manifest.maintenanceInstanceId || ''),
+    maintenanceRenderCommit: String(manifest.maintenanceRenderCommit || ''),
+    maintenanceLeaseStartedAt: String(manifest.maintenanceLeaseStartedAt || ''),
+    maintenanceLeaseChecksum: String(manifest.maintenanceLeaseChecksum || '').toLowerCase(),
+    maintenanceLeaseSignatureChecksum: String(manifest.maintenanceLeaseSignatureChecksum || '').toLowerCase(),
     policy: String(manifest.policy || ''),
     repairsChecksum: String(manifest.repairsChecksum || '').toLowerCase()
   });
@@ -109,6 +115,7 @@ function signProvenanceManifest(manifest, secret) {
 
 function createProvenanceManifest(details = {}, environment = process.env) {
   const context = sourceCaptureContext(environment);
+  const liveLease = details.maintenanceLease && typeof details.maintenanceLease === 'object' ? details.maintenanceLease : {};
   const source = path.resolve(String(details.source || ''));
   const protectedCopy = path.resolve(String(details.protectedCopy || ''));
   if (!insideDirectory(context.dataDir, source)) throw new Error('The live source must be inside DATA_DIR. Refusing a developer-checkout or temporary source.');
@@ -116,6 +123,14 @@ function createProvenanceManifest(details = {}, environment = process.env) {
   if (source === protectedCopy) throw new Error('The protected PostgreSQL source must be a separate immutable copy of the live Render data file.');
   if (!validChecksum(details.sourceFileChecksum) || !validChecksum(details.protectedCopyChecksum)) {
     throw new Error('Protected-source provenance requires valid source and protected-copy SHA-256 checksums.');
+  }
+  if (String(liveLease.serviceId || '') !== context.serviceId
+    || !String(liveLease.renderCommit || '').trim()
+    || !/^[a-f0-9]{32,128}$/i.test(String(liveLease.instanceId || ''))
+    || !Number.isFinite(Date.parse(String(liveLease.startedAt || '')))
+    || !validChecksum(liveLease.leaseChecksum)
+    || !validChecksum(liveLease.signatureChecksum)) {
+    throw new Error('Protected-source provenance requires a fresh signed lease from the deployed Render maintenance process.');
   }
   const repairsChecksum = sha256(Buffer.from(JSON.stringify(Array.isArray(details.repairs) ? details.repairs : []), 'utf8'));
   const manifest = {
@@ -129,6 +144,11 @@ function createProvenanceManifest(details = {}, environment = process.env) {
     sourceDataDir: context.dataDir,
     renderServiceId: context.serviceId,
     maintenanceMode: true,
+    maintenanceInstanceId: String(liveLease.instanceId),
+    maintenanceRenderCommit: String(liveLease.renderCommit),
+    maintenanceLeaseStartedAt: new Date(liveLease.startedAt).toISOString(),
+    maintenanceLeaseChecksum: String(liveLease.leaseChecksum).toLowerCase(),
+    maintenanceLeaseSignatureChecksum: String(liveLease.signatureChecksum).toLowerCase(),
     policy: String(details.policy || ''),
     repairsChecksum
   };
@@ -182,6 +202,13 @@ async function assertProvenanceManifest(dataFile, sourceFileChecksum, environmen
   if (!validChecksum(manifest.sourceFileChecksum) || !validChecksum(manifest.protectedCopyChecksum)) {
     throw new Error('The PostgreSQL source provenance manifest contains an invalid checksum.');
   }
+  if (!/^[a-f0-9]{32,128}$/i.test(String(manifest.maintenanceInstanceId || ''))
+    || !String(manifest.maintenanceRenderCommit || '').trim()
+    || !Number.isFinite(Date.parse(String(manifest.maintenanceLeaseStartedAt || '')))
+    || !validChecksum(manifest.maintenanceLeaseChecksum)
+    || !validChecksum(manifest.maintenanceLeaseSignatureChecksum)) {
+    throw new Error('The PostgreSQL source provenance manifest is missing its deployed maintenance-process proof.');
+  }
   assertExpectedChecksum(sourceFileChecksum, manifest.protectedCopyChecksum, 'Protected copy does not match its signed provenance manifest');
   const manifestRepairsChecksum = sha256(Buffer.from(JSON.stringify(Array.isArray(manifest.repairs) ? manifest.repairs : []), 'utf8'));
   assertExpectedChecksum(manifestRepairsChecksum, manifest.repairsChecksum, 'Protected-source repair evidence does not match its signed provenance manifest');
@@ -203,6 +230,13 @@ async function assertProvenanceManifest(dataFile, sourceFileChecksum, environmen
   if (String(manifest.signature && manifest.signature.algorithm || '') !== 'HMAC-SHA256' || actualBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(actualBytes, expectedBytes)) {
     throw new Error('The protected PostgreSQL source provenance signature is invalid. Refusing a copied or modified snapshot.');
   }
+  const activeLease = await migrationMaintenanceLease.assertActiveLease({ environment });
+  if (activeLease.serviceId !== manifest.renderServiceId
+    || activeLease.renderCommit !== manifest.maintenanceRenderCommit
+    || activeLease.instanceId !== manifest.maintenanceInstanceId
+    || activeLease.startedAt !== new Date(manifest.maintenanceLeaseStartedAt).toISOString()) {
+    throw new Error('The protected PostgreSQL source belongs to a different or restarted maintenance process. Capture a fresh source from the currently deployed maintenance instance.');
+  }
   return {
     version: Number(manifest.version),
     manifestFile,
@@ -212,7 +246,12 @@ async function assertProvenanceManifest(dataFile, sourceFileChecksum, environmen
     sourceOrigin: manifest.sourceOrigin,
     sourceFileChecksum: manifest.sourceFileChecksum,
     protectedCopyChecksum: manifest.protectedCopyChecksum,
-    renderServiceId: manifest.renderServiceId
+    renderServiceId: manifest.renderServiceId,
+    maintenanceInstanceId: manifest.maintenanceInstanceId,
+    maintenanceRenderCommit: manifest.maintenanceRenderCommit,
+    maintenanceLeaseStartedAt: new Date(manifest.maintenanceLeaseStartedAt).toISOString(),
+    maintenanceLeaseChecksum: manifest.maintenanceLeaseChecksum,
+    maintenanceLeaseSignatureChecksum: manifest.maintenanceLeaseSignatureChecksum
   };
 }
 
@@ -225,6 +264,7 @@ module.exports = {
   assertSourceUnchanged,
   createProvenanceManifest,
   assertProvenanceManifest,
+  PROVENANCE_VERSION,
   SOURCE_ORIGIN_CONFIRMATION,
   MIGRATION_PROVENANCE_CONFIRMATION
 };

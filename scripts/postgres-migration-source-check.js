@@ -7,6 +7,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const source = require('../postgres-migration-source');
 const stateMigrationLock = require('../state-migration-lock');
+const migrationMaintenanceLease = require('../migration-maintenance-lease');
 
 const importer = path.join(__dirname, 'migrate-json-to-postgres.js');
 const verifier = path.join(__dirname, 'verify-json-to-postgres.js');
@@ -130,8 +131,10 @@ async function main() {
       WOA_MIGRATION_MAINTENANCE_MODE: '1',
       WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM: source.SOURCE_ORIGIN_CONFIRMATION,
       WOA_SESSION_SECRET: provenanceSecret,
-      RENDER_SERVICE_ID: renderServiceId
+      RENDER_SERVICE_ID: renderServiceId,
+      RENDER_GIT_COMMIT: 'abcdef1234567890abcdef1234567890abcdef12'
     };
+    const activeMaintenanceLease = await migrationMaintenanceLease.publishLease({ environment: captureEnvironment, maintenanceMode: true });
     let checkoutSourceError = null;
     try {
       source.createProvenanceManifest({
@@ -139,6 +142,7 @@ async function main() {
         sourceFileChecksum: liveSourceChecksum,
         protectedCopy: dataFile,
         protectedCopyChecksum: exact,
+        maintenanceLease: activeMaintenanceLease,
         repairs: []
       }, captureEnvironment);
     } catch (error) {
@@ -150,6 +154,7 @@ async function main() {
       sourceFileChecksum: exact,
       protectedCopy: dataFile,
       protectedCopyChecksum: exact,
+      maintenanceLease: activeMaintenanceLease,
       repairs: []
     }, captureEnvironment), /separate immutable copy/i, 'The live source and protected copy must be different files.');
     const provenanceManifestFile = dataFile + '.repair-manifest.json';
@@ -159,6 +164,7 @@ async function main() {
         sourceFileChecksum: liveSourceChecksum,
         protectedCopy: dataFile,
         protectedCopyChecksum: exact,
+        maintenanceLease: activeMaintenanceLease,
         policy: 'test protected source',
         repairs: []
       }, captureEnvironment),
@@ -172,6 +178,30 @@ async function main() {
     };
     const verifiedProvenance = await source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment);
     assert.strictEqual(verifiedProvenance.renderServiceId, renderServiceId, 'Valid provenance must remain bound to the Render service that captured it.');
+    assert.strictEqual(verifiedProvenance.maintenanceInstanceId, activeMaintenanceLease.instanceId, 'Valid provenance must remain bound to the exact deployed maintenance process.');
+    await migrationMaintenanceLease.publishLease({
+      environment: captureEnvironment,
+      maintenanceMode: false,
+      instanceId: activeMaintenanceLease.instanceId,
+      startedAt: activeMaintenanceLease.startedAt
+    });
+    await assert.rejects(
+      () => source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment),
+      /not in migration maintenance mode/i,
+      'A command environment flag must not authorize import after the deployed service leaves maintenance mode.'
+    );
+    await migrationMaintenanceLease.publishLease({ environment: captureEnvironment, maintenanceMode: true });
+    await assert.rejects(
+      () => source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment),
+      /different or restarted maintenance process/i,
+      'A source captured by a previous maintenance process must fail after a same-commit service restart.'
+    );
+    await migrationMaintenanceLease.publishLease({
+      environment: captureEnvironment,
+      maintenanceMode: true,
+      instanceId: activeMaintenanceLease.instanceId,
+      startedAt: activeMaintenanceLease.startedAt
+    });
     await assert.rejects(
       () => source.assertProvenanceManifest(dataFile, exact, { ...provenanceEnvironment, RENDER_SERVICE_ID: 'srv-different-service' }),
       /different Render service/i,
@@ -189,6 +219,7 @@ async function main() {
         sourceFileChecksum: liveSourceChecksum,
         protectedCopy: dataFile,
         protectedCopyChecksum: exact,
+        maintenanceLease: activeMaintenanceLease,
         preparedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
         policy: 'stale test protected source',
         repairs: []
