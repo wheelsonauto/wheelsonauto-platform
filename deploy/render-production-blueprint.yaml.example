@@ -1,0 +1,189 @@
+# REVIEW-ONLY PRODUCTION CUTOVER TEMPLATE.
+#
+# Do not rename this file to render.yaml or sync it to Render until:
+# 1. the owner approves the paid PostgreSQL resource,
+# 2. the frozen live JSON source has passed preflight,
+# 3. the migration/recovery drill has passed, and
+# 4. the maintenance-window cutover is ready.
+#
+# Applying this template can create a paid database. The active render.yaml
+# intentionally remains on the existing disk-backed service until cutover.
+
+databases:
+  - name: wheelsonauto-postgres
+    databaseName: wheelsonauto
+    user: wheelsonauto
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "16"
+    ipAllowList: []
+
+services:
+  - type: web
+    name: wheelsonauto-platform
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: ""
+    startCommand: "node server.js"
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: wheelsonauto-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: DATABASE_URL
+        fromDatabase:
+          name: wheelsonauto-postgres
+          property: connectionString
+
+      # Operator gates. Enter these manually only at the documented cutover step.
+      - key: WOA_DATA_BACKEND
+        sync: false
+      - key: WOA_MIGRATION_MAINTENANCE_MODE
+        value: "0"
+      - key: WOA_PRODUCTION_HARDENING_REQUIRED
+        sync: false
+      - key: WOA_POSTGRES_SNAPSHOT_LIMIT
+        value: "180"
+
+      # Stable authentication and document-encryption secrets.
+      - key: WOA_SESSION_SECRET
+        sync: false
+      - key: WOA_DOCUMENT_STORAGE_PROVIDER
+        value: s3
+      - key: WOA_DOCUMENT_ENCRYPTION_KEY
+        sync: false
+      - key: WOA_DOCUMENT_ENCRYPTION_KEY_VERSION
+        sync: false
+      - key: WOA_DOCUMENT_DECRYPTION_KEYS
+        sync: false
+      - key: WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED
+        value: "1"
+
+      # Private S3-compatible object storage. Never use a public delivery URL.
+      - key: WOA_OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: WOA_OBJECT_STORAGE_ENDPOINT
+        sync: false
+      - key: WOA_OBJECT_STORAGE_REGION
+        sync: false
+      - key: WOA_OBJECT_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: WOA_OBJECT_STORAGE_PATH_STYLE
+        sync: false
+      - key: WOA_OBJECT_STORAGE_TIMEOUT_MS
+        value: "15000"
+
+      # Encrypted offsite state backups use a different key from documents.
+      - key: WOA_STATE_BACKUP_ENABLED
+        value: "1"
+      - key: WOA_STATE_BACKUP_ENCRYPTION_KEY
+        sync: false
+      - key: WOA_STATE_BACKUP_KEY_VERSION
+        sync: false
+      - key: WOA_STATE_BACKUP_DECRYPTION_KEYS
+        sync: false
+      - key: WOA_STATE_BACKUP_INTERVAL_MS
+        value: "21600000"
+      - key: WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS
+        value: "43200000"
+
+      # Clover remains active during customer-by-customer Stripe migration.
+      - key: WOA_PAYMENT_PROVIDER
+        value: clover
+      - key: CLOVER_ENV
+        sync: false
+      - key: CLOVER_MERCHANT_ID
+        sync: false
+      - key: CLOVER_ACCESS_TOKEN
+        sync: false
+      - key: CLOVER_API_ACCESS_KEY
+        sync: false
+      - key: CLOVER_ECOMMERCE_PUBLIC_KEY
+        sync: false
+      - key: CLOVER_ECOMMERCE_PRIVATE_KEY
+        sync: false
+      - key: CLOVER_HCO_PAGE_CONFIG_UUID
+        sync: false
+      - key: CLOVER_WEBHOOK_SECRET
+        sync: false
+      - key: CLOVER_HCO_WEBHOOK_SECRET
+        sync: false
+
+      # New onboarding, card setup, identity, and controlled cutovers use Stripe.
+      - key: WOA_ONBOARDING_PAYMENT_PROVIDER
+        value: stripe
+      - key: WOA_IDENTITY_PROVIDER
+        value: stripe
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # Telnyx readiness stays blocked until CUSTOMER_CARE is approved and a
+      # number is assigned. The application still requires signed webhooks.
+      - key: WOA_MESSAGING_PROVIDER
+        value: telnyx
+      - key: WOA_MESSAGING_ENABLED
+        value: "1"
+      - key: TELNYX_API_KEY
+        sync: false
+      - key: TELNYX_PUBLIC_KEY
+        sync: false
+      - key: TELNYX_MESSAGING_PROFILE_ID
+        sync: false
+      - key: WOA_MESSAGING_FROM_NUMBER
+        sync: false
+      - key: WOA_MESSAGING_OWNER_NOTIFY_NUMBER
+        sync: false
+      - key: WOA_MESSAGING_WEBHOOK_SECRET
+        sync: false
+      - key: TELNYX_10DLC_USECASE
+        value: CUSTOMER_CARE
+
+      # Resend sends receipts, notifications, replies, and operational alerts.
+      - key: WOA_EMAIL_PROVIDER
+        value: resend
+      - key: WOA_EMAIL_ENABLED
+        value: "1"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_WEBHOOK_SECRET
+        sync: false
+      - key: WOA_EMAIL_FROM
+        sync: false
+      - key: WOA_EMAIL_REPLY_TO
+        sync: false
+      - key: WOA_EMAIL_OWNER_NOTIFY
+        sync: false
+
+      # Star drafts replies and platform actions. Money/account mutations still
+      # require the server-side approval gates even when Star is enabled.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: WOA_AI_MODEL
+        sync: false
+      - key: WOA_STAR_AI_ENABLED
+        value: "1"
+      - key: WOA_AI_REPLY_DRAFTS
+        value: "1"
+      - key: WOA_AI_AUTO_SEND
+        value: "0"
+      - key: WOA_AI_MAX_REQUESTS_PER_DAY
+        value: "250"
+      - key: WOA_AI_MAX_REQUESTS_PER_MONTH
+        value: "2500"
+
+      - key: PUBLIC_BASE_URL
+        value: https://wheelsonauto-platform.onrender.com
+      - key: WOA_ERROR_ALERTS_ENABLED
+        value: "1"

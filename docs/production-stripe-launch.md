@@ -81,6 +81,64 @@ artifact and must never be committed as part of a code release.
   production-key signatures and private key blocks without printing the secret
   value if one is found.
 
+## 0. Prepare Render Infrastructure Without Applying It
+
+The active `render.yaml` intentionally describes the existing disk-backed
+service. It must not create a paid database or switch the live state backend as
+part of a normal code deploy.
+
+The reviewed final-state example is:
+
+```text
+deploy/render-production-blueprint.yaml.example
+```
+
+Run this guard before making any infrastructure change:
+
+```sh
+pnpm run render-production-blueprint-check
+```
+
+The guard verifies that:
+
+- the active `render.yaml` cannot create a paid database or switch to
+  PostgreSQL early;
+- the review-only example clearly discloses its paid-resource side effect;
+- PostgreSQL stays in the same Oregon region as the current Render service;
+- the database uses the private `connectionString` and has no public IP allow
+  list;
+- all credentials remain manual Render secrets with no committed values;
+- Clover remains the default while new onboarding uses Stripe; and
+- PostgreSQL and production hardening remain explicit operator gates.
+
+Do not copy or sync that example until the owner approves the paid PostgreSQL
+resource. Applying it can create a paid `basic-256mb` database. When approval
+is given, use this order:
+
+1. Create the database in the **Production** environment and Oregon region.
+2. Disable external database access (`ipAllowList: []`) and use Render's
+   internal connection string for `DATABASE_URL`.
+3. Add the private-object-storage and provider variables manually in Render.
+   `sync: false` entries added to an already linked Blueprint are not a secret
+   migration mechanism; verify every key by name in the Render environment.
+4. Keep `WOA_DATA_BACKEND` unset and
+   `WOA_PRODUCTION_HARDENING_REQUIRED` unset while the web service still reads
+   live JSON.
+5. Run `pnpm run validate-production-environment` with the proposed final
+   values in a protected one-off shell. The output exposes names and readiness,
+   never values.
+6. Complete the dedicated database, storage, backup, restore, restart, and
+   tenant-privacy drills before entering maintenance mode.
+7. Follow the signed-source capture and import steps below. Set
+   `WOA_DATA_BACKEND=postgres` only after checksum verification succeeds.
+8. Leave hardening off until live Stripe, Identity, private storage, backups,
+   owner-password cutover, alerts, and provider proofs are all fresh. Then set
+   `WOA_PRODUCTION_HARDENING_REQUIRED=1` as the final fail-closed gate.
+
+Render Blueprint behavior and database references are documented in the
+[Blueprint specification](https://render.com/docs/blueprint-spec) and
+[infrastructure-as-code guide](https://render.com/docs/infrastructure-as-code).
+
 ## 1. Prepare a Separate Test Environment
 
 Provision a dedicated PostgreSQL test database first. It must not be the live
