@@ -2,6 +2,7 @@
 
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const secureDocumentStore = require('../secure-document-store');
 const encryptedStateBackup = require('../encrypted-state-backup');
@@ -20,6 +21,8 @@ let pathStyle = process.env.WOA_TEST_OBJECT_STORAGE_PATH_STYLE !== '0';
 let confirmed = process.env.WOA_OBJECT_STORAGE_RUNTIME_TEST_CONFIRM === '1';
 let allowHttp = process.env.WOA_TEST_OBJECT_STORAGE_ALLOW_HTTP === '1';
 let ciMinioContainer = '';
+let isolatedS3Server = null;
+let isolatedS3Metrics = null;
 
 function dockerCommand(args, options = {}) {
   const result = spawnSync('docker', args, {
@@ -35,6 +38,91 @@ function stopCiMinio() {
   if (!ciMinioContainer) return;
   dockerCommand(['rm', '--force', ciMinioContainer], { timeout: 30000 });
   ciMinioContainer = '';
+}
+
+async function stopIsolatedS3() {
+  if (!isolatedS3Server) return;
+  const server = isolatedS3Server;
+  isolatedS3Server = null;
+  await new Promise(resolve => server.close(resolve));
+}
+
+async function startIsolatedS3() {
+  const objects = new Map();
+  isolatedS3Metrics = { authenticatedRequests: 0, anonymousReadBlocks: 0, immutableWriteBlocks: 0, deletedObjects: 0 };
+  isolatedS3Server = http.createServer(async (request, response) => {
+    const authorization = String(request.headers.authorization || '');
+    const signed = /^AWS4-HMAC-SHA256 Credential=/.test(authorization) &&
+      /^\d{8}T\d{6}Z$/.test(String(request.headers['x-amz-date'] || '')) &&
+      /^[a-f0-9]{64}$/.test(String(request.headers['x-amz-content-sha256'] || ''));
+    if (!signed) {
+      if (request.method === 'GET') isolatedS3Metrics.anonymousReadBlocks += 1;
+      response.writeHead(403, { 'content-type': 'application/xml' });
+      response.end('<Error><Code>AccessDenied</Code></Error>');
+      return;
+    }
+    isolatedS3Metrics.authenticatedRequests += 1;
+    const objectKey = decodeURIComponent(String(request.url || '').split('?')[0].replace(/^\/+/, ''));
+    if (!objectKey.startsWith('wheelsonauto-private-local/')) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    if (request.method === 'PUT') {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const bytes = Buffer.concat(chunks);
+      const actualHash = crypto.createHash('sha256').update(bytes).digest('hex');
+      if (actualHash !== String(request.headers['x-amz-content-sha256'] || '')) {
+        response.writeHead(400, { 'content-type': 'application/xml' });
+        response.end('<Error><Code>XAmzContentSHA256Mismatch</Code></Error>');
+        return;
+      }
+      if (request.headers['if-none-match'] === '*' && objects.has(objectKey)) {
+        isolatedS3Metrics.immutableWriteBlocks += 1;
+        response.writeHead(412, { 'content-type': 'application/xml' });
+        response.end('<Error><Code>PreconditionFailed</Code></Error>');
+        return;
+      }
+      objects.set(objectKey, bytes);
+      response.writeHead(200, { etag: '"' + crypto.createHash('md5').update(bytes).digest('hex') + '"' });
+      response.end();
+      return;
+    }
+    if (request.method === 'GET') {
+      if (!objects.has(objectKey)) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      const bytes = objects.get(objectKey);
+      response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length) });
+      response.end(bytes);
+      return;
+    }
+    if (request.method === 'DELETE') {
+      if (objects.delete(objectKey)) isolatedS3Metrics.deletedObjects += 1;
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(405);
+    response.end();
+  });
+  await new Promise((resolve, reject) => {
+    isolatedS3Server.once('error', reject);
+    isolatedS3Server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = isolatedS3Server.address();
+  endpoint = 'http://127.0.0.1:' + address.port;
+  bucket = 'wheelsonauto-private-local';
+  region = 'us-east-1';
+  accessKeyId = 'wheelsonauto_local_access';
+  secretAccessKey = 'wheelsonauto_local_secret_2026';
+  pathStyle = true;
+  allowHttp = true;
+  confirmed = true;
+  console.log('Isolated local S3-compatible service is ready for encrypted object-storage checks.');
 }
 
 async function startGitHubMinio() {
@@ -98,13 +186,10 @@ function configuredFields() {
 
 async function main() {
   if (!configuredFields().some(Boolean) && process.env.GITHUB_ACTIONS === 'true') await startGitHubMinio();
+  if (!configuredFields().some(Boolean)) await startIsolatedS3();
   const configuredCount = configuredFields().filter(Boolean).length;
   if (configuredCount > 0 && configuredCount < configuredFields().length) {
     throw new Error('Object-storage runtime check received an incomplete endpoint, bucket, access-key, or secret-key configuration.');
-  }
-  if (configuredCount === 0) {
-    console.log('S3-compatible object-storage runtime check skipped. Set the WOA_TEST_OBJECT_STORAGE_* variables and WOA_OBJECT_STORAGE_RUNTIME_TEST_CONFIRM=1 to run it against a dedicated private test bucket.');
-    return;
   }
   if (!confirmed) throw new Error('Set WOA_OBJECT_STORAGE_RUNTIME_TEST_CONFIRM=1 before writing encrypted test objects to the dedicated test bucket.');
   const parsedEndpoint = new URL(endpoint);
@@ -176,15 +261,24 @@ async function main() {
     const verifiedBackup = await backups.verifyLatest();
     assert(backup.verified && verifiedBackup.stateChecksum === backup.stateChecksum, 'The real S3-compatible backup must publish, read, decrypt, and authenticate through its signed pointer.');
 
+    if (isolatedS3Metrics) {
+      assert(isolatedS3Metrics.authenticatedRequests >= 10, 'The isolated S3 check must exercise signed read, write, replacement, and delete requests.');
+      assert(isolatedS3Metrics.anonymousReadBlocks >= 1, 'The isolated S3 check must prove anonymous object reads are denied.');
+      assert(isolatedS3Metrics.immutableWriteBlocks >= 2, 'The isolated S3 check must reject immutable document and probe overwrites.');
+      assert(isolatedS3Metrics.deletedObjects >= 1, 'The isolated S3 check must prove encrypted objects can be removed during controlled cleanup.');
+    }
+
     console.log('S3-compatible object-storage runtime check passed: encrypted document round-trip, plaintext exclusion, immutable collision defense, anonymous-read denial, deletion, signed backup publication, and authenticated recovery verified.');
   } finally {
     for (const key of [...cleanupKeys].reverse()) await store.deleteObject(key).catch(() => {});
     stopCiMinio();
+    await stopIsolatedS3();
   }
 }
 
-main().catch(error => {
+main().catch(async error => {
   stopCiMinio();
+  await stopIsolatedS3();
   console.error(error.stack || error);
   process.exit(1);
 });
