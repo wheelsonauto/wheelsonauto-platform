@@ -133,6 +133,7 @@ requireText('Completed Star action guard', app, 'function starAiActionComplete')
 requireText('Completed Star replies cannot be approved twice', app, 'if(!complete&&!p.needsHuman&&!p.approvalRequired)');
 requireText('Star SMS auto-send carrier guard', server, 'settings.aiAutoSend && channelStatus.smsDeliveryLive');
 requireText('Star email auto-send delivery guard', server, 'settings.aiAutoSend && channelStatus.emailOutboundVerified');
+requireText('Star auto-send fail-closed environment gate', server, "const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND === '1'");
 requireText('Star 10DLC draft fallback', server, 'Ready - 10DLC approval needed');
 requireText('Messaging setup carrier pending label', app, 'SMS configured - test pending');
 requireText('Messaging setup 10DLC label', app, '10DLC approval needed');

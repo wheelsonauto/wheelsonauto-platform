@@ -142,7 +142,7 @@ const WOA_AI_MAX_REQUESTS_PER_DAY = Math.max(1, Math.min(10000, Number(process.e
 const WOA_AI_MAX_REQUESTS_PER_MONTH = Math.max(WOA_AI_MAX_REQUESTS_PER_DAY, Math.min(100000, Number(process.env.WOA_AI_MAX_REQUESTS_PER_MONTH || 2500)));
 const WOA_MESSAGING_ENABLED = process.env.WOA_MESSAGING_ENABLED !== '0';
 const WOA_STAR_AI_ENABLED = process.env.WOA_STAR_AI_ENABLED !== '0';
-const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND !== '0';
+const WOA_AI_AUTO_SEND = process.env.WOA_AI_AUTO_SEND === '1';
 const WOA_AI_REPLY_DRAFTS = process.env.WOA_AI_REPLY_DRAFTS !== '0';
 const WOA_EMAIL_ENABLED = process.env.WOA_EMAIL_ENABLED !== '0';
 const WOA_EMAIL_PROVIDER = String(process.env.WOA_EMAIL_PROVIDER || process.env.EMAIL_PROVIDER || 'not_configured').toLowerCase();
@@ -221,7 +221,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-session-lock-208';
+const ASSET_VERSION = 'platform-20260719-star-safety-209';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);

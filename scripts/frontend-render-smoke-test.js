@@ -810,6 +810,15 @@ function sessionExpirySmoke() {
   assert(forbidden.window.location.href === '/', 'A role-based 403 must not be mistaken for an expired authentication session.');
 }
 
+function starAutoSendDefaultSmoke() {
+  const context = makeContext({ name: 'Owner Star Safety', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
+  context.db.integrations = context.db.integrations || {};
+  context.db.integrations.messaging = {};
+  assert(context.messagingStatus().aiAutoSend === false, 'Star auto-send must remain off when no saved messaging setting exists.');
+  context.db.integrations.messaging.aiAutoSend = true;
+  assert(context.messagingStatus().aiAutoSend === true, 'Star auto-send may turn on only after an explicit saved setting.');
+}
+
 function heavyMessagesReportsSmoke() {
   const context = makeContext({ name: 'Owner Heavy Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
   const customers = context.db.contracts || [];
@@ -871,6 +880,7 @@ async function main() {
   recoveryConsoleSmoke();
   await refreshCoordinationSmoke();
   sessionExpirySmoke();
+  starAutoSendDefaultSmoke();
   heavyMessagesReportsSmoke();
   console.log('Frontend render smoke passed: owner, manager, mechanic, public, recovery console, heavy Messages/Reports, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
 }
