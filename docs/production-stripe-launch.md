@@ -22,6 +22,9 @@ artifact and must never be committed as part of a code release.
   PostgreSQL backend, production-ready encrypted private object storage, and a
   dedicated encrypted offsite state-backup configuration are active. Clover
   setup and charging remain available during this infrastructure phase.
+- Do not start or retrieve live Stripe Identity sessions while production still
+  uses JSON or local document storage. License/selfie verification uses the same
+  PostgreSQL, encrypted private storage, and offsite-backup foundation gate.
 - Before enabling production hardening, reset the owner password through
   **Settings -> Account** so the platform stores the current PBKDF2 record.
   Saving the password revokes the current session and temporarily keeps the

@@ -318,6 +318,25 @@ function assertStripeCardPreparationReady(options = {}) {
   );
 }
 
+function stripeIdentityPreparationReady(options = {}) {
+  return stripeCardPreparationReady(options);
+}
+
+function assertStripeIdentityPreparationReady(options = {}) {
+  if (stripeIdentityPreparationReady(options)) return { ready: true, isolatedTestMode: options.isolatedTestMode === true };
+  const missing = [];
+  if (options.configured !== true || text(options.keyMode).toLowerCase() !== 'live') missing.push('Stripe live secret key');
+  if (options.webhookSecretConfigured !== true) missing.push('Stripe signed webhook secret');
+  if (options.transactionalStateReady !== true) missing.push('transactional PostgreSQL state backend');
+  if (options.privateDocumentStorageReady !== true) missing.push('production-ready encrypted private object storage');
+  if (options.stateBackupConfigured !== true) missing.push('dedicated encrypted offsite state-backup configuration');
+  throw stripeLaunchSafetyError(
+    'Stripe Identity is not safe to launch. Keep identity review manual until live Stripe, transactional PostgreSQL, encrypted private storage, and dedicated offsite backups are configured.',
+    'stripe_identity_preparation_not_live',
+    missing
+  );
+}
+
 function stripeMoneyActionsArmed(options = {}) {
   if (options.isolatedTestMode === true) return true;
   return options.productionHardeningRequired === true && stripeCardPreparationReady(options);
@@ -531,6 +550,8 @@ module.exports = {
   stripeLaunchSafetyError,
   stripeCardPreparationReady,
   assertStripeCardPreparationReady,
+  stripeIdentityPreparationReady,
+  assertStripeIdentityPreparationReady,
   stripeMoneyActionsArmed,
   assertStripeMoneyActionsArmed,
   stripeLiveResultAccepted,

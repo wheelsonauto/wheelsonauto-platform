@@ -10312,6 +10312,20 @@ function stripeCardPreparationReady() {
 function assertStripeCardPreparationReady() {
   return stripeMigration.assertStripeCardPreparationReady(stripeProviderSafetyOptions());
 }
+function stripeIdentityPreparationReady() {
+  return STRIPE_IDENTITY_RUNTIME_READY && stripeMigration.stripeIdentityPreparationReady(stripeProviderSafetyOptions());
+}
+function assertStripeIdentityPreparationReady() {
+  if (!STRIPE_IDENTITY_RUNTIME_READY) {
+    const mode = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity is prepared in test mode but cannot verify live customers.' : 'Stripe Identity is not connected.';
+    throw stripeMigration.stripeLaunchSafetyError(
+      mode + ' WheelsonAuto staff can continue with manual review until the live Stripe identity connection is enabled.',
+      'stripe_identity_runtime_not_live',
+      ['Stripe Identity live runtime']
+    );
+  }
+  return stripeMigration.assertStripeIdentityPreparationReady(stripeProviderSafetyOptions());
+}
 function stripeMoneyActionsArmed() {
   return stripeMigration.stripeMoneyActionsArmed(stripeProviderSafetyOptions());
 }
@@ -17915,7 +17929,7 @@ const server = http.createServer(async (req, res) => {
       const identityReturned = url.searchParams.get('identity') === 'returned';
       const identityLastChecked = Date.parse(context.session.identityVerificationLastCheckedAt || '') || 0;
       const identityPollDue = context.session.identityVerificationStatus === 'processing' && Date.now() - identityLastChecked >= 30000;
-      if (STRIPE_IDENTITY_RUNTIME_READY && context.session.stripeIdentityVerificationId && (identityReturned || identityPollDue)) {
+      if (stripeIdentityPreparationReady() && context.session.stripeIdentityVerificationId && (identityReturned || identityPollDue)) {
         try {
           await syncStripeIdentitySession(data, context.session, context.application);
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
@@ -18290,10 +18304,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'identity') {
         if (normalizedIdentityProvider(session.identityProvider) !== 'stripe') return json(res, 409, { ok: false, error: 'This onboarding file uses WheelsonAuto staff identity review.' });
-        if (!STRIPE_IDENTITY_RUNTIME_READY) {
-          const mode = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity is prepared in test mode but cannot verify live customers.' : 'Stripe Identity is not connected.';
-          return json(res, 503, { ok: false, error: mode + ' WheelsonAuto staff can continue with manual review until the live Stripe identity connection is enabled.' });
-        }
+        try { assertStripeIdentityPreparationReady(); } catch (error) { return json(res, Number(error.statusCode || 503), { ok: false, code: error.code, error: error.message, missing: error.missing || [] }); }
         const identityRate = await publicActionLimit(req, 'stripe-identity', 12, 60 * 60 * 1000);
         if (!identityRate.allowed) return json(res, 429, { ok: false, error: 'Too many identity-verification attempts. Wait before trying again.' }, { 'Retry-After': String(identityRate.retryAfterSeconds) });
         const onboardingState = nativeSite.onboardingStatus(data, session, application);
@@ -20375,7 +20386,7 @@ const server = http.createServer(async (req, res) => {
         providers: {
           identity: IDENTITY_PROVIDER,
           identityMode: STRIPE_KEY_MODE,
-          identityRuntimeReady: STRIPE_IDENTITY_RUNTIME_READY,
+          identityRuntimeReady: stripeIdentityPreparationReady(),
           insurance: configuredVerificationProvider('insurance'),
           background: configuredVerificationProvider('background'),
           driverRecord: configuredVerificationProvider('driver_record'),
@@ -20899,9 +20910,8 @@ const server = http.createServer(async (req, res) => {
         try { assertStripeMoneyActionsArmed(); } catch (error) { return json(res, Number(error.statusCode || 409), { ok: false, code: error.code, error: error.message }); }
       }
       const onboardingIdentityProvider = IDENTITY_PROVIDER === 'stripe' ? 'stripe' : 'manual';
-      if (onboardingIdentityProvider === 'stripe' && !STRIPE_IDENTITY_RUNTIME_READY) {
-        const reason = STRIPE_KEY_MODE === 'test' ? 'Stripe Identity has only a test key.' : 'Stripe Identity does not have a usable live key.';
-        return json(res, 503, { ok: false, error: reason + ' Keep WOA_IDENTITY_PROVIDER=manual until live Stripe Identity is enabled, or finish the live Stripe setup before creating this customer link.' });
+      if (onboardingIdentityProvider === 'stripe') {
+        try { assertStripeIdentityPreparationReady(); } catch (error) { return json(res, Number(error.statusCode || 503), { ok: false, code: error.code, error: error.message, missing: error.missing || [] }); }
       }
       const session = onboarding.createSession(data, application, user, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
       const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
