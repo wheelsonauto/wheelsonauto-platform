@@ -152,6 +152,8 @@ const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
 const WOA_PUBLIC_SITE_ENABLED = process.env.WOA_PUBLIC_SITE_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
 const WOA_DATA_BACKEND = String(process.env.WOA_DATA_BACKEND || 'json').trim().toLowerCase();
+const POSTGRES_DRILL_RUNTIME_KEYS = ['WOA_TEST_DATABASE_URL', 'WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL'];
+const POSTGRES_DRILL_CREDENTIALS_CONFIGURED = POSTGRES_DRILL_RUNTIME_KEYS.some(key => !!String(process.env[key] || '').trim());
 const WOA_POSTGRES_SNAPSHOT_LIMIT = Math.max(30, Math.min(1000, Number(process.env.WOA_POSTGRES_SNAPSHOT_LIMIT || 180)));
 const WOA_DEPLOY_COMMIT = String(process.env.RENDER_GIT_COMMIT || process.env.WOA_DEPLOY_COMMIT || '').trim().slice(0, 12);
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
@@ -218,7 +220,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-responsive-launch-199';
+const ASSET_VERSION = 'platform-20260719-drill-isolation-200';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9834,6 +9836,13 @@ function cloverRecurringMigrationReadiness(data = {}) {
 }
 async function productionInfrastructurePreflight(data = null) {
   const database = await STATE_REPOSITORY.health();
+  const databaseCredentialIsolation = {
+    ready: !POSTGRES_DRILL_CREDENTIALS_CONFIGURED,
+    configured: POSTGRES_DRILL_CREDENTIALS_CONFIGURED,
+    message: POSTGRES_DRILL_CREDENTIALS_CONFIGURED
+      ? 'Remove dedicated PostgreSQL drill credentials from the long-running production web service. Supply them only to a short-lived one-off recovery drill.'
+      : 'Dedicated PostgreSQL drill credentials are isolated from the production web runtime.'
+  };
   const backendCutover = await dataBackendCutoverEvidence();
   const recoveryDrill = currentRecoveryDrillEvidence(database);
   const databaseWithRecoveryDrill = { ...database, recoveryDrill, recoveryDrillReady: recoveryDrill.ready };
@@ -9857,6 +9866,7 @@ async function productionInfrastructurePreflight(data = null) {
   const assignmentConflicts = assignmentClassification.all;
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
+  if (!databaseCredentialIsolation.ready) missing.push('remove dedicated PostgreSQL drill credentials from the production web runtime');
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
   if (!backendCutover.ready) missing.push('persistent PostgreSQL cutover sentinel');
   if (!databaseWithRecoveryDrill.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
@@ -9898,6 +9908,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   return {
     database: databaseWithRecoveryDrill,
+    databaseCredentialIsolation,
     backendCutover,
     recoveryDrill,
     stateBackup,
@@ -10009,6 +10020,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     ['STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET ? 'Set' : 'Optional', 'Signed Stripe payment and dispute reconciliation'],
     ['WOA_DATA_BACKEND', STATE_REPOSITORY.kind === 'postgres' ? 'PostgreSQL enabled' : 'JSON development fallback', 'Set postgres only after the controlled migration preflight passes; production Stripe launch requires PostgreSQL'],
     ['DATABASE_URL', STATE_REPOSITORY.kind === 'postgres' ? 'Set' : 'Provider setup needed', 'Transactional PostgreSQL state, snapshots, webhook idempotency, recovery history, and uniqueness constraints'],
+    ['WOA_TEST_DATABASE_URL', POSTGRES_DRILL_CREDENTIALS_CONFIGURED ? 'Remove from web runtime' : 'Isolated', 'Dedicated drill database credentials belong only in short-lived one-off test jobs, never in the production web service'],
     ['WOA_STATE_BACKUP_ENABLED', WOA_STATE_BACKUP_ENABLED ? 'Set' : 'Provider setup needed', 'Scheduled authenticated encrypted offsite state backup with a signed latest pointer and freshness gate'],
     ['WOA_STATE_BACKUP_ENCRYPTION_KEY', STATE_BACKUP_DEDICATED_KEY_CONFIGURED ? 'Set' : STATE_BACKUP_STORE.status().encryptionConfigured ? 'Document-key fallback only' : 'Missing', 'Dedicated AES-256-GCM state-backup key required before production launch'],
     ['WOA_DOCUMENT_ENCRYPTION_KEY', PRIVATE_DOCUMENT_STORE.status().encryptionConfigured ? 'Set' : 'Missing', 'AES-256-GCM encryption for private IDs, insurance, signatures, contracts, receipts, and dispute evidence'],

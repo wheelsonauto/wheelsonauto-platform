@@ -220,6 +220,7 @@ assertIncludes('Owner live launch preflight surface', app, [
   'open-live-launch-preflight',
   '/api/system/infrastructure/preflight',
   'Controlled Stripe launch preflight',
+  'Database credential isolation',
   'Clover cutover roster',
   'Clover cutover review',
   'liveLaunchCloverQuarantineReview',

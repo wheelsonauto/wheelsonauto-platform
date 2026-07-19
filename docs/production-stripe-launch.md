@@ -10,6 +10,11 @@ artifact and must never be committed as part of a code release.
 - Do not cancel a Clover plan before the matching Stripe first charge passes.
 - Do not set `WOA_DATA_BACKEND=postgres` until the import, checksum, and test
   restore pass against the intended database.
+- Never store `WOA_TEST_DATABASE_URL` or
+  `WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL` on the long-running Render web
+  service. Inject those credentials only into the short-lived one-off command
+  that performs the controlled drill, then remove them. The dedicated drill
+  database must never be reused as the production database.
 - Do not set `WOA_PRODUCTION_HARDENING_REQUIRED=1` until the owner-only
   infrastructure preflight is clear.
 - Before enabling production hardening, reset the owner password through
@@ -57,6 +62,11 @@ WOA_TEST_DATABASE_URL='postgresql://...' \
 WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1 \
 pnpm run postgres-runtime-check
 ```
+
+Pass `WOA_TEST_DATABASE_URL` to that command or one-off job only. Do not save it
+as a normal environment variable on `wheelsonauto-platform`; the live launch
+preflight and hardened startup gate deliberately reject a web runtime that can
+reach the dedicated drill database.
 
 It creates a random test organization, proves write/snapshot/restore/checksum
 behavior, then removes only that generated test organization. Never point

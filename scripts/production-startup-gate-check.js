@@ -36,6 +36,7 @@ function cleanRuntimeEnvironment(dataDir) {
     WOA_AUTOPAY_MS: '3600000',
     WOA_AUTO_SYNC_STARTUP_DELAY_MS: '3600000',
     DATABASE_URL: '',
+    WOA_TEST_DATABASE_URL: 'postgres://drill-only:drill-only@127.0.0.1:5432/wheelsonauto-drill',
     STRIPE_SECRET_KEY: '',
     WOA_STRIPE_SECRET_KEY: '',
     STRIPE_WEBHOOK_SECRET: '',
@@ -74,6 +75,7 @@ async function main() {
     assert.strictEqual(result.status, 1, 'Hardened mode with incomplete infrastructure must refuse to start the HTTP server.');
     assert.match(output, /WheelsonAuto refused to start with incomplete production safeguards/i, 'The startup failure must clearly identify the production guard.');
     assert.match(output, /PostgreSQL transactional state/i, 'The startup guard must require transactional PostgreSQL.');
+    assert.match(output, /remove dedicated PostgreSQL drill credentials from the production web runtime/i, 'The startup guard must reject a web service that retains the dedicated drill database credential.');
     assert.match(output, /controlled PostgreSQL recovery drill/i, 'The startup guard must require a fresh controlled PostgreSQL restore and restart drill.');
     assert.match(output, /WOA_STATE_BACKUP_ENABLED=1/i, 'The startup guard must require the scheduled encrypted state-backup worker.');
     assert.match(output, /HTTPS offsite encrypted state-backup storage/i, 'The startup guard must require independent HTTPS offsite backup storage.');
