@@ -582,6 +582,12 @@ function ownerSmoke() {
   });
   const assignmentResolverBoard = renderView(context, 'Operations', 'Assigned');
   assert(assignmentResolverBoard.includes('data-action="resolve-assignment-conflict"') && assignmentResolverBoard.includes('data-id="veh-owner-resolver-reachability"'), 'Operations / Assigned must render the owner conflict resolver after all fleet-card decorators are applied.');
+  const launchAssignmentReview = context.liveLaunchPreflightModal({
+    ok: false,
+    missing: ['resolve active vehicle assignment conflicts'],
+    assignmentConflicts: [{ vehicleId: 'veh-owner-resolver-reachability', vehicle: '2025 Resolver Reachability', vin: 'RESOLVERREACHVIN', plate: 'RES-OLVE', claimedBy: 'Resolver Primary / Resolver Alias' }]
+  });
+  assert(launchAssignmentReview.includes('Data conflicts') && launchAssignmentReview.includes('Vehicle assignment review') && launchAssignmentReview.includes('RESOLVERREACHVIN') && launchAssignmentReview.includes('Resolver Primary / Resolver Alias') && launchAssignmentReview.includes('data-view="Operations" data-tab="Assigned"'), 'Controlled Stripe preflight must count active vehicle assignment conflicts and route the owner to the exact review workspace.');
 
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payments & customers', 'customer-pay-list']],

@@ -218,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-assignment-resolver-195';
+const ASSET_VERSION = 'platform-20260719-assignment-launch-gate-196';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -5919,6 +5919,18 @@ function assignmentConflictRows(data = {}) {
     return String(vehicle.assignmentConflict || '').trim() && !/removed/i.test(String(vehicle.status || ''));
   });
 }
+function assignmentConflictPreflightRows(data = {}) {
+  return assignmentConflictRows(data).map(vehicle => ({
+    vehicleId: String(vehicle.id || '').trim(),
+    vehicle: vehicleNameFromParts(vehicle),
+    vin: String(vehicle.vin || '').trim(),
+    plate: String(vehicle.plate || vehicle.stock || '').trim(),
+    tracker: trackerName(vehicle),
+    status: String(vehicle.status || '').trim(),
+    currentCustomer: String(vehicle.currentCustomer || '').trim(),
+    claimedBy: String(vehicle.assignmentConflict || '').trim()
+  }));
+}
 function customerVehicleTextGapRows(data = {}) {
   const fleetNames = new Set((Array.isArray(data.vehicles) ? data.vehicles : []).map(vehicle => normKey(vehicleNameFromParts(vehicle))).filter(Boolean));
   const rows = [];
@@ -9809,6 +9821,7 @@ async function productionInfrastructurePreflight(data = null) {
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const cloverRecurring = cloverRecurringMigrationReadiness(state);
   const identityConflicts = stateRepository.identityConflicts(state);
+  const assignmentConflicts = assignmentConflictRows(state);
   const identityWarnings = stateRepository.identityWarnings(state);
   const missing = [];
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
@@ -9846,7 +9859,8 @@ async function productionInfrastructurePreflight(data = null) {
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
-  if (identityConflicts.length) missing.push('resolve customer and vehicle identity conflicts');
+  if (identityConflicts.length) missing.push('resolve duplicate provider identity conflicts');
+  if (assignmentConflicts.length) missing.push('resolve active vehicle assignment conflicts');
   if (identityWarnings.length) missing.push('complete vehicle VIN identity review');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   return {
@@ -9868,6 +9882,7 @@ async function productionInfrastructurePreflight(data = null) {
     ownerAuthentication,
     cloverRecurring,
     identityConflictCount: identityConflicts.length,
+    assignmentConflictCount: assignmentConflicts.length,
     identityWarnings,
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
@@ -21243,6 +21258,7 @@ const server = http.createServer(async (req, res) => {
         health.infrastructure = {
           ...infrastructure,
           identityConflicts: identityConflicts.slice(0, 20),
+          assignmentConflicts: assignmentConflictPreflightRows(data).slice(0, 20),
           identityWarnings: stateRepository.identityWarnings(data).slice(0, 20),
           openJobErrors: await STATE_REPOSITORY.recentJobErrors(12)
         };
@@ -21254,11 +21270,13 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const infrastructure = await productionInfrastructurePreflight(data);
       const conflicts = stateRepository.identityConflicts(data);
+      const assignmentConflicts = assignmentConflictPreflightRows(data);
       const warnings = stateRepository.identityWarnings(data);
       return json(res, 200, {
-        ok: infrastructure.readyForLiveStripe && conflicts.length === 0 && warnings.length === 0,
+        ok: infrastructure.readyForLiveStripe && conflicts.length === 0 && assignmentConflicts.length === 0 && warnings.length === 0,
         ...infrastructure,
         identityConflicts: conflicts.slice(0, 50),
+        assignmentConflicts: assignmentConflicts.slice(0, 50),
         identityWarnings: warnings.slice(0, 50),
         openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
         requiredBeforeLiveStripe: [
