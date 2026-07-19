@@ -217,7 +217,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-clover-roster-178';
+const ASSET_VERSION = 'platform-20260718-clover-proof-179';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1388,6 +1388,14 @@ function messagingLaunchConfigurationFingerprint(data = {}) {
     MESSAGING_WEBHOOK_SECRET,
     PUBLIC_BASE_URL,
     settings.enabled ? '1' : '0'
+  ]);
+}
+function cloverRecurringConfigurationFingerprint() {
+  return launchConfigurationFingerprint([
+    CLOVER_ENV,
+    CLOVER_API_BASE,
+    CLOVER_TOKEN,
+    CLOVER_MERCHANT_ID
   ]);
 }
 function emailLaunchConfigurationFingerprint(data = {}) {
@@ -7643,7 +7651,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError', 'telnyx10dlc', 'aiUsage', 'smsWebhookConnected', 'smsWebhookConfiguredAt'];
-  const cloverProofFields = ['lastRecurringPlanSyncAt', 'lastRecurringPlanSyncError', 'lastRecurringPlanSyncWarning', 'lastRecurringMemberSyncWarning', 'lastRecurringPlanSyncDegradedAt', 'lastRecurringPlanSyncDegradedStatus', 'lastRecurringPlanSyncPreservedPlans', 'lastRecurringPlanSyncPreservedMembers', 'lastRecurringRosterCoverage', 'lastRecurringVerifiedSubscriptionIds', 'lastRecurringVerifiedSubscriptionIdsAt', 'lastRecurringSubscriptionSyncSource', 'lastRecurringPlanSyncSource', 'lastRecurringPlanSyncPaths', 'lastRecurringPlanSyncDetails', 'recurringPlanSummary'];
+  const cloverProofFields = ['lastRecurringPlanSyncAt', 'lastRecurringPlanSyncError', 'lastRecurringPlanSyncWarning', 'lastRecurringMemberSyncWarning', 'lastRecurringPlanSyncDegradedAt', 'lastRecurringPlanSyncDegradedStatus', 'lastRecurringPlanSyncPreservedPlans', 'lastRecurringPlanSyncPreservedMembers', 'lastRecurringRosterCoverage', 'lastRecurringVerifiedSubscriptionIds', 'lastRecurringVerifiedSubscriptionIdsAt', 'lastRecurringVerifiedConfigurationFingerprint', 'lastRecurringSubscriptionSyncSource', 'lastRecurringPlanSyncSource', 'lastRecurringPlanSyncPaths', 'lastRecurringPlanSyncDetails', 'recurringPlanSummary'];
   const preserveFields = (prior, candidate, fields) => {
     const safe = { ...(candidate || {}) };
     fields.forEach(field => {
@@ -7692,6 +7700,7 @@ function redactStaffSecrets(data) {
     delete safe.integrations.messaging.lastTelnyxInboundConfigurationFingerprint;
     delete safe.integrations.messaging.lastAiHealthConfigurationFingerprint;
   }
+  if (safe.integrations && safe.integrations.clover) delete safe.integrations.clover.lastRecurringVerifiedConfigurationFingerprint;
   return safe;
 }
 function scrubOrganizationProviderProfile(organization) {
@@ -9633,8 +9642,12 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const activeCustomers = Math.max(identities.size, Number(summary.activeCustomers || 0));
   const activePlans = Math.max(Number(summary.activePlans || 0), (clover.recurringPlans || []).filter(plan => !inactiveStatus.test(String(plan && plan.status || 'active').toLowerCase())).length);
   const requiresFreshRoster = activeCustomers > 0 || activePlans > 0;
-  const checkedAt = String(clover.lastRecurringPlanSyncAt || '');
+  const latestSyncAt = String(clover.lastRecurringPlanSyncAt || '');
+  const checkedAt = String(clover.lastRecurringVerifiedSubscriptionIdsAt || '');
   const checkedAtMs = Date.parse(checkedAt);
+  const expectedConfigurationFingerprint = cloverRecurringConfigurationFingerprint();
+  const recordedConfigurationFingerprint = String(clover.lastRecurringVerifiedConfigurationFingerprint || '');
+  const configurationMatched = evidenceFingerprintMatches(recordedConfigurationFingerprint, expectedConfigurationFingerprint);
   const degradedAt = String(clover.lastRecurringPlanSyncDegradedAt || '');
   const degradedAtMs = Date.parse(degradedAt);
   const currentDegradedFailure = Number.isFinite(degradedAtMs) && (!Number.isFinite(checkedAtMs) || degradedAtMs >= checkedAtMs);
@@ -9644,14 +9657,15 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const degraded = currentDegradedFailure || !!providerError;
   const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
   const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS;
-  const fullRosterReady = !requiresFreshRoster || (fresh && !degraded && !warning && coverage.complete !== false && quarantinedRows.length === 0);
+  const fullRosterReady = !requiresFreshRoster || (fresh && configurationMatched && !degraded && !warning && coverage.complete !== false && quarantinedRows.length === 0);
   const reviewRequired = requiresFreshRoster && (!!warning || coverage.complete === false || quarantinedRows.length > 0);
-  const ready = !requiresFreshRoster || (fresh && !degraded && eligibleRows.length > 0);
+  const ready = !requiresFreshRoster || (fresh && configurationMatched && !degraded && eligibleRows.length > 0);
   let error = '';
   if (requiresFreshRoster && currentDegradedFailure) error = 'Clover recurring refresh is degraded (HTTP ' + Number(clover.lastRecurringPlanSyncDegradedStatus || 0) + '). Keep the preserved roster read-only and correct the Clover merchant API token before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && providerError) error = 'Clover recurring refresh has not recovered. Correct the provider connection before scheduling Stripe cutovers.';
-  else if (requiresFreshRoster && !checkedAt) error = 'Run a successful Clover recurring roster refresh before scheduling Stripe cutovers.';
-  else if (requiresFreshRoster && !fresh) error = 'The last successful Clover recurring roster is stale. Refresh it before scheduling Stripe cutovers.';
+  else if (requiresFreshRoster && !checkedAt) error = 'Run a successful Clover provider recurring roster refresh before scheduling Stripe cutovers. A manual Plan Manager import is not provider verification.';
+  else if (requiresFreshRoster && !configurationMatched) error = 'The verified Clover roster belongs to an older or different merchant configuration. Run a fresh Clover recurring sync with the currently deployed merchant API credentials.';
+  else if (requiresFreshRoster && !fresh) error = 'The last provider-verified Clover recurring roster is stale. Refresh it before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && !eligibleRows.length) error = 'No active Clover row has both an exact subscription ID and a verified customer identity. Resolve at least one individual row before scheduling a Stripe cutover.';
   const message = ready
     ? (requiresFreshRoster
@@ -9662,6 +9676,7 @@ function cloverRecurringMigrationReadiness(data = {}) {
     : '';
   return {
     checkedAt,
+    latestSyncAt,
     degradedAt,
     degradedStatus: Number(clover.lastRecurringPlanSyncDegradedStatus || 0),
     activeCustomers,
@@ -9683,6 +9698,8 @@ function cloverRecurringMigrationReadiness(data = {}) {
     fullRosterReady,
     requiresFreshRoster,
     verified: !!checkedAt,
+    configurationMatched,
+    verifiedSubscriptionIds: Array.isArray(clover.lastRecurringVerifiedSubscriptionIds) ? new Set(clover.lastRecurringVerifiedSubscriptionIds.map(value => String(value || '').trim()).filter(Boolean)).size : 0,
     fresh,
     degraded,
     maxAgeHours: Math.round(WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000) * 10) / 10,
@@ -13431,6 +13448,7 @@ async function syncCloverRecurringPlans(data) {
     .map(row => String(row && (row.cloverSubscriptionId || row.subscriptionId || row.id) || '').trim())
     .filter(Boolean)));
   data.integrations.clover.lastRecurringVerifiedSubscriptionIdsAt = rosterCheckedAt;
+  data.integrations.clover.lastRecurringVerifiedConfigurationFingerprint = cloverRecurringConfigurationFingerprint();
   const expectedActiveSubscriptions = Number(summary.activeCustomers || 0);
   const providerSubscriptionRows = importedMembers.length;
   const reconciledNamedMembers = reconciledMembers.filter(recurringMemberNameResolved);
@@ -22243,6 +22261,7 @@ module.exports = {
   emailChannelReadiness,
   openAiProviderReadiness,
   messagingLaunchConfigurationFingerprint,
+  cloverRecurringConfigurationFingerprint,
   emailLaunchConfigurationFingerprint,
   usesVerifiedWheelsonAutoSendingDomain,
   starAiLaunchConfigurationFingerprint,

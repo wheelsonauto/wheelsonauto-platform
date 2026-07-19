@@ -523,10 +523,21 @@ merchant API token is corrected; do not schedule a customer cutover from a
 stale roster alone.
 
 The owner **Live launch preflight** enforces this rule as a separate Clover
-cutover-roster gate. A current `401`, `403`, `404`, incomplete-count warning,
-or roster older than six hours keeps that gate blocked even if older job
+cutover-roster gate. Provider subscription evidence has its own timestamp; a
+manual Plan Manager import cannot refresh it. The evidence is also bound to the
+deployed Clover environment, API base, merchant ID, and API token. Changing any
+of those values invalidates the old evidence until a new provider sync passes.
+A current `401`, `403`, `404`, changed configuration, or roster older than six
+hours keeps the gate blocked even if a generic import is current or older job
 errors are marked reviewed. `WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS` may
 make the window stricter, but it must not be used to bypass a degraded sync.
+
+When Clover returns a partial roster, only exact subscription IDs present in
+that protected provider response may proceed through an individual cutover.
+Missing plans, duplicated subscription IDs, and ambiguous customer identities
+remain quarantined on Clover. A count warning therefore never authorizes an
+unknown row and does not prevent a separately verified row from being migrated
+one customer plan at a time.
 
 ## 6. Provider Settings
 
