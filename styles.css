@@ -7808,3 +7808,13 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .assignment-evidence-row span,
   .assignment-claim-list span{text-align:left}
 }
+
+/* Launch evidence stays compact before the long provider and conflict tables. */
+.modal .launch-preflight-stats{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:8px}
+.modal .launch-preflight-stats .stat{min-width:0}
+.modal .launch-preflight-stats small{overflow-wrap:anywhere}
+@media(max-width:700px){
+  .modal .launch-preflight-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .modal .launch-preflight-stats .stat{padding:10px}
+  .modal .launch-preflight-stats .stat b{font-size:22px;margin-top:4px}
+}
