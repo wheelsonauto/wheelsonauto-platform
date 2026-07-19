@@ -7745,3 +7745,66 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .recovery-snapshot-picker .btn{width:100%}
   .recovery-restore-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+/* Owner-only assignment review keeps identity evidence compact and readable. */
+.assignment-review-section{display:grid;gap:9px;margin:11px 0}
+.assignment-review-head{display:flex;align-items:end;justify-content:space-between;gap:10px}
+.assignment-review-head strong{color:#f2eee5;font-size:13px}
+.assignment-review-head small{color:#9fa4a8;font-size:10px;text-align:right}
+.assignment-match-strip,
+.assignment-provider-summary{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px;
+}
+.assignment-match-strip>div,
+.assignment-provider-summary>span{
+  min-width:0;
+  padding:9px 10px;
+  border:1px solid rgba(99,202,143,.28);
+  border-radius:8px;
+  background:rgba(73,168,113,.075);
+}
+.assignment-match-strip strong,
+.assignment-match-strip span,
+.assignment-match-strip small{display:block;overflow-wrap:anywhere}
+.assignment-match-strip strong{color:#94ddb1;font-size:11px}
+.assignment-match-strip span{margin-top:3px;color:#f1eee6;font-size:13px;font-weight:800}
+.assignment-match-strip small{margin-top:3px;color:#a9b2ad;font-size:9px}
+.assignment-provider-summary>span{
+  border-color:rgba(205,209,213,.15);
+  background:rgba(231,234,236,.04);
+  color:#a8aaac;
+  font-size:9px;
+  text-align:center;
+}
+.assignment-provider-summary b{display:block;margin-bottom:2px;color:#eeeae1;font-size:16px}
+.assignment-evidence-list,
+.assignment-claim-list{display:grid;gap:6px}
+.assignment-evidence-row,
+.assignment-claim-list>div{
+  display:grid;
+  gap:4px;
+  min-width:0;
+  padding:9px 10px;
+  border:1px solid rgba(203,207,211,.14);
+  border-radius:8px;
+  background:rgba(230,233,236,.035);
+}
+.assignment-evidence-row>div{display:flex;justify-content:space-between;align-items:start;gap:10px;min-width:0}
+.assignment-evidence-row strong,
+.assignment-claim-list strong{color:#f1eee6;font-size:12px;overflow-wrap:anywhere}
+.assignment-evidence-row span,
+.assignment-claim-list span{color:#c8c9c6;font-size:10px;line-height:1.4;text-align:right;overflow-wrap:anywhere}
+.assignment-evidence-row small{color:#969b9e;font-size:9px;line-height:1.4;overflow-wrap:anywhere}
+.assignment-claim-list>div{grid-template-columns:minmax(130px,.65fr) minmax(0,1.35fr);align-items:center}
+
+@media(max-width:680px){
+  .assignment-review-head{align-items:start}
+  .assignment-match-strip,
+  .assignment-provider-summary{grid-template-columns:1fr}
+  .assignment-evidence-row>div,
+  .assignment-claim-list>div{display:grid;grid-template-columns:1fr;gap:3px}
+  .assignment-evidence-row span,
+  .assignment-claim-list span{text-align:left}
+}

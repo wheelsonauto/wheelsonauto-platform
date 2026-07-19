@@ -218,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-complete-source-audit-193';
+const ASSET_VERSION = 'platform-20260719-assignment-evidence-194';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -5567,9 +5567,77 @@ function activeAssignmentClaimsForVehicle(data = {}, vehicleId = '') {
   addRows(data.customers, 'Customer record');
   return claims.sort((a, b) => String(a.customer).localeCompare(String(b.customer)) || String(a.source).localeCompare(String(b.source)) || String(a.id).localeCompare(String(b.id)));
 }
+function assignmentConflictIdentityEvidence(data = {}, claims = []) {
+  const names = [];
+  claims.forEach(claim => {
+    const name = String(claim && claim.customer || '').trim();
+    if (name && !names.some(saved => normKey(saved) === normKey(name))) names.push(name);
+  });
+  const collections = [
+    ['Customer record', data.customers],
+    ['Customer file', data.contracts],
+    ['WheelsonAuto autopay', data.recurringPayments],
+    ['Clover recurring', (((data.integrations || {}).clover || {}).recurringPlanMembers)],
+    ['Customer portal', data.customerAccounts]
+  ];
+  const internal = names.map(customer => {
+    const key = normKey(customer);
+    const rows = [];
+    collections.forEach(([source, records]) => {
+      (Array.isArray(records) ? records : []).forEach(row => {
+        if (normKey(row && (row.customer || row.name) || '') === key) rows.push({ source, row });
+      });
+    });
+    const unique = values => [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
+    const phoneValues = unique(rows.map(entry => phoneKey(entry.row.phone || entry.row.phoneNumber)));
+    const emailValues = unique(rows.map(entry => emailKey(entry.row.email || entry.row.emailAddress)));
+    const cloverCustomerIds = unique(rows.map(entry => entry.row.cloverCustomerId));
+    const cloverSubscriptionIds = unique(rows.map(entry => entry.row.cloverSubscriptionId));
+    const cardEndings = unique(rows.map(entry => entry.row.cardLast4 || entry.row.stripeCardLast4)).filter(value => /^\d{4}$/.test(value));
+    const claimCount = claims.filter(claim => normKey(claim.customer) === key).length;
+    return {
+      raw: { phoneValues, emailValues, cloverCustomerIds, cloverSubscriptionIds, cardEndings },
+      safe: {
+        customer,
+        recordCount: rows.length,
+        claimCount,
+        sources: unique(rows.map(entry => entry.source)),
+        phones: phoneValues.map(maskPhone),
+        emails: emailValues.map(maskEmail),
+        cloverProfileCount: cloverCustomerIds.length,
+        cloverSubscriptionCount: cloverSubscriptionIds.length,
+        cardEndings: cardEndings.map(value => 'ending ' + value)
+      }
+    };
+  });
+  const sharedSignals = [];
+  const addSharedSignals = (kind, label, valueKey, masker) => {
+    const values = [...new Set(internal.flatMap(item => item.raw[valueKey]))];
+    values.forEach(value => {
+      const customers = internal.filter(item => item.raw[valueKey].includes(value)).map(item => item.safe.customer);
+      if (customers.length > 1) sharedSignals.push({ kind, label, value: masker(value), customers });
+    });
+  };
+  addSharedSignals('phone', 'Exact phone match', 'phoneValues', maskPhone);
+  addSharedSignals('email', 'Exact email match', 'emailValues', maskEmail);
+  const providerIds = [...new Set(internal.flatMap(item => item.raw.cloverCustomerIds))];
+  const subscriptionIds = [...new Set(internal.flatMap(item => item.raw.cloverSubscriptionIds))];
+  const cardEndings = [...new Set(internal.flatMap(item => item.raw.cardEndings))];
+  return {
+    identities: internal.map(item => item.safe),
+    sharedSignals,
+    providerSummary: {
+      cloverCustomerProfiles: providerIds.length,
+      cloverSubscriptions: subscriptionIds.length,
+      savedCardEndings: cardEndings.map(value => 'ending ' + value)
+    }
+  };
+}
 function assignmentConflictReview(data = {}, vehicleId = '') {
   const vehicle = (Array.isArray(data.vehicles) ? data.vehicles : []).find(row => String(row && row.id || '') === String(vehicleId || ''));
   if (!vehicle) return null;
+  const claims = activeAssignmentClaimsForVehicle(data, vehicle.id);
+  const evidence = assignmentConflictIdentityEvidence(data, claims);
   return {
     vehicle: {
       id: vehicle.id,
@@ -5581,7 +5649,10 @@ function assignmentConflictReview(data = {}, vehicleId = '') {
       currentCustomer: vehicle.currentCustomer || '',
       conflict: vehicle.assignmentConflict || ''
     },
-    claims: activeAssignmentClaimsForVehicle(data, vehicle.id),
+    claims,
+    identities: evidence.identities,
+    sharedSignals: evidence.sharedSignals,
+    providerSummary: evidence.providerSummary,
     aliases: assignmentAliasRows(data, vehicle.id).map(row => ({
       id: row.id || '',
       canonicalCustomer: row.canonicalCustomer || '',

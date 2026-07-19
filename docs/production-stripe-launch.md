@@ -277,6 +277,16 @@ identity conflict remains, the review copy is retained but the command exits
 with status `2`; PostgreSQL import remains blocked until the owner explicitly
 resolves that business-data decision and a fresh protected copy is prepared.
 
+For an active customer/vehicle conflict, sign in as the owner and open
+**Operations -> Assigned**. Select **Resolve** on the exact vehicle. The modal
+loads an owner-only server review with masked exact phone/email matches, active
+claim sources, amounts, schedules, Clover profile counts, subscription counts,
+and saved-card endings. Confirm the link only when the two names are truly the
+same person. The action is scoped to that vehicle, audited, reversible, and
+does not merge or rewrite any customer, card, payment, contract, or recurring
+record. If the evidence is uncertain, leave the conflict open and keep the
+PostgreSQL import blocked.
+
 Run preflight again against the newly created copy. From this point forward,
 use only that copy and its **new** `sourceFileChecksum` for import and proof.
 Keep the original live JSON and repair manifest as rollback and audit evidence.

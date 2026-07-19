@@ -1105,8 +1105,8 @@ async function main() {
       { id: 'rec-direct-alias-profile-only', organizationId: 'org-wheelsonauto', customer: 'Direct Long Alias Person', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-alias-short', organizationId: 'org-wheelsonauto', customer: 'Direct Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-alias-middle', organizationId: 'org-wheelsonauto', customer: 'Direct Middle Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
-      { id: 'rec-direct-conflict-one', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict One', vehicleId: 'veh-direct-assignment-conflict', amount: 111, status: 'Active', nextRun: '2026-07-24' },
-      { id: 'rec-direct-conflict-two', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Two', vehicleId: 'veh-direct-assignment-conflict', amount: 112, status: 'Active', nextRun: '2026-07-24' }
+      { id: 'rec-direct-conflict-one', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict One', phone: '856-555-1385', email: 'direct.alias@example.com', vehicleId: 'veh-direct-assignment-conflict', amount: 111, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-24', cloverCustomerId: 'CLV-DIRECT-ONE', cloverSubscriptionId: 'SUB-DIRECT-ONE', cardLast4: '1111' },
+      { id: 'rec-direct-conflict-two', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Two', phone: '(856) 555-1385', email: 'DIRECT.ALIAS@example.com', vehicleId: 'veh-direct-assignment-conflict', amount: 112, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-24', cloverCustomerId: 'CLV-DIRECT-TWO', cloverSubscriptionId: 'SUB-DIRECT-TWO', cardLast4: '1111' }
     );
     assignmentConflictState.maintenance.unshift({ id: 'mnt-direct-open-inspection-no-checklist', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-assignment-alias', vehicle: '2025 Direct Alias Car', vin: 'DIRECTALIASVIN', plate: 'DIR-ALS', tracker: 'TRK-ALS', customer: 'Direct Alias Person', status: 'Scheduled', type: 'Inspection', issue: 'Open inspection checklist is completed at sign-off', due: '2026-07-30' });
     const assignmentConflictWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: assignmentConflictState });
@@ -1128,6 +1128,12 @@ async function main() {
     assert(Number((conflictReadiness.json.truthChecks.find(row => row.key === 'service_identity') || {}).count || 0) === serviceIdentityCountBefore, 'An open inspection with customer, vehicle identity, and due date must not be treated as incomplete before mechanic sign-off.');
     const conflictReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-conflict/assignment-conflict', { cookie: ownerCookie });
     assert(conflictReview.status === 200 && conflictReview.json && conflictReview.json.review && conflictReview.json.review.claims.length === 2, 'Owner conflict review should expose only the two active claims for the selected vehicle.');
+    assert(conflictReview.json.review.identities.length === 2, 'Owner conflict review should keep each conflicting customer name visible as a separate evidence row.');
+    assert(conflictReview.json.review.sharedSignals.some(row => row.label === 'Exact phone match' && row.value === '***-***-1385'), 'Owner conflict review should expose a masked exact phone match across the two names.');
+    assert(conflictReview.json.review.sharedSignals.some(row => row.label === 'Exact email match' && row.value === 'd***@example.com'), 'Owner conflict review should expose a masked exact email match across the two names.');
+    assert(conflictReview.json.review.providerSummary.cloverCustomerProfiles === 2 && conflictReview.json.review.providerSummary.cloverSubscriptions === 2, 'Owner conflict review should count distinct Clover identities without exposing the private provider IDs.');
+    assert(conflictReview.json.review.providerSummary.savedCardEndings.includes('ending 1111'), 'Owner conflict review should show only the saved-card ending needed for comparison.');
+    assert(!conflictReview.text.includes('856-555-1385') && !conflictReview.text.includes('direct.alias@example.com') && !conflictReview.text.includes('CLV-DIRECT-ONE'), 'Owner conflict review must not return raw contact details or Clover identifiers to the browser.');
     const aliasWithoutConfirmation = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias', {
       cookie: ownerCookie,
       json: { canonicalCustomer: 'Direct Conflict One', aliasCustomer: 'Direct Conflict Two' }
