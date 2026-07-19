@@ -120,8 +120,11 @@ The guard verifies that:
 - PostgreSQL and production hardening remain explicit operator gates.
 
 Do not copy or sync that example until the owner approves the paid PostgreSQL
-resource. Applying it can create a paid `basic-256mb` database. When approval
-is given, use this order:
+resource. Applying it can create the reviewed paid `basic-1gb` PostgreSQL 18
+database. The smaller 256 MB tier is intentionally excluded from the production
+template because this service also handles payment webhooks, encrypted document
+metadata, background jobs, and operator reporting. When approval is given, use
+this order:
 
 1. Create the database in the **Production** environment and Oregon region.
 2. Disable external database access (`ipAllowList: []`) and use Render's

@@ -41,9 +41,9 @@ assert(/REVIEW-ONLY PRODUCTION CUTOVER TEMPLATE/.test(template), 'The production
 assert(/Applying this template can create a paid database/.test(template), 'The production template must disclose the paid-resource side effect.');
 
 assert(/^databases:\s*$/m.test(template), 'The production template must declare PostgreSQL.');
-assert(/^\s*plan:\s*basic-256mb\s*$/m.test(template), 'The production database must use the explicit entry paid plan.');
+assert(/^\s*plan:\s*basic-1gb\s*$/m.test(template), 'The production database must use the reviewed 1 GB paid plan rather than the undersized 256 MB tier.');
 assert(/^\s*region:\s*oregon\s*$/m.test(template), 'The production database and service must remain in the current Oregon region.');
-assert(/^\s*postgresMajorVersion:\s*["']16["']\s*$/m.test(template), 'The production template must match the PostgreSQL 16 runtime proven in CI.');
+assert(/^\s*postgresMajorVersion:\s*["']18["']\s*$/m.test(template), 'The production template must match the PostgreSQL 18 runtime used by the current Render drill.');
 assert(/^\s*ipAllowList:\s*\[\]\s*$/m.test(template), 'The production database must reject public Internet connections.');
 assert(/^\s*runtime:\s*node\s*$/m.test(template), 'The Render service must use the current node runtime declaration.');
 
@@ -65,8 +65,12 @@ assert(!/- key: (?:WOA_TEST_DATABASE_URL|WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL
   ['WOA_ONBOARDING_PAYMENT_PROVIDER', 'stripe'],
   ['WOA_IDENTITY_PROVIDER', 'stripe'],
   ['WOA_MESSAGING_PROVIDER', 'telnyx'],
+  ['WOA_MESSAGING_ENABLED', '1'],
   ['TELNYX_10DLC_USECASE', 'CUSTOMER_CARE'],
   ['WOA_EMAIL_PROVIDER', 'resend'],
+  ['WOA_EMAIL_ENABLED', '1'],
+  ['WOA_STAR_AI_ENABLED', '1'],
+  ['WOA_AI_REPLY_DRAFTS', '1'],
   ['WOA_AI_AUTO_SEND', '0'],
   ['WOA_ERROR_ALERTS_ENABLED', '1']
 ].forEach(([key, expected]) => expectValue(key, expected));
@@ -76,11 +80,17 @@ assert(!/- key: (?:WOA_TEST_DATABASE_URL|WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL
   'WOA_PRODUCTION_HARDENING_REQUIRED',
   'WOA_SESSION_SECRET',
   'WOA_DOCUMENT_ENCRYPTION_KEY',
+  'WOA_DOCUMENT_ENCRYPTION_KEY_VERSION',
+  'WOA_DOCUMENT_DECRYPTION_KEYS',
   'WOA_STATE_BACKUP_ENCRYPTION_KEY',
+  'WOA_STATE_BACKUP_KEY_VERSION',
+  'WOA_STATE_BACKUP_DECRYPTION_KEYS',
   'WOA_OBJECT_STORAGE_BUCKET',
   'WOA_OBJECT_STORAGE_ENDPOINT',
+  'WOA_OBJECT_STORAGE_REGION',
   'WOA_OBJECT_STORAGE_ACCESS_KEY_ID',
   'WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY',
+  'WOA_OBJECT_STORAGE_PATH_STYLE',
   'CLOVER_ACCESS_TOKEN',
   'CLOVER_ECOMMERCE_PRIVATE_KEY',
   'STRIPE_SECRET_KEY',

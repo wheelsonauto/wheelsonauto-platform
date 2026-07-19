@@ -59,7 +59,7 @@ async function startGitHubPostgres() {
     '--env', 'POSTGRES_DB=wheelsonauto_ci',
     '--env', 'POSTGRES_USER=wheelsonauto_ci',
     '--env', 'POSTGRES_PASSWORD=wheelsonauto_ci',
-    'postgres:16-alpine'
+    'postgres:18-alpine'
   ]);
   if (started.status !== 0) throw new Error('GitHub PostgreSQL runtime container failed to start: ' + String(started.stderr || started.stdout || '').trim());
   ciPostgresContainer = container;
@@ -82,7 +82,7 @@ async function startGitHubPostgres() {
     databaseSslMode = 'disable';
     await waitForHostPostgres(databaseUrl);
     confirmed = true;
-    console.log('GitHub PostgreSQL 16 runtime container is ready for transactional recovery checks.');
+    console.log('GitHub PostgreSQL 18 runtime container is ready for transactional recovery checks.');
   } catch (error) {
     stopCiPostgres();
     throw error;

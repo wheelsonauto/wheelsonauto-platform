@@ -13,9 +13,12 @@ databases:
   - name: wheelsonauto-postgres
     databaseName: wheelsonauto
     user: wheelsonauto
-    plan: basic-256mb
+    # Recommended production starting point for payment webhooks, encrypted
+    # document metadata, background jobs, and operator reporting. This is a
+    # paid resource and must still be approved before applying the blueprint.
+    plan: basic-1gb
     region: oregon
-    postgresMajorVersion: "16"
+    postgresMajorVersion: "18"
     ipAllowList: []
 
 services:

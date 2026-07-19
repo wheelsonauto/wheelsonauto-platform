@@ -143,7 +143,7 @@ async function main() {
       && serverSource.includes("publicActionLimit(req, 'payment-link-checkout'")
       && serverSource.includes("publicActionLimit(req, 'card-setup-complete'"), 'Public money links must use high-entropy expiring bearer IDs, private response headers, provider-authoritative failure status, and persistent mutation limits.');
     assert(postgresRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
-      && postgresRuntimeCheckSource.includes("'postgres:16-alpine'")
+      && postgresRuntimeCheckSource.includes("'postgres:18-alpine'")
       && postgresRuntimeCheckSource.includes("'pg_isready'")
       && postgresRuntimeCheckSource.includes('startGitHubPostgres()'), 'The main production gate must start and test against an isolated real PostgreSQL container instead of silently skipping transactional recovery checks.');
     assert(postgresRuntimeCheckSource.includes('WOA_TEST_DATABASE_SSL_MODE') && postgresRuntimeCheckSource.includes('sslMode: databaseSslMode'), 'The PostgreSQL runtime check must support the isolated CI database without weakening production TLS defaults.');
