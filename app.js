@@ -2387,6 +2387,47 @@ window.addEventListener('storage',function(event){
   refreshData(true)
 });
 
+var __woaSessionExpiredKey='woa-session-expired';
+var __woaSessionLocking=false;
+function __woaSessionRequestPath(input){
+  if(typeof input==='string')return input;
+  return input&&typeof input.url==='string'?input.url:''
+}
+function __woaLockExpiredSession(broadcast){
+  if(isPublic||__woaSessionLocking)return false;
+  __woaSessionLocking=true;
+  try{localStorage.removeItem('woa-platform-backup')}catch(error){}
+  try{localStorage.removeItem(__woaStateBroadcastKey)}catch(error){}
+  if(broadcast!==false){
+    try{localStorage.setItem(__woaSessionExpiredKey,JSON.stringify({at:Date.now(),owner:__woaRuntimeTabId}))}catch(error){}
+  }
+  db=normalize({});
+  lastDataFingerprint='';
+  __woaLastDataVersion='';
+  window.__SERVER_DATA__={};
+  var root=document.getElementById('root');
+  if(root)root.innerHTML='<main class="session-expired-lock"><section><strong>Session expired</strong><span>Sign in again to continue securely.</span></section></main>';
+  var modal=document.getElementById('modal');
+  if(modal)modal.innerHTML='';
+  var loginPath='/login?expired=1';
+  if(window.location&&typeof window.location.replace==='function')window.location.replace(loginPath);
+  else if(window.location)window.location.href=loginPath;
+  return true
+}
+function __woaHandleAuthenticatedResponse(response,input){
+  var path=__woaSessionRequestPath(input),origin=window.location&&window.location.origin||'',staffApi=/^\/api\//.test(path)||(origin&&path.indexOf(origin+'/api/')===0);
+  if(response&&Number(response.status)===401&&staffApi)__woaLockExpiredSession(true);
+  return response
+}
+var __woaAuthenticatedFetch=fetch;
+fetch=async function(input,init){
+  return __woaHandleAuthenticatedResponse(await __woaAuthenticatedFetch(input,init),input)
+};
+window.addEventListener('storage',function(event){
+  if(!event||event.key!==__woaSessionExpiredKey||!event.newValue)return;
+  __woaLockExpiredSession(false)
+});
+
 refreshData=async function(silent){
   if(__woaStateSaveInFlight)return false;
   if(isPublic)return false;

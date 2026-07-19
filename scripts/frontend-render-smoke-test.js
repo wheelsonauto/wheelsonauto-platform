@@ -135,7 +135,11 @@ function makeContext(user, publicMode = false) {
     __SERVER_DATA__: JSON.parse(JSON.stringify(seed)),
     addEventListener() {},
     removeEventListener() {},
-    location: { href: '/', origin: 'https://wheelsonauto-platform.onrender.com' }
+    location: {
+      href: '/',
+      origin: 'https://wheelsonauto-platform.onrender.com',
+      replace(value) { this.href = String(value || ''); }
+    }
   };
   const context = {
     window,
@@ -790,6 +794,22 @@ async function refreshCoordinationSmoke() {
   assert(ownerCalls === 0, 'A leased provider sync must not call an external sync route twice.');
 }
 
+function sessionExpirySmoke() {
+  const context = makeContext({ name: 'Owner Session', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  context.localStorage.setItem('woa-platform-backup', JSON.stringify(seed));
+  context.document.getElementById('root').innerHTML = '<div>Private customer and payment data</div>';
+  context.__woaHandleAuthenticatedResponse({ status: 401, ok: false }, '/api/system/infrastructure/preflight');
+  const locked = html(context);
+  assert(context.window.location.href === '/login?expired=1', 'An expired staff API session must return to login immediately.');
+  assert(context.localStorage.getItem('woa-platform-backup') === null, 'An expired session must clear the browser emergency state backup.');
+  assert(!/Private customer and payment data/.test(locked) && /Session expired/.test(locked), 'An expired session must blank stale business data before navigation.');
+  assert((context.db.customers || []).length === 0 && (context.db.payments || []).length === 0, 'An expired session must clear in-memory customer and payment state.');
+
+  const forbidden = makeContext({ name: 'Manager Session', role: 'Manager', homeView: 'Manager Portal', access: 'Manager access' });
+  forbidden.__woaHandleAuthenticatedResponse({ status: 403, ok: false }, '/api/system/infrastructure/preflight');
+  assert(forbidden.window.location.href === '/', 'A role-based 403 must not be mistaken for an expired authentication session.');
+}
+
 function heavyMessagesReportsSmoke() {
   const context = makeContext({ name: 'Owner Heavy Smoke', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
   const customers = context.db.contracts || [];
@@ -850,6 +870,7 @@ async function main() {
   publicSmoke();
   recoveryConsoleSmoke();
   await refreshCoordinationSmoke();
+  sessionExpirySmoke();
   heavyMessagesReportsSmoke();
   console.log('Frontend render smoke passed: owner, manager, mechanic, public, recovery console, heavy Messages/Reports, key tabs, role scrub, click interactions, search, and core modals render without localhost.');
 }
