@@ -95,6 +95,9 @@ async function main() {
   const immutableProviderIdentities = stateRepository.identityEntries(state);
   const postgresqlImportAllowed = conflicts.length === 0 && structuralErrors.length === 0;
   const controlledRecoveryDrill = 'Run the isolated PostgreSQL recovery drill after import: WOA_TEST_DATABASE_URL=<dedicated-test-db> WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1 WOA_POSTGRES_RUNTIME_PROOF_RECORD=1 WOA_POSTGRES_RUNTIME_PROOF_CONFIRM=1 WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL=$DATABASE_URL node scripts/postgres-runtime-check.js. It records only proof metadata in the production database and uses the deployed WOA_SESSION_SECRET to bind that proof to the current database configuration.';
+  const signedCapture = 'Do not import a repository-checkout data.json or an ad hoc download. While Render reports migrationMaintenance=true, capture a separate signed source inside DATA_DIR with WOA_MIGRATION_MAINTENANCE_MODE=1 WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM=RENDER_LIVE_DISK and prepare-postgres-migration-source.';
+  const signedImport = 'Import only that fresh signed copy with WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM=RENDER_LIVE_DISK_SNAPSHOT, its mode-0600 .repair-manifest.json, and the protectedCopyChecksum printed by the capture command.';
+  const signedProof = 'Verify PostgreSQL against the same signed copy, manifest, service ID, and checksum before switching WOA_DATA_BACKEND=postgres.';
   const report = {
     source: dataFile,
     timestamp: new Date().toISOString(),
@@ -128,11 +131,12 @@ async function main() {
           ...(nonidenticalCriticalDuplicates.length ? ['Review every non-identical duplicate with the owner. The preparation tool will not guess which record is authoritative.'] : []),
           ...(structuralErrors.some(row => row.kind === 'woa_assignment_identity_conflict') ? ['Resolve each customer-name assignment in Operations / Assigned. Confirm an alias only when both names are truly the same person.'] : []),
           'Resolve every listed immutable VIN, plate, portal-username, provider transaction/subscription, critical-record, and active vehicle-assignment conflict without deleting business history.',
-          'Run this preflight again until postgresqlImportAllowed is true.'
+          'Run this preflight again until postgresqlImportAllowed is true.',
+          signedCapture
         ]
       : (warnings.length
-        ? ['Review and complete each missing vehicle VIN before enabling a controlled Stripe launch. PostgreSQL import remains available, but launch readiness stays blocked until these identity warnings are cleared.', 'Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
-        : ['Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'])
+        ? ['Review and complete each missing vehicle VIN before enabling a controlled Stripe launch. PostgreSQL import remains available, but launch readiness stays blocked until these identity warnings are cleared.', signedCapture, signedImport, signedProof, 'Provision PostgreSQL and set DATABASE_URL.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
+        : [signedCapture, signedImport, signedProof, 'Provision PostgreSQL and set DATABASE_URL.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'])
   };
   console.log(JSON.stringify(report, null, 2));
   process.exitCode = postgresqlImportAllowed ? 0 : 2;

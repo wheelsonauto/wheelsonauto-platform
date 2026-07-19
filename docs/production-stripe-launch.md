@@ -285,16 +285,23 @@ POST /api/state returns 503 with code migration_maintenance
 The `503` response includes `Retry-After: 120`, so Stripe, Clover, Telnyx, and
 other well-behaved providers can retry rather than losing an event. Keep this
 write freeze active through the protected copy, import, checksum verification,
-and backend switch. Retain that protected copy as the rollback artifact. First
-run the preflight against the exact protected source copy:
+and backend switch.
+
+The repository-checkout `data.json` is **not** authoritative production data.
+It may be a valid older development snapshot while Render's persistent disk has
+newer customers, assignments, transactions, card-setup rows, and documents.
+Never import it, an ad hoc browser download, or a file prepared outside
+`DATA_DIR`. Run an initial diagnostic only against the frozen live file on the
+Render persistent disk:
 
 ```sh
-pnpm run postgres-preflight -- /secure/path/to/data-backup.json
+pnpm run postgres-preflight -- "$DATA_DIR/data.json"
 ```
 
-Record the `sourceFileChecksum` printed by preflight. It is an exact SHA-256
-fingerprint of the protected JSON bytes. The importer and verifier refuse to
-operate if that file changes, even if the JSON still parses.
+Record the diagnostic `sourceFileChecksum`, resolve any owner-review conflicts,
+then create a separate signed mode-`0600` copy on that same persistent disk.
+`RENDER_SERVICE_ID` is supplied by Render; `WOA_SESSION_SECRET` must be the
+stable production secret already used by the deployed service:
 
 If preflight reports a duplicated critical record ID, do not edit the live
 JSON file and do not delete payment history by hand. First inspect the reported
@@ -307,21 +314,31 @@ different records and never resolves a customer/vehicle assignment by guessing:
 ```sh
 WOA_POSTGRES_SOURCE_REPAIR_CONFIRM=EXACT_DUPLICATES_ONLY \
 WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM=1 \
-WOA_POSTGRES_SOURCE_REPAIR_SHA256='<live sourceFileChecksum from preflight>' \
+WOA_POSTGRES_SOURCE_REPAIR_SHA256='<frozen live sourceFileChecksum from preflight>' \
+WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM=RENDER_LIVE_DISK \
+WOA_MIGRATION_MAINTENANCE_MODE=1 \
 pnpm run prepare-postgres-migration-source -- \
-  /secure/path/to/live-data.json \
-  /secure/path/to/new-postgres-source.json
+  "$DATA_DIR/data.json" \
+  "$DATA_DIR/postgres-migration-$(date +%Y%m%d-%H%M%S).json"
 ```
 
 The command acquires the shared migration write lock, verifies the live source
 checksum before and after copying, and creates a new mode-`0600` file plus a
 mode-`0600` `.repair-manifest.json`. It uses exclusive creation and will not
-overwrite either the live source or an existing protected copy. The manifest
-records both checksums and every exact duplicate removed. If any duplicated ID
-contains different data, no copy is written. If an unrelated assignment or
-identity conflict remains, the review copy is retained but the command exits
-with status `2`; PostgreSQL import remains blocked until the owner explicitly
-resolves that business-data decision and a fresh protected copy is prepared.
+overwrite either the live source or an existing protected copy. The manifest is
+HMAC-signed with the stable session secret and binds the live source path,
+protected-copy path, both checksums, repair evidence, `DATA_DIR`, Render service
+ID, capture time, and maintenance-mode policy. If any signed field changes, the
+service ID differs, the copy leaves `DATA_DIR`, or the capture is more than six
+hours old, import and verification fail before opening PostgreSQL. The freshness
+window may be shortened with `WOA_POSTGRES_MIGRATION_SOURCE_MAX_AGE_MS`; accepted
+values are one minute through 24 hours.
+
+If any duplicated ID contains different data, no copy is written. If an
+unrelated assignment or identity conflict remains, the review copy is retained
+but the command exits with status `2`; PostgreSQL import remains blocked until
+the owner explicitly resolves that business-data decision and a fresh signed
+copy is prepared.
 
 For an active customer/vehicle conflict, sign in as the owner and open
 **Operations -> Assigned**. Select **Resolve** on the exact vehicle. The modal
@@ -334,8 +351,9 @@ record. If the evidence is uncertain, leave the conflict open and keep the
 PostgreSQL import blocked.
 
 Run preflight again against the newly created copy. From this point forward,
-use only that copy and its **new** `sourceFileChecksum` for import and proof.
-Keep the original live JSON and repair manifest as rollback and audit evidence.
+use only that copy, its `.repair-manifest.json`, and its **new**
+`protectedCopyChecksum` for import and proof. Keep the original live JSON and
+signed manifest as rollback and audit evidence.
 
 Import only after it reports no immutable identity conflicts and only while
 application writes are paused:
@@ -344,8 +362,11 @@ application writes are paused:
 DATABASE_URL='postgresql://...' \
 WOA_POSTGRES_MIGRATION_CONFIRM=1 \
 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 \
-WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<sourceFileChecksum from preflight>' \
-pnpm run migrate-json-to-postgres -- /secure/path/to/data-backup.json
+WOA_MIGRATION_MAINTENANCE_MODE=1 \
+WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM=RENDER_LIVE_DISK_SNAPSHOT \
+WOA_POSTGRES_MIGRATION_SOURCE_MANIFEST="$DATA_DIR/postgres-migration-<timestamp>.json.repair-manifest.json" \
+WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<protectedCopyChecksum>' \
+pnpm run migrate-json-to-postgres -- "$DATA_DIR/postgres-migration-<timestamp>.json"
 ```
 
 The importer refuses to overwrite an existing PostgreSQL organization unless
@@ -358,8 +379,11 @@ without rewriting either state, use the exact protected source copy:
 ```sh
 DATABASE_URL='postgresql://...' \
 WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 \
-WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<same sourceFileChecksum from preflight>' \
-pnpm run verify-json-to-postgres -- /secure/path/to/data-backup.json
+WOA_MIGRATION_MAINTENANCE_MODE=1 \
+WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM=RENDER_LIVE_DISK_SNAPSHOT \
+WOA_POSTGRES_MIGRATION_SOURCE_MANIFEST="$DATA_DIR/postgres-migration-<timestamp>.json.repair-manifest.json" \
+WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<same protectedCopyChecksum>' \
+pnpm run verify-json-to-postgres -- "$DATA_DIR/postgres-migration-<timestamp>.json"
 ```
 
 The verifier refuses a source that differs from the current database and only

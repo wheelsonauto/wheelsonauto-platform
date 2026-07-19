@@ -122,14 +122,17 @@ async function main() {
     outputCreated = true;
     await migrationSource.assertSourceUnchanged(sourceFile, source.sourceFileChecksum);
     const prepared = await migrationSource.readSource(outputFile);
-    const manifest = {
-      version: 1,
+    const signedProvenance = migrationSource.createProvenanceManifest({
       preparedAt,
       source: sourceFile,
       sourceFileChecksum: source.sourceFileChecksum,
       protectedCopy: outputFile,
       protectedCopyChecksum: prepared.sourceFileChecksum,
       policy: 'Only canonical byte-equivalent records sharing one critical resource ID were collapsed. Non-identical duplicates and assignment conflicts are never guessed.',
+      repairs: collapsed.repairs
+    });
+    const manifest = {
+      ...signedProvenance,
       repairs: collapsed.repairs,
       readiness
     };
@@ -143,10 +146,13 @@ async function main() {
       protectedCopy: outputFile,
       protectedCopyChecksum: prepared.sourceFileChecksum,
       repairManifest: manifestFile,
+      sourceOrigin: manifest.sourceOrigin,
+      renderServiceId: manifest.renderServiceId,
+      provenanceSignatureAlgorithm: manifest.signature.algorithm,
       exactDuplicateRepairs: collapsed.repairs,
       ...readiness,
       message: readiness.postgresqlImportAllowed
-        ? 'Protected PostgreSQL migration source is structurally ready. Use its new checksum for preflight, import, and verification.'
+        ? 'Signed Render live-disk PostgreSQL source is structurally ready. Use its protected-copy checksum and provenance manifest for preflight, import, and verification.'
         : 'The exact duplicate copy is preserved, but unresolved identities or assignments still block PostgreSQL import. Resolve them explicitly and prepare a fresh copy from the current live source.'
     }, null, 2));
     process.exitCode = readiness.postgresqlImportAllowed ? 0 : 2;

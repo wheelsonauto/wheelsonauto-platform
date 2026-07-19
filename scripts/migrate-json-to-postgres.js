@@ -23,6 +23,7 @@ async function main() {
   migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedSourceChecksum);
   const state = source.state;
   stateRepository.assertTransactionalSourceReady(state);
+  const sourceProvenance = await migrationSource.assertProvenanceManifest(dataFile, source.sourceFileChecksum);
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL migration.');
   const maintenanceLock = await stateMigrationLock.acquire({
     dataFile,
@@ -79,6 +80,7 @@ async function main() {
       ok: true,
       source: dataFile,
       sourceFileChecksum: source.sourceFileChecksum,
+      sourceProvenance,
       databaseVersion: verified.version,
       checksum: verified.checksum,
       migrationProof,
@@ -88,7 +90,7 @@ async function main() {
         protectedSourceFileChecksum: cutoverSentinel.sentinel.protectedSourceFileChecksum
       },
       maintenanceLock: { acquiredAt: maintenanceLock.acquiredAt, sourceFileChecksum: maintenanceLock.sourceFileChecksum },
-      message: 'PostgreSQL import and checksum/count evidence verified against the preflight-confirmed protected source. The persistent cutover sentinel now prevents the retained JSON rollback artifact from becoming writable by accident.'
+      message: 'PostgreSQL import and checksum/count evidence verified against the signed maintenance-frozen Render live-disk source. The persistent cutover sentinel now prevents the retained JSON rollback artifact from becoming writable by accident.'
     }, null, 2));
   } finally {
     try {

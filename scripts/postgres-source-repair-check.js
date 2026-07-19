@@ -33,6 +33,13 @@ async function exists(file) {
 async function main() {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-postgres-source-repair-'));
   try {
+    const captureEnvironment = {
+      DATA_DIR: temp,
+      WOA_MIGRATION_MAINTENANCE_MODE: '1',
+      WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM: migrationSource.SOURCE_ORIGIN_CONFIRMATION,
+      WOA_SESSION_SECRET: 'postgres-source-repair-test-secret-2026',
+      RENDER_SERVICE_ID: 'srv-wheelsonauto-source-repair-test'
+    };
     const sourceFile = path.join(temp, 'live-source.json');
     const outputFile = path.join(temp, 'protected-source.json');
     const exactPayment = {
@@ -68,7 +75,18 @@ async function main() {
     assert.match(wrongChecksum.stderr, /checksum does not match/i, 'The checksum refusal must be explicit.');
     assert.strictEqual(await exists(outputFile), false, 'A checksum mismatch must not create an output file.');
 
+    const missingOriginOutput = path.join(temp, 'missing-origin-output.json');
+    const missingOrigin = run(repairScript, [sourceFile, missingOriginOutput], {
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: sourceChecksum
+    });
+    assert.notStrictEqual(missingOrigin.status, 0, 'A developer checkout or unproven source must not produce an importable migration snapshot.');
+    assert.match(missingOrigin.stderr, /WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM/, 'Protected-source capture must require the Render live-disk origin confirmation.');
+    assert.strictEqual(await exists(missingOriginOutput), false, 'A failed provenance check must remove its incomplete protected copy.');
+
     const repaired = run(repairScript, [sourceFile, outputFile], {
+      ...captureEnvironment,
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
       WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
       WOA_POSTGRES_SOURCE_REPAIR_SHA256: sourceChecksum
@@ -90,11 +108,21 @@ async function main() {
     const manifest = JSON.parse(await fs.readFile(manifestFile, 'utf8'));
     assert.strictEqual(manifest.sourceFileChecksum, sourceChecksum);
     assert.strictEqual(manifest.protectedCopyChecksum, report.protectedCopyChecksum);
+    assert.strictEqual(manifest.sourceOrigin, 'render-live-disk');
+    assert.strictEqual(manifest.renderServiceId, captureEnvironment.RENDER_SERVICE_ID);
+    assert.strictEqual(manifest.signature.algorithm, 'HMAC-SHA256');
     assert.strictEqual((await fs.stat(manifestFile)).mode & 0o777, 0o600, 'The repair manifest must be owner-readable only.');
+    const verifiedProvenance = await migrationSource.assertProvenanceManifest(outputFile, report.protectedCopyChecksum, {
+      ...captureEnvironment,
+      WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM: migrationSource.MIGRATION_PROVENANCE_CONFIRMATION,
+      WOA_POSTGRES_MIGRATION_SOURCE_MANIFEST: manifestFile
+    });
+    assert.strictEqual(verifiedProvenance.renderServiceId, captureEnvironment.RENDER_SERVICE_ID, 'The importer must verify the service-bound signed manifest.');
     const preparedPreflight = run(preflightScript, [outputFile]);
     assert.strictEqual(preparedPreflight.status, 0, 'The repaired protected copy must pass the ordinary PostgreSQL preflight.');
 
     const overwriteAttempt = run(repairScript, [sourceFile, outputFile], {
+      ...captureEnvironment,
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
       WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
       WOA_POSTGRES_SOURCE_REPAIR_SHA256: sourceChecksum
@@ -129,6 +157,7 @@ async function main() {
     }, null, 2) + '\n', 'utf8');
     const assignmentChecksum = (await migrationSource.readSource(assignmentSource)).sourceFileChecksum;
     const assignmentRepair = run(repairScript, [assignmentSource, assignmentOutput], {
+      ...captureEnvironment,
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
       WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
       WOA_POSTGRES_SOURCE_REPAIR_SHA256: assignmentChecksum

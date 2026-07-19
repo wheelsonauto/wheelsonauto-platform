@@ -83,6 +83,7 @@ async function main() {
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
     const postgresSourceRepairSource = await fs.readFile(path.resolve(__dirname, 'prepare-postgres-migration-source.js'), 'utf8');
     const postgresSourceRepairCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-source-repair-check.js'), 'utf8');
+    const postgresMigrationSource = await fs.readFile(path.resolve(__dirname, '..', 'postgres-migration-source.js'), 'utf8');
     const postgresPreflightSource = await fs.readFile(path.resolve(__dirname, 'postgres-preflight.js'), 'utf8');
     const postgresImporterSource = await fs.readFile(path.resolve(__dirname, 'migrate-json-to-postgres.js'), 'utf8');
     const postgresVerifierSource = await fs.readFile(path.resolve(__dirname, 'verify-json-to-postgres.js'), 'utf8');
@@ -168,9 +169,18 @@ async function main() {
       && postgresPreflightSource.includes('prepare-postgres-migration-source'), 'PostgreSQL preflight must report every exact and non-identical duplicate group in one run and direct safe duplicates to the protected-copy workflow.');
     assert(postgresImporterSource.includes('assertTransactionalSourceReady(state)')
       && postgresVerifierSource.includes('assertTransactionalSourceReady(state)'), 'PostgreSQL import and migration proof must reject provider identity, critical record, and active assignment conflicts before a database connection.');
+    assert(postgresMigrationSource.includes('RENDER_LIVE_DISK_SNAPSHOT')
+      && postgresMigrationSource.includes("createHmac('sha256'")
+      && postgresMigrationSource.includes('RENDER_SERVICE_ID')
+      && postgresMigrationSource.includes('source provenance is stale')
+      && postgresSourceRepairSource.includes('createProvenanceManifest')
+      && postgresImporterSource.includes('assertProvenanceManifest')
+      && postgresVerifierSource.includes('assertProvenanceManifest'), 'Production PostgreSQL import and proof must require a fresh HMAC-signed, service-bound Render live-disk snapshot instead of trusting a stale developer checkout.');
     assert(launchRunbook.includes('prepare-postgres-migration-source')
       && launchRunbook.includes('never resolves a customer/vehicle assignment by guessing')
-      && launchRunbook.includes('**new** `sourceFileChecksum`'), 'The launch runbook must document the protected-copy repair audit trail and the new checksum required after exact duplicate collapse.');
+      && launchRunbook.includes('repository-checkout `data.json` is **not** authoritative')
+      && launchRunbook.includes('WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM=RENDER_LIVE_DISK_SNAPSHOT')
+      && launchRunbook.includes('**new**\n`protectedCopyChecksum`'), 'The launch runbook must document the signed live-disk audit trail and the protected-copy checksum required after exact duplicate collapse.');
     assert.strictEqual(new Set(stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS).size, stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.length, 'Every required PostgreSQL schema migration ID must be unique so readiness cannot silently collapse duplicate requirements.');
     assert(stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.includes(stateRepository.RECOVERY_HISTORY_MIGRATION_ID)
       && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_recovery_history')

@@ -19,6 +19,7 @@ async function main() {
   migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedSourceChecksum);
   const state = source.state;
   stateRepository.assertTransactionalSourceReady(state);
+  const sourceProvenance = await migrationSource.assertProvenanceManifest(dataFile, source.sourceFileChecksum);
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required to verify PostgreSQL import evidence.');
   const repository = stateRepository.createStateRepository({
     backend: 'postgres',
@@ -64,6 +65,7 @@ async function main() {
       ok: true,
       source: dataFile,
       sourceFileChecksum: source.sourceFileChecksum,
+      sourceProvenance,
       databaseVersion: target.version,
       checksum: target.checksum,
       migrationProof: proof,
@@ -72,7 +74,7 @@ async function main() {
         file: cutoverSentinel.file,
         protectedSourceFileChecksum: cutoverSentinel.sentinel.protectedSourceFileChecksum
       },
-      message: 'The JSON source exactly matches PostgreSQL. Import proof metadata and the persistent cutover sentinel were verified without rewriting either business state.'
+      message: 'The signed Render live-disk JSON source exactly matches PostgreSQL. Import proof metadata and the persistent cutover sentinel were verified without rewriting either business state.'
     }, null, 2));
   } finally {
     await repository.close();

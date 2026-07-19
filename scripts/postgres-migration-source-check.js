@@ -120,21 +120,120 @@ async function main() {
 
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
     const exact = (await source.readSource(dataFile)).sourceFileChecksum;
-    const base = { ...process.env, WOA_POSTGRES_MIGRATION_CONFIRM: '1', WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM: '1' };
+    const liveSourceFile = path.join(temp, 'live-data.json');
+    await fs.writeFile(liveSourceFile, JSON.stringify(value, null, 2), 'utf8');
+    const liveSourceChecksum = (await source.readSource(liveSourceFile)).sourceFileChecksum;
+    const provenanceSecret = 'postgres-migration-source-test-secret-2026';
+    const renderServiceId = 'srv-wheelsonauto-migration-source-test';
+    const captureEnvironment = {
+      DATA_DIR: temp,
+      WOA_MIGRATION_MAINTENANCE_MODE: '1',
+      WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM: source.SOURCE_ORIGIN_CONFIRMATION,
+      WOA_SESSION_SECRET: provenanceSecret,
+      RENDER_SERVICE_ID: renderServiceId
+    };
+    let checkoutSourceError = null;
+    try {
+      source.createProvenanceManifest({
+        source: path.join(path.dirname(temp), 'developer-checkout-data.json'),
+        sourceFileChecksum: liveSourceChecksum,
+        protectedCopy: dataFile,
+        protectedCopyChecksum: exact,
+        repairs: []
+      }, captureEnvironment);
+    } catch (error) {
+      checkoutSourceError = error;
+    }
+    assert.match(String(checkoutSourceError && checkoutSourceError.message || ''), /inside DATA_DIR/i, 'A repository-checkout data.json must never be accepted as the Render production source.');
+    assert.throws(() => source.createProvenanceManifest({
+      source: dataFile,
+      sourceFileChecksum: exact,
+      protectedCopy: dataFile,
+      protectedCopyChecksum: exact,
+      repairs: []
+    }, captureEnvironment), /separate immutable copy/i, 'The live source and protected copy must be different files.');
+    const provenanceManifestFile = dataFile + '.repair-manifest.json';
+    const provenanceManifest = {
+      ...source.createProvenanceManifest({
+        source: liveSourceFile,
+        sourceFileChecksum: liveSourceChecksum,
+        protectedCopy: dataFile,
+        protectedCopyChecksum: exact,
+        policy: 'test protected source',
+        repairs: []
+      }, captureEnvironment),
+      repairs: []
+    };
+    await fs.writeFile(provenanceManifestFile, JSON.stringify(provenanceManifest, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    const provenanceEnvironment = {
+      ...captureEnvironment,
+      WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM: source.MIGRATION_PROVENANCE_CONFIRMATION,
+      WOA_POSTGRES_MIGRATION_SOURCE_MANIFEST: provenanceManifestFile
+    };
+    const verifiedProvenance = await source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment);
+    assert.strictEqual(verifiedProvenance.renderServiceId, renderServiceId, 'Valid provenance must remain bound to the Render service that captured it.');
+    await assert.rejects(
+      () => source.assertProvenanceManifest(dataFile, exact, { ...provenanceEnvironment, RENDER_SERVICE_ID: 'srv-different-service' }),
+      /different Render service/i,
+      'A protected copy from another Render service must fail closed.'
+    );
+    await fs.writeFile(provenanceManifestFile, JSON.stringify({ ...provenanceManifest, policy: 'tampered after signing' }, null, 2) + '\n', 'utf8');
+    await assert.rejects(
+      () => source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment),
+      /signature is invalid/i,
+      'Editing the signed provenance manifest must invalidate it.'
+    );
+    const staleManifest = {
+      ...source.createProvenanceManifest({
+        source: liveSourceFile,
+        sourceFileChecksum: liveSourceChecksum,
+        protectedCopy: dataFile,
+        protectedCopyChecksum: exact,
+        preparedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(),
+        policy: 'stale test protected source',
+        repairs: []
+      }, captureEnvironment),
+      repairs: []
+    };
+    await fs.writeFile(provenanceManifestFile, JSON.stringify(staleManifest, null, 2) + '\n', 'utf8');
+    await assert.rejects(
+      () => source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment),
+      /stale or has an invalid capture time/i,
+      'A migration source older than the allowed maintenance window must be recaptured.'
+    );
+    await fs.writeFile(provenanceManifestFile, JSON.stringify(provenanceManifest, null, 2) + '\n', 'utf8');
+    await assert.rejects(
+      () => source.assertProvenanceManifest(dataFile, exact, { ...provenanceEnvironment, WOA_POSTGRES_MIGRATION_SOURCE_MAX_AGE_MS: 'not-a-number' }),
+      /must be between 60000 and 86400000/i,
+      'A malformed freshness policy must fail closed instead of disabling expiration.'
+    );
+
+    const base = {
+      ...process.env,
+      ...provenanceEnvironment,
+      WOA_POSTGRES_MIGRATION_CONFIRM: '1',
+      WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM: '1'
+    };
     const noImporterChecksum = run(importer, dataFile, base);
     assert.notStrictEqual(noImporterChecksum.status, 0, 'The importer must reject a missing protected-source checksum before it opens a database connection.');
     assert.match(noImporterChecksum.stderr, /WOA_POSTGRES_MIGRATION_SOURCE_SHA256/, 'The importer must name the required protected-source checksum.');
     const wrongImporterChecksum = run(importer, dataFile, { ...base, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: '0'.repeat(64) });
     assert.notStrictEqual(wrongImporterChecksum.status, 0, 'The importer must reject the wrong preflight source checksum.');
     assert.match(wrongImporterChecksum.stderr, /does not match/i, 'The importer must explain the changed-source block.');
+    const missingImporterProvenance = run(importer, dataFile, { ...base, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact, WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM: '' });
+    assert.notStrictEqual(missingImporterProvenance.status, 0, 'The importer must reject a checksum-valid source without signed Render provenance.');
+    assert.match(missingImporterProvenance.stderr, /WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM/, 'The importer must name the live-disk provenance confirmation.');
     const validImporterWithoutDatabase = run(importer, dataFile, { ...base, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact });
     assert.notStrictEqual(validImporterWithoutDatabase.status, 0, 'A valid source still needs an explicit PostgreSQL database URL.');
     assert.match(validImporterWithoutDatabase.stderr, /DATABASE_URL/, 'The importer must not connect without a database URL.');
 
-    const proofBase = { ...process.env, WOA_POSTGRES_MIGRATION_PROOF_CONFIRM: '1' };
+    const proofBase = { ...process.env, ...provenanceEnvironment, WOA_POSTGRES_MIGRATION_PROOF_CONFIRM: '1' };
     const noProofChecksum = run(verifier, dataFile, proofBase);
     assert.notStrictEqual(noProofChecksum.status, 0, 'The proof verifier must reject a missing protected-source checksum before it opens a database connection.');
     assert.match(noProofChecksum.stderr, /WOA_POSTGRES_MIGRATION_SOURCE_SHA256/, 'The verifier must name the required protected-source checksum.');
+    const missingProofProvenance = run(verifier, dataFile, { ...proofBase, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact, WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM: '' });
+    assert.notStrictEqual(missingProofProvenance.status, 0, 'The verifier must reject a checksum-valid source without signed Render provenance.');
+    assert.match(missingProofProvenance.stderr, /WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM/, 'The verifier must name the live-disk provenance confirmation.');
     const validProofWithoutDatabase = run(verifier, dataFile, { ...proofBase, WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact });
     assert.notStrictEqual(validProofWithoutDatabase.status, 0, 'A proof verification with a valid source still needs an explicit PostgreSQL database URL.');
     assert.match(validProofWithoutDatabase.stderr, /DATABASE_URL/, 'The verifier must not connect without a database URL.');
@@ -149,7 +248,9 @@ async function main() {
     assert.match(importerSource, /stateMigrationLock\.release/, 'The controlled PostgreSQL importer must release its lock after success or failure.');
     assert.match(importerSource, /assertTransactionalSourceReady/, 'The importer must reject critical resource and assignment conflicts before opening PostgreSQL.');
     assert.match(verifierSource, /assertTransactionalSourceReady/, 'Migration proof must reject critical resource and assignment conflicts before opening PostgreSQL.');
-    console.log('PostgreSQL protected-source check passed: exact preflight checksum, immutable source guard, enforced application write lock, single-import ownership, checksum-gated stale-lock recovery, and changed-source rejection are verified.');
+    assert.match(importerSource, /assertProvenanceManifest/, 'The importer must verify signed Render live-disk provenance before opening PostgreSQL.');
+    assert.match(verifierSource, /assertProvenanceManifest/, 'Migration proof must verify signed Render live-disk provenance before opening PostgreSQL.');
+    console.log('PostgreSQL protected-source check passed: exact checksum, signed Render live-disk provenance, service binding, freshness, tamper rejection, immutable source guard, write lock, stale-lock recovery, and changed-source rejection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }
