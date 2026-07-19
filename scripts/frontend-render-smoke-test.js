@@ -814,9 +814,11 @@ function starAutoSendDefaultSmoke() {
   const context = makeContext({ name: 'Owner Star Safety', role: 'Owner', homeView: 'Dashboard', access: 'Owner access' });
   context.db.integrations = context.db.integrations || {};
   context.db.integrations.messaging = {};
-  assert(context.messagingStatus().aiAutoSend === false, 'Star auto-send must remain off when no saved messaging setting exists.');
-  context.db.integrations.messaging.aiAutoSend = true;
-  assert(context.messagingStatus().aiAutoSend === true, 'Star auto-send may turn on only after an explicit saved setting.');
+  const missing = context.messagingStatus();
+  assert(missing.enabled === false && missing.aiEnabled === false && missing.aiAutoSend === false && missing.aiDrafts === false && missing.emailEnabled === false, 'Messaging providers and Star must remain off when no saved server setting exists.');
+  Object.assign(context.db.integrations.messaging, { enabled: true, aiEnabled: true, aiAutoSend: true, aiDrafts: true, emailEnabled: true });
+  const explicit = context.messagingStatus();
+  assert(explicit.enabled === true && explicit.aiEnabled === true && explicit.aiAutoSend === true && explicit.aiDrafts === true && explicit.emailEnabled === true, 'Messaging providers and Star may turn on only after explicit saved settings.');
 }
 
 function heavyMessagesReportsSmoke() {

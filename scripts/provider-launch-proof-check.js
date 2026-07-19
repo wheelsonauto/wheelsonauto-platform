@@ -3,6 +3,11 @@
 const assert = require('node:assert');
 
 process.env.WOA_SESSION_SECRET = 'provider-launch-proof-session-secret';
+process.env.WOA_MESSAGING_ENABLED = '1';
+process.env.WOA_STAR_AI_ENABLED = '1';
+process.env.WOA_AI_AUTO_SEND = '0';
+process.env.WOA_AI_REPLY_DRAFTS = '1';
+process.env.WOA_EMAIL_ENABLED = '1';
 process.env.WOA_MESSAGING_PROVIDER = 'telnyx';
 process.env.WOA_MESSAGING_FROM_NUMBER = '+16095550199';
 process.env.WOA_MESSAGING_WEBHOOK_SECRET = 'provider-launch-proof-webhook-secret';

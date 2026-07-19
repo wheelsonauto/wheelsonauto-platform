@@ -198,6 +198,11 @@ async function main() {
   process.env.WOA_EMAIL_PROVIDER = 'resend';
   process.env.WOA_EMAIL_FROM = 'alerts@wheelsonauto.example';
   process.env.WOA_EMAIL_OWNER_NOTIFY = 'owner-alerts@example.com';
+  process.env.WOA_MESSAGING_ENABLED = '1';
+  process.env.WOA_STAR_AI_ENABLED = '1';
+  process.env.WOA_AI_AUTO_SEND = '0';
+  process.env.WOA_AI_REPLY_DRAFTS = '1';
+  process.env.WOA_EMAIL_ENABLED = '1';
   process.env.WOA_ERROR_ALERTS_ENABLED = '1';
   process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = String(30 * 24 * 60 * 60 * 1000);
   process.env.WOA_DOCUMENT_STORAGE_PROVIDER = 'local';
