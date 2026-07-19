@@ -23,6 +23,18 @@ function validHttps(valueToCheck) {
   }
 }
 
+function validPrivateObjectStorageEndpoint(valueToCheck) {
+  try {
+    const parsed = new URL(String(valueToCheck || ''));
+    if (!validHttps(valueToCheck) || parsed.username || parsed.password || parsed.search || parsed.hash) return false;
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'r2.dev' || hostname.endsWith('.r2.dev')) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function validPostgresUrl(valueToCheck) {
   try {
     const parsed = new URL(String(valueToCheck || ''));
@@ -74,7 +86,7 @@ function productionEnvironmentReport(env = {}) {
   add('WOA_DOCUMENT_ENCRYPTION_KEY', !!documentKey, 'The active document encryption key must decode to exactly 32 bytes.');
   add('WOA_DOCUMENT_ENCRYPTION_KEY_VERSION', /^[a-zA-Z0-9._-]{1,80}$/.test(value(env, 'WOA_DOCUMENT_ENCRYPTION_KEY_VERSION')), 'Name the active encryption-key version explicitly.');
   add('WOA_OBJECT_STORAGE_BUCKET', !!value(env, 'WOA_OBJECT_STORAGE_BUCKET', 'S3_BUCKET'), 'Configure the private object-storage bucket.');
-  add('WOA_OBJECT_STORAGE_ENDPOINT', validHttps(value(env, 'WOA_OBJECT_STORAGE_ENDPOINT', 'S3_ENDPOINT')), 'Use a non-local HTTPS object-storage endpoint.');
+  add('WOA_OBJECT_STORAGE_ENDPOINT', validPrivateObjectStorageEndpoint(value(env, 'WOA_OBJECT_STORAGE_ENDPOINT', 'S3_ENDPOINT')), 'Use the private HTTPS S3 API endpoint, never a public r2.dev delivery URL.');
   add('WOA_OBJECT_STORAGE_ACCESS_KEY_ID', !!value(env, 'WOA_OBJECT_STORAGE_ACCESS_KEY_ID', 'S3_ACCESS_KEY_ID'), 'Configure the private bucket access-key ID.');
   add('WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY', !!value(env, 'WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY', 'S3_SECRET_ACCESS_KEY'), 'Configure the private bucket secret access key.');
   add('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED', enabled(env, 'WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED'), 'Fail closed when encrypted private storage is unavailable.');
@@ -128,6 +140,7 @@ function productionEnvironmentReport(env = {}) {
 module.exports = {
   productionEnvironmentReport,
   validHttps,
+  validPrivateObjectStorageEndpoint,
   validPostgresUrl,
   validPrivatePostgresUrl,
   validEmailSender

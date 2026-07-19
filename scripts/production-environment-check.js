@@ -70,6 +70,18 @@ function main() {
   });
   assert.strictEqual(unsafe.ready, false, 'Unsafe production configuration must fail closed.');
 
+  const publicR2 = productionEnvironmentReport({
+    ...ready,
+    WOA_OBJECT_STORAGE_ENDPOINT: 'https://pub-wheelsonauto.r2.dev'
+  });
+  assert(publicR2.missing.includes('WOA_OBJECT_STORAGE_ENDPOINT'), 'A public R2 delivery endpoint must never qualify as private document storage.');
+
+  const credentialedStorageUrl = productionEnvironmentReport({
+    ...ready,
+    WOA_OBJECT_STORAGE_ENDPOINT: 'https://access:secret@account.r2.cloudflarestorage.com'
+  });
+  assert(credentialedStorageUrl.missing.includes('WOA_OBJECT_STORAGE_ENDPOINT'), 'Object-storage credentials must remain separate from the endpoint URL.');
+
   const empty = productionEnvironmentReport({});
   assert.strictEqual(empty.ready, false, 'An empty environment must not be launch-ready.');
   assert(empty.missing.includes('DATABASE_URL') && empty.missing.includes('WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED') && empty.missing.includes('WOA_PRODUCTION_HARDENING_REQUIRED'), 'An empty report must name the critical launch controls.');
@@ -80,7 +92,7 @@ function main() {
   });
   assert.deepStrictEqual(Object.keys(report.checks[0]).sort(), ['key', 'message', 'ready'], 'Environment checks may expose only key name, status, and guidance.');
 
-  console.log('Production environment check passed: private database networking, private storage, isolated backup keys, live Stripe, Telnyx, Resend, Star limits, alerts, and hardened controlled-cutover settings fail closed without exposing secret values.');
+  console.log('Production environment check passed: private database networking, private S3 API storage, isolated backup keys, live Stripe, Telnyx, Resend, Star limits, alerts, and hardened controlled-cutover settings fail closed without exposing secret values.');
 }
 
 main();

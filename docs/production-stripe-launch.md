@@ -116,6 +116,24 @@ WOA_OBJECT_STORAGE_PATH_STYLE=1   # only when the provider requires it
 WOA_OBJECT_STORAGE_TIMEOUT_MS=15000
 ```
 
+For Cloudflare R2, create a **private Standard** bucket and a bucket-scoped API
+token with object read/write permission. Use the S3 API endpoint, not an
+`r2.dev` public-delivery URL:
+
+```text
+WOA_OBJECT_STORAGE_BUCKET=wheelsonauto-private-production
+WOA_OBJECT_STORAGE_ENDPOINT=https://<cloudflare-account-id>.r2.cloudflarestorage.com
+WOA_OBJECT_STORAGE_REGION=auto
+WOA_OBJECT_STORAGE_PATH_STYLE=1
+```
+
+Keep public development URLs and custom public domains disabled for this
+bucket. Store the R2 access-key ID and secret in the separate Render variables
+shown above; never place credentials in the endpoint URL. Cloudflare documents
+the S3 endpoint format at
+https://developers.cloudflare.com/r2/api/s3/api/ and the current Standard free
+tier at https://developers.cloudflare.com/r2/pricing/.
+
 The platform encrypts each document with AES-256-GCM before it is stored. The
 database receives metadata and encrypted-object references, not file bytes.
 IDs, insurance, contracts, signatures, receipts, and dispute evidence should
