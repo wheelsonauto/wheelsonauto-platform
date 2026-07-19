@@ -160,6 +160,13 @@ pnpm run postgres-preflight -- data.json
 pnpm run production-foundation-check
 ```
 
+The checkout preflight may report `postgresqlImportAllowed: true` when its data
+shape is structurally coherent. It must still report
+`productionSourceEligible: false` and `productionImportAllowed: false` because
+an unsigned repository file is never an authorized production source. Only the
+fresh signed Render-disk copy described in the cutover section can make both
+production fields true.
+
 Run the real transactional write/snapshot/recovery check only against that
 dedicated test database:
 
@@ -404,8 +411,12 @@ Render persistent disk:
 pnpm run postgres-preflight -- "$DATA_DIR/data.json"
 ```
 
-Record the diagnostic `sourceFileChecksum`, resolve any owner-review conflicts,
-then create a separate signed mode-`0600` copy on that same persistent disk.
+Record the diagnostic `sourceFileChecksum` and resolve any owner-review
+conflicts. Treat this first report as structural review only. Then create the
+separate signed mode-`0600` copy on that same persistent disk. Run preflight
+again against that protected copy with the same provenance environment used by
+the importer. Do not proceed unless it reports both
+`productionSourceEligible: true` and `productionImportAllowed: true`.
 `RENDER_SERVICE_ID` and `RENDER_GIT_COMMIT` are supplied by Render;
 `WOA_SESSION_SECRET` must be the stable production secret already used by the
 deployed service. The server publishes

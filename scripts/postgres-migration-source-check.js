@@ -26,7 +26,10 @@ async function main() {
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
     const validPreflight = run(preflight, dataFile, process.env);
     assert.strictEqual(validPreflight.status, 0, 'A structurally coherent protected source must pass PostgreSQL preflight.');
-    assert.strictEqual(JSON.parse(validPreflight.stdout).postgresqlImportAllowed, true, 'A passing preflight must explicitly authorize the protected source for import.');
+    const validPreflightReport = JSON.parse(validPreflight.stdout);
+    assert.strictEqual(validPreflightReport.postgresqlImportAllowed, true, 'A passing preflight must explicitly authorize the protected source for structural import review.');
+    assert.strictEqual(validPreflightReport.productionSourceEligible, false, 'An unsigned developer or checkout file must never be labeled as the production migration source.');
+    assert.strictEqual(validPreflightReport.productionImportAllowed, false, 'Structural coherence alone must not authorize a production import.');
     await fs.writeFile(dataFile, JSON.stringify({
       vehicles: [
         { id: 'vehicle-assignment-conflict', vin: 'ASSIGNMENTVIN0001', status: 'Rented' },
@@ -212,6 +215,13 @@ async function main() {
     const verifiedProvenance = await source.assertProvenanceManifest(dataFile, exact, provenanceEnvironment);
     assert.strictEqual(verifiedProvenance.renderServiceId, renderServiceId, 'Valid provenance must remain bound to the Render service that captured it.');
     assert.strictEqual(verifiedProvenance.maintenanceInstanceId, activeMaintenanceLease.instanceId, 'Valid provenance must remain bound to the exact deployed maintenance process.');
+    const signedPreflight = run(preflight, dataFile, provenanceEnvironment);
+    assert.strictEqual(signedPreflight.status, 0, signedPreflight.stderr || 'A structurally coherent signed Render snapshot must pass preflight.');
+    const signedPreflightReport = JSON.parse(signedPreflight.stdout);
+    assert.strictEqual(signedPreflightReport.postgresqlImportAllowed, true, 'The signed Render snapshot must remain structurally coherent.');
+    assert.strictEqual(signedPreflightReport.productionSourceEligible, true, 'A fresh signed Render snapshot bound to the active maintenance lease must be production eligible.');
+    assert.strictEqual(signedPreflightReport.productionImportAllowed, true, 'Only a coherent signed Render snapshot may be labeled ready for production import.');
+    assert.strictEqual(signedPreflightReport.sourceProvenance.renderServiceId, renderServiceId, 'Preflight must expose only safe signed-source identity, never secret values.');
     const repeatedProvenance = await source.assertSameProvenanceManifest(dataFile, exact, verifiedProvenance, provenanceEnvironment);
     assert.strictEqual(repeatedProvenance.manifestChecksum, verifiedProvenance.manifestChecksum, 'Repeated cutover checks must authenticate the exact same signed source manifest.');
     const replacementManifest = {
