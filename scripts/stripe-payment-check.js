@@ -78,6 +78,9 @@ async function run() {
   assert(captured.url.endsWith('/account'), 'Stripe account readiness must use the authenticated account endpoint.');
   assert.strictEqual(captured.options.method, 'GET', 'Stripe account readiness must be a read-only request.');
   assert.strictEqual(captured.options.body, undefined, 'Stripe account readiness must never submit money or account changes.');
+  await client.createCustomer({ name: 'Test Customer', metadata: { recurringPaymentId: 'rec-1' } }, 'woa-customer-test-key');
+  assert(captured.url.endsWith('/customers'), 'Stripe customer creation must use the provider customer endpoint.');
+  assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-customer-test-key', 'Stripe customer creation must use a deterministic idempotency key so a restart cannot create a duplicate customer.');
   await client.createPaymentIntent({ amount: 22900, currency: 'usd', metadata: { recurringPaymentId: 'rec-1' } }, 'woa-test-key');
   assert.strictEqual(captured.options.headers.Authorization, 'Bearer sk_test_private', 'Stripe secret key must only be sent in the Authorization header.');
   assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-test-key', 'Money actions must use an idempotency key.');
@@ -108,6 +111,11 @@ async function run() {
     () => uncertainClient.createPaymentIntent({ amount: 22900, currency: 'usd' }, 'woa-timeout-key'),
     error => error && error.code === 'stripe_confirmation_pending' && error.ambiguous === true && error.timedOut === true && error.idempotencyKey === 'woa-timeout-key',
     'A timeout after an idempotent money request must be classified as confirmation pending, never as a clean decline.'
+  );
+  await assert.rejects(
+    () => uncertainClient.createCustomer({ name: 'Restart Test' }, 'woa-customer-timeout-key'),
+    error => error && error.code === 'stripe_confirmation_pending' && error.ambiguous === true && error.idempotencyKey === 'woa-customer-timeout-key',
+    'A customer-creation timeout must retain the deterministic Stripe idempotency key for a safe restart retry.'
   );
   const serverErrorClient = stripeAdapter.stripeClient({
     secretKey: 'sk_test_private',
@@ -165,6 +173,7 @@ async function run() {
     'completeStripeRecurringChargeClaim',
     'failStripeRecurringChargeClaim'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
+  assert(server.includes("stableId('woa-stripe-customer'") && server.includes('stripeCustomerIdempotencyKey'), 'Stripe customer creation must derive and retain a deterministic company-and-customer-scoped idempotency key.');
   assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
   ['claim_token', 'idempotencyClaimToken', 'claimIdempotencyKey', 'completeIdempotencyKey', 'failIdempotencyKey'].forEach(value => {
     assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);

@@ -14023,17 +14023,39 @@ async function ensureStripeCustomer(data, request) {
   const recurring = stripeRecurringRowsForRequest(data, request)[0] || {};
   const saved = String(request.stripeCustomerId || recurring.stripeCustomerId || '').trim();
   if (saved) return saved;
+  const customerAnchor = String(
+    recurring.id
+    || request.recurringPaymentId
+    || request.customerAccountId
+    || request.applicationId
+    || request.onboardingSessionId
+    || request.id
+    || ''
+  ).trim();
+  if (!customerAnchor) throw new Error('Stripe customer creation requires a stable WheelsonAuto customer or onboarding reference.');
+  const customerIdempotencyKey = String(request.stripeCustomerIdempotencyKey || integrationEngine.stableId('woa-stripe-customer', [
+    request.organizationId || recurring.organizationId || MAIN_ORG_ID,
+    customerAnchor
+  ])).slice(0, 255);
+  request.stripeCustomerIdempotencyKey = customerIdempotencyKey;
   const customer = await stripe.createCustomer({
     name: request.customer || undefined,
     email: request.email || undefined,
     phone: request.phone || undefined,
     description: ['WheelsonAuto customer', request.customer, request.vehicle].filter(Boolean).join(' - ').slice(0, 350),
     metadata: stripeMetadata(request, { flow: 'customer_record' })
-  });
+  }, customerIdempotencyKey);
   request.stripeCustomerId = customer.id;
-  stripeRecurringRowsForRequest(data, request).forEach(row => { row.stripeCustomerId = customer.id; });
+  request.stripeCustomerCreatedAt = request.stripeCustomerCreatedAt || new Date().toISOString();
+  stripeRecurringRowsForRequest(data, request).forEach(row => {
+    row.stripeCustomerId = customer.id;
+    row.stripeCustomerIdempotencyKey = customerIdempotencyKey;
+  });
   const profile = (data.customers || []).find(row => request.customer && normKey(row.name || row.customer) === normKey(request.customer));
-  if (profile) profile.stripeCustomerId = customer.id;
+  if (profile) {
+    profile.stripeCustomerId = customer.id;
+    profile.stripeCustomerIdempotencyKey = customerIdempotencyKey;
+  }
   return customer.id;
 }
 async function attachStripeCardSetupCheckout(data, request, req) {
