@@ -57,6 +57,10 @@ It creates a random test organization, proves write/snapshot/restore/checksum
 behavior, then removes only that generated test organization. Never point
 `WOA_TEST_DATABASE_URL` at the production database. This first test proves the
 database behavior only; it does not record production launch evidence yet.
+Recovery evidence is bound to the exact current schema-migration set and drill
+script contract. Any later database-safety migration or required-check change
+automatically invalidates older evidence and requires a fresh controlled drill;
+the 30-day freshness window never overrides a contract mismatch.
 
 ## 2. Configure Private Document Storage
 

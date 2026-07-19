@@ -9,6 +9,13 @@ const TRANSACTIONAL_INDEX_MIGRATION_ID = '20260718_transactional_resource_assign
 const DURABLE_RATE_LIMIT_MIGRATION_ID = '20260718_durable_security_rate_limits_v3';
 const DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID = '20260718_document_tenant_primary_key_v4';
 const PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID = '20260718_provider_financial_identity_index_v5';
+const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
+  MIGRATION_ID,
+  TRANSACTIONAL_INDEX_MIGRATION_ID,
+  DURABLE_RATE_LIMIT_MIGRATION_ID,
+  DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
+  PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID
+]);
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'durableJobLock',
@@ -20,6 +27,13 @@ const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'stateChecksum',
   'migrationProof'
 ]);
+const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v4-provider-identity';
+const RECOVERY_DRILL_CONTRACT_VERSION = Object.freeze([
+  'wheelsonauto-recovery-drill-v2',
+  RECOVERY_DRILL_SCRIPT_VERSION,
+  ...REQUIRED_SCHEMA_MIGRATION_IDS,
+  ...RECOVERY_DRILL_REQUIRED_CHECKS
+].join('|'));
 const DEFAULT_RECOVERY_DRILL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function clone(value) {
@@ -270,13 +284,14 @@ function migrationProofEvidence(proof) {
   };
 }
 
-function recoveryDrillConfigurationFingerprint(secret, databaseUrl, organizationId = DEFAULT_ORGANIZATION_ID) {
+function recoveryDrillConfigurationFingerprint(secret, databaseUrl, organizationId = DEFAULT_ORGANIZATION_ID, contractVersion = RECOVERY_DRILL_CONTRACT_VERSION) {
   const key = String(secret || '');
   const database = String(databaseUrl || '');
   const organization = String(organizationId || DEFAULT_ORGANIZATION_ID).trim() || DEFAULT_ORGANIZATION_ID;
+  const contract = String(contractVersion || RECOVERY_DRILL_CONTRACT_VERSION).trim() || RECOVERY_DRILL_CONTRACT_VERSION;
   if (!key || !database) return '';
   return crypto.createHmac('sha256', key)
-    .update(['wheelsonauto-recovery-drill-v1', database, organization].join('\u0000'), 'utf8')
+    .update([contract, database, organization].join('\u0000'), 'utf8')
     .digest('hex');
 }
 
@@ -291,6 +306,7 @@ function recoveryDrillEvidence(proof, options = {}) {
   const requiredChecks = Array.isArray(options.requiredChecks) && options.requiredChecks.length
     ? options.requiredChecks.map(value => String(value || '').trim()).filter(Boolean)
     : RECOVERY_DRILL_REQUIRED_CHECKS;
+  const expectedScriptVersion = String(options.expectedScriptVersion || options.scriptVersion || RECOVERY_DRILL_SCRIPT_VERSION).trim();
   const missingChecks = requiredChecks.filter(check => checks[check] !== true);
   const verifiedAt = String(row.verifiedAt || row.verified_at || '');
   const verifiedAtMs = Date.parse(verifiedAt);
@@ -300,12 +316,14 @@ function recoveryDrillEvidence(proof, options = {}) {
   const configurationMatched = expectedFingerprint
     ? !!configurationFingerprint && configurationFingerprint === expectedFingerprint
     : !!configurationFingerprint;
+  const scriptVersionMatched = !!scriptVersion && (!expectedScriptVersion || scriptVersion === expectedScriptVersion);
   const checksPassed = missingChecks.length === 0;
-  const passed = result === 'passed' && !!runId && !!testDatabaseFingerprint && !!scriptVersion && checksPassed;
+  const passed = result === 'passed' && !!runId && !!testDatabaseFingerprint && scriptVersionMatched && checksPassed;
   const ready = passed && configurationMatched && fresh;
   let error = '';
   if (!runId || !testDatabaseFingerprint || !scriptVersion) error = 'No signed controlled PostgreSQL recovery drill record exists yet.';
   else if (result !== 'passed') error = 'The latest controlled PostgreSQL recovery drill did not pass.';
+  else if (!scriptVersionMatched) error = 'The recorded recovery drill used an older database-safety contract. Run the current controlled drill before the Stripe launch.';
   else if (!checksPassed) error = 'The latest controlled PostgreSQL recovery drill is missing: ' + missingChecks.join(', ') + '.';
   else if (!configurationMatched) error = 'The recorded recovery drill belongs to an older or unknown PostgreSQL configuration. Run a new controlled drill after the current Render settings are deployed.';
   else if (!fresh) error = 'The controlled PostgreSQL recovery drill is stale. Run it again before the Stripe launch.';
@@ -315,6 +333,8 @@ function recoveryDrillEvidence(proof, options = {}) {
     verifiedAt,
     testDatabaseConfigured: !!testDatabaseFingerprint,
     scriptVersion,
+    expectedScriptVersion,
+    scriptVersionMatched,
     checks,
     requiredChecks,
     missingChecks,
@@ -2624,7 +2644,10 @@ module.exports = {
   DURABLE_RATE_LIMIT_MIGRATION_ID,
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
+  REQUIRED_SCHEMA_MIGRATION_IDS,
   DEFAULT_ORGANIZATION_ID,
+  RECOVERY_DRILL_SCRIPT_VERSION,
+  RECOVERY_DRILL_CONTRACT_VERSION,
   clone,
   stableJson,
   checksum,

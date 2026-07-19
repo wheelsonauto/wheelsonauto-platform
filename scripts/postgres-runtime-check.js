@@ -15,7 +15,7 @@ const recoveryProofConfirmed = process.env.WOA_POSTGRES_RUNTIME_PROOF_CONFIRM ==
 const recoveryProofDatabaseUrl = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL || process.env.DATABASE_URL || '').trim();
 const recoveryProofOrganizationId = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID || stateRepository.DEFAULT_ORGANIZATION_ID).trim() || stateRepository.DEFAULT_ORGANIZATION_ID;
 const recoveryProofSecret = String(process.env.WOA_RECOVERY_DRILL_CONFIGURATION_SECRET || process.env.WOA_SESSION_SECRET || '').trim();
-const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v3';
+const RECOVERY_DRILL_SCRIPT_VERSION = stateRepository.RECOVERY_DRILL_SCRIPT_VERSION;
 
 function dockerCommand(args, options = {}) {
   const result = spawnSync('docker', args, {
@@ -218,7 +218,9 @@ async function main() {
       foreignRepository.ensureSchema()
     ]);
     const schemaMigrationRows = await repository.pool.query('SELECT id FROM woa_schema_migrations ORDER BY id');
-    assert(schemaMigrationRows.rowCount >= 4, 'Concurrent PostgreSQL startups must complete one serialized schema upgrade with every required migration recorded.');
+    const recordedMigrationIds = new Set(schemaMigrationRows.rows.map(row => String(row.id || '')));
+    const missingMigrationIds = stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.filter(id => !recordedMigrationIds.has(id));
+    assert.deepStrictEqual(missingMigrationIds, [], 'Concurrent PostgreSQL startups must complete every exact required schema migration before recovery evidence can be recorded.');
 
     const firstAutopayLock = await repository.acquireJobLock('wheelsonauto-autopay');
     assert.strictEqual(firstAutopayLock.acquired, true, 'The first PostgreSQL autopay worker must acquire the durable job lock.');

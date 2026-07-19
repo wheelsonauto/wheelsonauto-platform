@@ -313,10 +313,20 @@ async function main() {
       testDatabaseFingerprint: stateRepository.recoveryDrillConfigurationFingerprint('foundation-recovery-secret', 'postgres://foundation-test/wheelsonauto', 'org-foundation-test'),
       configurationFingerprint: recoveryDrillFingerprint,
       checks: recoveryDrillChecks,
-      scriptVersion: 'foundation-check-v1',
+      scriptVersion: stateRepository.RECOVERY_DRILL_SCRIPT_VERSION,
       verifiedAt: new Date().toISOString()
     };
     assert.strictEqual(stateRepository.recoveryDrillEvidence(freshRecoveryDrill, { configurationFingerprint: recoveryDrillFingerprint }).ready, true, 'A fresh passed recovery drill with every required check must satisfy the controlled launch gate.');
+    const previousRecoveryContractFingerprint = stateRepository.recoveryDrillConfigurationFingerprint(
+      'foundation-recovery-secret',
+      'postgres://foundation-primary/wheelsonauto',
+      'org-foundation',
+      'wheelsonauto-recovery-drill-v1'
+    );
+    assert.notStrictEqual(previousRecoveryContractFingerprint, recoveryDrillFingerprint, 'A database-safety contract change must invalidate the previous recovery-drill configuration proof.');
+    const staleScriptEvidence = stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, scriptVersion: 'postgres-runtime-check-v3' }, { configurationFingerprint: recoveryDrillFingerprint });
+    assert.strictEqual(staleScriptEvidence.ready, false, 'A recovery drill from an older test contract must fail closed even when its database fingerprint is current.');
+    assert.match(staleScriptEvidence.error, /older database-safety contract/i, 'An outdated recovery drill must explain that the current controlled drill is required.');
     assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, checks: { ...recoveryDrillChecks, serverRestartRead: false } }, { configurationFingerprint: recoveryDrillFingerprint }).ready, false, 'A recovery drill missing a server-restart read must fail closed before live launch.');
     assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, configurationFingerprint: 'old-database-configuration' }, { configurationFingerprint: recoveryDrillFingerprint }).ready, false, 'A recovery drill from an older database configuration must not satisfy the current launch gate.');
     assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, verifiedAt: '2020-01-01T00:00:00.000Z' }, { configurationFingerprint: recoveryDrillFingerprint, maxAgeMs: 60 * 60 * 1000 }).ready, false, 'A stale recovery drill must not satisfy the current launch gate.');
