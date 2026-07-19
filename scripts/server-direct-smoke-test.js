@@ -4311,6 +4311,37 @@ async function main() {
     });
     assert(managerRecoveryRestore.status === 403, 'Only the owner can initiate a transactional recovery restore.');
 
+    const smsReviewSeed = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    smsReviewSeed.json.messages = Array.isArray(smsReviewSeed.json.messages) ? smsReviewSeed.json.messages : [];
+    smsReviewSeed.json.messages.unshift({
+      id: 'message-direct-sms-review',
+      customer: 'Direct Customer',
+      phone: '+13135550199',
+      body: 'Direct confirmation-pending SMS route test.',
+      direction: 'Outbound',
+      channel: 'SMS',
+      provider: 'telnyx',
+      providerIdempotencyKey: 'woa-sms-' + 'a'.repeat(64),
+      status: 'Send confirmation pending',
+      tone: 'warn',
+      createdAt: new Date().toISOString()
+    });
+    const smsReviewSeedWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: smsReviewSeed.json });
+    assert(smsReviewSeedWrite.status === 200 && smsReviewSeedWrite.json.ok, 'Confirmation-pending SMS review setup failed.');
+    const managerSmsReview = await request(server, 'POST', '/api/messages/delivery-review', {
+      cookie: managerCookie,
+      json: { messageId: 'message-direct-sms-review', action: 'confirm_delivered', note: 'Manager must not settle carrier delivery.' }
+    });
+    assert(managerSmsReview.status === 403, 'Managers must not settle an uncertain carrier delivery.');
+    const ownerSmsReview = await request(server, 'POST', '/api/messages/delivery-review', {
+      cookie: ownerCookie,
+      json: { messageId: 'message-direct-sms-review', action: 'confirm_delivered', note: 'Carrier history checked in direct smoke.' }
+    });
+    assert(ownerSmsReview.status === 200 && ownerSmsReview.json.ok && ownerSmsReview.json.result.action === 'confirm_delivered', 'Owner SMS delivery review route failed.');
+    const smsReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const reviewedSms = (smsReviewRead.json.messages || []).find(message => message.id === 'message-direct-sms-review');
+    assert(reviewedSms && reviewedSms.deliveryReviewOutcome === 'delivered' && reviewedSms.deliveryReviewedBy, 'Owner SMS delivery review must persist the carrier decision and reviewer audit fields.');
+
     const managerMessage = await request(server, 'POST', '/api/messages/send', {
       cookie: managerCookie,
       json: { customer: 'Direct Customer', phone: '3135550199', body: 'Direct smoke manager message.' }
