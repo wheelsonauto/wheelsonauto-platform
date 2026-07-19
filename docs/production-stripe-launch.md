@@ -728,6 +728,17 @@ Before moving more customers, explicitly verify:
 - private document access cannot cross customer/company boundaries
 - backup restoration and server restart recovery
 
+After every production deployment, run the read-only anonymous security probe:
+
+```sh
+pnpm run live-security-probe -- https://wheelsonauto-platform.onrender.com
+```
+
+It performs no login and no business write. It verifies the deployed release,
+security headers, and that anonymous requests cannot read dashboard state,
+launch preflight, the editable contract, identity documents, signatures, or a
+customer's private documents.
+
 Keep EZPass CSV matching, manual insurance review, manual accounting exports,
 and PassTime companion access separate from the Stripe go-live. They should not
 block a safe payment migration.

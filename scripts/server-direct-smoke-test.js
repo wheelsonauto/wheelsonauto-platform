@@ -2571,6 +2571,7 @@ async function main() {
     assert(ownDocumentDownload.status === 200 && String(ownDocumentDownload.headers['Content-Type'] || ownDocumentDownload.headers['content-type']).includes('image/png'), 'Customer should be able to reopen their own uploaded document through the authenticated route.');
     const unauthenticatedDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id));
     assert(unauthenticatedDocumentDownload.status === 302 && unauthenticatedDocumentDownload.location === '/customer/login', 'Private customer document download must require a customer login.');
+    assert(String(unauthenticatedDocumentDownload.headers['Cache-Control'] || unauthenticatedDocumentDownload.headers['cache-control']) === 'no-store', 'Private customer document login redirects must never be cached.');
     const sameOrganizationCustomerDocumentDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(uploadedDocument.id), { cookie: sameOrganizationCustomerCookie });
     assert(sameOrganizationCustomerDocumentDownload.status === 404, 'A different customer in the same company must not be able to read another customer private upload.');
     const sameOrganizationCustomerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: sameOrganizationCustomerCookie });

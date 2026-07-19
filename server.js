@@ -217,7 +217,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260718-clover-proof-179';
+const ASSET_VERSION = 'platform-20260718-live-security-180';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -19019,10 +19019,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/customer/documents/') && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
-      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      if (!customerUser) return send(res, 302, '', 'text/plain', { 'Cache-Control': 'no-store', Location: '/customer/login' });
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
-      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      if (!account) return send(res, 302, '', 'text/plain', { 'Cache-Control': 'no-store', 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
       const document = (data.documents || []).find(row => row.id === id && row.customerAccountId === account.id && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
       if (!document || !privateDocumentAvailable(document)) return send(res, 404, 'Document not found', 'text/plain; charset=utf-8');
