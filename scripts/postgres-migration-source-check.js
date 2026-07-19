@@ -11,6 +11,7 @@ const stateMigrationLock = require('../state-migration-lock');
 const importer = path.join(__dirname, 'migrate-json-to-postgres.js');
 const verifier = path.join(__dirname, 'verify-json-to-postgres.js');
 const lockRecovery = path.join(__dirname, 'recover-postgres-migration-lock.js');
+const preflight = path.join(__dirname, 'postgres-preflight.js');
 
 function run(script, dataFile, env) {
   return spawnSync(process.execPath, [script, dataFile], { cwd: path.resolve(__dirname, '..'), env, encoding: 'utf8' });
@@ -21,6 +22,32 @@ async function main() {
   try {
     const dataFile = path.join(temp, 'protected-data.json');
     const value = { vehicles: [{ id: 'vehicle-source-1', vin: 'SOURCEVIN00000001' }], customers: [{ id: 'customer-source-1', email: 'source@example.com' }] };
+    await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
+    const validPreflight = run(preflight, dataFile, process.env);
+    assert.strictEqual(validPreflight.status, 0, 'A structurally coherent protected source must pass PostgreSQL preflight.');
+    assert.strictEqual(JSON.parse(validPreflight.stdout).postgresqlImportAllowed, true, 'A passing preflight must explicitly authorize the protected source for import.');
+    await fs.writeFile(dataFile, JSON.stringify({
+      vehicles: [{ id: 'vehicle-assignment-conflict', vin: 'ASSIGNMENTVIN0001', status: 'Rented' }],
+      customers: [
+        { id: 'customer-assignment-a', name: 'Customer Alpha', vehicleId: 'vehicle-assignment-conflict', status: 'Active' },
+        { id: 'customer-assignment-b', name: 'Customer Beta', vehicleId: 'vehicle-assignment-conflict', status: 'Active' }
+      ]
+    }, null, 2), 'utf8');
+    const assignmentConflictPreflight = run(preflight, dataFile, process.env);
+    assert.strictEqual(assignmentConflictPreflight.status, 2, 'Two active customers claiming one vehicle must block PostgreSQL preflight before migration starts.');
+    const assignmentConflictReport = JSON.parse(assignmentConflictPreflight.stdout);
+    assert.strictEqual(assignmentConflictReport.postgresqlImportAllowed, false);
+    assert(assignmentConflictReport.structuralErrors.some(error => error.kind === 'woa_assignment_identity_conflict'), 'Preflight must identify the active vehicle-assignment conflict directly.');
+    await fs.writeFile(dataFile, JSON.stringify({
+      payments: [
+        { id: 'payment-provider-a', stripeChargeId: 'ch_preflight_duplicate' },
+        { id: 'payment-provider-b', stripeChargeId: 'ch_preflight_duplicate' }
+      ]
+    }, null, 2), 'utf8');
+    const providerConflictPreflight = run(preflight, dataFile, process.env);
+    assert.strictEqual(providerConflictPreflight.status, 2, 'A duplicated provider transaction identity must block PostgreSQL preflight.');
+    const providerConflictReport = JSON.parse(providerConflictPreflight.stdout);
+    assert(providerConflictReport.conflicts.some(conflict => conflict.kind === 'stripe_charge'), 'Preflight must expose which immutable provider identity is duplicated.');
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
     const snapshot = await source.readSource(dataFile);
     assert(source.validChecksum(snapshot.sourceFileChecksum), 'The protected-source checksum must be SHA-256.');

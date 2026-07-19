@@ -8,6 +8,7 @@ const MIGRATION_ID = '20260717_production_state_foundation_v1';
 const TRANSACTIONAL_INDEX_MIGRATION_ID = '20260718_transactional_resource_assignment_indexes_v2';
 const DURABLE_RATE_LIMIT_MIGRATION_ID = '20260718_durable_security_rate_limits_v3';
 const DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID = '20260718_document_tenant_primary_key_v4';
+const PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID = '20260718_provider_financial_identity_index_v5';
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'durableJobLock',
@@ -381,6 +382,38 @@ function identityEntries(state = {}) {
     pushIdentity(entries, 'clover_subscription', recurring && recurring.cloverSubscriptionId, 'recurring_payment', id);
     pushIdentity(entries, 'stripe_subscription', recurring && recurring.stripeSubscriptionId, 'recurring_payment', id);
   });
+  (state.cardSetupRequests || []).forEach((request, index) => {
+    const id = rowId(request, 'card-setup-request-' + index);
+    pushIdentity(entries, 'stripe_checkout_session', request && request.stripeCheckoutSessionId, 'card_setup_request', id);
+    pushIdentity(entries, 'stripe_setup_intent', request && request.stripeSetupIntentId, 'card_setup_request', id);
+  });
+  (state.paymentRequests || []).forEach((request, index) => {
+    const id = rowId(request, 'payment-request-' + index);
+    const provider = normalizedIdentity(request && (request.paymentProvider || request.provider) || 'unknown').replace(/[^a-z0-9]+/g, '_') || 'unknown';
+    pushIdentity(entries, 'stripe_checkout_session', request && request.stripeCheckoutSessionId, 'payment_request', id);
+    pushIdentity(entries, 'provider_checkout_session:' + provider, request && request.providerCheckoutSessionId, 'payment_request', id);
+  });
+  (state.refundRequests || []).forEach((refund, index) => {
+    const id = rowId(refund, 'refund-request-' + index);
+    const provider = normalizedIdentity(refund && (refund.paymentProvider || refund.provider) || 'unknown').replace(/[^a-z0-9]+/g, '_') || 'unknown';
+    pushIdentity(entries, 'provider_refund:' + provider, refund && refund.providerRefundId, 'refund_request', id);
+  });
+  (state.claims || []).forEach((claim, index) => {
+    const id = rowId(claim, 'claim-' + index);
+    pushIdentity(entries, 'stripe_dispute', claim && claim.stripeDisputeId, 'claim', id);
+  });
+  (state.onboardingSessions || []).forEach((session, index) => {
+    const id = rowId(session, 'onboarding-session-' + index);
+    pushIdentity(entries, 'stripe_identity_verification', session && session.stripeIdentityVerificationId, 'onboarding_session', id);
+  });
+  (state.documents || []).forEach((document, index) => {
+    const id = rowId(document, 'document-' + index);
+    pushIdentity(entries, 'private_document_id', document && document.id, 'document', id);
+  });
+  (state.eSignatures || []).forEach((signature, index) => {
+    const id = rowId(signature, 'e-signature-' + index);
+    pushIdentity(entries, 'private_document_id', signature && signature.id, 'e_signature', id);
+  });
   // A signed verification webhook resolves an external provider id back to one
   // customer case. Keep ids provider-scoped so different providers may reuse a
   // value, while preventing one provider event from matching two local cases.
@@ -399,8 +432,11 @@ function identityEntries(state = {}) {
   (state.payments || []).forEach((payment, index) => {
     const id = rowId(payment, 'payment-' + index);
     pushIdentity(entries, 'stripe_payment_intent', payment && payment.stripePaymentIntentId, 'payment', id);
+    pushIdentity(entries, 'stripe_charge', payment && payment.stripeChargeId, 'payment', id);
     pushIdentity(entries, 'clover_payment', payment && payment.cloverPaymentId, 'payment', id);
+    pushIdentity(entries, 'clover_charge', payment && payment.cloverChargeId, 'payment', id);
     pushIdentity(entries, 'provider_payment', payment && payment.providerPaymentId, 'payment', id);
+    pushIdentity(entries, 'provider_charge', payment && payment.providerChargeId, 'payment', id);
   });
   return entries;
 }
@@ -675,6 +711,36 @@ function activeAssignmentIndexRows(state = {}) {
     });
   });
   return result.sort((left, right) => left.vehicleId.localeCompare(right.vehicleId));
+}
+
+function transactionalIndexReadiness(state = {}, counts = {}) {
+  const expectedResourceIndexCount = criticalResourceIndexRows(state).length;
+  const expectedAssignmentIndexCount = activeAssignmentIndexRows(state).length;
+  const expectedIdentityIndexCount = identityEntries(state).length;
+  const expectedDocumentIndexCount = privateDocumentRows(state).length;
+  const resourceIndexCount = Number(counts.resourceIndexCount ?? counts.resource_index_count ?? 0);
+  const assignmentIndexCount = Number(counts.assignmentIndexCount ?? counts.assignment_index_count ?? 0);
+  const identityIndexCount = Number(counts.identityIndexCount ?? counts.identity_index_count ?? 0);
+  const documentIndexCount = Number(counts.documentIndexCount ?? counts.document_index_count ?? 0);
+  const resourceIndexReady = resourceIndexCount === expectedResourceIndexCount;
+  const assignmentIndexReady = assignmentIndexCount === expectedAssignmentIndexCount;
+  const identityIndexReady = identityIndexCount === expectedIdentityIndexCount;
+  const documentIndexReady = documentIndexCount === expectedDocumentIndexCount;
+  return {
+    allReady: resourceIndexReady && assignmentIndexReady && identityIndexReady && documentIndexReady,
+    resourceIndexReady,
+    resourceIndexCount,
+    expectedResourceIndexCount,
+    assignmentIndexReady,
+    assignmentIndexCount,
+    expectedAssignmentIndexCount,
+    identityIndexReady,
+    identityIndexCount,
+    expectedIdentityIndexCount,
+    documentIndexReady,
+    documentIndexCount,
+    expectedDocumentIndexCount
+  };
 }
 
 class JsonStateRepository {
@@ -1465,6 +1531,7 @@ class PostgresStateRepository {
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [TRANSACTIONAL_INDEX_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DURABLE_RATE_LIMIT_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID]);
         const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
@@ -2406,7 +2473,9 @@ class PostgresStateRepository {
         recovery_drill.verified_at AS recovery_drill_verified_at,
         (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count,
         (SELECT COUNT(*)::int FROM woa_resource_index WHERE organization_id = $1) AS resource_index_count,
-        (SELECT COUNT(*)::int FROM woa_active_assignments WHERE organization_id = $1) AS assignment_index_count
+        (SELECT COUNT(*)::int FROM woa_active_assignments WHERE organization_id = $1) AS assignment_index_count,
+        (SELECT COUNT(*)::int FROM woa_identity_index WHERE organization_id = $1) AS identity_index_count,
+        (SELECT COUNT(*)::int FROM woa_documents WHERE organization_id = $1) AS document_index_count
         FROM woa_state AS state
         LEFT JOIN LATERAL (
           SELECT id, version, checksum, state, created_at
@@ -2444,6 +2513,12 @@ class PostgresStateRepository {
           assignmentIndexReady: false,
           assignmentIndexCount: 0,
           expectedAssignmentIndexCount: 0,
+          identityIndexReady: false,
+          identityIndexCount: 0,
+          expectedIdentityIndexCount: 0,
+          documentIndexReady: false,
+          documentIndexCount: 0,
+          expectedDocumentIndexCount: 0,
           version: 0,
           updatedAt: '',
           error: 'PostgreSQL is reachable but WheelsonAuto state has not been imported.'
@@ -2488,37 +2563,31 @@ class PostgresStateRepository {
       };
       const recoveryDrillEvidenceResult = recoveryDrillEvidence(recoveryDrill);
       const checkedState = this.repair(clone(row.state));
-      const expectedResourceIndexCount = criticalResourceIndexRows(checkedState).length;
-      const expectedAssignmentIndexCount = activeAssignmentIndexRows(checkedState).length;
-      const resourceIndexCount = Number(row.resource_index_count || 0);
-      const assignmentIndexCount = Number(row.assignment_index_count || 0);
-      const resourceIndexReady = resourceIndexCount === expectedResourceIndexCount;
-      const assignmentIndexReady = assignmentIndexCount === expectedAssignmentIndexCount;
+      const indexes = transactionalIndexReadiness(checkedState, row);
       return {
         backend: 'postgres',
         connected: true,
         transactional: true,
-        productionReady: integrity.matches && resourceIndexReady && assignmentIndexReady,
+        productionReady: integrity.matches && indexes.allReady,
         stateImported: true,
         integrity: integrity.matches ? 'verified' : 'failed',
         ...recovery,
         ...migrationProof,
         recoveryDrill: recoveryDrillEvidenceResult,
         recoveryDrillReady: recoveryDrillEvidenceResult.ready,
-        resourceIndexReady,
-        resourceIndexCount,
-        expectedResourceIndexCount,
-        assignmentIndexReady,
-        assignmentIndexCount,
-        expectedAssignmentIndexCount,
+        ...indexes,
         version: Number(row.version || 0),
         updatedAt: row.updated_at,
         error: !integrity.matches
           ? 'PostgreSQL state checksum verification failed.'
-          : !resourceIndexReady
+          : !indexes.resourceIndexReady
             ? 'PostgreSQL critical-record index does not match the authoritative state. Refusing production readiness.'
-            : !assignmentIndexReady
+            : !indexes.assignmentIndexReady
               ? 'PostgreSQL active-assignment index does not match the authoritative state. Refusing production readiness.'
+            : !indexes.identityIndexReady
+              ? 'PostgreSQL immutable provider-identity index does not match the authoritative state. Refusing production readiness.'
+            : !indexes.documentIndexReady
+              ? 'PostgreSQL private-document metadata index does not match the authoritative state. Refusing production readiness.'
           : !recovery.snapshotRecoveryReady
             ? recovery.snapshotIntegrity === 'missing'
               ? 'PostgreSQL state is healthy but no current transactional recovery snapshot exists.'
@@ -2554,6 +2623,7 @@ module.exports = {
   TRANSACTIONAL_INDEX_MIGRATION_ID,
   DURABLE_RATE_LIMIT_MIGRATION_ID,
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
+  PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
   DEFAULT_ORGANIZATION_ID,
   clone,
   stableJson,
@@ -2578,6 +2648,7 @@ module.exports = {
   sameApprovedAssignmentCustomer,
   activeAssignmentCandidate,
   activeAssignmentIndexRows,
+  transactionalIndexReadiness,
   JsonStateRepository,
   PostgresStateRepository,
   createStateRepository

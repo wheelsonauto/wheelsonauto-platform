@@ -515,6 +515,10 @@ async function main() {
     assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');
     assert.strictEqual(health.resourceIndexReady, true, 'A production-ready PostgreSQL repository must have a complete critical-resource index.');
     assert.strictEqual(health.assignmentIndexReady, true, 'A production-ready PostgreSQL repository must have a complete active-assignment index.');
+    assert.strictEqual(health.identityIndexReady, true, 'A production-ready PostgreSQL repository must have a complete immutable provider-identity index.');
+    assert.strictEqual(health.documentIndexReady, true, 'A production-ready PostgreSQL repository must have complete private-document metadata.');
+    assert.strictEqual(health.identityIndexCount, health.expectedIdentityIndexCount, 'The provider-identity index count must match authoritative state after recovery.');
+    assert.strictEqual(health.documentIndexCount, health.expectedDocumentIndexCount, 'The private-document metadata count must match authoritative state after recovery.');
     assert.strictEqual(health.snapshotIntegrity, 'verified', 'The latest PostgreSQL recovery snapshot must verify its own checksum.');
     assert.strictEqual(health.snapshotVersionMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state version.');
     assert.strictEqual(health.snapshotChecksumMatchesCurrent, true, 'The latest PostgreSQL recovery snapshot must match the current state checksum.');

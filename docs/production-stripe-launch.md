@@ -371,6 +371,17 @@ show private document storage as production-ready with a current
 write/read/delete validation, no identity conflicts, and no unresolved launch
 blockers.
 
+PostgreSQL production readiness also compares four transactional indexes with
+the authoritative state on every health check: critical business resources,
+active vehicle assignments, immutable provider identities, and private-document
+metadata. Provider identities include Stripe/Clover charges, payment intents,
+recurring subscriptions, Checkout and SetupIntent sessions, Stripe Identity
+sessions, disputes, and provider-scoped refunds. A missing, duplicated, or
+out-of-sync index keeps the launch gate closed even when the main state checksum
+still matches. Shared customer IDs and payment methods remain allowed because
+one customer can legitimately have multiple plans; the individual subscription
+and transaction IDs must still be unique.
+
 PostgreSQL also gives the background autopay worker an organization-scoped
 advisory lock. A second app process will skip the same run instead of starting
 a competing charge pass; the lock is released automatically if its database

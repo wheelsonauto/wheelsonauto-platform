@@ -16,14 +16,40 @@ async function main() {
   const privateDocuments = stateRepository.privateDocumentRows(state);
   const encryptedDocuments = privateDocuments.filter(row => row.storageKey && row.encryption && row.encryption.algorithm === 'AES-256-GCM');
   const legacyDocuments = privateDocuments.filter(row => !encryptedDocuments.includes(row));
+  const structuralErrors = [];
+  let criticalResources = [];
+  let activeAssignments = [];
+  try {
+    criticalResources = stateRepository.criticalResourceIndexRows(state);
+  } catch (error) {
+    structuralErrors.push({
+      kind: String(error && error.code || 'woa_resource_index_error'),
+      message: String(error && error.message || error || 'Critical resource index failed.').slice(0, 1000),
+      resourceType: String(error && error.resourceType || ''),
+      resourceId: String(error && error.resourceId || '')
+    });
+  }
+  try {
+    activeAssignments = stateRepository.activeAssignmentIndexRows(state);
+  } catch (error) {
+    structuralErrors.push({
+      kind: String(error && error.code || 'woa_assignment_index_error'),
+      message: String(error && error.message || error || 'Active assignment index failed.').slice(0, 1000),
+      vehicleId: String(error && error.vehicleId || ''),
+      customers: Array.isArray(error && error.customers) ? error.customers.slice(0, 10) : []
+    });
+  }
+  const immutableProviderIdentities = stateRepository.identityEntries(state);
+  const postgresqlImportAllowed = conflicts.length === 0 && structuralErrors.length === 0;
   const controlledRecoveryDrill = 'Run the isolated PostgreSQL recovery drill after import: WOA_TEST_DATABASE_URL=<dedicated-test-db> WOA_POSTGRES_RUNTIME_TEST_CONFIRM=1 WOA_POSTGRES_RUNTIME_PROOF_RECORD=1 WOA_POSTGRES_RUNTIME_PROOF_CONFIRM=1 WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL=$DATABASE_URL node scripts/postgres-runtime-check.js. It records only proof metadata in the production database and uses the deployed WOA_SESSION_SECRET to bind that proof to the current database configuration.';
   const report = {
     source: dataFile,
     timestamp: new Date().toISOString(),
     sourceFileChecksum: source.sourceFileChecksum,
     canonicalStateChecksum: stateRepository.checksum(state),
-    postgresqlImportAllowed: conflicts.length === 0,
+    postgresqlImportAllowed,
     conflicts,
+    structuralErrors,
     warnings,
     counts: {
       vehicles: Array.isArray(state.vehicles) ? state.vehicles.length : 0,
@@ -32,16 +58,19 @@ async function main() {
       payments: Array.isArray(state.payments) ? state.payments.length : 0,
       privateDocuments: privateDocuments.length,
       encryptedDocuments: encryptedDocuments.length,
-      legacyDocuments: legacyDocuments.length
+      legacyDocuments: legacyDocuments.length,
+      criticalResources: criticalResources.length,
+      activeAssignments: activeAssignments.length,
+      immutableProviderIdentities: immutableProviderIdentities.length
     },
-    nextSteps: conflicts.length
-      ? ['Resolve each listed immutable VIN, plate, email, or payment-id conflict without deleting business history.', 'Run this preflight again until postgresqlImportAllowed is true.']
+    nextSteps: !postgresqlImportAllowed
+      ? ['Resolve every listed immutable VIN, plate, portal-username, provider transaction/subscription, critical-record, and active vehicle-assignment conflict without deleting business history.', 'Run this preflight again until postgresqlImportAllowed is true.']
       : (warnings.length
         ? ['Review and complete each missing vehicle VIN before enabling a controlled Stripe launch. PostgreSQL import remains available, but launch readiness stays blocked until these identity warnings are cleared.', 'Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.']
         : ['Copy this exact source to protected backup storage and retain the sourceFileChecksum printed above.', 'Provision PostgreSQL and set DATABASE_URL.', 'Pause production writes, then run WOA_POSTGRES_MIGRATION_CONFIRM=1 WOA_POSTGRES_MIGRATION_MAINTENANCE_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/migrate-json-to-postgres.js <protected-copy>.', 'Verify the same checksum with WOA_POSTGRES_MIGRATION_PROOF_CONFIRM=1 WOA_POSTGRES_MIGRATION_SOURCE_SHA256=<sourceFileChecksum> node scripts/verify-json-to-postgres.js <protected-copy>.', controlledRecoveryDrill, 'Set WOA_DATA_BACKEND=postgres only after the dedicated recovery test and proof record pass.', 'Migrate legacy private files before setting WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED=1.'])
   };
   console.log(JSON.stringify(report, null, 2));
-  process.exitCode = conflicts.length ? 2 : 0;
+  process.exitCode = postgresqlImportAllowed ? 0 : 2;
 }
 
 main().catch(error => {

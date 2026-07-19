@@ -415,6 +415,65 @@ async function main() {
       verificationCases: [{ id: 'verification-alias-one', provider: 'Canopy', externalCaseId: 'pull-one', providerPullId: 'pull-one' }]
     };
     assert.strictEqual(stateRepository.identityEntries(repeatedVerificationAliasOnOneCase).filter(entry => entry.kind === 'verification_provider_case:canopy').length, 1, 'The same provider identifier stored in two fields on one case must produce one database identity row.');
+    const duplicateStripeCharge = {
+      payments: [
+        { id: 'payment-charge-a', stripeChargeId: 'ch_foundation_duplicate' },
+        { id: 'payment-charge-b', stripeChargeId: 'ch_foundation_duplicate' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeCharge).map(conflict => conflict.kind), ['stripe_charge'], 'One Stripe charge must never resolve to two WheelsonAuto payment records.');
+    const duplicateStripeCheckout = {
+      cardSetupRequests: [{ id: 'card-setup-a', stripeCheckoutSessionId: 'cs_foundation_duplicate' }],
+      paymentRequests: [{ id: 'payment-link-b', paymentProvider: 'stripe', stripeCheckoutSessionId: 'cs_foundation_duplicate' }]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeCheckout).map(conflict => conflict.kind), ['stripe_checkout_session'], 'One Stripe Checkout session must never complete two local customer requests.');
+    const duplicateStripeSetupIntent = {
+      cardSetupRequests: [
+        { id: 'card-setup-intent-a', stripeSetupIntentId: 'seti_foundation_duplicate' },
+        { id: 'card-setup-intent-b', stripeSetupIntentId: 'seti_foundation_duplicate' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeSetupIntent).map(conflict => conflict.kind), ['stripe_setup_intent'], 'One Stripe SetupIntent must never save a card onto two local setup requests.');
+    const duplicateStripeIdentitySession = {
+      onboardingSessions: [
+        { id: 'onboarding-identity-a', stripeIdentityVerificationId: 'vs_foundation_duplicate' },
+        { id: 'onboarding-identity-b', stripeIdentityVerificationId: 'vs_foundation_duplicate' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeIdentitySession).map(conflict => conflict.kind), ['stripe_identity_verification'], 'One Stripe Identity session must never verify two onboarding files.');
+    const duplicateStripeDispute = {
+      claims: [
+        { id: 'claim-dispute-a', stripeDisputeId: 'dp_foundation_duplicate' },
+        { id: 'claim-dispute-b', stripeDisputeId: 'dp_foundation_duplicate' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateStripeDispute).map(conflict => conflict.kind), ['stripe_dispute'], 'One Stripe dispute must never create two evidence cases.');
+    const duplicateProviderRefund = {
+      refundRequests: [
+        { id: 'refund-a', paymentProvider: 'stripe', providerRefundId: 're_foundation_duplicate' },
+        { id: 'refund-b', provider: 'Stripe', providerRefundId: 're_foundation_duplicate' }
+      ]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicateProviderRefund).map(conflict => conflict.kind), ['provider_refund:stripe'], 'One provider refund must never settle two local refund requests.');
+    const providerScopedRefundIds = {
+      refundRequests: [
+        { id: 'refund-stripe', paymentProvider: 'stripe', providerRefundId: 'shared-provider-value' },
+        { id: 'refund-clover', paymentProvider: 'clover', providerRefundId: 'shared-provider-value' }
+      ]
+    };
+    assert.strictEqual(stateRepository.identityConflicts(providerScopedRefundIds).length, 0, 'Different payment providers may issue the same refund identifier without creating a false cross-provider conflict.');
+    const sharedStripeCardAcrossPlans = {
+      recurringPayments: [
+        { id: 'shared-card-plan-a', stripeCustomerId: 'cus_shared', stripePaymentMethodId: 'pm_shared', stripeSubscriptionId: 'sub_shared_a' },
+        { id: 'shared-card-plan-b', stripeCustomerId: 'cus_shared', stripePaymentMethodId: 'pm_shared', stripeSubscriptionId: 'sub_shared_b' }
+      ]
+    };
+    assert.strictEqual(stateRepository.identityConflicts(sharedStripeCardAcrossPlans).length, 0, 'A customer may intentionally authorize one Stripe card for multiple distinct recurring plans.');
+    const duplicatePrivateDocumentIdentity = {
+      documents: [{ id: 'private-artifact-duplicate', storageKey: 'documents/private-artifact-duplicate.enc' }],
+      eSignatures: [{ id: 'private-artifact-duplicate', storageKey: 'signatures/private-artifact-duplicate.enc' }]
+    };
+    assert.deepStrictEqual(stateRepository.identityConflicts(duplicatePrivateDocumentIdentity).map(conflict => conflict.kind), ['private_document_id'], 'A private document and e-signature must never share one database document identity.');
     const missingVinWarnings = stateRepository.identityWarnings({ vehicles: [{ id: 'vehicle-missing-vin', year: 2013, make: 'BMW', model: '528XI', plate: 'VIN-REVIEW', tracker: 'Tracker 12', currentCustomer: 'VIN Review Customer', status: 'Rented' }] });
     assert.strictEqual(missingVinWarnings.length, 1, 'A vehicle without a VIN must remain visible for owner review before Stripe cutover.');
     assert.strictEqual(missingVinWarnings[0].kind, 'vehicle_missing_vin', 'A missing VIN warning must retain a stable review category.');
@@ -445,6 +504,29 @@ async function main() {
     assert.strictEqual(activeAssignments.length, 1, 'Matching active customer, file, and autopay rows must collapse into one vehicle assignment.');
     assert.strictEqual(activeAssignments[0].customerName, 'Maya Stone', 'The active assignment index must retain the canonical saved customer name.');
     assert.strictEqual(activeAssignments[0].sourceRefs.length, 3, 'The active assignment must preserve each authoritative source for later recovery review.');
+    const exactIndexReadiness = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      resourceIndexCount: resourceIndexRows.length,
+      assignmentIndexCount: activeAssignments.length,
+      identityIndexCount: stateRepository.identityEntries(indexedBusinessState).length,
+      documentIndexCount: stateRepository.privateDocumentRows(indexedBusinessState).length
+    });
+    assert.strictEqual(exactIndexReadiness.allReady, true, 'PostgreSQL readiness must require all four transactional indexes to match authoritative state.');
+    const missingProviderIdentityIndex = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      resourceIndexCount: resourceIndexRows.length,
+      assignmentIndexCount: activeAssignments.length,
+      identityIndexCount: Math.max(0, exactIndexReadiness.expectedIdentityIndexCount - 1),
+      documentIndexCount: exactIndexReadiness.expectedDocumentIndexCount
+    });
+    assert.strictEqual(missingProviderIdentityIndex.allReady, false, 'A missing immutable provider identity row must block PostgreSQL production readiness.');
+    assert.strictEqual(missingProviderIdentityIndex.identityIndexReady, false, 'The launch gate must identify provider-identity index drift directly.');
+    const orphanedDocumentIndex = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      resourceIndexCount: resourceIndexRows.length,
+      assignmentIndexCount: activeAssignments.length,
+      identityIndexCount: exactIndexReadiness.expectedIdentityIndexCount,
+      documentIndexCount: exactIndexReadiness.expectedDocumentIndexCount + 1
+    });
+    assert.strictEqual(orphanedDocumentIndex.allReady, false, 'Orphaned private-document metadata must block PostgreSQL production readiness.');
+    assert.strictEqual(orphanedDocumentIndex.documentIndexReady, false, 'The launch gate must identify private-document index drift directly.');
     assert.strictEqual(stateRepository.activeAssignmentIndexRows({
       vehicles: [{ id: 'vehicle-history', status: 'Ready', currentCustomer: 'Old Customer' }],
       customers: [{ id: 'customer-history', name: 'Old Customer', vehicleId: 'vehicle-history', status: 'History' }]
