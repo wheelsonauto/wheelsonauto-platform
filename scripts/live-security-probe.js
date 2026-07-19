@@ -38,6 +38,34 @@ async function expectStatus(pathname, expected, label, method = 'GET') {
   return response;
 }
 
+const anonymousProtectedRoutes = [
+  ['GET', '/api/customer/portal-state', 'Customer portal state'],
+  ['POST', '/api/customer-accounts', 'Customer account administration'],
+  ['POST', '/api/organizations', 'Company administration'],
+  ['GET', '/api/messages/status', 'Messaging staff status'],
+  ['POST', '/api/messages/ai-action', 'Star approval action'],
+  ['GET', '/api/reports/deep.csv', 'Deep business report'],
+  ['GET', '/api/accounting/ledger', 'Accounting ledger'],
+  ['GET', '/api/billing/summary', 'Company billing summary'],
+  ['GET', '/api/verification/status', 'Verification and insurance cases'],
+  ['GET', '/api/integrations/tracker/status', 'Tracker status'],
+  ['GET', '/api/integrations/marketing/status', 'Marketing status'],
+  ['GET', '/api/pickups/calendar', 'Pickup calendar'],
+  ['GET', '/api/integrations/clover/reconciliation', 'Clover reconciliation'],
+  ['POST', '/api/integrations/payments/refunds/execute', 'Refund execution'],
+  ['POST', '/api/payment-provider/switch', 'Payment-provider cutover'],
+  ['POST', '/api/woa-autopay/run', 'Autopay execution']
+];
+
+async function expectAnonymousApiBoundary(method, pathname, label) {
+  const response = await expectStatus(pathname, 401, label, method);
+  assert.match(String(response.headers.get('cache-control') || ''), /no-store/i, label + ' authentication failure must not be cached.');
+  const body = await response.json();
+  assert.equal(body.ok, false, label + ' must return a failed JSON result.');
+  assert.match(String(body.error || ''), /(?:authentication|login) required/i, label + ' must fail at authentication before reading or changing business data.');
+  assert.deepEqual(Object.keys(body).sort(), ['error', 'ok'], label + ' anonymous response must not leak route or business metadata.');
+}
+
 async function main() {
   const health = await expectStatus('/healthz', 200, 'Health route');
   const healthBody = await health.json();
@@ -53,12 +81,15 @@ async function main() {
   await expectStatus('/api/onboarding/documents/security-probe-does-not-exist', 401, 'Private identity document');
   await expectStatus('/api/onboarding/signatures/security-probe-does-not-exist', 401, 'Private signature');
   await expectStatus('/api/contract-template', 401, 'Editable contract template');
+  for (const [method, pathname, label] of anonymousProtectedRoutes) {
+    await expectAnonymousApiBoundary(method, pathname, label);
+  }
 
   const customerDocument = await expectStatus('/customer/documents/security-probe-does-not-exist', 302, 'Customer private document');
   assert.equal(customerDocument.headers.get('location'), '/customer/login', 'An unauthenticated customer document request must return to customer login.');
   assert.equal(customerDocument.headers.get('cache-control'), 'no-store', 'The customer document redirect must not be cached.');
 
-  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous state, preflight, recovery history/restore, contract, identity-document, signature, and customer-document access with hardened response headers.');
+  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous access across ' + anonymousProtectedRoutes.length + ' staff/customer API boundaries plus state, preflight, recovery, contract, identity-document, signature, and customer-document routes with hardened response headers.');
 }
 
 main().catch(error => {

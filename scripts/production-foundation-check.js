@@ -89,6 +89,7 @@ async function main() {
     const launchRunbook = await fs.readFile(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
     const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
     const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
+    const liveSecurityProbeSource = await fs.readFile(path.resolve(__dirname, 'live-security-probe.js'), 'utf8');
     assert(serverSource.includes("url.pathname === '/healthz'") && serverSource.includes("release: ASSET_VERSION"), 'Production must expose a minimal unauthenticated health route without loading the staff workspace.');
     assert(serverSource.includes('process.env.RENDER_GIT_COMMIT') && serverSource.includes('commit: WOA_DEPLOY_COMMIT'), 'Production health must expose the short Render commit SHA for exact deploy verification.');
     assert(/healthCheckPath:\s*\/healthz/.test(renderBlueprint), 'Render must probe the dedicated health route instead of treating an open port as application readiness.');
@@ -97,6 +98,10 @@ async function main() {
     assert(packageSource.includes('scripts/dependency-vulnerability-check.js')
       && dependencyVulnerabilityCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && dependencyVulnerabilityCheckSource.includes("['audit', '--omit=dev', '--audit-level=high']"), 'The mandatory CI precheck must reject known high-severity runtime dependency vulnerabilities before Render deploys main.');
+    ['Customer portal state', 'Star approval action', 'Deep business report', 'Accounting ledger', 'Verification and insurance cases', 'Clover reconciliation', 'Refund execution', 'Payment-provider cutover', 'Autopay execution'].forEach(label => {
+      assert(liveSecurityProbeSource.includes(label), 'The live anonymous-access probe must cover the ' + label + ' boundary.');
+    });
+    assert(liveSecurityProbeSource.includes("assert.deepEqual(Object.keys(body).sort(), ['error', 'ok']"), 'Anonymous API failures must be checked for metadata leakage, not only an HTTP status.');
     assert(postgresRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && postgresRuntimeCheckSource.includes("'postgres:16-alpine'")
       && postgresRuntimeCheckSource.includes("'pg_isready'")
