@@ -182,12 +182,20 @@ async function main() {
       recurringPayments: [
         { id: 'rec-plan-a', status: 'Active', paymentProvider: 'clover', customer: 'Same Customer', cloverCustomerId: 'clover-same-customer', cloverPaymentSource: 'source-plan-a', cloverSubscriptionId: 'sub-plan-a' },
         { id: 'rec-plan-b', status: 'Active', paymentProvider: 'clover', customer: 'Same Customer', cloverCustomerId: 'clover-same-customer', cloverPaymentSource: 'source-plan-b', cloverSubscriptionId: 'sub-plan-b' }
-      ]
+      ],
+      integrations: { clover: { lastRecurringVerifiedSubscriptionIds: ['sub-plan-a', 'sub-plan-b'] } }
     };
     const multiPlanEligibility = stripeMigration.cutoverEligibility(multiPlanCustomer, multiPlanCustomer.recurringPayments[0]);
     assert.strictEqual(multiPlanEligibility.eligible, true, 'Separate plans for the same customer must remain eligible when each has its own Clover subscription ID.');
     assert.strictEqual(multiPlanEligibility.code, 'verified_multi_plan_customer', 'A verified multi-plan customer must remain explicit in cutover evidence.');
     assert.strictEqual(multiPlanEligibility.relatedPlanCount, 2, 'Cutover evidence must disclose the customer\'s other distinct Clover plans.');
+    assert.strictEqual(multiPlanEligibility.providerRosterMatched, true, 'A protected cutover must prove the exact subscription came from the server-owned Clover roster.');
+    const missingVerifiedRoster = stripeMigration.cutoverEligibility({ recurringPayments: multiPlanCustomer.recurringPayments }, multiPlanCustomer.recurringPayments[0]);
+    assert.strictEqual(missingVerifiedRoster.eligible, false, 'A browser-entered subscription ID must not cut over without a provider roster snapshot.');
+    assert.strictEqual(missingVerifiedRoster.code, 'missing_verified_clover_roster', 'Missing provider roster evidence must expose a stable quarantine code.');
+    const mismatchedVerifiedRoster = stripeMigration.cutoverEligibility({ recurringPayments: multiPlanCustomer.recurringPayments, integrations: { clover: { lastRecurringVerifiedSubscriptionIds: ['different-subscription'] } } }, multiPlanCustomer.recurringPayments[0]);
+    assert.strictEqual(mismatchedVerifiedRoster.eligible, false, 'A fresh Clover roster for a different subscription must not authorize this row.');
+    assert.strictEqual(mismatchedVerifiedRoster.code, 'clover_subscription_not_in_verified_roster', 'Mismatched provider roster evidence must expose a stable quarantine code.');
     const missingSubscriptionEligibility = stripeMigration.cutoverEligibility({ recurringPayments: [{ ...multiPlanCustomer.recurringPayments[0], cloverSubscriptionId: '' }] }, { ...multiPlanCustomer.recurringPayments[0], cloverSubscriptionId: '' });
     assert.strictEqual(missingSubscriptionEligibility.eligible, false, 'A Clover row without an exact subscription ID must stay quarantined instead of relying on a customer-name guess.');
     assert.strictEqual(missingSubscriptionEligibility.code, 'missing_clover_subscription_id', 'The missing-subscription quarantine must expose a stable reason code.');
@@ -195,7 +203,8 @@ async function main() {
       recurringPayments: [
         multiPlanCustomer.recurringPayments[0],
         { ...multiPlanCustomer.recurringPayments[1], cloverSubscriptionId: 'sub-plan-a' }
-      ]
+      ],
+      integrations: { clover: { lastRecurringVerifiedSubscriptionIds: ['sub-plan-a'] } }
     };
     const duplicateSubscriptionEligibility = stripeMigration.cutoverEligibility(duplicatedSubscriptionState, duplicatedSubscriptionState.recurringPayments[0]);
     assert.strictEqual(duplicateSubscriptionEligibility.eligible, false, 'Two active local rows must never cut over against the same Clover subscription ID.');

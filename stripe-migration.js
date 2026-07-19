@@ -71,7 +71,14 @@ function cloverSubscriptionId(row = {}) {
   return text(row.cloverSubscriptionId || row.subscriptionId);
 }
 
-function cutoverEligibility(data = {}, row = {}) {
+function verifiedCloverRosterSubscriptionIds(data = {}) {
+  const clover = data && data.integrations && data.integrations.clover || {};
+  return Array.from(new Set((Array.isArray(clover.lastRecurringVerifiedSubscriptionIds) ? clover.lastRecurringVerifiedSubscriptionIds : [])
+    .map(value => text(value))
+    .filter(Boolean)));
+}
+
+function cutoverEligibility(data = {}, row = {}, options = {}) {
   const currentProvider = provider(row.paymentProvider || row.provider || 'clover');
   if (currentProvider !== 'clover' || !hasCloverSource(row) || !activeCutoverRow(row)) {
     return {
@@ -106,6 +113,27 @@ function cutoverEligibility(data = {}, row = {}) {
     };
   }
 
+  const verifiedRosterIds = verifiedCloverRosterSubscriptionIds(data);
+  if (options.requireProviderRoster !== false && !verifiedRosterIds.length) {
+    return {
+      applicable: true,
+      eligible: false,
+      code: 'missing_verified_clover_roster',
+      subscriptionId,
+      message: 'This customer stays on Clover until a fresh provider roster confirms the exact subscription ID. Run Clover recurring sync after the current safety release; WheelsonAuto will not authorize a cutover from a browser-entered ID alone.'
+    };
+  }
+  if (options.requireProviderRoster !== false && !verifiedRosterIds.includes(subscriptionId)) {
+    return {
+      applicable: true,
+      eligible: false,
+      code: 'clover_subscription_not_in_verified_roster',
+      subscriptionId,
+      verifiedRosterSubscriptions: verifiedRosterIds.length,
+      message: 'Clover did not return this exact subscription ID in the last verified provider roster. Keep this row on Clover and resolve the subscription match before scheduling Stripe.'
+    };
+  }
+
   const customerName = resolvedCustomerName(row);
   const customerIdentity = text(row.cloverCustomerId || row.customerId || row.contractId) || customerName;
   if (!customerIdentity) {
@@ -132,6 +160,7 @@ function cutoverEligibility(data = {}, row = {}) {
     eligible: true,
     code: siblingPlans.length ? 'verified_multi_plan_customer' : 'verified_clover_subscription',
     subscriptionId,
+    providerRosterMatched: options.requireProviderRoster === false ? false : true,
     customerIdentity: text(row.cloverCustomerId || row.customerId || row.contractId) ? 'linked customer ID' : 'resolved customer name',
     relatedPlanCount: siblingPlans.length + 1,
     message: siblingPlans.length
