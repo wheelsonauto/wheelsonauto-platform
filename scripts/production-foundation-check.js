@@ -83,6 +83,7 @@ async function main() {
     const repairDataCheckSource = await fs.readFile(path.resolve(__dirname, 'repair-data-check.js'), 'utf8');
     const onboardingSource = await fs.readFile(path.resolve(__dirname, '..', 'onboarding-service.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
+    const stateMigrationLockSource = await fs.readFile(path.resolve(__dirname, '..', 'state-migration-lock.js'), 'utf8');
     const postgresSourceRepairSource = await fs.readFile(path.resolve(__dirname, 'prepare-postgres-migration-source.js'), 'utf8');
     const postgresSourceRepairCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-source-repair-check.js'), 'utf8');
     const postgresMigrationSource = await fs.readFile(path.resolve(__dirname, '..', 'postgres-migration-source.js'), 'utf8');
@@ -90,6 +91,7 @@ async function main() {
     const postgresPreflightSource = await fs.readFile(path.resolve(__dirname, 'postgres-preflight.js'), 'utf8');
     const postgresImporterSource = await fs.readFile(path.resolve(__dirname, 'migrate-json-to-postgres.js'), 'utf8');
     const postgresVerifierSource = await fs.readFile(path.resolve(__dirname, 'verify-json-to-postgres.js'), 'utf8');
+    const postgresLockRecoverySource = await fs.readFile(path.resolve(__dirname, 'recover-postgres-migration-lock.js'), 'utf8');
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
     const objectStorageRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'object-storage-runtime-check.js'), 'utf8');
     const secureDocumentStoreSource = await fs.readFile(path.resolve(__dirname, '..', 'secure-document-store.js'), 'utf8');
@@ -187,6 +189,13 @@ async function main() {
       && postgresPreflightSource.includes('prepare-postgres-migration-source'), 'PostgreSQL preflight must report every exact and non-identical duplicate group in one run and direct safe duplicates to the protected-copy workflow.');
     assert(postgresImporterSource.includes('assertTransactionalSourceReady(state)')
       && postgresVerifierSource.includes('assertTransactionalSourceReady(state)'), 'PostgreSQL import and migration proof must reject provider identity, critical record, and active assignment conflicts before a database connection.');
+    assert(postgresLockRecoverySource.includes("WOA_MIGRATION_MAINTENANCE_MODE || '') !== '1'")
+      && postgresLockRecoverySource.includes('migrationMaintenanceLease.assertActiveLease')
+      && postgresLockRecoverySource.includes('assertSameMaintenanceLease(activeMaintenanceLease)')
+      && postgresLockRecoverySource.includes('maintenanceLeaseSignatureChecksum: activeMaintenanceLease.signatureChecksum')
+      && stateMigrationLockSource.includes("assertMaintenance('before_lock_recovery')")
+      && stateMigrationLockSource.includes("assertMaintenance('after_lock_recovery')")
+      && stateMigrationLockSource.includes('await fs.link(recoveryFile, status.file)'), 'Stale PostgreSQL lock recovery must require active signed maintenance, recheck it around the rename, restore the lock on a lease failure, and retain safe service, commit, process, and lease evidence before restoring writes.');
     assert(postgresMigrationSource.includes('RENDER_LIVE_DISK_SNAPSHOT')
       && postgresMigrationSource.includes("createHmac('sha256'")
       && postgresMigrationSource.includes('RENDER_SERVICE_ID')

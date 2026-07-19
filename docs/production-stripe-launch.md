@@ -451,19 +451,25 @@ manually editing production rows.
 The importer creates a shared application write lock and releases it after
 success or handled failure. If the process or host is killed and the lock is
 still present after five minutes, do not delete it by hand. Verify that no
-migration process remains, use the exact protected-source checksum from
-preflight, and run the guarded recovery command:
+migration process remains, deploy with `WOA_MIGRATION_MAINTENANCE_MODE=1`,
+confirm `/healthz` reports both maintenance mode and an active signed lease,
+use the exact protected-source checksum from preflight, and run the guarded
+recovery command:
 
 ```sh
+WOA_MIGRATION_MAINTENANCE_MODE=1 \
 WOA_POSTGRES_MIGRATION_LOCK_RECOVERY_CONFIRM='RECOVER STALE POSTGRES MIGRATION LOCK' \
 WOA_POSTGRES_MIGRATION_SOURCE_SHA256='<same sourceFileChecksum from preflight>' \
 pnpm run recover-postgres-migration-lock -- /secure/path/to/data-backup.json
 ```
 
 Recovery refuses a fresh lock, a changed source file, a different source path,
-or a checksum mismatch. It renames the original lock instead of deleting it so
-the acquisition record remains available for incident review. Run preflight
-again before attempting another import.
+or a checksum mismatch. It rechecks the exact signed Render service, commit,
+instance, start time, and lease signature before and after recovery. If the
+lease disappears or the deployed process changes, the original lock is restored
+so writes remain blocked. A successful recovery renames the original lock
+instead of deleting it so the acquisition record remains available for
+incident review. Run preflight again before attempting another import.
 
 After the production import and verifier pass, run the controlled recovery
 drill one more time. It runs all writes, snapshot restores, lease recovery,

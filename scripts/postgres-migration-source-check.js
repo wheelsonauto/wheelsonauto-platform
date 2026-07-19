@@ -113,8 +113,41 @@ async function main() {
       'Stale-lock recovery must keep writes blocked if the protected source changed.'
     );
     await fs.writeFile(dataFile, JSON.stringify(value, null, 2), 'utf8');
-    const recoveredLock = await stateMigrationLock.recoverStale({ dataFile, expectedSourceChecksum: recoveryChecksum, minAgeMs: 60_000 });
+    await assert.rejects(
+      () => stateMigrationLock.recoverStale({
+        dataFile,
+        expectedSourceChecksum: recoveryChecksum,
+        minAgeMs: 60_000,
+        maintenanceAssertion: checkpoint => {
+          if (checkpoint === 'before_lock_recovery') throw new Error('maintenance lease changed before recovery');
+        }
+      }),
+      /maintenance lease changed before recovery/i,
+      'A maintenance failure immediately before recovery must leave the cutover lock active.'
+    );
+    assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, true, 'A failed pre-recovery maintenance assertion must preserve the cutover lock.');
+    await assert.rejects(
+      () => stateMigrationLock.recoverStale({
+        dataFile,
+        expectedSourceChecksum: recoveryChecksum,
+        minAgeMs: 60_000,
+        maintenanceAssertion: checkpoint => {
+          if (checkpoint === 'after_lock_recovery') throw new Error('maintenance lease changed after recovery');
+        }
+      }),
+      /maintenance lease changed after recovery/i,
+      'A maintenance failure after the rename must restore the original lock so writes remain blocked.'
+    );
+    assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, true, 'A failed post-recovery maintenance assertion must restore the original cutover lock.');
+    const recoveryMaintenanceCheckpoints = [];
+    const recoveredLock = await stateMigrationLock.recoverStale({
+      dataFile,
+      expectedSourceChecksum: recoveryChecksum,
+      minAgeMs: 60_000,
+      maintenanceAssertion: checkpoint => recoveryMaintenanceCheckpoints.push(checkpoint)
+    });
     assert.strictEqual(recoveredLock.recovered, true, 'A checksum-matched stale migration lock must be recoverable after the safety delay.');
+    assert.deepStrictEqual(recoveryMaintenanceCheckpoints, ['before_lock_read', 'before_lock_recovery', 'after_lock_recovery'], 'Stale-lock recovery must re-prove maintenance around its destructive rename.');
     assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, false, 'A verified stale-lock recovery must restore application writes.');
     assert.strictEqual((await fs.stat(recoveredLock.recoveryFile)).isFile(), true, 'Stale-lock recovery must preserve the original lock metadata as evidence.');
     await stateMigrationLock.assertWritesAllowed({ dataFile });
@@ -293,6 +326,45 @@ async function main() {
     const unconfirmedRecovery = run(lockRecovery, dataFile, process.env);
     assert.notStrictEqual(unconfirmedRecovery.status, 0, 'The stale-lock recovery CLI must require the exact destructive-action confirmation phrase.');
     assert.match(unconfirmedRecovery.stderr, /WOA_POSTGRES_MIGRATION_LOCK_RECOVERY_CONFIRM/, 'The stale-lock recovery CLI must name its required confirmation guard.');
+    const confirmedWithoutMaintenance = run(lockRecovery, dataFile, {
+      ...process.env,
+      WOA_POSTGRES_MIGRATION_LOCK_RECOVERY_CONFIRM: 'RECOVER STALE POSTGRES MIGRATION LOCK',
+      WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact
+    });
+    assert.notStrictEqual(confirmedWithoutMaintenance.status, 0, 'The stale-lock recovery CLI must reject a confirmation phrase outside migration maintenance mode.');
+    assert.match(confirmedWithoutMaintenance.stderr, /WOA_MIGRATION_MAINTENANCE_MODE=1/, 'The stale-lock recovery CLI must name its maintenance-mode requirement.');
+    const cliRecoveryLock = await stateMigrationLock.acquire({ dataFile, sourceFileChecksum: exact });
+    const cliRecoveryRecord = JSON.parse(await fs.readFile(cliRecoveryLock.file, 'utf8'));
+    cliRecoveryRecord.acquiredAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    await fs.writeFile(cliRecoveryLock.file, JSON.stringify(cliRecoveryRecord, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    await migrationMaintenanceLease.publishLease({
+      environment: captureEnvironment,
+      maintenanceMode: true,
+      instanceId: activeMaintenanceLease.instanceId,
+      startedAt: activeMaintenanceLease.startedAt
+    });
+    const cliRecoveryEnvironment = {
+      ...process.env,
+      ...captureEnvironment,
+      WOA_POSTGRES_MIGRATION_LOCK_RECOVERY_CONFIRM: 'RECOVER STALE POSTGRES MIGRATION LOCK',
+      WOA_POSTGRES_MIGRATION_SOURCE_SHA256: exact,
+      WOA_POSTGRES_MIGRATION_LOCK_MIN_AGE_SECONDS: '60'
+    };
+    const restartedMaintenanceRecovery = run(lockRecovery, dataFile, {
+      ...cliRecoveryEnvironment,
+      RENDER_GIT_COMMIT: '9999999999999999999999999999999999999999'
+    });
+    assert.notStrictEqual(restartedMaintenanceRecovery.status, 0, 'A different deployed commit must not recover the old process lock.');
+    assert.match(restartedMaintenanceRecovery.stderr, /different deployed commit/i, 'Restart rejection must identify the maintenance deployment mismatch.');
+    assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, true, 'A restarted-process rejection must keep writes blocked.');
+    const confirmedRecovery = run(lockRecovery, dataFile, cliRecoveryEnvironment);
+    assert.strictEqual(confirmedRecovery.status, 0, confirmedRecovery.stderr || 'A signed active maintenance process must be able to recover its verified stale lock.');
+    const confirmedRecoveryResult = JSON.parse(confirmedRecovery.stdout);
+    assert.strictEqual(confirmedRecoveryResult.maintenanceServiceId, captureEnvironment.RENDER_SERVICE_ID);
+    assert.strictEqual(confirmedRecoveryResult.maintenanceRenderCommit, captureEnvironment.RENDER_GIT_COMMIT);
+    assert.strictEqual(confirmedRecoveryResult.maintenanceInstanceId, activeMaintenanceLease.instanceId);
+    assert.match(confirmedRecoveryResult.maintenanceLeaseSignatureChecksum, /^[a-f0-9]{64}$/);
+    assert.strictEqual((await stateMigrationLock.lockStatus({ dataFile })).active, false, 'A maintenance-bound CLI recovery must restore application writes only after every guard passes.');
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const importerSource = await fs.readFile(importer, 'utf8');
     const verifierSource = await fs.readFile(verifier, 'utf8');

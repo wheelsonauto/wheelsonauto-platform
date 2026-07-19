@@ -98,6 +98,10 @@ async function release(lock = {}) {
 }
 
 async function recoverStale(options = {}) {
+  const assertMaintenance = async checkpoint => {
+    if (typeof options.maintenanceAssertion === 'function') await options.maintenanceAssertion(checkpoint);
+  };
+  await assertMaintenance('before_lock_read');
   const status = await lockStatus(options);
   if (!status.active) {
     const error = new Error('No PostgreSQL migration lock exists. There is nothing to recover.');
@@ -137,6 +141,7 @@ async function recoverStale(options = {}) {
   const recoveredAt = new Date().toISOString();
   const suffix = recoveredAt.replace(/[^0-9]/g, '').slice(0, 14) + '-' + String(status.record.token).slice(0, 12);
   const recoveryFile = status.file + '.recovered-' + suffix + '.json';
+  await assertMaintenance('before_lock_recovery');
   try {
     await fs.rename(status.file, recoveryFile);
   } catch (error) {
@@ -144,6 +149,17 @@ async function recoverStale(options = {}) {
       const conflict = new Error('The PostgreSQL migration lock changed while recovery was being verified. Recheck its status before continuing.');
       conflict.code = 'woa_postgres_migration_lock_recovery_race';
       throw conflict;
+    }
+    throw error;
+  }
+  try {
+    await assertMaintenance('after_lock_recovery');
+  } catch (error) {
+    try {
+      await fs.link(recoveryFile, status.file);
+      await fs.rm(recoveryFile);
+    } catch (rollbackError) {
+      error.lockRecoveryRollbackError = String(rollbackError && rollbackError.message || rollbackError);
     }
     throw error;
   }
