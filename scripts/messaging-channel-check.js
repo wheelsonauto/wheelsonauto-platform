@@ -48,6 +48,7 @@ const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
 const emailDeliveryIdempotencyKey = finalFunctionSlice(server, 'emailDeliveryIdempotencyKey');
 const sendProviderSms = finalFunctionSlice(server, 'sendProviderSms');
 const smsDeliveryIdempotencyKey = finalFunctionSlice(server, 'smsDeliveryIdempotencyKey');
+const reviewPendingSmsDelivery = finalFunctionSlice(server, 'reviewPendingSmsDelivery');
 const parseIncomingEmail = finalFunctionSlice(server, 'parseIncomingEmail');
 const hydrateIncomingEmail = finalFunctionSlice(server, 'hydrateIncomingEmail');
 const verifyResendWebhook = finalFunctionSlice(server, 'verifyResendWebhook');
@@ -73,7 +74,7 @@ const configureTelnyxMessagingProfile = finalFunctionSlice(server, 'configureTel
 const applyTelnyxDeliveryEvent = finalFunctionSlice(server, 'applyTelnyxDeliveryEvent');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !sendProviderSms || !smsDeliveryIdempotencyKey || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !sendProviderSms || !smsDeliveryIdempotencyKey || !reviewPendingSmsDelivery || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging inbound SMS status', messagingStatus, 'smsWebhookConnected');
@@ -157,8 +158,17 @@ requireText('Telnyx profile setup', configureTelnyxMessagingProfile, '/messaging
 requireText('Telnyx number assignment', configureTelnyxMessagingProfile, '/phone_numbers');
 requireText('Telnyx delivery matching', applyTelnyxDeliveryEvent, 'externalId');
 requireText('Durable SMS delivery claim', sendProviderSms, "claimIdempotencyKey(claimScope, idempotencyKey");
+requireText('Uncertain SMS claim remains held', sendProviderSms, 'holdClaimUntilSettled: true');
 requireText('Completed SMS delivery reuse', sendProviderSms, 'claim.completed');
 requireText('Ambiguous SMS retry block', sendProviderSms, "error.code = 'sms_confirmation_pending'");
+requireText('Owner-only SMS delivery review', reviewPendingSmsDelivery, 'Only the owner can review');
+requireText('Owner-confirmed SMS completion', reviewPendingSmsDelivery, 'providerAuthoritative: true');
+requireText('Owner-released SMS retry', reviewPendingSmsDelivery, "action === 'confirm_delivered'");
+requireText('SMS delivery review API', server, "/api/messages/delivery-review");
+requireText('SMS delivery review UI', app, 'review-sms-delivery');
+requireText('SMS delivery confirm UI', app, 'confirm-sms-delivered');
+requireText('SMS delivery release UI', app, 'release-sms-retry');
+requireText('Star confirmation-pending record', server, 'msg-ai-pending-');
 requireText('Deterministic SMS delivery key', smsDeliveryIdempotencyKey, "createHash('sha256')");
 requireText('Manual message UI delivery identity', app, "messageDeliveryId=b.dataset.deliveryId||('ui-message-'");
 requireText('Manual message delivery identity payload', app, 'deliveryId:messageDeliveryId');

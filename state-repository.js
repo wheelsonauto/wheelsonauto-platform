@@ -1211,7 +1211,7 @@ class JsonStateRepository {
         return { accepted: false, duplicate: true, completed: true, scope: identity.scope, key: identity.key, attempts: Number(existing.attempts || 1), response: clone(existing.response || {}) };
       }
       const startedAt = Date.parse(existing.processingStartedAt || existing.updatedAt || existing.createdAt || 0);
-      const active = existing.status === 'claimed' && Number.isFinite(startedAt) && Date.now() - startedAt < this.idempotencyProcessingLeaseMs;
+      const active = existing.status === 'claimed' && (options.holdClaimUntilSettled === true || (Number.isFinite(startedAt) && Date.now() - startedAt < this.idempotencyProcessingLeaseMs));
       if (active) {
         return { accepted: false, duplicate: true, inProgress: true, scope: identity.scope, key: identity.key, attempts: Number(existing.attempts || 1) };
       }
@@ -2250,7 +2250,7 @@ class PostgresStateRepository {
           return { accepted: false, duplicate: true, completed: true, scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 1), response: clone(row.response || {}) };
         }
         const startedAt = new Date(row.processing_started_at || 0).getTime();
-        const active = status === 'claimed' && Number.isFinite(startedAt) && Date.now() - startedAt < this.idempotencyProcessingLeaseMs;
+        const active = status === 'claimed' && (options.holdClaimUntilSettled === true || (Number.isFinite(startedAt) && Date.now() - startedAt < this.idempotencyProcessingLeaseMs));
         if (active) {
           await client.query('COMMIT');
           return { accepted: false, duplicate: true, inProgress: true, scope: identity.scope, key: identity.key, attempts: Number(row.attempts || 1) };

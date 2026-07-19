@@ -221,7 +221,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-sms-delivery-205';
+const ASSET_VERSION = 'platform-20260719-sms-review-206';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -2334,7 +2334,7 @@ async function sendProviderSms(to, body, meta = {}) {
     bodyHash: crypto.createHash('sha256').update(String(body)).digest('hex'),
     deliveryId: String(meta.deliveryId || meta.idempotencyKey || '')
   };
-  const claim = await STATE_REPOSITORY.claimIdempotencyKey(claimScope, idempotencyKey, request);
+  const claim = await STATE_REPOSITORY.claimIdempotencyKey(claimScope, idempotencyKey, request, { holdClaimUntilSettled: true });
   if (!claim.accepted) {
     if (claim.completed) return { ...(claim.response || {}), idempotencyKey, duplicate: true };
     return {
@@ -2414,6 +2414,53 @@ async function sendProviderSms(to, body, meta = {}) {
     }
     throw error;
   }
+}
+async function reviewPendingSmsDelivery(data, payload = {}, user = {}) {
+  if (!isOwnerUser(user)) throw new Error('Only the owner can review an uncertain SMS delivery.');
+  data.messages = Array.isArray(data.messages) ? data.messages : [];
+  const message = data.messages.find(item => item.id === String(payload.messageId || payload.id || '').trim());
+  if (!message) throw new Error('That SMS delivery record was not found.');
+  const key = String(message.providerIdempotencyKey || '').trim();
+  if (!/^woa-sms-[a-f0-9]{64}$/.test(key)) throw new Error('That message does not have a protected SMS delivery identity.');
+  if (!/confirmation pending/i.test(String(message.status || ''))) throw new Error('Only a confirmation-pending SMS can be reviewed here.');
+  if (message.deliveryReviewOutcome) throw new Error('That SMS delivery was already reviewed.');
+  const action = String(payload.action || '').trim().toLowerCase();
+  if (!['confirm_delivered', 'release_retry'].includes(action)) throw new Error('Choose whether the carrier shows delivered or whether this message may be retried.');
+  const now = new Date().toISOString();
+  let claimSettled = false;
+  if (action === 'confirm_delivered') {
+    claimSettled = await STATE_REPOSITORY.completeIdempotencyKey('outbound_sms_delivery', key, {
+      sent: true,
+      status: 'Delivered (owner verified)',
+      provider: message.provider || MESSAGING_PROVIDER || 'not_configured',
+      channel: 'SMS',
+      externalId: message.externalId || '',
+      idempotencyKey: key,
+      ownerVerified: true,
+      ownerVerifiedAt: now
+    }, { providerAuthoritative: true });
+    message.status = 'Delivered (owner verified)';
+    message.tone = 'good';
+    message.error = '';
+    message.deliveryReviewOutcome = 'delivered';
+  } else {
+    claimSettled = await STATE_REPOSITORY.failIdempotencyKey('outbound_sms_delivery', key, new Error('Owner reviewed carrier history and released this exact SMS delivery for retry.'));
+    message.status = 'Retry released by owner';
+    message.tone = 'warn';
+    message.deliveryReviewOutcome = 'retry_released';
+  }
+  message.deliveryReviewedAt = now;
+  message.deliveryReviewedBy = user.name || user.role || 'Owner';
+  message.deliveryReviewNote = String(payload.note || '').trim().slice(0, 600);
+  message.updatedAt = now;
+  appendAuditLog(data, user, action === 'confirm_delivered' ? 'SMS delivery confirmed by owner' : 'SMS delivery retry released by owner', [message.customer || 'Unknown customer', maskPhone(message.phone || message.to || ''), message.provider || MESSAGING_PROVIDER || 'SMS', claimSettled ? 'Durable claim settled' : 'No durable claim remained']);
+  return {
+    reviewed: true,
+    action,
+    claimSettled,
+    message,
+    warning: claimSettled ? '' : 'The audit record was updated, but no durable provider claim remained. Review the carrier account before any resend.'
+  };
 }
 async function configureTwilioSmsWebhook(options = {}) {
   const accountSid = String(options.accountSid || TWILIO_ACCOUNT_SID || '').trim();
@@ -10346,6 +10393,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/api/messages/status', 'Messaging integration status'),
     route('POST', '/api/messages/delivery-sync', 'Refresh final SMS carrier delivery results'),
     route('POST', '/api/messages/send', 'Send or save customer SMS/email messages'),
+    route('POST', '/api/messages/delivery-review', 'Owner review for confirmation-pending SMS delivery'),
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
     route('POST', '/api/messages/ai-health', 'Owner Star AI provider health test'),
@@ -11783,9 +11831,12 @@ async function sendTollReceipt(data, claim, channel, user, deliveryId = '') {
   }
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const existingReceipt = result.idempotencyKey && result.duplicate
-    ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending'))
+    ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending' || item.deliveryReviewOutcome === 'delivered'))
     : null;
-  if (existingReceipt) return { sent: !!existingReceipt.externalId, duplicate: true, confirmationPending: !existingReceipt.externalId, status: existingReceipt.status || 'Sent', channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: existingReceipt };
+  if (existingReceipt) {
+    const confirmationPending = !existingReceipt.externalId && existingReceipt.deliveryReviewOutcome !== 'delivered';
+    return { sent: !confirmationPending, duplicate: true, confirmationPending, status: existingReceipt.status || 'Sent', channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: existingReceipt };
+  }
   const now = new Date().toISOString();
   const record = {
     id: 'msg-toll-receipt-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex'),
@@ -21411,6 +21462,19 @@ const server = http.createServer(async (req, res) => {
         return json(res, err.status || 400, { ok: false, error: String(err && err.message || err) });
       }
     }
+    if (url.pathname === '/api/messages/delivery-review' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can review an uncertain SMS delivery.' });
+      const payload = await readJsonBody(req);
+      const data = await readData();
+      try {
+        const result = await reviewPendingSmsDelivery(data, payload, user);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'review confirmation-pending SMS delivery' });
+        await writeData(data);
+        return json(res, 200, { ok: true, result, version: await dataVersion() });
+      } catch (err) {
+        return json(res, 409, { ok: false, error: String(err && err.message || err) });
+      }
+    }
     if (url.pathname === '/api/messages/send' && req.method === 'POST') {
       const payload = await readJsonBody(req);
       const data = await readData();
@@ -21445,10 +21509,10 @@ const server = http.createServer(async (req, res) => {
             messagingSettings: settings
           });
         const existingDelivery = result.idempotencyKey && result.duplicate
-          ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending'))
+          ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending' || item.deliveryReviewOutcome === 'delivered'))
           : null;
         if (existingDelivery) {
-          const confirmationPending = !existingDelivery.externalId;
+          const confirmationPending = !existingDelivery.externalId && existingDelivery.deliveryReviewOutcome !== 'delivered';
           return json(res, confirmationPending ? 202 : 200, { ok: true, sent: !confirmationPending, duplicate: true, confirmationPending, message: existingDelivery, provider: result.provider, ownerMirror: null, warning: confirmationPending ? 'This message is still waiting for provider confirmation. WheelsonAuto did not send another copy.' : 'This message was already accepted by the provider. WheelsonAuto did not send another copy.' });
         }
         const record = {
@@ -21601,6 +21665,56 @@ const server = http.createServer(async (req, res) => {
         await writeData(data);
         return json(res, approved.result.sent ? 200 : 202, { ok: true, sent: !!approved.result.sent, message: approved.sent, draft: approved.draft, warning: approved.result.message || '' });
       } catch (err) {
+        if (err && err.code === 'sms_confirmation_pending' && pendingDraft) {
+          const key = String(err.idempotencyKey || '').trim();
+          const now = new Date().toISOString();
+          let pendingRecord = (data.messages || []).find(item => item.providerIdempotencyKey === key && item.aiDraftId === pendingDraft.id);
+          if (!pendingRecord) {
+            pendingRecord = {
+              id: 'msg-ai-pending-' + Date.now(),
+              date: new Date().toLocaleString('en-US'),
+              createdAt: now,
+              customer: pendingDraft.customer || '',
+              organizationId: pendingDraft.organizationId || MAIN_ORG_ID,
+              phone: pendingDraft.phone || '',
+              email: pendingDraft.email || '',
+              direction: 'Outbound',
+              channel: 'SMS',
+              template: 'Star approved reply',
+              subject: pendingDraft.subject || 'Star reply',
+              status: 'Send confirmation pending',
+              tone: 'warn',
+              body: pendingDraft.body || '',
+              provider: MESSAGING_PROVIDER || 'not_configured',
+              providerIdempotencyKey: key,
+              source: 'Star AI + SMS provider confirmation',
+              aiApprovedAt: now,
+              aiDraftId: pendingDraft.id,
+              customerId: pendingDraft.customerId || '',
+              contractId: pendingDraft.contractId || '',
+              recurringPaymentId: pendingDraft.recurringPaymentId || '',
+              vehicleId: pendingDraft.vehicleId || '',
+              vehicle: pendingDraft.vehicle || '',
+              vin: pendingDraft.vin || '',
+              licensePlate: pendingDraft.licensePlate || pendingDraft.plate || '',
+              plate: pendingDraft.plate || pendingDraft.licensePlate || '',
+              tracker: pendingDraft.tracker || '',
+              amount: pendingDraft.amount || '',
+              frequency: pendingDraft.frequency || '',
+              claimId: pendingDraft.claimId || '',
+              error: String(err.message || err)
+            };
+            data.messages.unshift(pendingRecord);
+          }
+          pendingDraft.status = 'Approval send confirmation pending';
+          pendingDraft.tone = 'warn';
+          pendingDraft.approvedAt = pendingDraft.approvedAt || now;
+          data.integrations = data.integrations || {};
+          data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastConfirmationPendingAt: now, lastError: String(err.message || err) };
+          appendAuditLog(data, user, 'Star AI reply confirmation pending', [pendingDraft.customer || 'Unknown customer', 'SMS', key || 'Protected delivery']);
+          await writeData(data);
+          return json(res, 503, { ok: false, confirmationPending: true, retry: false, error: 'The SMS provider response was interrupted. WheelsonAuto blocked another Star send until the owner reviews carrier delivery.', message: pendingRecord });
+        }
         return json(res, 409, { ok: false, error: String(err && err.message || err) });
       }
     }
@@ -23137,6 +23251,7 @@ module.exports = {
   parseIncomingEmail,
   parseIncomingMessage,
   sendProviderSms,
+  reviewPendingSmsDelivery,
   smsScamAssessment,
   smsSensitiveActionAssessment,
   smsBridgeCode,

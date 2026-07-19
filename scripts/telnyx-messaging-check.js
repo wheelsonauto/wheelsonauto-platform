@@ -15,6 +15,7 @@ const {
   verifyTelnyxWebhook,
   parseIncomingMessage,
   sendProviderSms,
+  reviewPendingSmsDelivery,
   applyTelnyxDeliveryEvent,
   telnyxCarrierReadiness,
   mergeTelnyxDeliveryUpdates,
@@ -81,18 +82,97 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(outboundBody.encoding, 'auto');
 
   let ambiguousAttempts = 0;
+  let ambiguousKey = '';
+  const originalDateNow = Date.now;
   global.fetch = async () => {
     ambiguousAttempts += 1;
     throw new TypeError('Controlled transport interruption');
   };
-  await assert.rejects(
-    () => sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' }),
-    error => error && error.code === 'sms_confirmation_pending' && error.ambiguous === true && /^woa-sms-/.test(error.idempotencyKey || '')
-  );
+  try {
+    await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+    assert.fail('The controlled Telnyx interruption should remain confirmation pending.');
+  } catch (error) {
+    assert(error && error.code === 'sms_confirmation_pending' && error.ambiguous === true && /^woa-sms-/.test(error.idempotencyKey || ''));
+    ambiguousKey = error.idempotencyKey;
+  }
+  Date.now = () => originalDateNow() + 20 * 60 * 1000;
   const ambiguousDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+  Date.now = originalDateNow;
   global.fetch = originalFetch;
   assert(!ambiguousDuplicate.sent && ambiguousDuplicate.inProgress && ambiguousDuplicate.duplicate, 'An ambiguous Telnyx retry must remain confirmation pending instead of sending again.');
-  assert.strictEqual(ambiguousAttempts, 1, 'An ambiguous Telnyx retry must not call the carrier a second time.');
+  assert.strictEqual(ambiguousAttempts, 1, 'An ambiguous Telnyx retry must not call the carrier a second time, even after the normal processing lease expires.');
+
+  const confirmedData = {
+    messages: [{
+      id: 'message-ambiguous-confirmed',
+      customer: 'Confirmed Customer',
+      phone: '+16095550103',
+      body: 'WheelsonAuto ambiguous Telnyx test',
+      provider: 'telnyx',
+      providerIdempotencyKey: ambiguousKey,
+      status: 'Send confirmation pending',
+      tone: 'warn'
+    }]
+  };
+  const confirmedReview = await reviewPendingSmsDelivery(confirmedData, {
+    messageId: 'message-ambiguous-confirmed',
+    action: 'confirm_delivered',
+    note: 'Checked Telnyx message history.'
+  }, { role: 'Owner', name: 'Test Owner' });
+  assert(confirmedReview.claimSettled && confirmedReview.message.deliveryReviewOutcome === 'delivered', 'Owner confirmation should settle the protected SMS claim as delivered.');
+  const confirmedDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+  assert(confirmedDuplicate.sent && confirmedDuplicate.duplicate && confirmedDuplicate.ownerVerified, 'A carrier-confirmed message must reuse the completed result without another provider call.');
+  assert.strictEqual(ambiguousAttempts, 1, 'Owner-confirmed delivery must never call Telnyx again.');
+
+  let releasedAttempts = 0;
+  let releasedKey = '';
+  global.fetch = async () => {
+    releasedAttempts += 1;
+    throw new TypeError('Controlled transport interruption for owner release');
+  };
+  try {
+    await sendProviderSms('+16095550105', 'WheelsonAuto owner release test', { deliveryId: 'telnyx-check-release-1' });
+    assert.fail('The controlled owner-release interruption should remain confirmation pending.');
+  } catch (error) {
+    assert(error && error.code === 'sms_confirmation_pending');
+    releasedKey = error.idempotencyKey;
+  }
+  const releasedData = {
+    messages: [{
+      id: 'message-ambiguous-released',
+      customer: 'Released Customer',
+      phone: '+16095550105',
+      body: 'WheelsonAuto owner release test',
+      provider: 'telnyx',
+      providerIdempotencyKey: releasedKey,
+      status: 'Send confirmation pending',
+      tone: 'warn'
+    }]
+  };
+  await assert.rejects(
+    () => reviewPendingSmsDelivery(releasedData, { messageId: 'message-ambiguous-released', action: 'release_retry' }, { role: 'Manager', name: 'Test Manager' }),
+    /Only the owner/
+  );
+  const releasedReview = await reviewPendingSmsDelivery(releasedData, {
+    messageId: 'message-ambiguous-released',
+    action: 'release_retry',
+    note: 'Telnyx shows no message accepted.'
+  }, { role: 'Owner', name: 'Test Owner' });
+  assert(releasedReview.claimSettled && releasedReview.message.deliveryReviewOutcome === 'retry_released', 'Owner release should settle the uncertain claim and permit a deliberate retry.');
+  global.fetch = async () => {
+    releasedAttempts += 1;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { data: { id: 'telnyx-owner-released-retry-1', to: [{ phone_number: '+16095550105', status: 'queued' }] } };
+      }
+    };
+  };
+  const releasedRetry = await sendProviderSms('+16095550105', 'WheelsonAuto owner release test', { deliveryId: 'telnyx-check-release-1' });
+  global.fetch = originalFetch;
+  assert(releasedRetry.sent && releasedRetry.externalId === 'telnyx-owner-released-retry-1', 'An owner-released SMS should allow exactly one deliberate provider retry.');
+  assert.strictEqual(releasedAttempts, 2, 'Owner release should result in one interrupted attempt and one deliberate retry.');
 
   let rejectedAttempts = 0;
   global.fetch = async () => {
