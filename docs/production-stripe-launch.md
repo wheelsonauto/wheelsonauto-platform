@@ -250,6 +250,35 @@ Record the `sourceFileChecksum` printed by preflight. It is an exact SHA-256
 fingerprint of the protected JSON bytes. The importer and verifier refuse to
 operate if that file changes, even if the JSON still parses.
 
+If preflight reports a duplicated critical record ID, do not edit the live
+JSON file and do not delete payment history by hand. First inspect the reported
+records. The guarded preparation tool may collapse only records that share the
+same critical ID **and** have identical canonical content. It never merges two
+different records and never resolves a customer/vehicle assignment by guessing:
+
+```sh
+WOA_POSTGRES_SOURCE_REPAIR_CONFIRM=EXACT_DUPLICATES_ONLY \
+WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM=1 \
+WOA_POSTGRES_SOURCE_REPAIR_SHA256='<live sourceFileChecksum from preflight>' \
+pnpm run prepare-postgres-migration-source -- \
+  /secure/path/to/live-data.json \
+  /secure/path/to/new-postgres-source.json
+```
+
+The command acquires the shared migration write lock, verifies the live source
+checksum before and after copying, and creates a new mode-`0600` file plus a
+mode-`0600` `.repair-manifest.json`. It uses exclusive creation and will not
+overwrite either the live source or an existing protected copy. The manifest
+records both checksums and every exact duplicate removed. If any duplicated ID
+contains different data, no copy is written. If an unrelated assignment or
+identity conflict remains, the review copy is retained but the command exits
+with status `2`; PostgreSQL import remains blocked until the owner explicitly
+resolves that business-data decision and a fresh protected copy is prepared.
+
+Run preflight again against the newly created copy. From this point forward,
+use only that copy and its **new** `sourceFileChecksum` for import and proof.
+Keep the original live JSON and repair manifest as rollback and audit evidence.
+
 Import only after it reports no immutable identity conflicts and only while
 application writes are paused:
 

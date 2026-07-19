@@ -563,6 +563,66 @@ const CRITICAL_RESOURCE_COLLECTIONS = Object.freeze([
   ['maintenance', 'maintenance'],
   ['customerAccounts', 'customer_account']
 ]);
+
+function exactDuplicateCriticalResourcePlan(state = {}) {
+  const repairs = [];
+  const conflicts = [];
+  CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
+    const records = Array.isArray(state[collection]) ? state[collection] : [];
+    const groups = new Map();
+    records.forEach((record, index) => {
+      const resourceId = rowId(record);
+      if (!resourceId) return;
+      const rows = groups.get(resourceId) || [];
+      rows.push({ index, record, recordHash: checksum(record) });
+      groups.set(resourceId, rows);
+    });
+    groups.forEach((rows, resourceId) => {
+      if (rows.length < 2) return;
+      const hashes = [...new Set(rows.map(row => row.recordHash))];
+      const detail = {
+        collection,
+        resourceType,
+        resourceId,
+        occurrenceCount: rows.length,
+        firstIndex: rows[0].index,
+        duplicateIndexes: rows.slice(1).map(row => row.index),
+        recordHashes: hashes
+      };
+      if (hashes.length === 1) repairs.push({ ...detail, recordHash: hashes[0], removedCount: rows.length - 1 });
+      else conflicts.push(detail);
+    });
+  });
+  return { repairs, conflicts };
+}
+
+function collapseExactDuplicateCriticalResources(state = {}) {
+  const plan = exactDuplicateCriticalResourcePlan(state);
+  if (plan.conflicts.length) {
+    const error = new Error('At least one duplicated critical record ID contains different data. Refusing to guess which record should survive.');
+    error.code = 'woa_nonidentical_resource_duplicate';
+    error.conflicts = plan.conflicts;
+    throw error;
+  }
+  const next = clone(state);
+  const repairsByCollection = new Map();
+  plan.repairs.forEach(repair => {
+    const ids = repairsByCollection.get(repair.collection) || new Set();
+    ids.add(repair.resourceId);
+    repairsByCollection.set(repair.collection, ids);
+  });
+  repairsByCollection.forEach((resourceIds, collection) => {
+    const seen = new Set();
+    next[collection] = (Array.isArray(next[collection]) ? next[collection] : []).filter(record => {
+      const resourceId = rowId(record);
+      if (!resourceIds.has(resourceId)) return true;
+      if (seen.has(resourceId)) return false;
+      seen.add(resourceId);
+      return true;
+    });
+  });
+  return { state: next, repairs: plan.repairs, conflicts: [] };
+}
 const INACTIVE_ASSIGNMENT_PATTERN = /(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|pending application|pending approval|awaiting approval|awaiting pickup|pending pickup|\bdraft\b|\blead\b|\bprospect\b|\bnew\b)/i;
 const AVAILABLE_VEHICLE_PATTERN = /\b(ready|available|in lot|fleet ready|prep|in prep)\b/i;
 
@@ -759,6 +819,22 @@ function activeAssignmentIndexRows(state = {}) {
     });
   });
   return result.sort((left, right) => left.vehicleId.localeCompare(right.vehicleId));
+}
+
+function assertTransactionalSourceReady(state = {}) {
+  const conflicts = identityConflicts(state);
+  if (conflicts.length) {
+    const error = new Error('Transactional migration source has ' + conflicts.length + ' duplicate immutable provider identity value(s). Refusing an ambiguous database write.');
+    error.code = 'woa_immutable_identity_conflict';
+    error.conflicts = conflicts;
+    throw error;
+  }
+  return {
+    criticalResources: criticalResourceIndexRows(state),
+    activeAssignments: activeAssignmentIndexRows(state),
+    immutableProviderIdentities: identityEntries(state),
+    privateDocuments: privateDocumentRows(state)
+  };
 }
 
 function transactionalIndexReadiness(state = {}, counts = {}) {
@@ -2818,11 +2894,15 @@ module.exports = {
   identityConflicts,
   identityWarnings,
   privateDocumentRows,
+  CRITICAL_RESOURCE_COLLECTIONS,
+  exactDuplicateCriticalResourcePlan,
+  collapseExactDuplicateCriticalResources,
   criticalResourceIndexRows,
   sameAssignmentCustomer,
   sameApprovedAssignmentCustomer,
   activeAssignmentCandidate,
   activeAssignmentIndexRows,
+  assertTransactionalSourceReady,
   transactionalIndexReadiness,
   JsonStateRepository,
   PostgresStateRepository,

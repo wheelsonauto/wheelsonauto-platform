@@ -12,6 +12,7 @@ const migrationScripts = [
   'client-state-budget-check.js',
   'migrate-json-to-postgres.js',
   'migrate-private-documents.js',
+  'prepare-postgres-migration-source.js',
   'postgres-preflight.js',
   'repair-data.js',
   'verify-json-to-postgres.js',

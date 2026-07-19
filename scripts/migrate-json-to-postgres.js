@@ -21,14 +21,9 @@ async function main() {
   const source = await migrationSource.readSource(dataFile);
   const expectedSourceChecksum = migrationSource.requiredExpectedChecksum();
   migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedSourceChecksum);
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL migration.');
   const state = source.state;
-  const conflicts = stateRepository.identityConflicts(state);
-  if (conflicts.length) {
-    const error = new Error('Migration blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Run node scripts/postgres-preflight.js first.');
-    error.conflicts = conflicts;
-    throw error;
-  }
+  stateRepository.assertTransactionalSourceReady(state);
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL migration.');
   const maintenanceLock = await stateMigrationLock.acquire({
     dataFile,
     sourceFileChecksum: source.sourceFileChecksum,

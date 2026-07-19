@@ -17,14 +17,9 @@ async function main() {
   const source = await migrationSource.readSource(dataFile);
   const expectedSourceChecksum = migrationSource.requiredExpectedChecksum();
   migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedSourceChecksum);
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required to verify PostgreSQL import evidence.');
   const state = source.state;
-  const conflicts = stateRepository.identityConflicts(state);
-  if (conflicts.length) {
-    const error = new Error('Migration proof blocked by ' + conflicts.length + ' duplicate immutable identity value(s). Resolve the source conflicts without deleting business history.');
-    error.conflicts = conflicts;
-    throw error;
-  }
+  stateRepository.assertTransactionalSourceReady(state);
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required to verify PostgreSQL import evidence.');
   const repository = stateRepository.createStateRepository({
     backend: 'postgres',
     dataFile,

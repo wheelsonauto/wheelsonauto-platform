@@ -81,6 +81,10 @@ async function main() {
     const packageSource = await fs.readFile(path.resolve(__dirname, '..', 'package.json'), 'utf8');
     const onboardingSource = await fs.readFile(path.resolve(__dirname, '..', 'onboarding-service.js'), 'utf8');
     const stateRepositorySource = await fs.readFile(path.resolve(__dirname, '..', 'state-repository.js'), 'utf8');
+    const postgresSourceRepairSource = await fs.readFile(path.resolve(__dirname, 'prepare-postgres-migration-source.js'), 'utf8');
+    const postgresSourceRepairCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-source-repair-check.js'), 'utf8');
+    const postgresImporterSource = await fs.readFile(path.resolve(__dirname, 'migrate-json-to-postgres.js'), 'utf8');
+    const postgresVerifierSource = await fs.readFile(path.resolve(__dirname, 'verify-json-to-postgres.js'), 'utf8');
     const postgresRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'postgres-runtime-check.js'), 'utf8');
     const objectStorageRuntimeCheckSource = await fs.readFile(path.resolve(__dirname, 'object-storage-runtime-check.js'), 'utf8');
     const secureDocumentStoreSource = await fs.readFile(path.resolve(__dirname, '..', 'secure-document-store.js'), 'utf8');
@@ -151,6 +155,18 @@ async function main() {
       && serverSource.includes("reportBackgroundTaskFailure('private-artifact-storage'")
       && serverSource.includes("missing.push('encrypted payment receipt and dispute evidence artifact backfill')"), 'Paid transactions and owner-reviewed dispute packets must become encrypted immutable artifacts through a durable retry worker, and launch must fail closed while any required artifact is missing.');
     assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical records and active vehicle assignments into transactionally synchronized indexes.');
+    assert(stateRepositorySource.includes('exactDuplicateCriticalResourcePlan')
+      && stateRepositorySource.includes('collapseExactDuplicateCriticalResources')
+      && postgresSourceRepairSource.includes("WOA_POSTGRES_SOURCE_REPAIR_CONFIRM !== 'EXACT_DUPLICATES_ONLY'")
+      && postgresSourceRepairSource.includes("fs.open(file, 'wx', 0o600)")
+      && postgresSourceRepairSource.includes('assertSourceUnchanged(sourceFile, source.sourceFileChecksum)')
+      && postgresSourceRepairCheckSource.includes('Protected-copy preparation must never rewrite the live source')
+      && packageSource.includes('node scripts/postgres-source-repair-check.js'), 'Production migration repair must be checksum-locked, exact-duplicate-only, non-overwriting, owner-readable, live-source preserving, and mandatory in the main gate.');
+    assert(postgresImporterSource.includes('assertTransactionalSourceReady(state)')
+      && postgresVerifierSource.includes('assertTransactionalSourceReady(state)'), 'PostgreSQL import and migration proof must reject provider identity, critical record, and active assignment conflicts before a database connection.');
+    assert(launchRunbook.includes('prepare-postgres-migration-source')
+      && launchRunbook.includes('never resolves a customer/vehicle assignment by guessing')
+      && launchRunbook.includes('**new** `sourceFileChecksum`'), 'The launch runbook must document the protected-copy repair audit trail and the new checksum required after exact duplicate collapse.');
     assert.strictEqual(new Set(stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS).size, stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.length, 'Every required PostgreSQL schema migration ID must be unique so readiness cannot silently collapse duplicate requirements.');
     assert(stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.includes(stateRepository.RECOVERY_HISTORY_MIGRATION_ID)
       && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_recovery_history')

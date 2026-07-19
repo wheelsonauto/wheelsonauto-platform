@@ -121,9 +121,12 @@ async function main() {
     assert.match(unconfirmedRecovery.stderr, /WOA_POSTGRES_MIGRATION_LOCK_RECOVERY_CONFIRM/, 'The stale-lock recovery CLI must name its required confirmation guard.');
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
     const importerSource = await fs.readFile(importer, 'utf8');
+    const verifierSource = await fs.readFile(verifier, 'utf8');
     assert.match(serverSource, /stateMigrationLock\.assertWritesAllowed/, 'The production write path must enforce the shared PostgreSQL cutover lock.');
     assert.match(importerSource, /stateMigrationLock\.acquire/, 'The controlled PostgreSQL importer must acquire the shared cutover lock.');
     assert.match(importerSource, /stateMigrationLock\.release/, 'The controlled PostgreSQL importer must release its lock after success or failure.');
+    assert.match(importerSource, /assertTransactionalSourceReady/, 'The importer must reject critical resource and assignment conflicts before opening PostgreSQL.');
+    assert.match(verifierSource, /assertTransactionalSourceReady/, 'Migration proof must reject critical resource and assignment conflicts before opening PostgreSQL.');
     console.log('PostgreSQL protected-source check passed: exact preflight checksum, immutable source guard, enforced application write lock, single-import ownership, checksum-gated stale-lock recovery, and changed-source rejection are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
