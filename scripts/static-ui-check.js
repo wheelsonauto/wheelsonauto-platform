@@ -237,7 +237,7 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Telnyx SMS',
   'Resend email',
   'Star AI',
-  'Open job errors',
+  'Recent job failures',
   'Vehicle identity review',
   'VIN review'
 ]);
