@@ -601,6 +601,17 @@ function ownerSmoke() {
   const detachedConflictButton = { dataset: { id: 'veh-detached-review', vehicleName: '2023 Detached Review', vin: 'DETACHEDVIN', plate: 'DET-123', tracker: 'Tracker 9', claimedBy: 'One Name / Two Name' } };
   const detachedConflictVehicle = context.assignmentConflictVehicleFromButton(detachedConflictButton);
   assert(detachedConflictVehicle && detachedConflictVehicle.id === 'veh-detached-review' && detachedConflictVehicle.vin === 'DETACHEDVIN' && detachedConflictVehicle.assignmentConflict === 'One Name / Two Name', 'A preflight review must retain enough safe vehicle identity to open the exact server resolver even when that vehicle is absent from the current client list.');
+  const assignmentClaimActions = context.assignmentConflictEvidenceHtml({
+    claims: [
+      { id: 'file-exact-old-assignment', source: 'Customer file', customer: 'Old Assignment', status: 'Active' },
+      { id: 'autopay-exact-current-assignment', source: 'WheelsonAuto autopay', customer: 'Current Assignment', status: 'Active', amount: 229, frequency: 'Weekly' },
+      { id: 'clover-exact-plan', source: 'Clover recurring', customer: 'Clover Name Variant', status: 'Active' }
+    ],
+    identities: [],
+    sharedSignals: [],
+    providerSummary: {}
+  });
+  assert(assignmentClaimActions.includes('data-action="open-contract" data-id="file-exact-old-assignment"') && assignmentClaimActions.includes('data-action="open-autopay" data-id="autopay-exact-current-assignment"') && assignmentClaimActions.includes('data-view="Payments" data-tab="Active"') && assignmentClaimActions.includes('multiple payment plans can still belong to one person') && assignmentClaimActions.includes('never merges, stops, or charges a plan'), 'Owner assignment review must open each exact editable source, route Clover-only rows to Payments, and explain that same-customer links do not alter payment plans.');
 
   [
     ['Payments active', 'Payments', 'Active', ['Payments & Customers', 'Active recurring customers', 'Payments & customers', 'customer-pay-list']],
