@@ -12,6 +12,14 @@ const nativeSite = fs.readFileSync(path.join(root, 'native-site.js'), 'utf8');
 const stateRepository = fs.readFileSync(path.join(root, 'state-repository.js'), 'utf8');
 
 async function run() {
+  const liveStripeFoundation = {
+    configured: true,
+    keyMode: 'live',
+    webhookSecretConfigured: true,
+    transactionalStateReady: true,
+    privateDocumentStorageReady: true,
+    stateBackupConfigured: true
+  };
   const form = stripeAdapter.formBody({
     mode: 'setup',
     payment_method_types: ['card'],
@@ -32,18 +40,29 @@ async function run() {
   assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'test', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1', RENDER: 'true' }), false, 'A Render deployment must never enable the isolated provider-test path.');
   assert.strictEqual(stripeMigration.isolatedProviderTestMode({ NODE_ENV: 'production', WOA_ALLOW_ISOLATED_PROVIDER_TESTS: '1' }), false, 'Production must never enable the isolated provider-test path.');
   assert.strictEqual(stripeMigration.stripeCardPreparationReady({ configured: true, keyMode: 'test', webhookSecretConfigured: true }), false, 'A Stripe test key must never expose customer card setup on a deployed site.');
-  assert.strictEqual(stripeMigration.stripeCardPreparationReady({ configured: true, keyMode: 'live', webhookSecretConfigured: true }), true, 'A live Stripe key and signed webhook secret may prepare cards before cutover.');
+  assert.strictEqual(stripeMigration.stripeCardPreparationReady({ configured: true, keyMode: 'live', webhookSecretConfigured: true }), false, 'Live Stripe keys alone must never store card-setup state on the JSON backend.');
+  assert.strictEqual(stripeMigration.stripeCardPreparationReady(liveStripeFoundation), true, 'Live Stripe card setup requires transactional state, encrypted private storage, and dedicated offsite backups.');
   assert.throws(
     () => stripeMigration.assertStripeCardPreparationReady({ configured: true, keyMode: 'test', webhookSecretConfigured: true }),
     error => error && error.code === 'stripe_card_preparation_not_live' && error.statusCode === 503,
     'Customer card preparation must fail closed outside live mode.'
   );
-  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ configured: true, keyMode: 'live', webhookSecretConfigured: true, productionHardeningRequired: false }), false, 'A live key alone must not arm Stripe money actions.');
-  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ configured: true, keyMode: 'test', webhookSecretConfigured: true, productionHardeningRequired: true }), false, 'Production hardening must never arm a Stripe test key.');
-  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ configured: true, keyMode: 'live', webhookSecretConfigured: true, productionHardeningRequired: true }), true, 'Live Stripe money actions require hardening, a live key, and a signed webhook secret.');
+  assert.throws(
+    () => stripeMigration.assertStripeCardPreparationReady({ ...liveStripeFoundation, transactionalStateReady: false }),
+    error => error && error.code === 'stripe_card_preparation_not_live' && error.missing.includes('transactional PostgreSQL state backend'),
+    'Live Stripe card preparation must name the missing transactional backend instead of writing migration state to JSON.'
+  );
+  assert.throws(
+    () => stripeMigration.assertStripeCardPreparationReady({ ...liveStripeFoundation, privateDocumentStorageReady: false, stateBackupConfigured: false }),
+    error => error && error.missing.includes('production-ready encrypted private object storage') && error.missing.includes('dedicated encrypted offsite state-backup configuration'),
+    'Live Stripe card preparation must fail closed until private storage and offsite backups are configured.'
+  );
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ ...liveStripeFoundation, productionHardeningRequired: false }), false, 'A live key and infrastructure alone must not arm Stripe money actions.');
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ ...liveStripeFoundation, keyMode: 'test', productionHardeningRequired: true }), false, 'Production hardening must never arm a Stripe test key.');
+  assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ ...liveStripeFoundation, productionHardeningRequired: true }), true, 'Live Stripe money actions require hardening, live Stripe, PostgreSQL, private storage, and dedicated offsite backups.');
   assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ isolatedTestMode: true }), true, 'Explicit isolated tests may exercise Stripe money workflows without a live account.');
   assert.throws(
-    () => stripeMigration.assertStripeMoneyActionsArmed({ configured: true, keyMode: 'live', webhookSecretConfigured: true, productionHardeningRequired: false }),
+    () => stripeMigration.assertStripeMoneyActionsArmed({ ...liveStripeFoundation, productionHardeningRequired: false }),
     error => error && error.code === 'stripe_money_actions_not_armed' && error.statusCode === 409,
     'Stripe charges and refunds must fail closed until production hardening is armed.'
   );
@@ -155,6 +174,9 @@ async function run() {
     'STRIPE_IDENTITY_RUNTIME_READY',
     'assertStripeCardPreparationReady',
     'assertStripeMoneyActionsArmed',
+    "transactionalStateReady: STATE_REPOSITORY.kind === 'postgres'",
+    'privateDocumentStorageReady: WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED',
+    'stateBackupConfigured: WOA_STATE_BACKUP_ENABLED',
     'stripeLiveResultAccepted',
     'stripeLivemode',
     'Owner must review reason-specific evidence',

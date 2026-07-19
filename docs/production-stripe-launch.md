@@ -17,6 +17,11 @@ artifact and must never be committed as part of a code release.
   database must never be reused as the production database.
 - Do not set `WOA_PRODUCTION_HARDENING_REQUIRED=1` until the owner-only
   infrastructure preflight is clear.
+- Do not send live Stripe card-setup links while production still uses JSON.
+  The deployed server blocks Stripe card preparation until the transactional
+  PostgreSQL backend, production-ready encrypted private object storage, and a
+  dedicated encrypted offsite state-backup configuration are active. Clover
+  setup and charging remain available during this infrastructure phase.
 - Before enabling production hardening, reset the owner password through
   **Settings -> Account** so the platform stores the current PBKDF2 record.
   Saving the password revokes the current session and temporarily keeps the

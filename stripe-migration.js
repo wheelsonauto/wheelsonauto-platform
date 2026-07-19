@@ -297,7 +297,10 @@ function stripeCardPreparationReady(options = {}) {
   if (options.isolatedTestMode === true) return true;
   return options.configured === true
     && text(options.keyMode).toLowerCase() === 'live'
-    && options.webhookSecretConfigured === true;
+    && options.webhookSecretConfigured === true
+    && options.transactionalStateReady === true
+    && options.privateDocumentStorageReady === true
+    && options.stateBackupConfigured === true;
 }
 
 function assertStripeCardPreparationReady(options = {}) {
@@ -305,8 +308,11 @@ function assertStripeCardPreparationReady(options = {}) {
   const missing = [];
   if (options.configured !== true || text(options.keyMode).toLowerCase() !== 'live') missing.push('Stripe live secret key');
   if (options.webhookSecretConfigured !== true) missing.push('Stripe signed webhook secret');
+  if (options.transactionalStateReady !== true) missing.push('transactional PostgreSQL state backend');
+  if (options.privateDocumentStorageReady !== true) missing.push('production-ready encrypted private object storage');
+  if (options.stateBackupConfigured !== true) missing.push('dedicated encrypted offsite state-backup configuration');
   throw stripeLaunchSafetyError(
-    'Stripe card setup is not live. Keep Clover active until the live Stripe key and signed webhook secret are configured.',
+    'Stripe card setup is not safe to launch. Keep Clover active until live Stripe, transactional PostgreSQL, encrypted private storage, and dedicated offsite backups are configured.',
     'stripe_card_preparation_not_live',
     missing
   );
@@ -323,8 +329,11 @@ function assertStripeMoneyActionsArmed(options = {}) {
   if (options.productionHardeningRequired !== true) missing.push('WOA_PRODUCTION_HARDENING_REQUIRED=1');
   if (options.configured !== true || text(options.keyMode).toLowerCase() !== 'live') missing.push('Stripe live secret key');
   if (options.webhookSecretConfigured !== true) missing.push('Stripe signed webhook secret');
+  if (options.transactionalStateReady !== true) missing.push('transactional PostgreSQL state backend');
+  if (options.privateDocumentStorageReady !== true) missing.push('production-ready encrypted private object storage');
+  if (options.stateBackupConfigured !== true) missing.push('dedicated encrypted offsite state-backup configuration');
   throw stripeLaunchSafetyError(
-    'Stripe money actions are locked. Keep Clover active until production hardening, the live Stripe key, and the signed webhook secret are enabled.',
+    'Stripe money actions are locked. Keep Clover active until production hardening, live Stripe, transactional PostgreSQL, encrypted private storage, and dedicated offsite backups are enabled.',
     'stripe_money_actions_not_armed',
     missing,
     409

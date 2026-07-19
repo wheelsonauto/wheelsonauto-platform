@@ -10293,12 +10293,17 @@ async function assertStripeCutoverLaunchReady(data) {
   });
 }
 function stripeProviderSafetyOptions() {
+  const privateStorageStatus = PRIVATE_DOCUMENT_STORE.status();
+  const stateBackupStatus = STATE_BACKUP_STORE.status();
   return {
     isolatedTestMode: stripeMigration.isolatedProviderTestMode(process.env),
     configured: stripe.configured(),
     keyMode: STRIPE_KEY_MODE,
     webhookSecretConfigured: !!STRIPE_WEBHOOK_SECRET,
-    productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED
+    productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
+    transactionalStateReady: STATE_REPOSITORY.kind === 'postgres',
+    privateDocumentStorageReady: WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && privateStorageStatus.productionReady === true,
+    stateBackupConfigured: WOA_STATE_BACKUP_ENABLED && STATE_BACKUP_DEDICATED_KEY_CONFIGURED && stateBackupStatus.productionReady === true
   };
 }
 function stripeCardPreparationReady() {
