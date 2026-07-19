@@ -218,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-auth-boundary-187';
+const ASSET_VERSION = 'platform-20260719-public-links-188';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -321,6 +321,15 @@ const PUBLIC_APPLICATION_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBL
 const PUBLIC_APPLICATION_DUPLICATE_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_DUPLICATE_MS || 15 * 60 * 1000));
 const PUBLIC_HELP_LIMIT = Math.max(3, Number(process.env.WOA_PUBLIC_HELP_LIMIT || 8));
 const PUBLIC_HELP_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_HELP_WINDOW_MS || 60 * 60 * 1000));
+const PUBLIC_SECURE_LINK_LIMIT = Math.max(10, Number(process.env.WOA_PUBLIC_SECURE_LINK_LIMIT || 30));
+const PUBLIC_SECURE_LINK_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_SECURE_LINK_WINDOW_MS || 15 * 60 * 1000));
+const PAYMENT_LINK_TTL_MS = configuredDuration(process.env.WOA_PAYMENT_LINK_TTL_MS, 14 * 86400000);
+const CARD_SETUP_LINK_TTL_MS = configuredDuration(process.env.WOA_CARD_SETUP_LINK_TTL_MS, 7 * 86400000);
+
+function configuredDuration(value, fallback, minimum = 60 * 60 * 1000) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(minimum, parsed) : fallback;
+}
 
 function stableVehicleId(base, vehicle) {
   const source = [vehicle && vehicle.vin, vehicle && vehicle.plate, vehicle && vehicle.stock, vehicle && vehicle.name, vehicle && vehicle.currentCustomer].filter(Boolean).join('|') || JSON.stringify(vehicle || {});
@@ -8232,8 +8241,7 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
   }).slice(0, 30);
 }
 function isOpenCustomerPaymentRequest(row = {}) {
-  const status = String(row.status || 'Open').toLowerCase();
-  return status.indexOf('paid') < 0 && status.indexOf('closed') < 0 && status.indexOf('cancel') < 0 && status.indexOf('expired') < 0;
+  return !paymentRequestCompleted(row) && !publicLinkRevoked(row) && !publicLinkExpired(row);
 }
 function reconcilePaidPaymentRequests(data = {}) {
   data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
@@ -8281,8 +8289,7 @@ function staleOpenPaymentRequests(rows = [], now = new Date()) {
   return rows.filter(row => isOpenCustomerPaymentRequest(row) && paymentRequestAgeHours(row, now) >= 24);
 }
 function isOpenCardSetupRequest(row = {}) {
-  const status = String(row.status || 'Open').toLowerCase();
-  return status.indexOf('complete') < 0 && status.indexOf('saved') < 0 && status.indexOf('closed') < 0 && status.indexOf('cancel') < 0 && status.indexOf('expired') < 0 && status.indexOf('deleted') < 0;
+  return !cardSetupRequestCompleted(row) && !publicLinkRevoked(row) && !publicLinkExpired(row);
 }
 function cardSetupRequestAgeHours(row = {}, now = new Date()) {
   const raw = row.createdAt || row.date || row.updatedAt || '';
@@ -13517,6 +13524,48 @@ async function syncCloverRecurringPlans(data) {
   };
 }
 function cents(amount) { return Math.max(0, Math.round(Number(amount || 0) * 100)); }
+function publicLinkId(prefix) {
+  return String(prefix || 'link') + '-' + crypto.randomBytes(24).toString('hex');
+}
+function publicLinkExpiresAt(data, payload = {}, ttlMs) {
+  const requested = Date.parse(String(payload.expiresAt || ''));
+  const onboardingSession = payload.onboardingSessionId
+    ? (data.onboardingSessions || []).find(row => row.id === payload.onboardingSessionId)
+    : null;
+  const onboardingExpiry = Date.parse(String(onboardingSession && onboardingSession.expiresAt || ''));
+  const fallback = Date.now() + Math.max(60 * 60 * 1000, Number(ttlMs || 0));
+  const candidates = [requested, onboardingExpiry, fallback].filter(value => Number.isFinite(value) && value > Date.now());
+  return new Date(Math.min(...candidates)).toISOString();
+}
+function publicLinkExpired(row = {}, now = Date.now()) {
+  const expiresAt = Date.parse(String(row.expiresAt || ''));
+  return Number.isFinite(expiresAt) && expiresAt <= Number(now || Date.now());
+}
+function publicLinkExplicitlyRevoked(row = {}) {
+  return /closed|cancel|deleted|denied|replaced|revoked/i.test(String(row.status || '')) || !!row.revokedAt;
+}
+function publicLinkRevoked(row = {}) {
+  return publicLinkExplicitlyRevoked(row) || /expired/i.test(String(row.status || ''));
+}
+function cardSetupRequestCompleted(row = {}) {
+  return /complete|card saved|linked/i.test(String(row.status || '')) || !!row.completedAt;
+}
+function paymentRequestCompleted(row = {}) {
+  const status = String(row.status || '').trim().toLowerCase();
+  if (/unpaid|not paid|failed|declined|cancel|incomplete|awaiting|pending/.test(status)) return false;
+  return nativePaymentPaid(row) || /\bpaid\b|settled|completed/.test(status) || !!(row.paidAt && row.closedAt);
+}
+function markPublicLinkExpired(row = {}, now = new Date()) {
+  if (!publicLinkExpired(row, now.getTime()) || publicLinkRevoked(row) || paymentRequestCompleted(row) || cardSetupRequestCompleted(row)) return false;
+  row.status = 'Expired';
+  row.expiredAt = now.toISOString();
+  return true;
+}
+const PUBLIC_LINK_RESPONSE_HEADERS = Object.freeze({
+  'Cache-Control': 'private, no-store',
+  'X-Robots-Tag': 'noindex, nofollow',
+  'Referrer-Policy': 'no-referrer'
+});
 function splitName(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   return { firstName: parts[0] || 'WheelsonAuto', lastName: parts.slice(1).join(' ') || 'Customer' };
@@ -13540,8 +13589,9 @@ function createPaymentRequest(data, payload) {
   const vehicleName = vehicle.id ? vehicleNameFromParts(vehicle) : (payload.vehicle || recurring.vehicle || '');
   const tag = vehicle.plate || vehicle.stock || payload.licensePlate || payload.plate || recurring.licensePlate || recurring.plate || '';
   const amount = Number(payload.amount || recurring.amount || 0);
+  const createdAt = new Date().toISOString();
   const request = {
-    id: 'plink-' + crypto.randomBytes(12).toString('hex'),
+    id: publicLinkId('plink'),
     recurringPaymentId: payload.recurringPaymentId || recurring.id || '',
     applicationId: payload.applicationId || recurring.applicationId || '',
     onboardingSessionId: payload.onboardingSessionId || recurring.onboardingSessionId || '',
@@ -13565,7 +13615,8 @@ function createPaymentRequest(data, payload) {
     paymentProvider: normalizedPaymentProvider(payload.paymentProvider || WOA_PAYMENT_PROVIDER),
     status: 'Open',
     source: 'WheelsonAuto hosted checkout',
-    createdAt: new Date().toISOString(),
+    createdAt,
+    expiresAt: publicLinkExpiresAt(data, payload, PAYMENT_LINK_TTL_MS),
     url: ''
   };
   request.url = PUBLIC_BASE_URL + '/pay/' + request.id;
@@ -13595,7 +13646,7 @@ function createCardSetupRequest(data, payload) {
   const cardOnlyUpdate = !!(payload.cardOnlyUpdate && cardTarget);
   if (cardTarget) autopay.id = cardTarget.id || (existingAutopay && existingAutopay.id) || autopay.id;
   const request = {
-    id: 'setup-' + crypto.randomBytes(12).toString('hex'),
+    id: publicLinkId('setup'),
     organizationId: autopay.organizationId || MAIN_ORG_ID,
     recurringPaymentId: autopay.id,
     applicationId: String(payload.applicationId || autopay.applicationId || '').trim(),
@@ -13620,6 +13671,7 @@ function createCardSetupRequest(data, payload) {
     status: 'Open',
     source: 'WheelsonAuto card setup',
     createdAt: new Date().toISOString(),
+    expiresAt: publicLinkExpiresAt(data, payload, CARD_SETUP_LINK_TTL_MS),
     autopayConsentAt: String(payload.autopayConsentAt || '').trim(),
     autopayConsentIp: String(payload.autopayConsentIp || '').trim(),
     autopayConsentUserAgent: String(payload.autopayConsentUserAgent || '').trim(),
@@ -13779,6 +13831,7 @@ function stripeObjectId(value) {
   return typeof value === 'string' ? value : String(value && value.id || '');
 }
 async function completeStripeCardSetup(data, request, sessionInput) {
+  if (publicLinkExplicitlyRevoked(request)) throw stripeMigration.stripeLaunchSafetyError('This Stripe card setup request was cancelled or revoked. Send a fresh secure link before saving another card.', 'stripe_setup_link_revoked', ['Fresh owner-issued Stripe setup link'], 409);
   assertStripeCardPreparationReady();
   if (request.stripePaymentMethodId && /stripe card saved/i.test(String(request.status || ''))) {
     if (request.stripeLivemode === true || stripeMigration.isolatedProviderTestMode(process.env)) {
@@ -17161,8 +17214,9 @@ const server = http.createServer(async (req, res) => {
       const token = String(url.pathname.split('/').filter(Boolean)[1] || '');
       const data = await readData();
       const claim = (data.claims || []).find(row => isTollViolationClaim(row) && row.receiptToken === token);
-      if (!claim || token.length < 32) return send(res, 404, paymentResultHtml('Toll receipt not found', 'Please contact WheelsonAuto so we can verify the transaction and send fresh proof.'));
-      return send(res, 200, tollReceiptHtml(claim), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+      const revoked = claim && (claim.receiptRevokedAt || /revoked|cancel/i.test(String(claim.receiptStatus || '')));
+      if (!claim || token.length < 32 || revoked) return send(res, 404, paymentResultHtml('Toll receipt not found', 'Please contact WheelsonAuto so we can verify the transaction and send fresh proof.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      return send(res, 200, tollReceiptHtml(claim), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
     }
     if (url.pathname === '/apply' && req.method === 'GET') return send(res, 302, '', 'text/plain; charset=utf-8', { Location: '/inventory', 'Cache-Control': 'no-store' });
     if (url.pathname.startsWith('/setup-card/') && req.method === 'GET') {
@@ -17171,26 +17225,28 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
       const request = data.cardSetupRequests.find(item => item.id === requestId);
-      if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'));
+      if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       if (parts[2] === 'stripe-success') {
         try {
           await completeStripeCardSetup(data, request, String(url.searchParams.get('session_id') || ''));
-          if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
-          return send(res, 200, paymentResultHtml('Card saved securely', 'Stripe confirmed the card setup. If Clover was already active, WheelsonAuto will keep it active until the owner confirms the provider switch.', '/customer', 'Back to my account'));
+          if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
+          return send(res, 200, paymentResultHtml('Card saved securely', 'Stripe confirmed the card setup. If Clover was already active, WheelsonAuto will keep it active until the owner confirms the provider switch.', '/customer', 'Back to my account'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         } catch (err) {
           request.lastError = String(err && err.message || err);
           request.lastFailedAt = new Date().toISOString();
           await writeData(data);
-          return send(res, Number(err && err.statusCode || 400), stripeSetupCardHtml(request, request.lastError));
+          return send(res, Number(err && err.statusCode || 400), stripeSetupCardHtml(request, request.lastError), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         }
       }
-      if (String(request.status || '').toLowerCase().includes('card saved')) {
+      if (cardSetupRequestCompleted(request)) {
         if (normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' && request.stripeLivemode !== true && !stripeMigration.isolatedProviderTestMode(process.env)) {
-          return send(res, 409, stripeSetupCardHtml(request, 'This Stripe card has no verified live-mode proof. WheelsonAuto must send a fresh live setup link before it can be used.'));
+          return send(res, 409, stripeSetupCardHtml(request, 'This Stripe card has no verified live-mode proof. WheelsonAuto must send a fresh live setup link before it can be used.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         }
-        return send(res, 200, paymentResultHtml('Card already saved', 'This WheelsonAuto card setup link has already been completed.'));
+        return send(res, 200, paymentResultHtml('Card already saved', 'This WheelsonAuto card setup link has already been completed.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
-      return send(res, 200, normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' ? stripeSetupCardHtml(request) : setupCardHtml(request));
+      if (markPublicLinkExpired(request)) await writeData(data);
+      if (publicLinkRevoked(request) || publicLinkExpired(request)) return send(res, 410, paymentResultHtml('Card setup link expired', 'This secure card setup link is no longer active. Contact WheelsonAuto for a fresh link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      return send(res, 200, normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' ? stripeSetupCardHtml(request) : setupCardHtml(request), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
     }
     if (url.pathname.startsWith('/pay/') && req.method === 'GET') {
       const parts = url.pathname.split('/').filter(Boolean);
@@ -17198,15 +17254,15 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       const request = data.paymentRequests.find(item => item.id === requestId);
-      if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
+      if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      if (paymentRequestCompleted(request)) {
+        if (parts[2] === 'success' && request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
+        return send(res, 200, paymentResultHtml('Payment already received', 'This secure payment request has already been completed. No second checkout will be opened.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      }
       if (parts[2] === 'success') {
-        if (nativePaymentPaid(request)) {
-          if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
-          return send(res, 200, paymentResultHtml('Payment received', paymentProviderLabel(request.paymentProvider) + ' verified this payment and WheelsonAuto updated the customer account.'));
-        }
         const returnedSessionId = String(url.searchParams.get('session_id') || '');
         const expectedSessionId = String(request.providerCheckoutSessionId || request.checkoutSessionId || '');
-        if (returnedSessionId && expectedSessionId && returnedSessionId !== expectedSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned secure checkout did not match this WheelsonAuto payment request. No payment was recorded.'));
+        if (returnedSessionId && expectedSessionId && returnedSessionId !== expectedSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned secure checkout did not match this WheelsonAuto payment request. No payment was recorded.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         if (normalizedPaymentProvider(request.paymentProvider) === 'stripe' && returnedSessionId) {
           try {
             assertStripeMoneyActionsArmed();
@@ -17219,8 +17275,8 @@ const server = http.createServer(async (req, res) => {
               request.stripeCheckoutSessionId = session.id || returnedSessionId;
               await protectConcurrentLocalWrites(data, { preferIncoming: true });
               await writeData(data);
-              if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl });
-              return send(res, 200, paymentResultHtml('Payment received', 'Stripe verified this payment and WheelsonAuto updated the customer account.'));
+              if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
+              return send(res, 200, paymentResultHtml('Payment received', 'Stripe verified this payment and WheelsonAuto updated the customer account.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
             }
           } catch (err) {
             request.lastVerificationError = String(err && err.message || err);
@@ -17230,36 +17286,30 @@ const server = http.createServer(async (req, res) => {
         request.checkoutReturnedAt = new Date().toISOString();
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return send(res, 200, paymentResultHtml('Payment submitted', paymentProviderLabel(request.paymentProvider) + ' returned the checkout successfully. WheelsonAuto is waiting for the signed provider confirmation before marking money paid.', request.onboardingReturnUrl || request.url || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Check payment status'));
+        return send(res, 200, paymentResultHtml('Payment submitted', paymentProviderLabel(request.paymentProvider) + ' returned the checkout successfully. WheelsonAuto is waiting for the signed provider confirmation before marking money paid.', request.onboardingReturnUrl || request.url || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Check payment status'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
+      if (markPublicLinkExpired(request)) await writeData(data);
+      if (publicLinkRevoked(request) || publicLinkExpired(request)) return send(res, 410, paymentResultHtml('Payment link expired', 'This secure payment link is no longer active. Contact WheelsonAuto for a fresh link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       if (parts[2] === 'failure') {
-        request.status = 'Failed or incomplete';
-        request.failedAt = new Date().toISOString();
-        const recurring = (data.recurringPayments || []).find(p => p.id === request.recurringPaymentId);
-        if (recurring && !request.onboardingSessionId) { recurring.status = 'Failed retry'; recurring.tone = 'bad'; }
-        if (request.onboardingSessionId) {
-          const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
-          if (session) {
-            session.status = (request.paymentType || 'Payment') + ' failed or incomplete';
-            session.lastPaymentErrorAt = request.failedAt;
-          }
-        }
-        await writeData(data);
-        return send(res, 200, publicPayHtml(request, 'That payment did not complete. You can try again below, or contact WheelsonAuto for help.'));
+        return send(res, 200, publicPayHtml(request, 'Checkout was cancelled or returned without verified payment. No failed payment was recorded. You can try again below, or contact WheelsonAuto for help.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
-      return send(res, 200, publicPayHtml(request));
+      return send(res, 200, publicPayHtml(request), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
     }
     if (url.pathname.startsWith('/api/public/payment-links/') && url.pathname.endsWith('/checkout') && req.method === 'POST') {
+      const checkoutRate = await publicActionLimit(req, 'payment-link-checkout', PUBLIC_SECURE_LINK_LIMIT, PUBLIC_SECURE_LINK_WINDOW_MS);
+      if (!checkoutRate.allowed) return json(res, 429, { ok: false, error: 'Too many secure checkout attempts. Wait before trying again.' }, { 'Retry-After': String(checkoutRate.retryAfterSeconds) });
       const requestId = url.pathname.split('/')[4];
       const data = await readData();
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       const request = data.paymentRequests.find(item => item.id === requestId);
-      if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'));
-      if (nativePaymentPaid(request)) return send(res, 200, paymentResultHtml('Already paid', 'This payment request has already been verified by ' + paymentProviderLabel(request.paymentProvider) + '. No second checkout was opened.', request.onboardingReturnUrl || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Back to WheelsonAuto'));
+      if (!request) return send(res, 404, paymentResultHtml('Payment link not found', 'Please contact WheelsonAuto so we can send a fresh payment link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      if (paymentRequestCompleted(request)) return send(res, 200, paymentResultHtml('Already paid', 'This payment request has already been completed. No second checkout was opened.', request.onboardingReturnUrl || 'https://www.wheelsonauto.com/', request.onboardingReturnUrl ? 'Continue onboarding' : 'Back to WheelsonAuto'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      if (markPublicLinkExpired(request)) await writeData(data);
+      if (publicLinkRevoked(request) || publicLinkExpired(request)) return send(res, 410, paymentResultHtml('Payment link expired', 'This secure payment link is no longer active. Contact WheelsonAuto for a fresh link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       const currentCheckout = activeHostedCheckoutHref(request);
-      if (currentCheckout) return send(res, 302, '', 'text/plain', { Location: currentCheckout });
+      if (currentCheckout) return send(res, 302, '', 'text/plain', { Location: currentCheckout, ...PUBLIC_LINK_RESPONSE_HEADERS });
       const checkout = await attachHostedCheckout(data, request);
-      return send(res, 302, '', 'text/plain', { Location: checkout.href });
+      return send(res, 302, '', 'text/plain', { Location: checkout.href, ...PUBLIC_LINK_RESPONSE_HEADERS });
     }
     if (url.pathname === '/api/public/applications' && req.method === 'POST') {
       const applicationRate = await publicActionLimit(req, 'public-application', PUBLIC_APPLICATION_LIMIT, PUBLIC_APPLICATION_WINDOW_MS);
@@ -17413,6 +17463,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), loginUrl: '/customer/login' });
     }
     if (/^\/api\/public\/onboarding\/[^/]+\/pickup-availability$/.test(url.pathname) && req.method === 'GET') {
+      const availabilityRate = await publicActionLimit(req, 'onboarding-availability', PUBLIC_SECURE_LINK_LIMIT * 2, PUBLIC_SECURE_LINK_WINDOW_MS);
+      if (!availabilityRate.allowed) return json(res, 429, { ok: false, error: 'Too many pickup availability requests. Wait before trying again.' }, { 'Retry-After': String(availabilityRate.retryAfterSeconds) });
       const parts = url.pathname.split('/').filter(Boolean);
       const publicToken = decodeURIComponent(parts[3] || '');
       const data = await readData();
@@ -17428,6 +17480,8 @@ const server = http.createServer(async (req, res) => {
       const parts = url.pathname.split('/').filter(Boolean);
       const publicToken = decodeURIComponent(parts[3] || '');
       const action = String(parts[4] || '');
+      const actionRate = await publicActionLimit(req, 'onboarding-' + (action || 'unknown'), PUBLIC_SECURE_LINK_LIMIT, PUBLIC_SECURE_LINK_WINDOW_MS);
+      if (!actionRate.allowed) return json(res, 429, { ok: false, error: 'Too many secure onboarding attempts. Wait before trying again.' }, { 'Retry-After': String(actionRate.retryAfterSeconds) });
       const maxBytes = action === 'documents' ? 20 * 1024 * 1024 : action === 'signature' ? 2 * 1024 * 1024 : 512 * 1024;
       const payload = await readJsonBody(req, maxBytes);
       const data = await readData();
@@ -17809,33 +17863,43 @@ const server = http.createServer(async (req, res) => {
       return json(res, 404, { ok: false, error: 'Unknown onboarding step.' });
     }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/stripe-checkout') && req.method === 'POST') {
+      const setupRate = await publicActionLimit(req, 'card-setup-checkout', PUBLIC_SECURE_LINK_LIMIT, PUBLIC_SECURE_LINK_WINDOW_MS);
+      if (!setupRate.allowed) return json(res, 429, { ok: false, error: 'Too many secure card setup attempts. Wait before trying again.' }, { 'Retry-After': String(setupRate.retryAfterSeconds) });
       const requestId = url.pathname.split('/').filter(Boolean)[3];
       const rawBody = await readBody(req, 64 * 1024);
       const form = new URLSearchParams(rawBody);
       const data = await readData();
       data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
       const request = data.cardSetupRequests.find(item => item.id === requestId);
-      if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'));
-      if (form.get('consent') !== 'yes') return send(res, 400, stripeSetupCardHtml(request, 'Confirm the recurring card authorization before continuing.'));
+      if (!request) return send(res, 404, paymentResultHtml('Card setup link not found', 'Please contact WheelsonAuto so we can send a fresh card setup link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      if (cardSetupRequestCompleted(request)) return send(res, 409, paymentResultHtml('Card already saved', 'This secure card setup request has already been completed. Ask WheelsonAuto for a new card-change link if another update is needed.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      if (markPublicLinkExpired(request)) await writeData(data);
+      if (publicLinkRevoked(request) || publicLinkExpired(request)) return send(res, 410, paymentResultHtml('Card setup link expired', 'This secure card setup link is no longer active. Contact WheelsonAuto for a fresh link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      if (form.get('consent') !== 'yes') return send(res, 400, stripeSetupCardHtml(request, 'Confirm the recurring card authorization before continuing.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       try {
         const session = await attachStripeCardSetupCheckout(data, request, req);
         if (!session.url) throw new Error('Stripe did not return a secure checkout URL.');
-        return send(res, 303, '', 'text/plain', { Location: session.url, 'Cache-Control': 'no-store' });
+        return send(res, 303, '', 'text/plain', { Location: session.url, ...PUBLIC_LINK_RESPONSE_HEADERS });
       } catch (err) {
         request.status = 'Stripe setup needs attention';
         request.lastError = String(err && err.message || err);
         request.lastFailedAt = new Date().toISOString();
         await writeData(data);
-        return send(res, Number(err && err.statusCode || 502), stripeSetupCardHtml(request, request.lastError));
+        return send(res, Number(err && err.statusCode || 502), stripeSetupCardHtml(request, request.lastError), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
     }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
+      const setupRate = await publicActionLimit(req, 'card-setup-complete', PUBLIC_SECURE_LINK_LIMIT, PUBLIC_SECURE_LINK_WINDOW_MS);
+      if (!setupRate.allowed) return json(res, 429, { ok: false, error: 'Too many secure card setup attempts. Wait before trying again.' }, { 'Retry-After': String(setupRate.retryAfterSeconds) });
       const requestId = url.pathname.split('/').filter(Boolean)[3];
       const payload = await readJsonBody(req);
       const data = await readData();
       data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
       const request = data.cardSetupRequests.find(item => item.id === requestId);
       if (!request) return json(res, 404, { ok: false, error: 'Card setup link was not found.' });
+      if (cardSetupRequestCompleted(request)) return json(res, 409, { ok: false, error: 'This card setup link has already been completed. Request a new card-change link for another update.' });
+      if (markPublicLinkExpired(request)) await writeData(data);
+      if (publicLinkRevoked(request) || publicLinkExpired(request)) return json(res, 410, { ok: false, error: 'This card setup link is no longer active. Request a fresh secure link.' });
       try {
         const result = await completeCardSetup(data, request, payload);
         return json(res, 201, { ok: true, recurring: result.recurring, cloverCustomerId: request.cloverCustomerId, cloverSubscriptionId: request.cloverSubscriptionId, redirectUrl: request.onboardingReturnUrl || '' });

@@ -742,6 +742,24 @@ verified. The server records durable PostgreSQL job errors for webhook, sync,
 autopay, and provider failures. Monitor these before and after every live
 provider cutover.
 
+### Public customer-link boundary
+
+New payment and card-setup links use 192-bit random bearer identifiers. Payment
+links expire after 14 days and card-setup links after 7 days by default; links
+created inside onboarding cannot outlive the onboarding session. Completed,
+cancelled, revoked, deleted, or expired links cannot start new provider work.
+The expiration windows can be shortened with `WOA_PAYMENT_LINK_TTL_MS` and
+`WOA_CARD_SETUP_LINK_TTL_MS`, but do not extend them without an owner-reviewed
+reason.
+
+Browser success/cancel redirects are not payment evidence. An unsigned cancel
+return must never mark a customer failed, and money becomes paid only from a
+verified provider webhook or an authenticated provider retrieval. Card-setup
+completion is single-use. Toll receipt links remain long-lived proof, but a
+staff-set `receiptRevokedAt` or revoked receipt status invalidates the bearer
+link. All sensitive public pages use private no-store, noindex, and no-referrer
+headers, while public mutation routes use persistent rate limits.
+
 ## 9. Final Launch Matrix
 
 Before moving more customers, explicitly verify:
