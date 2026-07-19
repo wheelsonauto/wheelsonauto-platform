@@ -11,6 +11,7 @@ const DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID = '20260718_document_tenant_prima
 const PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID = '20260718_provider_financial_identity_index_v5';
 const RECOVERY_HISTORY_MIGRATION_ID = '20260719_append_only_recovery_history_v6';
 const MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID = '20260719_signed_migration_source_provenance_v7';
+const WEBHOOK_CLAIM_TOKEN_MIGRATION_ID = '20260719_webhook_claim_tokens_v8';
 const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
   MIGRATION_ID,
   TRANSACTIONAL_INDEX_MIGRATION_ID,
@@ -18,7 +19,8 @@ const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
   DOCUMENT_TENANT_PRIMARY_KEY_MIGRATION_ID,
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
   RECOVERY_HISTORY_MIGRATION_ID,
-  MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID
+  MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID,
+  WEBHOOK_CLAIM_TOKEN_MIGRATION_ID
 ]);
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
@@ -31,7 +33,7 @@ const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'stateChecksum',
   'migrationProof'
 ]);
-const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v4-provider-identity';
+const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v5-webhook-ownership';
 const RECOVERY_DRILL_CONTRACT_VERSION = Object.freeze([
   'wheelsonauto-recovery-drill-v2',
   RECOVERY_DRILL_SCRIPT_VERSION,
@@ -49,7 +51,11 @@ function normalizedStateTransactionEffects(options = {}) {
     ? options.transactionEffects
     : {};
   const webhookCompletions = (Array.isArray(effects.webhookCompletions) ? effects.webhookCompletions : [])
-    .map(item => ({ provider: String(item && item.provider || '').trim(), eventId: String(item && item.eventId || '').trim() }))
+    .map(item => ({
+      provider: String(item && item.provider || '').trim(),
+      eventId: String(item && item.eventId || '').trim(),
+      claimToken: String(item && item.claimToken || '').trim()
+    }))
     .filter(item => item.provider && item.eventId);
   const idempotencySettlements = (Array.isArray(effects.idempotencySettlements) ? effects.idempotencySettlements : [])
     .map(item => ({
@@ -1015,7 +1021,12 @@ class JsonStateRepository {
     const effects = normalizedStateTransactionEffects(options);
     const appliedEffects = { webhookCompletions: [], idempotencySettlements: [] };
     for (const completion of effects.webhookCompletions) {
-      await this.completeWebhookEvent(completion.provider, completion.eventId);
+      const completed = await this.completeWebhookEvent(completion.provider, completion.eventId, { claimToken: completion.claimToken });
+      if (!completed) {
+        const error = new Error('The durable webhook claim was missing, expired, or no longer owned by this worker while committing local state for ' + completion.provider + '.');
+        error.code = 'woa_webhook_claim_not_owned';
+        throw error;
+      }
       appliedEffects.webhookCompletions.push({ ...completion, applied: true });
     }
     for (const settlement of effects.idempotencySettlements) {
@@ -1112,11 +1123,13 @@ class JsonStateRepository {
     if (activelyProcessing) return { accepted: false, duplicate: true, inProgress: true, eventId: normalizedEventId, attempts: existing.attempts || 1 };
     const attempts = Number(existing && existing.attempts || 0) + 1;
     const now = new Date().toISOString();
+    const claimToken = idempotencyClaimToken();
     this.webhookEventClaims.set(key, {
       organizationId: this.organizationId,
       provider: normalizedProvider,
       eventId: normalizedEventId,
       status: 'processing',
+      claimToken,
       attempts,
       payload: clone(payload || {}),
       receivedAt: existing && existing.receivedAt || now,
@@ -1124,24 +1137,34 @@ class JsonStateRepository {
       updatedAt: now,
       lastError: ''
     });
-    return { accepted: true, duplicate: false, reclaimed: !!(existing && existing.status === 'processing'), eventId: normalizedEventId, attempts };
+    return { accepted: true, duplicate: false, reclaimed: !!(existing && existing.status === 'processing'), eventId: normalizedEventId, claimToken, attempts };
   }
 
-  async completeWebhookEvent(provider, eventId) {
+  async completeWebhookEvent(provider, eventId, options = {}) {
     const normalizedEventId = String(eventId || '').trim();
-    if (!normalizedEventId) return;
+    if (!normalizedEventId) return false;
     const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
-    const existing = this.webhookEventClaims.get(key) || {};
+    const existing = this.webhookEventClaims.get(key);
+    if (!existing) return false;
+    const claimToken = String(options.claimToken || '').trim();
+    if (!claimToken || claimToken !== String(existing.claimToken || '')) return false;
+    if (existing.status === 'processed') return true;
+    if (existing.status !== 'processing') return false;
     const now = new Date().toISOString();
     this.webhookEventClaims.set(key, { ...existing, status: 'processed', attempts: Number(existing.attempts || 1), processedAt: now, updatedAt: now, lastError: '' });
+    return true;
   }
 
-  async failWebhookEvent(provider, eventId, error) {
+  async failWebhookEvent(provider, eventId, error, options = {}) {
     const normalizedEventId = String(eventId || '').trim();
-    if (!normalizedEventId) return;
+    if (!normalizedEventId) return false;
     const key = [this.organizationId, String(provider || ''), normalizedEventId].join('|');
-    const existing = this.webhookEventClaims.get(key) || {};
+    const existing = this.webhookEventClaims.get(key);
+    if (!existing || existing.status !== 'processing') return false;
+    const claimToken = String(options.claimToken || '').trim();
+    if (!claimToken || claimToken !== String(existing.claimToken || '')) return false;
     this.webhookEventClaims.set(key, { ...existing, status: 'failed', attempts: Number(existing.attempts || 1), updatedAt: new Date().toISOString(), lastError: String(error && error.message || error || '').slice(0, 3000) });
+    return true;
   }
 
   async listRecoverableWebhookEvents(provider, options = {}) {
@@ -1603,6 +1626,7 @@ class PostgresStateRepository {
           status TEXT NOT NULL DEFAULT 'received',
           payload JSONB NOT NULL DEFAULT '{}'::jsonb,
           attempts INTEGER NOT NULL DEFAULT 0,
+          claim_token TEXT NOT NULL DEFAULT '',
           received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           processed_at TIMESTAMPTZ,
@@ -1610,6 +1634,7 @@ class PostgresStateRepository {
           PRIMARY KEY (organization_id, provider, event_id)
         )`);
         await client.query('ALTER TABLE woa_webhook_events ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ NOT NULL DEFAULT now()');
+        await client.query("ALTER TABLE woa_webhook_events ADD COLUMN IF NOT EXISTS claim_token TEXT NOT NULL DEFAULT ''");
         await client.query(`DO $webhook_tenant_primary_key$
         DECLARE
           primary_key_name TEXT;
@@ -1786,6 +1811,7 @@ class PostgresStateRepository {
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [RECOVERY_HISTORY_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [WEBHOOK_CLAIM_TOKEN_MIGRATION_ID]);
         const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
@@ -1944,12 +1970,19 @@ class PostgresStateRepository {
     const effects = normalizedStateTransactionEffects(options);
     const appliedEffects = { webhookCompletions: [], idempotencySettlements: [] };
     for (const completion of effects.webhookCompletions) {
+      if (!completion.claimToken) {
+        const error = new Error('A webhook ownership token is required while committing state for ' + completion.provider + '.');
+        error.code = 'woa_webhook_claim_token_required';
+        throw error;
+      }
       const completed = await client.query(`UPDATE woa_webhook_events
         SET status = 'processed', processed_at = now(), last_error = ''
-        WHERE organization_id = $1 AND provider = $2 AND event_id = $3 AND status = 'processing'
-        RETURNING attempts`, [this.organizationId, completion.provider, completion.eventId]);
+        WHERE organization_id = $1 AND provider = $2 AND event_id = $3 AND status = 'processing' AND claim_token = $4
+        RETURNING attempts`, [this.organizationId, completion.provider, completion.eventId, completion.claimToken]);
       if (!completed.rowCount) {
-        throw new Error('The durable webhook claim was missing or no longer processing while committing state for ' + completion.provider + '.');
+        const error = new Error('The durable webhook claim was missing, expired, or no longer owned by this worker while committing state for ' + completion.provider + '.');
+        error.code = 'woa_webhook_claim_not_owned';
+        throw error;
       }
       appliedEffects.webhookCompletions.push({ ...completion, applied: true });
     }
@@ -2094,7 +2127,7 @@ class PostgresStateRepository {
     const client = await this.connect();
     try {
       await client.query('BEGIN');
-      const existing = await client.query(`SELECT status, attempts, processing_started_at
+      const existing = await client.query(`SELECT status, attempts, processing_started_at, claim_token
         FROM woa_webhook_events
         WHERE organization_id = $1 AND provider = $2 AND event_id = $3
         FOR UPDATE`, [this.organizationId, provider, eventId]);
@@ -2112,17 +2145,19 @@ class PostgresStateRepository {
           await client.query('COMMIT');
           return { accepted: false, duplicate: true, inProgress: true, eventId, attempts: Number(row.attempts || 1) };
         }
+        const claimToken = idempotencyClaimToken();
         await client.query(`UPDATE woa_webhook_events
-          SET status = 'processing', attempts = attempts + 1, payload = $4::jsonb, last_error = '', processing_started_at = now()
-          WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId, JSON.stringify(payload || {})]);
+          SET status = 'processing', attempts = attempts + 1, payload = $4::jsonb, claim_token = $5, last_error = '', processing_started_at = now()
+          WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId, JSON.stringify(payload || {}), claimToken]);
         await client.query('COMMIT');
-        return { accepted: true, duplicate: false, reclaimed: row.status === 'processing', eventId, attempts: Number(row.attempts || 0) + 1 };
+        return { accepted: true, duplicate: false, reclaimed: row.status === 'processing', eventId, claimToken, attempts: Number(row.attempts || 0) + 1 };
       } else {
-        await client.query(`INSERT INTO woa_webhook_events (provider, event_id, organization_id, status, payload, attempts, processing_started_at)
-          VALUES ($1, $2, $3, 'processing', $4::jsonb, 1, now())`, [provider, eventId, this.organizationId, JSON.stringify(payload || {})]);
+        const claimToken = idempotencyClaimToken();
+        await client.query(`INSERT INTO woa_webhook_events (provider, event_id, organization_id, status, payload, attempts, claim_token, processing_started_at)
+          VALUES ($1, $2, $3, 'processing', $4::jsonb, 1, $5, now())`, [provider, eventId, this.organizationId, JSON.stringify(payload || {}), claimToken]);
+        await client.query('COMMIT');
+        return { accepted: true, duplicate: false, eventId, claimToken, attempts: 1 };
       }
-      await client.query('COMMIT');
-      return { accepted: true, duplicate: false, eventId, attempts: 1 };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
@@ -2131,20 +2166,26 @@ class PostgresStateRepository {
     }
   }
 
-  async completeWebhookEvent(provider, eventId) {
-    if (!eventId) return;
+  async completeWebhookEvent(provider, eventId, options = {}) {
+    if (!eventId) return false;
     await this.ensureSchema();
-    await this.pool.query(`UPDATE woa_webhook_events
+    const claimToken = String(options.claimToken || '').trim();
+    if (!claimToken) return false;
+    const result = await this.pool.query(`UPDATE woa_webhook_events
       SET status = 'processed', processed_at = now(), last_error = ''
-      WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId]);
+      WHERE organization_id = $1 AND provider = $2 AND event_id = $3 AND status = 'processing' AND claim_token = $4`, [this.organizationId, provider, eventId, claimToken]);
+    return result.rowCount > 0;
   }
 
-  async failWebhookEvent(provider, eventId, error) {
-    if (!eventId) return;
+  async failWebhookEvent(provider, eventId, error, options = {}) {
+    if (!eventId) return false;
     await this.ensureSchema();
-    await this.pool.query(`UPDATE woa_webhook_events
+    const claimToken = String(options.claimToken || '').trim();
+    if (!claimToken) return false;
+    const result = await this.pool.query(`UPDATE woa_webhook_events
       SET status = 'failed', last_error = $4
-      WHERE organization_id = $1 AND provider = $2 AND event_id = $3`, [this.organizationId, provider, eventId, String(error && error.message || error || '').slice(0, 3000)]);
+      WHERE organization_id = $1 AND provider = $2 AND event_id = $3 AND status = 'processing' AND claim_token = $5`, [this.organizationId, provider, eventId, String(error && error.message || error || '').slice(0, 3000), claimToken]);
+    return result.rowCount > 0;
   }
 
   async listRecoverableWebhookEvents(provider, options = {}) {
@@ -3038,6 +3079,7 @@ module.exports = {
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
   RECOVERY_HISTORY_MIGRATION_ID,
   MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID,
+  WEBHOOK_CLAIM_TOKEN_MIGRATION_ID,
   REQUIRED_SCHEMA_MIGRATION_IDS,
   DEFAULT_ORGANIZATION_ID,
   RECOVERY_DRILL_SCRIPT_VERSION,

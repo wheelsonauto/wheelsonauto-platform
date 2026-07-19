@@ -701,10 +701,10 @@ async function main() {
         },
         async claimWebhookEvent(provider, eventId) {
           recoveryLedgerCalls.push(['claim', provider, eventId]);
-          return { accepted: true, eventId, attempts: 2 };
+          return { accepted: true, eventId, claimToken: 'direct-recovery-webhook-lease', attempts: 2 };
         },
-        async completeWebhookEvent(provider, eventId) { recoveryLedgerCalls.push(['complete', provider, eventId]); },
-        async failWebhookEvent(provider, eventId) { recoveryLedgerCalls.push(['fail', provider, eventId]); }
+        async completeWebhookEvent(provider, eventId, options) { recoveryLedgerCalls.push(['complete', provider, eventId, options && options.claimToken]); },
+        async failWebhookEvent(provider, eventId, error, options) { recoveryLedgerCalls.push(['fail', provider, eventId, options && options.claimToken]); }
       },
       async processEvent(provider, headers, payload) {
         recoveryLedgerCalls.push(['process', provider, payload.data.id]);
@@ -714,6 +714,7 @@ async function main() {
     assert(recoveredTelnyx.checked === 1 && recoveredTelnyx.recovered === 1 && recoveredTelnyx.failed === 0, 'The Telnyx durable inbox must reclaim and finish an interrupted provider event.');
     assert(recoveryLedgerCalls.some(call => call[0] === 'process' && call[2] === 'evt-direct-telnyx-recovery'), 'Telnyx recovery must replay the exact stored provider envelope.');
     assert(recoveryLedgerCalls.some(call => call[0] === 'complete') && !recoveryLedgerCalls.some(call => call[0] === 'fail'), 'Successful Telnyx recovery must complete, not fail, the durable event claim.');
+    assert(recoveryLedgerCalls.some(call => call[0] === 'complete' && call[3] === 'direct-recovery-webhook-lease'), 'Telnyx recovery must complete only the webhook lease token returned to the recovery worker.');
     const originalFetch = global.fetch;
     global.fetch = async url => ({
       ok: String(url).includes('/emails/receiving/direct-resend-email'),

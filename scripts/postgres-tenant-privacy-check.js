@@ -129,14 +129,15 @@ async function verifyWebhookTenantScope() {
   const insert = transactionCalls.find(call => /INSERT INTO woa_webhook_events/.test(call.sql));
   assert(insert && insert.values[2] === 'org-tenant-a', 'A claimed webhook must persist its company owner.');
 
-  await repository.completeWebhookEvent('stripe', 'evt-tenant-private');
-  await repository.failWebhookEvent('stripe', 'evt-tenant-private', new Error('controlled failure'));
+  await repository.completeWebhookEvent('stripe', 'evt-tenant-private', { claimToken: claim.claimToken });
+  await repository.failWebhookEvent('stripe', 'evt-tenant-private', new Error('controlled failure'), { claimToken: claim.claimToken });
   assert.strictEqual(poolCalls.length, 2, 'Webhook completion and failure must each use one durable update.');
   poolCalls.forEach(call => {
     assert.match(call.sql, /organization_id = \$1/, 'Webhook terminal updates must remain company-scoped.');
     assert.strictEqual(call.values[0], 'org-tenant-a', 'Webhook terminal updates must bind the current company first.');
     assert.strictEqual(call.values[1], 'stripe', 'Webhook terminal updates must bind the provider after the company.');
     assert.strictEqual(call.values[2], 'evt-tenant-private', 'Webhook terminal updates must bind the exact event id.');
+    assert.strictEqual(call.values[call.values.length - 1], claim.claimToken, 'Webhook terminal updates must bind the repository-issued ownership token.');
   });
 }
 

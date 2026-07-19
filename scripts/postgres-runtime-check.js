@@ -264,46 +264,64 @@ async function main() {
     const activeWebhookDuplicate = await competingRepository.claimWebhookEvent('stripe', 'evt-postgres-runtime-processing', { type: 'payment_intent.succeeded' });
     assert.strictEqual(activeWebhookDuplicate.accepted, false, 'A second PostgreSQL webhook worker must not process an event that is already in progress.');
     assert.strictEqual(activeWebhookDuplicate.inProgress, true, 'An in-progress PostgreSQL webhook duplicate must be identified for provider retry.');
-    await repository.failWebhookEvent('stripe', 'evt-postgres-runtime-processing', new Error('controlled retry'));
+    await repository.failWebhookEvent('stripe', 'evt-postgres-runtime-processing', new Error('controlled retry'), { claimToken: firstWebhookClaim.claimToken });
     const retriedWebhookClaim = await competingRepository.claimWebhookEvent('stripe', 'evt-postgres-runtime-processing', { type: 'payment_intent.succeeded' });
     assert.strictEqual(retriedWebhookClaim.accepted, true, 'A failed PostgreSQL webhook event must be retryable.');
-    await competingRepository.completeWebhookEvent('stripe', 'evt-postgres-runtime-processing');
+    assert.notStrictEqual(retriedWebhookClaim.claimToken, firstWebhookClaim.claimToken, 'A retried PostgreSQL webhook must replace the previous worker lease token.');
+    assert.strictEqual(await repository.completeWebhookEvent('stripe', 'evt-postgres-runtime-processing', { claimToken: firstWebhookClaim.claimToken }), false, 'A stale PostgreSQL webhook worker must not complete the retried worker claim.');
+    await competingRepository.completeWebhookEvent('stripe', 'evt-postgres-runtime-processing', { claimToken: retriedWebhookClaim.claimToken });
     const completedWebhookDuplicate = await repository.claimWebhookEvent('stripe', 'evt-postgres-runtime-processing');
     assert.strictEqual(completedWebhookDuplicate.accepted, false, 'A completed PostgreSQL webhook event must remain deduplicated.');
     assert.strictEqual(completedWebhookDuplicate.inProgress, undefined, 'A completed webhook duplicate must not be mistaken for an active lease.');
 
     const staleWebhookEventId = 'evt-postgres-runtime-stale';
-    assert.strictEqual((await repository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' })).accepted, true, 'A PostgreSQL webhook event should be claimable before stale-lease recovery is tested.');
+    const staleOriginalWebhookClaim = await repository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' });
+    assert.strictEqual(staleOriginalWebhookClaim.accepted, true, 'A PostgreSQL webhook event should be claimable before stale-lease recovery is tested.');
     await repository.pool.query("UPDATE woa_webhook_events SET processing_started_at = now() - interval '15 minutes' WHERE organization_id = $1 AND provider = 'stripe' AND event_id = $2", [organizationId, staleWebhookEventId]);
     const listedStaleWebhooks = await repository.listRecoverableWebhookEvents('stripe', { staleAfterMs: 30 * 1000, retryAfterMs: 0 });
     assert(listedStaleWebhooks.some(event => event.eventId === staleWebhookEventId), 'The PostgreSQL recovery inbox must list a stale webhook lease before a worker reclaims it.');
     const reclaimedWebhookClaim = await competingRepository.claimWebhookEvent('stripe', staleWebhookEventId, { type: 'payment_intent.succeeded' });
     assert.strictEqual(reclaimedWebhookClaim.accepted, true, 'A PostgreSQL webhook event with an expired processing lease must be recoverable.');
     assert.strictEqual(reclaimedWebhookClaim.reclaimed, true, 'Expired PostgreSQL webhook recovery should be recorded as a reclaimed claim.');
-    await competingRepository.completeWebhookEvent('stripe', staleWebhookEventId);
+    assert(reclaimedWebhookClaim.claimToken && reclaimedWebhookClaim.claimToken !== staleOriginalWebhookClaim.claimToken, 'A recovered PostgreSQL webhook must receive a new ownership token.');
+    assert.strictEqual(await repository.failWebhookEvent('stripe', staleWebhookEventId, new Error('stale worker must lose'), { claimToken: staleOriginalWebhookClaim.claimToken }), false, 'An expired webhook worker must not fail the new owner claim.');
+    const beforeStaleWebhookCommit = await repository.read();
+    await assert.rejects(
+      () => repository.write({ ...beforeStaleWebhookCommit.state, staleWebhookWorkerCommitProof: 'must-not-commit' }, {
+        reason: 'stale webhook ownership rollback proof',
+        transactionEffects: { webhookCompletions: [{ provider: 'stripe', eventId: staleWebhookEventId, claimToken: staleOriginalWebhookClaim.claimToken }] }
+      }),
+      error => error && error.code === 'woa_webhook_claim_not_owned',
+      'A stale webhook worker must not commit authoritative state after another server reclaims the event.'
+    );
+    const afterStaleWebhookCommit = await repository.read();
+    assert.strictEqual(afterStaleWebhookCommit.version, beforeStaleWebhookCommit.version, 'A stale webhook ownership failure must roll back the state version.');
+    assert.strictEqual(afterStaleWebhookCommit.state.staleWebhookWorkerCommitProof, undefined, 'A stale webhook worker must not leak state after its transaction rolls back.');
+    await competingRepository.completeWebhookEvent('stripe', staleWebhookEventId, { claimToken: reclaimedWebhookClaim.claimToken });
 
     const telnyxRecoveryEventId = 'telnyx:evt-postgres-runtime-recovery';
     const telnyxRecoveryEnvelope = { data: { id: 'evt-postgres-runtime-recovery', event_type: 'message.received', payload: { text: 'Durable recovery proof' } } };
-    await repository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, { type: 'message.received', event: telnyxRecoveryEnvelope });
-    await repository.failWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, new Error('controlled Telnyx recovery'));
+    const telnyxInitialClaim = await repository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, { type: 'message.received', event: telnyxRecoveryEnvelope });
+    await repository.failWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, new Error('controlled Telnyx recovery'), { claimToken: telnyxInitialClaim.claimToken });
     const listedFailedTelnyxWebhooks = await competingRepository.listRecoverableWebhookEvents('messaging:telnyx', { retryAfterMs: 0, now: Date.now() + 1000 });
     const listedTelnyxRecovery = listedFailedTelnyxWebhooks.find(event => event.eventId === telnyxRecoveryEventId);
     assert(listedTelnyxRecovery, 'A failed PostgreSQL Telnyx webhook must be discoverable by another server instance.');
     assert.strictEqual(listedTelnyxRecovery.payload.event.data.id, 'evt-postgres-runtime-recovery', 'PostgreSQL must retain the exact Telnyx event envelope needed after a restart.');
-    assert.strictEqual((await competingRepository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, listedTelnyxRecovery.payload)).accepted, true, 'A recovery worker must atomically reclaim a failed Telnyx event.');
-    await competingRepository.completeWebhookEvent('messaging:telnyx', telnyxRecoveryEventId);
+    const telnyxRecoveredClaim = await competingRepository.claimWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, listedTelnyxRecovery.payload);
+    assert.strictEqual(telnyxRecoveredClaim.accepted, true, 'A recovery worker must atomically reclaim a failed Telnyx event.');
+    await competingRepository.completeWebhookEvent('messaging:telnyx', telnyxRecoveryEventId, { claimToken: telnyxRecoveredClaim.claimToken });
 
     const atomicWebhookEventId = 'evt-postgres-runtime-atomic-state';
     const atomicIdempotencyScope = 'stripe_recurring_charge';
     const atomicIdempotencyKey = 'period:rec-postgres-runtime-atomic:2026-07-25';
-    await repository.claimWebhookEvent('stripe', atomicWebhookEventId, { type: 'payment_intent.succeeded' });
+    const atomicWebhookClaim = await repository.claimWebhookEvent('stripe', atomicWebhookEventId, { type: 'payment_intent.succeeded' });
     await repository.claimIdempotencyKey(atomicIdempotencyScope, atomicIdempotencyKey, { recurringPaymentId: 'rec-postgres-runtime-atomic', amountCents: 22900 });
     const beforeAtomicWrite = await repository.read();
     const atomicState = { ...beforeAtomicWrite.state, atomicProviderCommitProof: 'committed' };
     await repository.write(atomicState, {
       reason: 'PostgreSQL provider transaction proof',
       transactionEffects: {
-        webhookCompletions: [{ provider: 'stripe', eventId: atomicWebhookEventId }],
+        webhookCompletions: [{ provider: 'stripe', eventId: atomicWebhookEventId, claimToken: atomicWebhookClaim.claimToken }],
         idempotencySettlements: [{ action: 'complete', scope: atomicIdempotencyScope, key: atomicIdempotencyKey, providerAuthoritative: true, response: { paymentIntentId: 'pi-postgres-runtime-atomic' } }]
       }
     });
@@ -318,7 +336,7 @@ async function main() {
     await assert.rejects(
       () => repository.write({ ...beforeRejectedAtomicWrite.state, atomicProviderRollbackProof: 'must-not-commit' }, {
         reason: 'PostgreSQL provider rollback proof',
-        transactionEffects: { webhookCompletions: [{ provider: 'stripe', eventId: 'evt-postgres-runtime-missing-claim' }] }
+        transactionEffects: { webhookCompletions: [{ provider: 'stripe', eventId: 'evt-postgres-runtime-missing-claim', claimToken: 'missing-webhook-claim-token' }] }
       }),
       /durable webhook claim was missing/i,
       'A state write must roll back when its claimed webhook cannot be completed in the same transaction.'
@@ -329,12 +347,12 @@ async function main() {
 
     const foreignWebhookEventId = 'evt-postgres-runtime-processing';
     await repository.pool.query(`INSERT INTO woa_webhook_events (
-      provider, event_id, organization_id, status, payload, attempts, processing_started_at
-    ) VALUES ('stripe', $1, $2, 'processing', '{}'::jsonb, 1, now())`, [foreignWebhookEventId, foreignOrganizationId]);
+      provider, event_id, organization_id, status, payload, attempts, claim_token, processing_started_at
+    ) VALUES ('stripe', $1, $2, 'processing', '{}'::jsonb, 1, $3, now())`, [foreignWebhookEventId, foreignOrganizationId, 'foreign-company-webhook-token']);
     const sameProviderEventAcrossCompanies = await repository.pool.query('SELECT organization_id FROM woa_webhook_events WHERE provider = $1 AND event_id = $2 ORDER BY organization_id', ['stripe', foreignWebhookEventId]);
     assert.strictEqual(sameProviderEventAcrossCompanies.rowCount, 2, 'The same provider event id must remain independently unique inside each company instead of colliding across franchise accounts.');
-    await repository.completeWebhookEvent('stripe', foreignWebhookEventId);
-    await repository.failWebhookEvent('stripe', foreignWebhookEventId, new Error('must not cross tenant boundary'));
+    await repository.completeWebhookEvent('stripe', foreignWebhookEventId, { claimToken: 'foreign-company-webhook-token' });
+    await repository.failWebhookEvent('stripe', foreignWebhookEventId, new Error('must not cross tenant boundary'), { claimToken: 'foreign-company-webhook-token' });
     const foreignWebhook = await repository.pool.query('SELECT status, last_error FROM woa_webhook_events WHERE organization_id = $1 AND provider = $2 AND event_id = $3', [foreignOrganizationId, 'stripe', foreignWebhookEventId]);
     assert.strictEqual(foreignWebhook.rows[0].status, 'processing', 'One company repository must not complete another company webhook event.');
     assert.strictEqual(foreignWebhook.rows[0].last_error, '', 'One company repository must not write an error into another company webhook event.');

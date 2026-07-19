@@ -12554,7 +12554,7 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
     data.integrations.clover.webhookEvents = data.integrations.clover.webhookEvents || [];
     const duplicate = data.integrations.clover.webhookEvents.find(row => row && row.fingerprint === fingerprint);
     if (duplicate) {
-      await STATE_REPOSITORY.completeWebhookEvent('clover', durableEventId);
+      await STATE_REPOSITORY.completeWebhookEvent('clover', durableEventId, { claimToken: claim.claimToken });
       return { ok: true, duplicate: true, webhookEventId: duplicate.id || durableEventId, hostedCheckout: { matched: false } };
     }
     const appDetails = options.verifiedCloverApp ? cloverAppWebhookDetails(event) : null;
@@ -12587,13 +12587,13 @@ async function recordCloverWebhookEvent(event = {}, options = {}) {
       await queueStateChangeNotifications(previous, data, { name: 'Clover webhook', role: 'System' });
     }
     await protectConcurrentLocalWrites(data, { preferIncoming: true });
-    stageStateTransactionEffects(data, { webhookCompletions: [{ provider: 'clover', eventId: durableEventId }] });
+    stageStateTransactionEffects(data, { webhookCompletions: [{ provider: 'clover', eventId: durableEventId, claimToken: claim.claimToken }] });
     await writeData(data);
     const webhookSyncTimer = setTimeout(() => runAutoSync({ source: 'clover webhook', force: true }).catch(err => reportBackgroundTaskFailure('clover-webhook-auto-sync', err, { route: 'Clover webhook automatic sync', source: 'webhook' }, 'Webhook auto sync')), WEBHOOK_AUTO_SYNC_DELAY_MS);
     if (webhookSyncTimer.unref) webhookSyncTimer.unref();
     return { ok: true, duplicate: false, webhookEventId: webhookEvent.id, durableEventId, disputeClaimId: createdClaimId, hostedCheckout };
   } catch (error) {
-    await STATE_REPOSITORY.failWebhookEvent('clover', durableEventId, error).catch(() => {});
+    await STATE_REPOSITORY.failWebhookEvent('clover', durableEventId, error, { claimToken: claim.claimToken }).catch(() => {});
     await recordOperationalFailure('clover-webhook', error, { route: '/api/webhooks/clover', source: authorization, eventId: durableEventId });
     throw error;
   }
@@ -16955,7 +16955,7 @@ async function recordStripeWebhookEvent(event = {}) {
   if (!durableClaim.accepted) return { ok: !durableClaim.inProgress, received: false, duplicate: true, retry: !!durableClaim.inProgress, inProgress: !!durableClaim.inProgress, eventId: event.id || '' };
   try {
   if (!stripeMigration.stripeLiveResultAccepted({ ...stripeProviderSafetyOptions(), livemode: event.livemode === true })) {
-    await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '');
+    await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '', { claimToken: durableClaim.claimToken });
     return {
       ok: true,
       received: false,
@@ -16971,7 +16971,7 @@ async function recordStripeWebhookEvent(event = {}) {
   const stripeState = data.integrations.stripe;
   stripeState.webhookEventIds = Array.isArray(stripeState.webhookEventIds) ? stripeState.webhookEventIds : [];
   if (event.id && stripeState.webhookEventIds.includes(event.id)) {
-    await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id);
+    await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id, { claimToken: durableClaim.claimToken });
     return { ok: true, received: false, duplicate: true, eventId: event.id };
   }
   const type = String(event.type || '');
@@ -17072,7 +17072,7 @@ async function recordStripeWebhookEvent(event = {}) {
   }
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   const transactionEffects = {
-    webhookCompletions: [{ provider: 'stripe', eventId: event.id || '' }],
+    webhookCompletions: [{ provider: 'stripe', eventId: event.id || '', claimToken: durableClaim.claimToken }],
     idempotencySettlements: []
   };
   if (stripePaymentIntentResult && stripePaymentIntentResult.matched === true && stripePaymentIntentResult.ignored !== true && stripePaymentIntentResult.alreadyPaid !== true) {
@@ -17119,7 +17119,7 @@ async function recordStripeWebhookEvent(event = {}) {
   }
   return { ok: true, received: true, eventId: event.id || '', type, cardSetupRequestId, paymentRequestId, disputeClaimId, stripeDisputeIgnored, stripeDisputeIgnoreReason, identitySessionId, refundRequestId, stripePaymentIntentResult };
   } catch (error) {
-    await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error).catch(() => {});
+    await STATE_REPOSITORY.failWebhookEvent('stripe', event.id || '', error, { claimToken: durableClaim.claimToken }).catch(() => {});
     await recordOperationalFailure('stripe-webhook', error, { eventId: event.id || '', route: '/api/webhooks/stripe' });
     throw error;
   }
@@ -17488,14 +17488,15 @@ async function processClaimedTelnyxWebhookEvent(eventId, payload, options = {}) 
   const repository = options.repository || STATE_REPOSITORY;
   const processEvent = options.processEvent || processMessagingWebhookEvent;
   const headers = options.headers || {};
+  const claimToken = String(options.claimToken || '').trim();
   try {
     const result = await processEvent('telnyx', headers, payload, {
-      transactionEffects: { webhookCompletions: [{ provider: 'messaging:telnyx', eventId }] }
+      transactionEffects: { webhookCompletions: [{ provider: 'messaging:telnyx', eventId, claimToken }] }
     });
-    await repository.completeWebhookEvent('messaging:telnyx', eventId);
+    await repository.completeWebhookEvent('messaging:telnyx', eventId, { claimToken });
     return result;
   } catch (err) {
-    await repository.failWebhookEvent('messaging:telnyx', eventId, err).catch(() => {});
+    await repository.failWebhookEvent('messaging:telnyx', eventId, err, { claimToken }).catch(() => {});
     if (options.reportFailure !== false) {
       await reportBackgroundTaskFailure('telnyx-webhook-processing', err, {
         route: '/api/webhooks/messages',
@@ -17540,7 +17541,7 @@ async function recoverTelnyxWebhookEvents(options = {}) {
       const payload = storedTelnyxWebhookPayload(record);
       if (!payload) {
         const missingPayload = new Error('Durable Telnyx webhook payload is missing; manual provider replay is required.');
-        await repository.failWebhookEvent('messaging:telnyx', eventId, missingPayload).catch(() => {});
+        await repository.failWebhookEvent('messaging:telnyx', eventId, missingPayload, { claimToken: claim.claimToken }).catch(() => {});
         if (options.reportFailure !== false) {
           await reportBackgroundTaskFailure('telnyx-webhook-processing', missingPayload, {
             route: '/api/webhooks/messages',
@@ -17557,7 +17558,8 @@ async function recoverTelnyxWebhookEvents(options = {}) {
           repository,
           processEvent: options.processEvent,
           reportFailure: options.reportFailure,
-          source: options.source || 'durable recovery'
+          source: options.source || 'durable recovery',
+          claimToken: claim.claimToken
         });
         result.recovered += 1;
       } catch (err) {
@@ -18432,19 +18434,20 @@ const server = http.createServer(async (req, res) => {
           void processClaimedTelnyxWebhookEvent(webhookEventId, payload, {
             repository: STATE_REPOSITORY,
             headers: req.headers,
-            source: 'live webhook'
+            source: 'live webhook',
+            claimToken: claim.claimToken
           }).catch(() => {});
         });
         return json(res, 200, { ok: true, queued: true, eventId: webhookEventId });
       }
       try {
         const result = await processMessagingWebhookEvent(provider, req.headers, payload, {
-          transactionEffects: { webhookCompletions: [{ provider: 'messaging:' + (provider || 'sms'), eventId: webhookEventId }] }
+          transactionEffects: { webhookCompletions: [{ provider: 'messaging:' + (provider || 'sms'), eventId: webhookEventId, claimToken: claim.claimToken }] }
         });
-        await STATE_REPOSITORY.completeWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId);
+        await STATE_REPOSITORY.completeWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId, { claimToken: claim.claimToken });
         return json(res, 200, { ...result, eventId: webhookEventId });
       } catch (err) {
-        await STATE_REPOSITORY.failWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId, err).catch(() => {});
+        await STATE_REPOSITORY.failWebhookEvent('messaging:' + (provider || 'sms'), webhookEventId, err, { claimToken: claim.claimToken }).catch(() => {});
         await recordOperationalFailure('messaging-webhook', err, { route: '/api/webhooks/messages', source: provider || 'sms', eventId: webhookEventId });
         throw err;
       }
@@ -18546,13 +18549,13 @@ const server = http.createServer(async (req, res) => {
         }
         data.integrations = data.integrations || {};
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastInboundAt: new Date().toISOString(), lastInboundChannel: 'Email', lastInboundFrom: maskEmail(inbound.from), lastError: '' };
-        stageStateTransactionEffects(data, { webhookCompletions: [{ provider: 'email:' + (provider || 'email'), eventId: webhookEventId }] });
+        stageStateTransactionEffects(data, { webhookCompletions: [{ provider: 'email:' + (provider || 'email'), eventId: webhookEventId, claimToken: claim.claimToken }] });
         await writeData(data);
       }
-      await STATE_REPOSITORY.completeWebhookEvent('email:' + (provider || 'email'), webhookEventId);
+      await STATE_REPOSITORY.completeWebhookEvent('email:' + (provider || 'email'), webhookEventId, { claimToken: claim.claimToken });
       return json(res, 200, { ok: true, received: !exists, customer: contact.name || '', ownerNotified: !!(ownerNotification && ownerNotification.sent), ai: aiResult ? { status: aiResult.draft && aiResult.draft.status, actionType: aiResult.plan && aiResult.plan.actionType, sent: !!aiResult.sent } : null, eventId: webhookEventId });
       } catch (err) {
-        await STATE_REPOSITORY.failWebhookEvent('email:' + (provider || 'email'), webhookEventId, err).catch(() => {});
+        await STATE_REPOSITORY.failWebhookEvent('email:' + (provider || 'email'), webhookEventId, err, { claimToken: claim.claimToken }).catch(() => {});
         await recordOperationalFailure('email-webhook', err, { route: '/api/webhooks/email', source: provider || 'email', eventId: webhookEventId });
         throw err;
       }
