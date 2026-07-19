@@ -218,7 +218,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-live-link-probes-189';
+const ASSET_VERSION = 'platform-20260719-card-status-truth-190';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -11585,7 +11585,7 @@ function apiProviderTruthOverrides(data = {}) {
     : (CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Clover credentials are stored; successful customer and payment sync timestamps are still required.' : 'Clover Core credentials are not complete.');
   const savedCardPayment = (data.payments || []).find(payment => /paid|succeed|complete/i.test(String(payment.status || '')) && /clover saved-card charge/i.test(String(payment.source || payment.method || '')));
   const linkedSavedCards = recurring.filter(row => String(row.cloverPaymentSource || '').trim()).length;
-  const completedCardSetup = (data.cardSetupRequests || []).find(request => /complete|saved|linked/i.test(String(request.status || '')));
+  const completedCardSetup = (data.cardSetupRequests || []).find(cardSetupRequestCompleted);
   const ecommerceKeysReady = !!(CLOVER_ECOMMERCE_PUBLIC_KEY && CLOVER_ECOMMERCE_PRIVATE_KEY && CLOVER_MERCHANT_ID);
   const ecommerceLive = !!(ecommerceKeysReady && savedCardPayment);
   const ecommerceAt = newestEvidenceAt([
@@ -13548,7 +13548,11 @@ function publicLinkRevoked(row = {}) {
   return publicLinkExplicitlyRevoked(row) || /expired/i.test(String(row.status || ''));
 }
 function cardSetupRequestCompleted(row = {}) {
-  return /complete|card saved|linked/i.test(String(row.status || '')) || !!row.completedAt;
+  if (row.completedAt) return true;
+  const status = String(row.status || '').trim().toLowerCase();
+  if (!status) return false;
+  if (/not linked|unlinked|not saved|unsaved|setup needed|waiting|open|failed|declined|attention|pending|expired|cancel|revoke|denied|replaced/.test(status)) return false;
+  return /\bcomplete(?:d)?\b|\bcard saved\b|\bsaved card\b|\bcard linked\b|\blinked card\b/.test(status);
 }
 function paymentRequestCompleted(row = {}) {
   const status = String(row.status || '').trim().toLowerCase();
@@ -17745,7 +17749,7 @@ const server = http.createServer(async (req, res) => {
           try { assertStripeCardPreparationReady(); } catch (error) { return json(res, Number(error.statusCode || 503), { ok: false, code: error.code, error: error.message }); }
         }
         if (recurringCardReadyForProvider(existingRecurring, paymentProvider)) return json(res, 200, { ok: true, message: providerName + ' card is already linked. Continue to the required payments.' });
-        const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && normalizedPaymentProvider(row.paymentProvider || 'clover') === paymentProvider && !/saved|complete|cancel|failed/i.test(String(row.status || '')));
+        const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && normalizedPaymentProvider(row.paymentProvider || 'clover') === paymentProvider && isOpenCardSetupRequest(row));
         if (openSetup) return json(res, 200, { ok: true, redirectUrl: openSetup.url, message: 'Opening the existing secure ' + providerName + ' card setup.' });
         const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || {};
         const consentAt = new Date().toISOString();

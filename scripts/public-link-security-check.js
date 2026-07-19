@@ -101,6 +101,8 @@ async function main() {
     cancelledPay: 'plink-' + 'd'.repeat(48),
     expiredSetup: 'setup-' + 'e'.repeat(48),
     activeSetup: 'setup-' + 'f'.repeat(48),
+    negativeSetup: 'setup-' + '0'.repeat(48),
+    legacyLinkedSetup: 'setup-' + '9'.repeat(48),
     completedSetup: 'setup-' + '1'.repeat(48)
   };
   const initial = {
@@ -116,6 +118,8 @@ async function main() {
     cardSetupRequests: [
       { id: ids.expiredSetup, recurringPaymentId: 'rec-public-link', organizationId: 'org-wheelsonauto', customer: 'Expired Setup', amount: 229, status: 'Open', paymentProvider: 'clover', createdAt: past, expiresAt: past },
       { id: ids.activeSetup, recurringPaymentId: 'rec-public-link', organizationId: 'org-wheelsonauto', customer: 'Active Setup', amount: 229, status: 'Open', paymentProvider: 'clover', createdAt: new Date().toISOString(), expiresAt: future },
+      { id: ids.negativeSetup, recurringPaymentId: 'rec-public-link', organizationId: 'org-wheelsonauto', customer: 'Needs Card Customer', amount: 229, status: 'Card not linked - setup needed', paymentProvider: 'clover', createdAt: new Date().toISOString(), expiresAt: future },
+      { id: ids.legacyLinkedSetup, recurringPaymentId: 'rec-public-link', organizationId: 'org-wheelsonauto', customer: 'Legacy Linked Customer', amount: 229, status: 'Card linked', paymentProvider: 'clover', createdAt: new Date().toISOString(), expiresAt: future },
       { id: ids.completedSetup, recurringPaymentId: 'rec-public-link', organizationId: 'org-wheelsonauto', customer: 'Completed Setup', amount: 229, status: 'Card saved for manual charges', completedAt: new Date().toISOString(), paymentProvider: 'clover', createdAt: new Date().toISOString(), expiresAt: future }
     ],
     claims: [
@@ -153,6 +157,10 @@ async function main() {
 
     const activeSetup = await request(server, 'GET', '/setup-card/' + ids.activeSetup);
     assert(activeSetup.status === 200 && activeSetup.text.includes('Active Setup') && publicHeaders(activeSetup), 'Active setup links must render with private response headers.');
+    const negativeSetup = await request(server, 'GET', '/setup-card/' + ids.negativeSetup);
+    assert(negativeSetup.status === 200 && negativeSetup.text.includes('Needs Card Customer') && !/Card already saved/i.test(negativeSetup.text), 'Negative legacy card statuses must remain open instead of being misclassified by the word linked.');
+    const legacyLinkedSetup = await request(server, 'GET', '/setup-card/' + ids.legacyLinkedSetup);
+    assert(legacyLinkedSetup.status === 200 && /Card already saved/i.test(legacyLinkedSetup.text) && !legacyLinkedSetup.text.includes('Legacy Linked Customer'), 'A positive legacy card-linked status must remain terminal without redisclosing customer setup details.');
     const expiredSetup = await request(server, 'GET', '/setup-card/' + ids.expiredSetup);
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(expiredSetup.status === 410 && saved.cardSetupRequests.find(row => row.id === ids.expiredSetup).status === 'Expired', 'Expired card links must fail closed and persist expiration.');

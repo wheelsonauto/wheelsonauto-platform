@@ -19,6 +19,11 @@ artifact and must never be committed as part of a code release.
   Stripe launch gate.
 - Never store card numbers, CVVs, API secrets, or private identity documents
   in the normal state JSON.
+- Treat card setup as complete only when the provider-backed record has a
+  completion timestamp or an explicit positive terminal status. Legacy text
+  such as `card not linked`, `setup needed`, `waiting`, `failed`, or `pending`
+  must remain actionable and cannot satisfy Ecommerce readiness or close the
+  customer's secure setup link.
 - Keep a dated, access-controlled copy of the current `data.json` before any
   intentional data migration. Do not add that file to a commit.
 - Never take a migration snapshot while the application is writable. Set
