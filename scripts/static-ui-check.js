@@ -221,6 +221,16 @@ assertIncludes('Owner live launch preflight surface', app, [
   'open-live-launch-preflight',
   '/api/system/infrastructure/preflight',
   'Controlled Stripe launch preflight',
+  'Live provider evidence',
+  'liveLaunchProviderConsole',
+  'liveLaunchProviderCard',
+  'Payments + Identity',
+  'SMS + 10DLC',
+  'Foundation safeguards',
+  'JSON retirement sentinel',
+  'Document decryption coverage',
+  'Receipt + dispute evidence',
+  'never sends a text or email, charges a card',
   'Database credential isolation',
   'Clover cutover roster',
   'Clover cutover review',
@@ -233,12 +243,8 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Encrypted offsite backup',
   'create-state-backup',
   '/api/system/infrastructure/state-backup/create',
-  'Stripe account',
   'check-stripe-readiness',
   '/api/integrations/stripe/readiness',
-  'Telnyx SMS',
-  'Resend email',
-  'Star AI',
   'Owner access',
   'open-owner-access-settings',
   'Recent job failures',
@@ -252,6 +258,7 @@ assertIncludes('Owner live launch preflight surface', app, [
 ]);
 assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "ready?'Clear':'Blocked'", 'Keep Clover live until every gate is verified.']);
 assertIncludes('Launch modal long-blocker wrapping', stylesCss, ['.modal .compact-list li', 'overflow-wrap:anywhere', 'word-break:break-word']);
+assertIncludes('Launch provider responsive console', stylesCss, ['.modal:has(.launch-provider-console)', '.launch-provider-grid', '.launch-provider-card', '.launch-provider-facts', '.launch-provider-link', 'grid-template-columns:1fr']);
 assertIncludes('Owner recovery operator surface', app, [
   'open-recovery-console',
   '/api/system/recovery/snapshots',

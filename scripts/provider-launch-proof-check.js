@@ -77,7 +77,14 @@ function readyState() {
           numberAssigned: true,
           campaignActive: true,
           checkedAt: now,
+          brandStatus: 'VERIFIED',
+          brandVerified: true,
           campaignStatus: 'MNO_ACCEPTED',
+          intendedUsecase: 'CUSTOMER_CARE',
+          usecaseQualificationChecked: true,
+          usecaseQualified: true,
+          usecaseQualificationUsecase: 'CUSTOMER_CARE',
+          usecaseQualificationFees: { monthly: 10, quarterly: 30, annual: 120 },
           summary: 'Telnyx number is assigned to an approved campaign.'
         },
         lastTelnyxDeliveryEvidenceAt: now,
@@ -161,6 +168,10 @@ const telnyx = telnyxLiveLaunchEvidence(data);
 assert.strictEqual(telnyx.live, true, 'Telnyx launch proof must require a connected profile, active 10DLC campaign, carrier delivery, and signed inbound evidence.');
 assert.strictEqual(telnyx.deliveryVerified, true);
 assert.strictEqual(telnyx.inboundVerified, true);
+assert.strictEqual(telnyx.provider, 'telnyx');
+assert.strictEqual(telnyx.brandVerified, true);
+assert.strictEqual(telnyx.numberAssigned, true);
+assert.deepStrictEqual(telnyx.carrierUsecaseQualificationFees, { monthly: 10, quarterly: 30, annual: 120 }, 'Owner preflight may expose carrier pricing without exposing Telnyx credentials.');
 
 const staleTelnyx = clone(data);
 staleTelnyx.integrations.messaging.lastTelnyxInboundConfigurationFingerprint = 'stale-proof';
@@ -208,6 +219,7 @@ assert.strictEqual(qualifiedReplacementTelnyxEvidence.carrierUsecaseQualificatio
 const resend = resendLiveLaunchEvidence(data);
 assert.strictEqual(resend.live, true, 'Resend launch proof must require the verified WheelsonAuto sender plus fresh outbound and inbound provider evidence.');
 assert.strictEqual(resend.senderDomainVerified, true);
+assert.strictEqual(resend.senderDomain, 'notify.wheelsonauto.com');
 assert.strictEqual(resend.outboundVerified, true);
 assert.strictEqual(resend.inboundVerified, true);
 
@@ -219,6 +231,11 @@ const star = starAiLiveLaunchEvidence(data);
 assert.strictEqual(star.live, true, 'Star launch proof must require an operational OpenAI health result tied to the current settings.');
 assert.strictEqual(star.dailyLimit, 50);
 assert.strictEqual(star.monthlyLimit, 500);
+assert.strictEqual(star.provider, 'openai');
+assert.strictEqual(star.model, 'gpt-5.4-nano');
+assert.strictEqual(star.autoSendEnabled, false);
+assert.strictEqual(star.draftsEnabled, true);
+assert.strictEqual(star.dailyRemaining, 50);
 
 const staleStar = clone(data);
 staleStar.integrations.messaging.lastAiHealthConfigurationFingerprint = 'stale-proof';
@@ -234,6 +251,9 @@ assert.strictEqual(stripeAccount.live, true, 'Stripe account proof must require 
 assert.strictEqual(stripeAccount.chargesEnabled, true);
 assert.strictEqual(stripeAccount.payoutsEnabled, true);
 assert.strictEqual(stripeAccount.detailsSubmitted, true);
+assert.strictEqual(stripeAccount.provider, 'stripe');
+assert.strictEqual(stripeAccount.keyMode, 'live');
+assert.strictEqual(stripeAccount.configured, true);
 
 const stripeChargesDisabled = clone(data);
 stripeChargesDisabled.integrations.stripe.lastAccountChargesEnabled = false;

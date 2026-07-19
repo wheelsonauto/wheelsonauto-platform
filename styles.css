@@ -7820,10 +7820,55 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
 .modal .launch-preflight-stats{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:8px}
 .modal .launch-preflight-stats .stat{min-width:0}
 .modal .launch-preflight-stats small{overflow-wrap:anywhere}
+.launch-provider-console>.section-head{align-items:flex-start}
+.modal:has(.launch-provider-console){width:min(960px,calc(100vw - 36px))}
+.launch-provider-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.launch-provider-card{
+  min-width:0;
+  display:grid;
+  gap:10px;
+  padding:13px;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:10px;
+  background:linear-gradient(145deg,rgba(255,255,255,.055),rgba(255,255,255,.02)),#17191b;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.055),0 10px 24px rgba(0,0,0,.16)
+}
+.launch-provider-card.good{border-color:rgba(95,207,139,.28)}
+.launch-provider-card.warn{border-color:rgba(213,177,95,.28)}
+.launch-provider-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-width:0}
+.launch-provider-head>div{display:grid;gap:2px;min-width:0}
+.launch-provider-head span:not(.tag){font-size:9px;font-weight:800;color:#9fa4a8;text-transform:uppercase;letter-spacing:.04em}
+.launch-provider-head strong{font-size:16px;color:#f3f1eb;overflow-wrap:anywhere}
+.launch-provider-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.launch-provider-fact{min-width:0;display:grid;gap:3px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:7px;background:rgba(255,255,255,.025)}
+.launch-provider-fact span{font-size:8px;font-weight:800;color:#8f9599;text-transform:uppercase;letter-spacing:.03em;overflow-wrap:anywhere}
+.launch-provider-fact strong{font-size:10px;color:#d9dcde;overflow-wrap:anywhere}
+.launch-provider-fact strong.good{color:#8fe0ad}
+.launch-provider-fact strong.warn{color:#e8cb7f}
+.launch-provider-proof{font-size:9px;color:#8f9599;overflow-wrap:anywhere}
+.launch-provider-card p{min-height:34px;margin:0;color:#b8bdc0;font-size:10px;line-height:1.55;overflow-wrap:anywhere}
+.launch-provider-link{
+  justify-self:start;
+  appearance:none;
+  border:0;
+  padding:2px 0;
+  background:transparent;
+  color:#e6ca7f;
+  font:inherit;
+  font-size:10px;
+  font-weight:850;
+  cursor:pointer
+}
+.launch-provider-link:hover,.launch-provider-link:focus-visible{color:#f5dda1;text-decoration:underline;text-underline-offset:3px}
+.launch-provider-link span{font-size:15px;line-height:0;vertical-align:-1px}
 @media(max-width:700px){
   .modal .launch-preflight-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}
   .modal .launch-preflight-stats .stat{padding:10px}
   .modal .launch-preflight-stats .stat b{font-size:22px;margin-top:4px}
+  .launch-provider-grid{grid-template-columns:1fr}
+  .launch-provider-card{padding:11px}
+  .launch-provider-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .launch-provider-card p{min-height:0}
 }
 
 /* Each launch conflict opens its exact owner review instead of a broad workspace. */

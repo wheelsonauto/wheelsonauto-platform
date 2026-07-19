@@ -221,7 +221,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-assignment-review-212';
+const ASSET_VERSION = 'platform-20260719-provider-preflight-213';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1458,6 +1458,7 @@ function usesVerifiedWheelsonAutoSendingDomain(value) {
 function telnyxLiveLaunchEvidence(data = {}) {
   const saved = (((data.integrations || {}).messaging) || {});
   const settings = messageSettings(data);
+  const registration = saved.telnyx10dlc && typeof saved.telnyx10dlc === 'object' ? saved.telnyx10dlc : {};
   const carrier = telnyxCarrierReadiness(data, 'telnyx');
   const expectedFingerprint = messagingLaunchConfigurationFingerprint(data);
   const delivery = providerEvidenceFreshness(saved.lastTelnyxDeliveryEvidenceAt, WOA_MESSAGING_VALIDATION_MAX_AGE_MS);
@@ -1498,7 +1499,16 @@ function telnyxLiveLaunchEvidence(data = {}) {
   else if (!deliveryVerified) error = deliveryConfigurationMatched && delivery.fresh ? 'Send a Telnyx test text and wait for a delivered carrier receipt.' : 'Run a fresh Telnyx delivery test after the current Render messaging configuration is deployed.';
   else if (!inboundVerified) error = inboundConfigurationMatched && inbound.fresh ? 'Reply to the Telnyx test text so WheelsonAuto records a signed inbound proof.' : 'Send a fresh signed inbound Telnyx reply after the current Render messaging configuration is deployed.';
   return {
+    provider: 'telnyx',
     configured,
+    checkedAt: carrier.carrierRegistrationCheckedAt || '',
+    fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
+    brandStatus: carrier.carrierBrandStatus || '',
+    brandVerified: carrier.carrierBrandVerified === true,
+    campaignStatus: carrier.carrierCampaignStatus || '',
+    campaignActive: registration.campaignActive === true,
+    numberAssigned: registration.numberAssigned === true,
+    assignmentStatus: String(registration.assignmentStatus || '').slice(0, 160),
     carrierRegistrationVerified: carrier.carrierRegistrationVerified,
     carrierDeliveryVerified: carrier.carrierDeliveryVerified,
     deliveryVerified,
@@ -1514,8 +1524,14 @@ function telnyxLiveLaunchEvidence(data = {}) {
     carrierIntendedUsecase: carrier.carrierIntendedUsecase || '',
     carrierUsecaseQualificationUsecase: carrier.carrierUsecaseQualificationUsecase || '',
     carrierUsecaseQualified: carrier.carrierUsecaseQualified === true,
+    carrierUsecaseQualificationFees: registration.usecaseQualificationFees && typeof registration.usecaseQualificationFees === 'object' ? {
+      monthly: Number(registration.usecaseQualificationFees.monthly || 0),
+      quarterly: Number(registration.usecaseQualificationFees.quarterly || 0),
+      annual: Number(registration.usecaseQualificationFees.annual || 0)
+    } : { monthly: 0, quarterly: 0, annual: 0 },
     carrierResubmissionBlocked: carrier.carrierResubmissionBlocked === true,
-    carrierFailureReason: carrier.carrierFailureReason || carrier.carrierHistoricalFailureReason || ''
+    carrierFailureReason: carrier.carrierFailureReason || carrier.carrierHistoricalFailureReason || '',
+    nextAction: carrier.carrierRegistrationNextAction || error
   };
 }
 function resendLiveLaunchEvidence(data = {}) {
@@ -1548,7 +1564,9 @@ function resendLiveLaunchEvidence(data = {}) {
   else if (!readiness.emailOutboundVerified || !matchingOutbound) error = 'Send a fresh Resend email accepted by the provider after the current Render email configuration is deployed.';
   else if (!readiness.emailInboundVerified || !matchingInbound) error = 'Send a reply into the signed Resend inbound webhook after the current Render email configuration is deployed.';
   return {
+    provider: 'resend',
     configured,
+    senderDomain: emailAddressFromSender(WOA_EMAIL_FROM).split('@')[1] || '',
     senderDomainVerified: usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM),
     outboundVerified: !!(readiness.emailOutboundVerified && matchingOutbound),
     inboundVerified: !!(readiness.emailInboundVerified && matchingInbound),
@@ -1574,6 +1592,8 @@ function starAiLiveLaunchEvidence(data = {}) {
   else if (readiness.aiProviderBudgetLimited) error = 'Raise or reset the configured Star request cap before the Stripe launch.';
   else if (!healthVerified || !configurationMatched || !health.fresh) error = 'Run a fresh owner Star Responses API health test after the current Render AI configuration is deployed.';
   return {
+    provider: 'openai',
+    model: WOA_AI_MODEL || '',
     configured,
     operational: readiness.aiProviderOperational,
     healthVerified,
@@ -1581,6 +1601,10 @@ function starAiLiveLaunchEvidence(data = {}) {
     health,
     dailyLimit: readiness.aiUsage.dailyLimit,
     monthlyLimit: readiness.aiUsage.monthlyLimit,
+    dailyRemaining: readiness.aiUsage.dailyRemaining,
+    monthlyRemaining: readiness.aiUsage.monthlyRemaining,
+    autoSendEnabled: settings.aiAutoSend === true,
+    draftsEnabled: settings.aiDrafts === true,
     live,
     error
   };
@@ -9814,6 +9838,9 @@ function stripeAccountLiveEvidence(data = {}) {
     ? 'Stripe account ' + accountId + ' is live with charges and payouts enabled' + (country ? ' in ' + country : '') + '.'
     : error;
   return {
+    provider: 'stripe',
+    configured: !!STRIPE_SECRET_KEY,
+    keyMode: STRIPE_KEY_MODE,
     checkedAt,
     checkedKeyMode,
     accountId,
