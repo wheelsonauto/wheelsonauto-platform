@@ -4,7 +4,13 @@ const TRANSIENT_RENDER_STATUSES = new Set([502, 503, 504]);
 
 function isTransientRenderRoutingError(response) {
   if (!response || !TRANSIENT_RENDER_STATUSES.has(Number(response.status))) return false;
-  return /error/i.test(String(response.headers?.get?.('x-render-routing') || ''));
+  const header = name => String(response.headers?.get?.(name) || '');
+  if (/error/i.test(header('x-render-routing'))) return true;
+
+  const isRenderHtmlEdgePage = /text\/html/i.test(header('content-type'))
+    && !/default-src\s+'self'/i.test(header('content-security-policy'))
+    && (/render/i.test(header('x-render-origin-server')) || /cloudflare/i.test(header('server')));
+  return isRenderHtmlEdgePage;
 }
 
 async function requestWithRenderRetry(url, options, configuration = {}) {

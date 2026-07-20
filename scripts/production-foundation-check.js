@@ -134,7 +134,9 @@ async function main() {
     });
     assert(liveSecurityProbeSource.includes("assert.deepEqual(Object.keys(body).sort(), ['error', 'ok']"), 'Anonymous API failures must be checked for metadata leakage, not only an HTTP status.');
     assert(liveSecurityProbeSource.includes('requestWithRenderRetry')
-      && liveProbeRequestSource.includes("response.headers?.get?.('x-render-routing')")
+      && liveProbeRequestSource.includes("header('x-render-routing')")
+      && liveProbeRequestSource.includes("header('content-security-policy')")
+      && liveProbeRequestSource.includes("header('x-render-origin-server')")
       && liveProbeRequestSource.includes('attempt === maxAttempts')
       && liveProbeRequestSource.includes('Math.min(3'), 'The live probe must retry only confirmed Render routing errors, keep retries bounded, and leave application failures visible.');
     assert(packageSource.includes('node scripts/public-link-security-check.js')

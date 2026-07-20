@@ -3,10 +3,13 @@
 const assert = require('node:assert/strict');
 const { isTransientRenderRoutingError, requestWithRenderRetry } = require('../live-probe-request');
 
-function response(status, routing = '') {
+function response(status, routing = '', additionalHeaders = {}) {
   return {
     status,
-    headers: new Headers(routing ? { 'x-render-routing': routing } : {}),
+    headers: new Headers({
+      ...(routing ? { 'x-render-routing': routing } : {}),
+      ...additionalHeaders
+    }),
     body: {
       cancel: async () => {}
     }
@@ -19,6 +22,17 @@ async function main() {
   assert.equal(isTransientRenderRoutingError(response(401, 'dynamic-paid-error')), false);
   assert.equal(isTransientRenderRoutingError(response(502, 'dynamic')), false);
   assert.equal(isTransientRenderRoutingError(response(502)), false);
+  assert.equal(isTransientRenderRoutingError(response(502, '', {
+    'content-type': 'text/html; charset=utf-8',
+    server: 'cloudflare',
+    'x-render-origin-server': 'Render'
+  })), true, 'A Render-generated HTML edge page without WheelsonAuto security headers should retry.');
+  assert.equal(isTransientRenderRoutingError(response(502, '', {
+    'content-type': 'text/html; charset=utf-8',
+    server: 'cloudflare',
+    'x-render-origin-server': 'Render',
+    'content-security-policy': "default-src 'self'"
+  })), false, 'An application response carrying WheelsonAuto security headers must remain visible.');
 
   let calls = 0;
   const recovered = await requestWithRenderRetry('https://example.invalid', {}, {
