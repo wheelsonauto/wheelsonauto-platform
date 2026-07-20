@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const workflowFile = path.resolve(__dirname, '..', '.github', 'workflows', 'production-checks.yml');
+const lockfile = path.resolve(__dirname, '..', 'pnpm-lock.yaml');
 assert(fs.existsSync(workflowFile), 'The production GitHub Actions workflow is missing.');
+assert(fs.existsSync(lockfile), 'pnpm-lock.yaml is required for reproducible production dependency installs.');
 
 const workflow = fs.readFileSync(workflowFile, 'utf8');
 const required = [
