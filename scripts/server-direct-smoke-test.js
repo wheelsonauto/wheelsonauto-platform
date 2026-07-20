@@ -1144,6 +1144,7 @@ async function main() {
       { id: 'rec-direct-alias-middle', organizationId: 'org-wheelsonauto', customer: 'Direct Middle Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-conflict-one', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict One', phone: '856-555-1385', email: 'direct.alias@example.com', vehicleId: 'veh-direct-assignment-conflict', amount: 111, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-24', cloverCustomerId: 'CLV-DIRECT-ONE', cloverSubscriptionId: 'SUB-DIRECT-ONE', cardLast4: '1111' },
       { id: 'rec-direct-conflict-two', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Two', phone: '(856) 555-1385', email: 'DIRECT.ALIAS@example.com', vehicleId: 'veh-direct-assignment-conflict', amount: 112, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-24', cloverCustomerId: 'CLV-DIRECT-TWO', cloverSubscriptionId: 'SUB-DIRECT-TWO', cardLast4: '1111' },
+      { id: 'rec-direct-conflict-three', organizationId: 'org-wheelsonauto', customer: 'Direct Conflict Three', phone: '8565551385', email: 'direct.alias@example.com', vehicleId: 'veh-direct-assignment-conflict', amount: 113, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-24', cloverCustomerId: 'CLV-DIRECT-THREE', cloverSubscriptionId: 'SUB-DIRECT-THREE', cardLast4: '1111' },
       { id: 'rec-direct-reference-name', organizationId: 'org-wheelsonauto', customer: 'Direct Reference Person', vehicleId: 'veh-direct-assignment-reference', amount: 113, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-reference-id', organizationId: 'org-wheelsonauto', customer: 'ABCD1234XYZ9', vehicleId: 'veh-direct-assignment-reference', amount: 113, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-transfer-old', organizationId: 'org-wheelsonauto', customer: 'Direct Old Driver', vehicleId: 'veh-direct-assignment-transfer', amount: 114, status: 'Active', nextRun: '2026-07-24' },
@@ -1159,7 +1160,7 @@ async function main() {
     const conflictVehicle = (assignmentConflictRead.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
     assert(numericVehicleCustomer && !numericVehicleCustomer.vehicle && numericVehicleCustomer.previousVehicle === '109', 'A payment amount must not remain displayed as a customer vehicle name.');
     assert(aliasVehicle && !aliasVehicle.assignmentConflict, 'Middle-name variants for the same customer should not create a vehicle assignment conflict.');
-    assert(conflictVehicle && /Direct Conflict One/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(conflictVehicle.assignmentConflict || ''), 'Competing active autopays should mark the vehicle assignment conflict.');
+    assert(conflictVehicle && /Direct Conflict One/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(conflictVehicle.assignmentConflict || '') && /Direct Conflict Three/.test(conflictVehicle.assignmentConflict || ''), 'Three competing active autopays should keep every identity visible in the vehicle assignment conflict.');
     const conflictHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
     assert(conflictHealth.status === 200 && conflictHealth.json && Array.isArray(conflictHealth.json.issues), 'System health should return JSON after assignment conflict save. Got ' + conflictHealth.status + ': ' + String(conflictHealth.text || '').slice(0, 220));
     assert(conflictHealth.json.issues.some(row => row.key === 'vehicle_assignment_conflict' && row.count >= 1 && row.view === 'Operations' && row.tab === 'Assigned'), 'System health should flag vehicle assignment conflicts and route to Operations / Assigned.');
@@ -1169,11 +1170,11 @@ async function main() {
     assert(Number((conflictReadiness.json.truthChecks.find(row => row.key === 'autopay_vehicle_link') || {}).count || 0) === autopayVehicleCountBefore, 'An autopay name alias connected through the customer/fleet truth layer must not inflate the missing-vehicle readiness count.');
     assert(Number((conflictReadiness.json.truthChecks.find(row => row.key === 'service_identity') || {}).count || 0) === serviceIdentityCountBefore, 'An open inspection with customer, vehicle identity, and due date must not be treated as incomplete before mechanic sign-off.');
     const conflictReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-conflict/assignment-conflict', { cookie: ownerCookie });
-    assert(conflictReview.status === 200 && conflictReview.json && conflictReview.json.review && conflictReview.json.review.claims.length === 2, 'Owner conflict review should expose only the two active claims for the selected vehicle.');
-    assert(conflictReview.json.review.identities.length === 2, 'Owner conflict review should keep each conflicting customer name visible as a separate evidence row.');
-    assert(conflictReview.json.review.sharedSignals.some(row => row.label === 'Exact phone match' && row.value === '***-***-1385'), 'Owner conflict review should expose a masked exact phone match across the two names.');
-    assert(conflictReview.json.review.sharedSignals.some(row => row.label === 'Exact email match' && row.value === 'd***@example.com'), 'Owner conflict review should expose a masked exact email match across the two names.');
-    assert(conflictReview.json.review.providerSummary.cloverCustomerProfiles === 2 && conflictReview.json.review.providerSummary.cloverSubscriptions === 2, 'Owner conflict review should count distinct Clover identities without exposing the private provider IDs.');
+    assert(conflictReview.status === 200 && conflictReview.json && conflictReview.json.review && conflictReview.json.review.claims.length === 3, 'Owner conflict review should expose all three active claims for the selected vehicle.');
+    assert(conflictReview.json.review.identities.length === 3, 'Owner conflict review should keep every conflicting customer name visible as a separate evidence row.');
+    assert(conflictReview.json.review.sharedSignals.some(row => row.label === 'Exact phone match' && row.value === '***-***-1385' && row.customers.length === 3), 'Owner conflict review should expose one masked exact phone match across all three names.');
+    assert(conflictReview.json.review.sharedSignals.some(row => row.label === 'Exact email match' && row.value === 'd***@example.com' && row.customers.length === 3), 'Owner conflict review should expose one masked exact email match across all three names.');
+    assert(conflictReview.json.review.providerSummary.cloverCustomerProfiles === 3 && conflictReview.json.review.providerSummary.cloverSubscriptions === 3, 'Owner conflict review should count three distinct Clover identities without exposing the private provider IDs.');
     assert(conflictReview.json.review.providerSummary.savedCardEndings.includes('ending 1111'), 'Owner conflict review should show only the saved-card ending needed for comparison.');
     assert(conflictReview.json.review.triage && conflictReview.json.review.triage.kind === 'shared_contact' && conflictReview.json.review.triage.priority === 3, 'Exact shared contact evidence should classify the conflict as an owner-reviewed likely alias without resolving it automatically.');
     const providerReferenceReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-reference/assignment-conflict', { cookie: ownerCookie });
@@ -1219,14 +1220,32 @@ async function main() {
       }
     });
     assert(aliasSaved.status === 200 && aliasSaved.json && aliasSaved.json.ok, 'Owner should be able to confirm a same-customer name link for one conflicted vehicle.');
+    const aliasPartiallyResolvedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const aliasPartiallyResolvedVehicle = (aliasPartiallyResolvedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
+    assert(aliasPartiallyResolvedVehicle && /Direct Conflict Three/.test(aliasPartiallyResolvedVehicle.assignmentConflict || ''), 'Saving one same-customer pair must leave the third identity visible instead of falsely clearing the conflict.');
+    const aliasPartiallyResolvedReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-conflict/assignment-conflict', { cookie: ownerCookie });
+    assert(aliasPartiallyResolvedReview.status === 200 && aliasPartiallyResolvedReview.json.review.aliases.length === 1 && aliasPartiallyResolvedReview.json.review.identities.length === 3, 'The continued review must preserve the first audit link and all three original identities.');
+    const aliasSecondPairSaved = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias', {
+      cookie: ownerCookie,
+      json: {
+        canonicalCustomer: 'Direct Conflict One',
+        aliasCustomer: 'Direct Conflict Three',
+        reason: 'Controlled direct smoke second spelling review',
+        confirmation: 'SAME_CUSTOMER_FOR_THIS_VEHICLE'
+      }
+    });
+    assert(aliasSecondPairSaved.status === 200 && aliasSecondPairSaved.json && aliasSecondPairSaved.json.ok && !String(aliasSecondPairSaved.json.review.vehicle.conflict || '').trim(), 'The second confirmed pair should clear the three-name vehicle conflict only after every identity is connected.');
     const aliasResolvedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const aliasResolvedVehicle = (aliasResolvedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
     const aliasRecurringOne = (aliasResolvedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-conflict-one');
     const aliasRecurringTwo = (aliasResolvedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-conflict-two');
-    assert(aliasResolvedVehicle && !aliasResolvedVehicle.assignmentConflict, 'A confirmed same-customer name link should clear this vehicle conflict without guessing at any other vehicle.');
-    assert(aliasRecurringOne && aliasRecurringOne.customer === 'Direct Conflict One' && aliasRecurringTwo && aliasRecurringTwo.customer === 'Direct Conflict Two', 'Resolving a name variation must keep the original customer/payment records distinct and untouched.');
-    const savedAlias = ((aliasResolvedState.json.assignmentCustomerAliases || []).find(row => row.vehicleId === 'veh-direct-assignment-conflict' && row.active !== false));
-    assert(savedAlias && savedAlias.id, 'The confirmed same-customer link must persist as an explicit, auditable vehicle-scoped record.');
+    const aliasRecurringThree = (aliasResolvedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-conflict-three');
+    assert(aliasResolvedVehicle && !aliasResolvedVehicle.assignmentConflict, 'A fully connected three-name review should clear this vehicle conflict without guessing at any other vehicle.');
+    assert(aliasRecurringOne && aliasRecurringOne.customer === 'Direct Conflict One' && aliasRecurringTwo && aliasRecurringTwo.customer === 'Direct Conflict Two' && aliasRecurringThree && aliasRecurringThree.customer === 'Direct Conflict Three', 'Resolving multiple name variations must keep all original customer/payment records distinct and untouched.');
+    const savedAliases = (aliasResolvedState.json.assignmentCustomerAliases || []).filter(row => row.vehicleId === 'veh-direct-assignment-conflict' && row.active !== false);
+    assert(savedAliases.length === 2, 'Each confirmed pair must persist as a separate, auditable vehicle-scoped record.');
+    const savedAlias = savedAliases.find(row => row.aliasCustomer === 'Direct Conflict Two');
+    assert(savedAlias && savedAlias.id, 'The first confirmed same-customer link must remain individually revocable.');
     const aliasRevoked = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias/' + encodeURIComponent(savedAlias.id) + '/revoke', {
       cookie: ownerCookie,
       json: { confirmation: 'REMOVE_ASSIGNMENT_ALIAS' }
@@ -1234,7 +1253,7 @@ async function main() {
     assert(aliasRevoked.status === 200 && aliasRevoked.json && aliasRevoked.json.ok, 'Owner should be able to revoke an incorrect same-customer name link.');
     const aliasRevokedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const aliasRevokedVehicle = (aliasRevokedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
-    assert(aliasRevokedVehicle && /Direct Conflict One/.test(aliasRevokedVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(aliasRevokedVehicle.assignmentConflict || ''), 'Revoking the name link must surface the original active assignment conflict again.');
+    assert(aliasRevokedVehicle && /Direct Conflict One/.test(aliasRevokedVehicle.assignmentConflict || '') && /Direct Conflict Two/.test(aliasRevokedVehicle.assignmentConflict || '') && /Direct Conflict Three/.test(aliasRevokedVehicle.assignmentConflict || ''), 'Revoking one link must surface all three original active identities again without merging or deleting records.');
     const conflictReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(conflictReport.text.includes('Vehicle assignment conflicts') && conflictReport.text.includes('DIRECTCONFLICTVIN'), 'Deep report should include vehicle assignment conflict QA and fleet evidence.');
     const readinessCleanupState = JSON.parse(JSON.stringify(assignmentConflictRead.json));
