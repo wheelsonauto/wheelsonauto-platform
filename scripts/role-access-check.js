@@ -183,6 +183,9 @@ if (!/\/api\/account\/owner-access\/disable-pin/.test(server) || !/Only the owne
 if (!/cloverRecurringMigrationReadiness/.test(productionInfrastructurePreflight) || !/fresh Clover recurring roster for controlled cutover/.test(productionInfrastructurePreflight)) {
   fail('The production Stripe launch gate must require a fresh complete Clover recurring roster before cutover.');
 }
+if (!/providerProofCollectionMissing/.test(productionInfrastructurePreflight) || !/provider_proof_collection/.test(productionInfrastructurePreflight) || !/WOA_MIGRATION_MAINTENANCE_MODE=0/.test(productionInfrastructurePreflight)) {
+  fail('The production launch preflight must distinguish safe provider-proof collection and reject maintenance mode as final launch readiness.');
+}
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
 if (!/Customer password help requested/.test(server) || !/Staff password help requested/.test(server)) {
   fail('Password help requests should be owner audit logged.');

@@ -256,7 +256,7 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Vehicle identity review',
   'VIN review'
 ]);
-assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "ready?'Clear':'Blocked'", 'Keep Clover live until every gate is verified.']);
+assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "launchStage==='provider_proof_collection'?'Collect proof'", "launchStage==='enable_final_hardening'?'Arm launch'", 'proofCollection.message']);
 assertIncludes('Launch modal long-blocker wrapping', stylesCss, ['.modal .compact-list li', 'overflow-wrap:anywhere', 'word-break:break-word']);
 assertIncludes('Launch provider responsive console', stylesCss, ['.modal:has(.launch-provider-console)', '.launch-provider-grid', '.launch-provider-card', '.launch-provider-facts', '.launch-provider-link', 'grid-template-columns:1fr']);
 assertIncludes('Owner recovery operator surface', app, [

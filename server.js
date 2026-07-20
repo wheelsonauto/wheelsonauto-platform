@@ -222,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-sms-postgres-gate-217';
+const ASSET_VERSION = 'platform-20260719-launch-stages-218';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -10415,7 +10415,29 @@ async function productionInfrastructurePreflight(data = null) {
   const assignmentClassification = assignmentConflictPreflightClassification(state);
   const assignmentConflicts = assignmentClassification.all;
   const identityWarnings = stateRepository.identityWarnings(state);
+  const providerProofCollectionMissing = [];
+  const providerEvidenceMissing = [];
   const missing = [];
+  if (!databaseCredentialIsolation.ready) providerProofCollectionMissing.push('database credential isolation');
+  if (!databaseWithRecoveryDrill.productionReady) providerProofCollectionMissing.push('PostgreSQL transactional state');
+  if (!backendCutover.ready) providerProofCollectionMissing.push('persistent PostgreSQL cutover sentinel');
+  if (!databaseWithRecoveryDrill.snapshotRecoveryReady) providerProofCollectionMissing.push('verified PostgreSQL recovery snapshot');
+  if (!databaseWithRecoveryDrill.migrationProofReady) providerProofCollectionMissing.push('verified JSON-to-PostgreSQL import proof');
+  if (!recoveryDrill.ready) providerProofCollectionMissing.push('controlled PostgreSQL recovery drill');
+  if (!stateBackup.enabled || !stateBackup.productionReady || !stateBackup.dedicatedKeyConfigured || !stateBackup.verified || !stateBackup.fresh) providerProofCollectionMissing.push('fresh encrypted offsite state backup');
+  if (!documentStorage.productionReady || !documentStorageValidation.live || !documentEncryptionKeys.ready || !privateArtifacts.ready || !WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED) providerProofCollectionMissing.push('production-ready encrypted private storage');
+  if (!SESSION_SIGNING_SECRET_CONFIGURED) providerProofCollectionMissing.push('stable signed sessions');
+  if (!ownerAuthentication.passwordLoginConfigured || !ownerAuthentication.passwordLoginStrong || !ownerAuthentication.passwordLoginVerified || ownerAuthentication.pinFallbackAllowed) providerProofCollectionMissing.push('verified password-only owner access');
+  if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) providerProofCollectionMissing.push('HTTPS public origin');
+  if (WOA_MIGRATION_MAINTENANCE_MODE) providerProofCollectionMissing.push('migration maintenance mode disabled');
+  if (!stripeAccount.live) providerEvidenceMissing.push('Stripe live account activation proof');
+  if (!stripeWebhook.live) providerEvidenceMissing.push('Stripe signed live webhook event');
+  if (!stripeIdentityWebhook.live) providerEvidenceMissing.push('signed live Stripe Identity verification');
+  if (!operationalAlerts.live) providerEvidenceMissing.push('verified operational error alert delivery');
+  if (!telnyxMessaging.live) providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof');
+  if (!resendEmail.live) providerEvidenceMissing.push('Resend wheelsonauto.com two-way email proof');
+  if (!starAi.live) providerEvidenceMissing.push('OpenAI Star Responses API health proof');
+  if (!cloverRecurring.ready) providerEvidenceMissing.push('fresh Clover recurring roster');
   if (!databaseCredentialIsolation.ready) missing.push('remove dedicated PostgreSQL drill credentials from the production web runtime');
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
   if (!backendCutover.ready) missing.push('persistent PostgreSQL cutover sentinel');
@@ -10449,6 +10471,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!cloverRecurring.ready) missing.push('fresh Clover recurring roster for controlled cutover');
   if (!SESSION_SIGNING_SECRET_CONFIGURED) missing.push('stable WOA_SESSION_SECRET');
   if (!WOA_PRODUCTION_HARDENING_REQUIRED) missing.push('WOA_PRODUCTION_HARDENING_REQUIRED=1');
+  if (WOA_MIGRATION_MAINTENANCE_MODE) missing.push('WOA_MIGRATION_MAINTENANCE_MODE=0');
   if (!ownerAuthentication.passwordLoginConfigured) missing.push('owner username/password login');
   else if (!ownerAuthentication.passwordLoginStrong) missing.push('PBKDF2 owner password record');
   else if (!ownerAuthentication.passwordLoginVerified) missing.push('verified owner password sign-in');
@@ -10457,6 +10480,19 @@ async function productionInfrastructurePreflight(data = null) {
   if (assignmentConflicts.length) missing.push('resolve active vehicle assignment conflicts');
   if (identityWarnings.length) missing.push('complete vehicle VIN identity review');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
+  const providerProofCollectionReady = providerProofCollectionMissing.length === 0;
+  const dataReviewMissing = identityConflicts.length + assignmentConflicts.length + identityWarnings.length;
+  const launchStage = missing.length === 0
+    ? 'live_stripe_ready'
+    : !providerProofCollectionReady
+      ? 'foundation_blocked'
+      : providerEvidenceMissing.length
+        ? 'provider_proof_collection'
+        : dataReviewMissing
+          ? 'data_review'
+          : !WOA_PRODUCTION_HARDENING_REQUIRED
+            ? 'enable_final_hardening'
+            : 'launch_blocked';
   return {
     database: databaseWithRecoveryDrill,
     databaseCredentialIsolation,
@@ -10481,6 +10517,18 @@ async function productionInfrastructurePreflight(data = null) {
     structuralAssignmentConflictCount: assignmentClassification.structural.length,
     assignmentReviewWarningCount: assignmentClassification.review.length,
     identityWarnings,
+    launchStage,
+    providerProofCollection: {
+      ready: providerProofCollectionReady,
+      missing: providerProofCollectionMissing,
+      providerEvidenceMissing,
+      stripeMoneyActionsLocked: !WOA_PRODUCTION_HARDENING_REQUIRED,
+      message: providerProofCollectionReady
+        ? (providerEvidenceMissing.length
+          ? 'The protected foundation is ready for live provider proof collection. Stripe charges, refunds, and customer cutovers remain locked until final production hardening is enabled.'
+          : 'Provider evidence is current. Finish data review, then enable the final production hardening gate.')
+        : 'Complete the protected PostgreSQL, backup, storage, access, and HTTPS foundation before collecting live provider evidence.'
+    },
     missing,
     hardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
     readyForLiveStripe: missing.length === 0,
