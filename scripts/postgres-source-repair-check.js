@@ -130,6 +130,72 @@ async function main() {
     const preparedPreflight = run(preflightScript, [outputFile]);
     assert.strictEqual(preparedPreflight.status, 0, 'The repaired protected copy must pass the ordinary PostgreSQL preflight.');
 
+    const vehicleSource = path.join(temp, 'duplicate-vehicle-source.json');
+    const vehicleOutput = path.join(temp, 'duplicate-vehicle-output.json');
+    const duplicateVehicleState = {
+      vehicles: [
+        { id: 'veh-sheet-004', year: '2017', make: 'Chevy', model: 'trax Red', vin: '3GNCJNSB9HL190487', plate: 'M97wuv', status: 'Rented', currentCustomer: 'Rudolph vernon Hawkes', sourceRow: 51 },
+        { id: 'veh-sheet-004', year: '2014', make: 'Dodge', model: 'Ram Cargo', vin: '2C4JRGAG5ER182015', plate: 'Y61www', status: 'Rented', currentCustomer: 'Dominique tatiana bruce', sourceRow: 4 }
+      ],
+      maintenance: [
+        { id: 'mnt-sheet-oil-overdue-51', vehicleId: 'veh-sheet-004', vehicle: '2017 Chevy trax Red', customer: 'Rudolph vernon Hawkes', sourceRow: 51, status: 'Scheduled' },
+        { id: 'mnt-sheet-oil-overdue-4', vehicleId: 'veh-sheet-004', vehicle: '2014 Dodge Ram Cargo', customer: 'Dominique tatiana bruce', sourceRow: 4, status: 'Scheduled' }
+      ],
+      customers: [],
+      recurringPayments: [],
+      payments: []
+    };
+    const duplicateVehicleBytes = JSON.stringify(duplicateVehicleState, null, 2) + '\n';
+    await fs.writeFile(vehicleSource, duplicateVehicleBytes, 'utf8');
+    const duplicateVehicleChecksum = (await migrationSource.readSource(vehicleSource)).sourceFileChecksum;
+    const vehicleRekeyUnconfirmed = run(repairScript, [vehicleSource, vehicleOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: duplicateVehicleChecksum
+    });
+    assert.notStrictEqual(vehicleRekeyUnconfirmed.status, 0, 'A non-identical duplicate vehicle ID must require its own narrow confirmation.');
+    assert.match(vehicleRekeyUnconfirmed.stderr, /WOA_POSTGRES_SOURCE_VEHICLE_REKEY_CONFIRM/);
+    assert.strictEqual(await exists(vehicleOutput), false, 'An unconfirmed vehicle re-key must not create a protected output.');
+
+    const vehicleRekey = run(repairScript, [vehicleSource, vehicleOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: duplicateVehicleChecksum,
+      WOA_POSTGRES_SOURCE_VEHICLE_REKEY_CONFIRM: 'DETERMINISTIC_VIN_REFERENCES_ONLY'
+    });
+    assert.strictEqual(vehicleRekey.status, 0, vehicleRekey.stderr || 'Distinct VIN and maintenance evidence should allow a protected vehicle-ID repair.');
+    const vehicleRekeyReport = JSON.parse(vehicleRekey.stdout);
+    assert.strictEqual(vehicleRekeyReport.deterministicVehicleIdentityRepairs.length, 1);
+    assert.strictEqual(vehicleRekeyReport.deterministicVehicleReferenceRepairs.length, 1);
+    assert.strictEqual(await fs.readFile(vehicleSource, 'utf8'), duplicateVehicleBytes, 'Vehicle-ID repair must preserve the live source byte-for-byte.');
+    const vehiclePrepared = JSON.parse(await fs.readFile(vehicleOutput, 'utf8'));
+    assert.strictEqual(new Set(vehiclePrepared.vehicles.map(vehicle => vehicle.id)).size, 2, 'Protected output must contain unique vehicle IDs.');
+    assert.strictEqual(vehiclePrepared.maintenance[0].vehicleId, vehiclePrepared.vehicles[0].id, 'The Chevy maintenance row must remain linked to the Chevy.');
+    assert.strictEqual(vehiclePrepared.maintenance[1].vehicleId, vehiclePrepared.vehicles[1].id, 'The Dodge maintenance row must follow the re-keyed Dodge.');
+    assert(vehiclePrepared.migrationSourceRepairs.some(row => /vehicle-rekey/.test(row.id)), 'Protected output must preserve an auditable vehicle re-key record.');
+    const vehicleManifest = JSON.parse(await fs.readFile(vehicleOutput + '.repair-manifest.json', 'utf8'));
+    assert.strictEqual(vehicleManifest.deterministicVehicleIdentityRepairs.length, 1);
+    assert.strictEqual(vehicleManifest.deterministicVehicleReferenceRepairs.length, 1);
+
+    const ambiguousVehicleSource = path.join(temp, 'ambiguous-vehicle-source.json');
+    const ambiguousVehicleOutput = path.join(temp, 'ambiguous-vehicle-output.json');
+    const ambiguousVehicleState = JSON.parse(JSON.stringify(duplicateVehicleState));
+    ambiguousVehicleState.maintenance = [{ id: 'mnt-ambiguous-vehicle', vehicleId: 'veh-sheet-004', status: 'Scheduled' }];
+    await fs.writeFile(ambiguousVehicleSource, JSON.stringify(ambiguousVehicleState, null, 2) + '\n', 'utf8');
+    const ambiguousVehicleChecksum = (await migrationSource.readSource(ambiguousVehicleSource)).sourceFileChecksum;
+    const ambiguousVehicleRepair = run(repairScript, [ambiguousVehicleSource, ambiguousVehicleOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: ambiguousVehicleChecksum,
+      WOA_POSTGRES_SOURCE_VEHICLE_REKEY_CONFIRM: 'DETERMINISTIC_VIN_REFERENCES_ONLY'
+    });
+    assert.notStrictEqual(ambiguousVehicleRepair.status, 0, 'An evidence-free duplicate vehicle reference must keep migration blocked.');
+    assert.match(ambiguousVehicleRepair.stderr, /cannot be repaired deterministically/i);
+    assert.strictEqual(await exists(ambiguousVehicleOutput), false, 'An ambiguous vehicle reference must not produce a migration copy.');
+
     const overwriteAttempt = run(repairScript, [sourceFile, outputFile], {
       ...captureEnvironment,
       WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',

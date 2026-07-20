@@ -6,6 +6,7 @@ const stateRepository = require('../state-repository');
 const migrationSource = require('../postgres-migration-source');
 const migrationMaintenanceLease = require('../migration-maintenance-lease');
 const stateMigrationLock = require('../state-migration-lock');
+const vehicleIdentityRepair = require('../vehicle-identity-repair');
 const { userArguments } = require('./cli-arguments');
 
 function structuralReadiness(state = {}) {
@@ -79,7 +80,19 @@ async function main() {
   const source = await migrationSource.readSource(sourceFile);
   const expectedChecksum = migrationSource.requiredExpectedChecksum(process.env, 'WOA_POSTGRES_SOURCE_REPAIR_SHA256');
   migrationSource.assertExpectedChecksum(source.sourceFileChecksum, expectedChecksum, 'Live JSON source selected for protected-copy preparation');
-  const plan = stateRepository.exactDuplicateCriticalResourcePlan(source.state);
+  const vehicleIdentity = vehicleIdentityRepair.repairDuplicateVehicleIdentities(source.state, {
+    requireResolvableReferences: true
+  });
+  if (vehicleIdentity.repairs.length && process.env.WOA_POSTGRES_SOURCE_VEHICLE_REKEY_CONFIRM !== 'DETERMINISTIC_VIN_REFERENCES_ONLY') {
+    throw new Error('Set WOA_POSTGRES_SOURCE_VEHICLE_REKEY_CONFIRM=DETERMINISTIC_VIN_REFERENCES_ONLY to re-key non-identical duplicate vehicle IDs only when every affected reference has unique VIN/source/plate/name/customer/tracker evidence.');
+  }
+  if (!vehicleIdentity.ready) {
+    const error = new Error('A duplicated vehicle ID cannot be repaired deterministically. No output was written; owner review is required.');
+    error.code = 'woa_ambiguous_duplicate_vehicle_identity';
+    error.conflicts = vehicleIdentity.conflicts.concat(vehicleIdentity.unresolvedReferences);
+    throw error;
+  }
+  const plan = stateRepository.exactDuplicateCriticalResourcePlan(vehicleIdentity.state);
   if (plan.conflicts.length) {
     const error = new Error('A duplicated critical resource ID contains different data. No output was written; owner review is required.');
     error.code = 'woa_nonidentical_resource_duplicate';
@@ -97,7 +110,7 @@ async function main() {
       reason: 'prepare checksum-locked PostgreSQL migration source copy'
     });
     await migrationSource.assertSourceUnchanged(sourceFile, source.sourceFileChecksum);
-    const collapsed = stateRepository.collapseExactDuplicateCriticalResources(source.state);
+    const collapsed = stateRepository.collapseExactDuplicateCriticalResources(vehicleIdentity.state);
     const preparedAt = new Date().toISOString();
     if (collapsed.repairs.length) {
       const repairId = 'postgres-source-repair-' + source.sourceFileChecksum.slice(0, 24);
@@ -118,6 +131,20 @@ async function main() {
         }))
       });
     }
+    if (vehicleIdentity.repairs.length) {
+      const vehicleRepairId = 'postgres-source-vehicle-rekey-' + source.sourceFileChecksum.slice(0, 24);
+      collapsed.state.migrationSourceRepairs = (Array.isArray(collapsed.state.migrationSourceRepairs) ? collapsed.state.migrationSourceRepairs : [])
+        .filter(row => row && row.id !== vehicleRepairId);
+      collapsed.state.migrationSourceRepairs.push({
+        id: vehicleRepairId,
+        preparedAt,
+        sourceFileChecksum: source.sourceFileChecksum,
+        policy: 'non-identical duplicate vehicle IDs with unique VINs; dependent references changed only with one uniquely strongest VIN/source/plate/name/customer/tracker match',
+        repairs: vehicleIdentity.repairs,
+        referenceRepairs: vehicleIdentity.referenceRepairs,
+        resolvedReferences: vehicleIdentity.resolvedReferences
+      });
+    }
     const readiness = structuralReadiness(collapsed.state);
     const outputBytes = Buffer.from(JSON.stringify(collapsed.state, null, 2) + '\n', 'utf8');
     await writeExclusive(outputFile, outputBytes);
@@ -131,12 +158,15 @@ async function main() {
       protectedCopy: outputFile,
       protectedCopyChecksum: prepared.sourceFileChecksum,
       maintenanceLease: captureLease,
-      policy: 'Only canonical byte-equivalent records sharing one critical resource ID were collapsed. Non-identical duplicates and assignment conflicts are never guessed.',
-      repairs: collapsed.repairs
+      policy: 'Canonical byte-equivalent records may be collapsed. Non-identical duplicate vehicles may be re-keyed only with unique VINs and uniquely matching dependent-reference evidence. Assignments are never guessed.',
+      repairs: collapsed.repairs.concat(vehicleIdentity.repairs)
     });
     const manifest = {
       ...signedProvenance,
       repairs: collapsed.repairs,
+      deterministicVehicleIdentityRepairs: vehicleIdentity.repairs,
+      deterministicVehicleReferenceRepairs: vehicleIdentity.referenceRepairs,
+      deterministicVehicleResolvedReferences: vehicleIdentity.resolvedReferences,
       readiness
     };
     await writeExclusive(manifestFile, Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'));
@@ -161,6 +191,8 @@ async function main() {
       maintenanceInstanceId: manifest.maintenanceInstanceId,
       provenanceSignatureAlgorithm: manifest.signature.algorithm,
       exactDuplicateRepairs: collapsed.repairs,
+      deterministicVehicleIdentityRepairs: vehicleIdentity.repairs,
+      deterministicVehicleReferenceRepairs: vehicleIdentity.referenceRepairs,
       ...readiness,
       message: readiness.postgresqlImportAllowed
         ? 'Signed Render live-disk PostgreSQL source is structurally ready. Use its protected-copy checksum and provenance manifest for preflight, import, and verification.'

@@ -22,6 +22,7 @@ const messagingConsent = require('./messaging-consent');
 const dataBackendCutover = require('./data-backend-cutover');
 const fatalProcessMonitor = require('./fatal-process-monitor');
 const migrationMaintenanceLease = require('./migration-maintenance-lease');
+const vehicleIdentityRepair = require('./vehicle-identity-repair');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -359,6 +360,7 @@ function stableRecordId(base, row) {
 }
 function repairDuplicateVehicleIds(data) {
   if (!data || !Array.isArray(data.vehicles)) return data;
+  vehicleIdentityRepair.repairDuplicateVehicleIdentities(data, { mutate: true });
   const seen = new Set();
   data.vehicles.forEach(vehicle => {
     const original = String(vehicle && vehicle.id || '').trim() || 'veh';
