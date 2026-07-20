@@ -140,8 +140,12 @@ data.integrations.stripe = {
   lastAccountChargesEnabled: true,
   lastAccountPayoutsEnabled: true,
   lastAccountDetailsSubmitted: true,
+  lastAccountCardPaymentsCapability: 'active',
+  lastAccountTransfersCapability: 'active',
   lastAccountRequirementsCurrentlyDueCount: 0,
   lastAccountRequirementsPastDueCount: 0,
+  lastAccountRequirementsPendingVerificationCount: 0,
+  lastAccountRequirementsEventuallyDueCount: 0,
   lastAccountDisabledReason: '',
   lastAccountHealthConfigurationFingerprint: stripeAccountFingerprint,
   lastAccountHealthError: '',
@@ -262,6 +266,8 @@ assert.strictEqual(stripeAccount.live, true, 'Stripe account proof must require 
 assert.strictEqual(stripeAccount.chargesEnabled, true);
 assert.strictEqual(stripeAccount.payoutsEnabled, true);
 assert.strictEqual(stripeAccount.detailsSubmitted, true);
+assert.strictEqual(stripeAccount.capabilitiesActive, true);
+assert.strictEqual(stripeAccount.accountRequirementsClear, true);
 assert.strictEqual(stripeAccount.provider, 'stripe');
 assert.strictEqual(stripeAccount.keyMode, 'live');
 assert.strictEqual(stripeAccount.configured, true);
@@ -278,6 +284,31 @@ assert.strictEqual(stripeAccountLiveEvidence(stripePayoutsDisabled).live, false,
 const stripeOnboardingIncomplete = clone(data);
 stripeOnboardingIncomplete.integrations.stripe.lastAccountDetailsSubmitted = false;
 assert.strictEqual(stripeAccountLiveEvidence(stripeOnboardingIncomplete).live, false, 'Incomplete Stripe business onboarding must not unlock launch.');
+
+const stripeCardPaymentsInactive = clone(data);
+stripeCardPaymentsInactive.integrations.stripe.lastAccountCardPaymentsCapability = 'pending';
+assert.strictEqual(stripeAccountLiveEvidence(stripeCardPaymentsInactive).live, false, 'A pending Stripe card-payments capability must not unlock launch.');
+assert.match(stripeAccountLiveEvidence(stripeCardPaymentsInactive).error, /card payments capability is not active/i);
+
+const stripeTransfersInactive = clone(data);
+stripeTransfersInactive.integrations.stripe.lastAccountTransfersCapability = 'inactive';
+assert.strictEqual(stripeAccountLiveEvidence(stripeTransfersInactive).live, false, 'An inactive Stripe transfers capability must not unlock launch.');
+assert.match(stripeAccountLiveEvidence(stripeTransfersInactive).error, /transfers capability is not active/i);
+
+const stripePastDue = clone(data);
+stripePastDue.integrations.stripe.lastAccountRequirementsPastDueCount = 2;
+assert.strictEqual(stripeAccountLiveEvidence(stripePastDue).live, false, 'Past-due Stripe account requirements must block launch even when charges and payouts are currently enabled.');
+assert.match(stripeAccountLiveEvidence(stripePastDue).error, /2 past-due account requirements/i);
+
+const stripePendingVerification = clone(data);
+stripePendingVerification.integrations.stripe.lastAccountRequirementsPendingVerificationCount = 1;
+assert.strictEqual(stripeAccountLiveEvidence(stripePendingVerification).live, false, 'Pending Stripe account verification must block launch until Stripe finishes its review.');
+assert.match(stripeAccountLiveEvidence(stripePendingVerification).error, /still verifying 1 account requirement/i);
+
+const stripeRestricted = clone(data);
+stripeRestricted.integrations.stripe.lastAccountDisabledReason = 'requirements.past_due';
+assert.strictEqual(stripeAccountLiveEvidence(stripeRestricted).live, false, 'A Stripe disabled reason must block launch even if other account booleans are still true.');
+assert.match(stripeAccountLiveEvidence(stripeRestricted).error, /account restriction/i);
 
 const staleStripeAccount = clone(data);
 staleStripeAccount.integrations.stripe.lastAccountHealthAt = '2020-01-01T00:00:00.000Z';
@@ -313,6 +344,9 @@ assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.s
 const forgedState = clone(data);
 forgedState.integrations.stripe.lastAccountChargesEnabled = false;
 forgedState.integrations.stripe.lastAccountPayoutsEnabled = false;
+forgedState.integrations.stripe.lastAccountCardPaymentsCapability = 'inactive';
+forgedState.integrations.stripe.lastAccountTransfersCapability = 'pending';
+forgedState.integrations.stripe.lastAccountRequirementsPendingVerificationCount = 99;
 forgedState.integrations.stripe.lastAccountHealthConfigurationFingerprint = 'forged-account-proof';
 forgedState.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint = 'forged-proof';
 forgedState.messages.push({
@@ -334,5 +368,8 @@ assert.strictEqual(ownerWrite.integrations.stripe.lastIdentityWebhookConfigurati
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountHealthConfigurationFingerprint, stripeAccountFingerprint, 'Browser writes must preserve the server-only Stripe account proof fingerprint.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountChargesEnabled, true, 'Browser writes must not forge or clear the server-verified Stripe account readiness values.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountPayoutsEnabled, true, 'Browser writes must not forge or clear the server-verified Stripe payout readiness value.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastAccountCardPaymentsCapability, 'active', 'Browser writes must not forge the server-verified Stripe card-payments capability.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastAccountTransfersCapability, 'active', 'Browser writes must not forge the server-verified Stripe transfers capability.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastAccountRequirementsPendingVerificationCount, 0, 'Browser writes must not clear or inflate the server-verified Stripe requirements state.');
 
 console.log('Provider launch proof check passed: Stripe account activation, Stripe payments, Stripe Identity, Telnyx, Resend, and Star require fresh evidence tied to the current secured configuration.');

@@ -726,7 +726,9 @@ PUBLIC_BASE_URL=https://wheelsonauto.com
 Start with the default payment provider left on Clover. The onboarding provider
 can use Stripe for new customers while existing customers migrate one at a
 time. Finish Stripe business onboarding first and confirm the Stripe dashboard
-shows both charges and payouts enabled. Then open **API Roadmap -> Stripe
+shows charges and payouts enabled, `card_payments` and `transfers` capabilities
+active, no currently due or past-due requirements, no pending verification,
+and no disabled reason. Then open **API Roadmap -> Stripe
 Payments -> Check Stripe account**. This read-only check calls Stripe's account
 endpoint, stores only the account ID, country, readiness booleans, requirement
 counts, and a server-only configuration proof, and never creates a customer or

@@ -386,7 +386,8 @@ async function main() {
         charges_enabled: true,
         payouts_enabled: true,
         details_submitted: true,
-        requirements: { currently_due: [], past_due: [], disabled_reason: null }
+        capabilities: { card_payments: 'active', transfers: 'active' },
+        requirements: { currently_due: [], past_due: [], pending_verification: [], eventually_due: [], disabled_reason: null }
       });
     }
     if (cloverRecurringFixture && requestUrl.includes('/recurring/v1/')) {
@@ -1793,7 +1794,8 @@ async function main() {
     const managerConflictReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-conflict/assignment-conflict', { cookie: managerCookie });
     assert(managerConflictReview.status === 403, 'A manager must not open the owner-only customer-name assignment resolver.');
     const ownerStripeReadiness = await request(server, 'POST', '/api/integrations/stripe/readiness', { cookie: ownerCookie, json: {} });
-    assert(ownerStripeReadiness.status === 200 && ownerStripeReadiness.json && ownerStripeReadiness.json.stripeAccount.live === true, 'Owner Stripe readiness must verify the read-only account endpoint and persist live charges/payout activation evidence.');
+    assert(ownerStripeReadiness.status === 200 && ownerStripeReadiness.json && ownerStripeReadiness.json.stripeAccount.live === true, 'Owner Stripe readiness must verify the read-only account endpoint and persist live charges, payouts, active capabilities, and a clear requirements state.');
+    assert(ownerStripeReadiness.json.stripeAccount.cardPaymentsCapability === 'active' && ownerStripeReadiness.json.stripeAccount.transfersCapability === 'active' && ownerStripeReadiness.json.stripeAccount.accountRequirementsClear === true, 'The readiness response must expose safe capability and requirements evidence without exposing account secrets.');
     assert(!Object.prototype.hasOwnProperty.call(ownerStripeReadiness.json.stripeAccount, 'configurationFingerprint'), 'Stripe account readiness responses must not expose the server-only configuration fingerprint.');
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');

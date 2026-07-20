@@ -224,7 +224,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-launch-matrix-249';
+const ASSET_VERSION = 'platform-20260720-stripe-account-gate-250';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -8789,7 +8789,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const priorMessaging = current && current.integrations && current.integrations.messaging || {};
   const priorClover = current && current.integrations && current.integrations.clover || {};
-  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError'];
+  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountCardPaymentsCapability', 'lastAccountTransfersCapability', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountRequirementsPendingVerificationCount', 'lastAccountRequirementsEventuallyDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError', 'telnyx10dlc', 'aiUsage', 'smsWebhookConnected', 'smsWebhookConfiguredAt'];
@@ -10745,10 +10745,16 @@ function stripeAccountLiveEvidence(data = {}) {
   const chargesEnabled = stripeState.lastAccountChargesEnabled === true;
   const payoutsEnabled = stripeState.lastAccountPayoutsEnabled === true;
   const detailsSubmitted = stripeState.lastAccountDetailsSubmitted === true;
+  const cardPaymentsCapability = String(stripeState.lastAccountCardPaymentsCapability || '');
+  const transfersCapability = String(stripeState.lastAccountTransfersCapability || '');
   const currentlyDueCount = Math.max(0, Number(stripeState.lastAccountRequirementsCurrentlyDueCount || 0));
   const pastDueCount = Math.max(0, Number(stripeState.lastAccountRequirementsPastDueCount || 0));
+  const pendingVerificationCount = Math.max(0, Number(stripeState.lastAccountRequirementsPendingVerificationCount || 0));
+  const eventuallyDueCount = Math.max(0, Number(stripeState.lastAccountRequirementsEventuallyDueCount || 0));
   const disabledReason = String(stripeState.lastAccountDisabledReason || '');
-  const live = STRIPE_KEY_MODE === 'live' && checkedKeyMode === 'live' && successful && !!accountId && chargesEnabled && payoutsEnabled && detailsSubmitted && configurationMatched && freshness.fresh;
+  const accountRequirementsClear = currentlyDueCount === 0 && pastDueCount === 0 && pendingVerificationCount === 0 && !disabledReason;
+  const capabilitiesActive = cardPaymentsCapability === 'active' && transfersCapability === 'active';
+  const live = STRIPE_KEY_MODE === 'live' && checkedKeyMode === 'live' && successful && !!accountId && chargesEnabled && payoutsEnabled && detailsSubmitted && accountRequirementsClear && capabilitiesActive && configurationMatched && freshness.fresh;
   let error = '';
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') error = 'Activate the Stripe business account and add its live secret key before checking account readiness.';
   else if (!successful || !accountId) error = String(stripeState.lastAccountHealthError || 'Run Check Stripe account from API Roadmap after the live key is deployed.');
@@ -10758,6 +10764,12 @@ function stripeAccountLiveEvidence(data = {}) {
   else if (!detailsSubmitted) error = 'Stripe business onboarding is incomplete. Finish the account activation requirements in Stripe, then check again.';
   else if (!chargesEnabled) error = 'Stripe has not enabled charges for this account yet.';
   else if (!payoutsEnabled) error = 'Stripe has not enabled payouts for this account yet.';
+  else if (cardPaymentsCapability !== 'active') error = 'Stripe card payments capability is not active yet.';
+  else if (transfersCapability !== 'active') error = 'Stripe transfers capability is not active yet.';
+  else if (pastDueCount > 0) error = 'Stripe has ' + pastDueCount + ' past-due account requirement' + (pastDueCount === 1 ? '' : 's') + '. Complete them before launch.';
+  else if (currentlyDueCount > 0) error = 'Stripe has ' + currentlyDueCount + ' currently-due account requirement' + (currentlyDueCount === 1 ? '' : 's') + '. Complete them before launch.';
+  else if (pendingVerificationCount > 0) error = 'Stripe is still verifying ' + pendingVerificationCount + ' account requirement' + (pendingVerificationCount === 1 ? '' : 's') + '. Wait for verification before launch.';
+  else if (disabledReason) error = 'Stripe reports an account restriction: ' + disabledReason + '.';
   const summary = live
     ? 'Stripe account ' + accountId + ' is live with charges and payouts enabled' + (country ? ' in ' + country : '') + '.'
     : error;
@@ -10772,8 +10784,14 @@ function stripeAccountLiveEvidence(data = {}) {
     chargesEnabled,
     payoutsEnabled,
     detailsSubmitted,
+    cardPaymentsCapability,
+    transfersCapability,
+    capabilitiesActive,
     currentlyDueCount,
     pastDueCount,
+    pendingVerificationCount,
+    eventuallyDueCount,
+    accountRequirementsClear,
     disabledReason,
     successful,
     configurationMatched,
@@ -22421,6 +22439,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const account = await stripe.retrieveAccount();
         const requirements = account && account.requirements || {};
+        const capabilities = account && account.capabilities || {};
         Object.assign(data.integrations.stripe, {
           lastAccountHealthAt: checkedAt,
           lastAccountHealthSuccess: true,
@@ -22430,8 +22449,12 @@ const server = http.createServer(async (req, res) => {
           lastAccountChargesEnabled: account && account.charges_enabled === true,
           lastAccountPayoutsEnabled: account && account.payouts_enabled === true,
           lastAccountDetailsSubmitted: account && account.details_submitted === true,
+          lastAccountCardPaymentsCapability: String(capabilities.card_payments || ''),
+          lastAccountTransfersCapability: String(capabilities.transfers || ''),
           lastAccountRequirementsCurrentlyDueCount: Array.isArray(requirements.currently_due) ? requirements.currently_due.length : 0,
           lastAccountRequirementsPastDueCount: Array.isArray(requirements.past_due) ? requirements.past_due.length : 0,
+          lastAccountRequirementsPendingVerificationCount: Array.isArray(requirements.pending_verification) ? requirements.pending_verification.length : 0,
+          lastAccountRequirementsEventuallyDueCount: Array.isArray(requirements.eventually_due) ? requirements.eventually_due.length : 0,
           lastAccountDisabledReason: String(requirements.disabled_reason || ''),
           lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
           lastAccountHealthError: ''
