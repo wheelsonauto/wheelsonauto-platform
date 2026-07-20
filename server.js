@@ -7462,6 +7462,14 @@ async function loadVehicleImport() {
     return [];
   }
 }
+function importedRecordEndedForDifferentRenter(record = {}, vehicle = {}, importedCustomer = '') {
+  const endedAt = String(record.assignmentEndedAt || record.endedAt || record.removedAt || '').trim();
+  if (!endedAt || !vehicle || !vehicle.id) return false;
+  const priorVehicleId = String(record.previousVehicleId || record.vehicleId || '').trim();
+  if (priorVehicleId && priorVehicleId !== String(vehicle.id || '')) return false;
+  const currentCustomer = String(vehicle.currentCustomer || '').trim();
+  return !!(currentCustomer && importedCustomer && !sameApprovedAssignmentCustomer({}, vehicle.id, currentCustomer, importedCustomer));
+}
 async function mergeVehicleImport(data) {
   const rows = await loadVehicleImport();
   if (!rows.length) return { rows: 0, vehicles: 0, customers: 0, contracts: 0, recurringLinked: 0 };
@@ -7613,7 +7621,10 @@ async function mergeVehicleImport(data) {
     const recurringMatch = recurringRows.find(recurring => normKey(recurring.customer) === customerKey) || {};
     if (recurringMatch.phone && !customerPatch.phone) customerPatch.phone = recurringMatch.phone;
     if (recurringMatch.email && !customerPatch.email) customerPatch.email = recurringMatch.email;
-    if (customerIndex.has(customerKey)) Object.assign(data.customers[customerIndex.get(customerKey)], customerPatch);
+    if (customerIndex.has(customerKey)) {
+      const savedCustomer = data.customers[customerIndex.get(customerKey)];
+      if (!importedRecordEndedForDifferentRenter(savedCustomer, currentVehicle, row.customer)) Object.assign(savedCustomer, customerPatch);
+    }
     else {
       data.customers.push({ id: 'cus-sheet-' + String(row.rowNumber).padStart(3, '0'), phone: recurringMatch.phone || '', email: recurringMatch.email || '', ...customerPatch });
       customerIndex.set(customerKey, data.customers.length - 1);
@@ -7624,7 +7635,10 @@ async function mergeVehicleImport(data) {
       const contractKey = customerKey + '|' + normKey(vehicleName);
       const contractPatch = { customer: row.customer, vehicle: vehicleName, weekly, status: 'Active', tone: 'good', dateStarted: row.dateStarted || '', nextDue: '', balance: 0, autopay: 'Clover recurring', paymentProvider: 'Clover', tracker: row.tracker || '', source: 'Vehicle sheet import' };
       if (currentVehicle) Object.assign(contractPatch, { vehicleId: currentVehicle.id, vin: currentVehicle.vin || row.vin || '', licensePlate: currentVehicle.plate || row.licensePlate || '', plate: currentVehicle.plate || row.licensePlate || '', tempTag: currentVehicle.tempTag || row.tempTag || '' });
-      if (contractIndex.has(contractKey)) Object.assign(data.contracts[contractIndex.get(contractKey)], contractPatch);
+      if (contractIndex.has(contractKey)) {
+        const savedContract = data.contracts[contractIndex.get(contractKey)];
+        if (!importedRecordEndedForDifferentRenter(savedContract, currentVehicle, row.customer)) Object.assign(savedContract, contractPatch);
+      }
       else {
         data.contracts.push({ id: 'WOA-SHEET-' + String(row.rowNumber).padStart(3, '0'), paidWeeks: 0, totalWeeks: 82, ...contractPatch });
         contractIndex.set(contractKey, data.contracts.length - 1);
@@ -24057,6 +24071,7 @@ module.exports = {
   stateForUserWrite,
   mergeConcurrentState,
   mergeConcurrentValue,
+  importedRecordEndedForDifferentRenter,
   repairVehicleSheetLinkConflicts,
   rowClaimsVehicle,
   enrichLinkedProfiles,

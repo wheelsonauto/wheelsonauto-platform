@@ -266,9 +266,12 @@ async function main() {
     recordOperationalFailure,
     reportBackgroundTaskFailure,
     sendProviderEmail,
+    importedRecordEndedForDifferentRenter,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
+  assert(importedRecordEndedForDifferentRenter({ assignmentEndedAt: '2026-07-20T08:00:00.000Z', previousVehicleId: 'veh-direct-transfer' }, { id: 'veh-direct-transfer', currentCustomer: 'New Current Renter' }, 'Old Sheet Renter'), 'A historical spreadsheet renter must not reactivate after an owner-confirmed transfer.');
+  assert(!importedRecordEndedForDifferentRenter({ assignmentEndedAt: '2026-07-20T08:00:00.000Z', previousVehicleId: 'veh-direct-transfer' }, { id: 'veh-direct-transfer', currentCustomer: 'Old Sheet Renter' }, 'Old Sheet Renter'), 'The spreadsheet importer may preserve an ended row only when the same customer is still authoritative on the vehicle.');
   const forgedLaunchState = stateForUserWrite({}, {
     messages: [{
       id: 'msg-browser-forged-provider-proof',
