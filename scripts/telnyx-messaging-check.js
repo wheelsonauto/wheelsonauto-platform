@@ -23,6 +23,7 @@ const {
   reconcileTelnyxDeliveryRecords,
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
+  telnyxCustomerCareCampaignDraft,
   assignTelnyx10dlcCampaign
 } = require('../server');
 
@@ -416,6 +417,25 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(qualifiedRegistration.registrationStage, 'campaign_creation');
   assert.deepStrictEqual(qualifiedRegistration.usecaseQualificationFees, { monthly: 2, quarterly: 6, annual: 24 });
   assert(/Review the corrected campaign details/.test(qualifiedRegistration.nextAction), 'Passing qualification still requires owner review before a paid campaign submission.');
+  const qualifiedCampaignDraft = telnyxCustomerCareCampaignDraft(qualifiedRegistration, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com' });
+  assert.strictEqual(qualifiedCampaignDraft.payload.usecase, 'CUSTOMER_CARE');
+  assert.strictEqual(qualifiedCampaignDraft.payload.brandId, 'brand-qualified');
+  assert.strictEqual(qualifiedCampaignDraft.payload.autoRenewal, true);
+  assert.strictEqual(qualifiedCampaignDraft.payload.subscriberOptin, true);
+  assert.strictEqual(qualifiedCampaignDraft.payload.subscriberOptout, true);
+  assert.strictEqual(qualifiedCampaignDraft.payload.subscriberHelp, true);
+  assert.strictEqual(qualifiedCampaignDraft.payload.privacyPolicyLink, 'https://wheelsonauto-platform.onrender.com/privacy');
+  assert.strictEqual(qualifiedCampaignDraft.payload.termsAndConditionsLink, 'https://wheelsonauto-platform.onrender.com/terms');
+  assert(/unchecked SMS-consent box/.test(qualifiedCampaignDraft.payload.messageFlow) && /Consent source and time are stored/.test(qualifiedCampaignDraft.payload.messageFlow), 'The Customer Care draft must describe WheelsonAuto opt-in evidence rather than claim blanket consent.');
+  assert(/STOP/.test(qualifiedCampaignDraft.payload.sample1) && /HELP/.test(qualifiedCampaignDraft.payload.sample3), 'Campaign samples must carry carrier opt-out and help language.');
+  assert.strictEqual(qualifiedCampaignDraft.reviewFeeUsd, 15);
+  assert.strictEqual(qualifiedCampaignDraft.recurringMonthlyFeeUsd, 2);
+  assert.strictEqual(qualifiedCampaignDraft.confirmationPhrase, 'SUBMIT TELNYX CUSTOMER_CARE $15 + $2/MONTH');
+  assert(/does not submit/.test(qualifiedCampaignDraft.warning) && /^[a-f0-9]{64}$/.test(qualifiedCampaignDraft.fingerprint), 'Campaign preparation must be a fingerprinted no-side-effect preview.');
+  const repeatedCampaignDraft = telnyxCustomerCareCampaignDraft(qualifiedRegistration, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com/' });
+  assert.strictEqual(repeatedCampaignDraft.fingerprint, qualifiedCampaignDraft.fingerprint, 'Equivalent public URLs must produce the same campaign-review fingerprint.');
+  assert.throws(() => telnyxCustomerCareCampaignDraft(failedRegistration, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com' }), /qualify the intended use case/, 'An unqualified campaign must fail closed before a paid submission can be prepared.');
+  assert.throws(() => telnyxCustomerCareCampaignDraft({ ...qualifiedRegistration, campaignId: 'campaign-existing', campaignActive: true }, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com' }), /already exists/, 'An existing current campaign must block duplicate preparation.');
   const unverifiedBrandRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',

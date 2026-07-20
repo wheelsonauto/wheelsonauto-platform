@@ -133,6 +133,7 @@ const TELNYX_PUBLIC_KEY = process.env.TELNYX_PUBLIC_KEY || '';
 const TELNYX_MESSAGING_PROFILE_ID = process.env.TELNYX_MESSAGING_PROFILE_ID || '';
 const TELNYX_MESSAGING_PROFILE_NAME = process.env.TELNYX_MESSAGING_PROFILE_NAME || 'WheelsonAuto Messaging';
 const TELNYX_10DLC_USECASE = String(process.env.TELNYX_10DLC_USECASE || 'CUSTOMER_CARE').trim().toUpperCase();
+const TELNYX_10DLC_REVIEW_FEE_USD = 15;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.WOA_OPENAI_API_KEY || '';
 const OPENAI_BASE_URL = (process.env.WOA_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
 const WOA_AI_MODEL = process.env.WOA_AI_MODEL || process.env.OPENAI_MODEL || (OPENAI_API_KEY ? 'gpt-5.4-nano' : '');
@@ -221,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-provider-preflight-213';
+const ASSET_VERSION = 'platform-20260719-telnyx-campaign-preview-214';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1506,7 +1507,9 @@ function telnyxLiveLaunchEvidence(data = {}) {
     brandStatus: carrier.carrierBrandStatus || '',
     brandVerified: carrier.carrierBrandVerified === true,
     campaignStatus: carrier.carrierCampaignStatus || '',
+    historicalCampaignStatus: carrier.carrierHistoricalCampaignStatus || '',
     campaignActive: registration.campaignActive === true,
+    campaignDraftReady: !!(carrier.carrierBrandVerified && !registration.campaignActive && !registration.campaignId && carrier.carrierUsecaseQualificationChecked && carrier.carrierUsecaseQualified && !carrier.carrierResubmissionBlocked),
     numberAssigned: registration.numberAssigned === true,
     assignmentStatus: String(registration.assignmentStatus || '').slice(0, 160),
     carrierRegistrationVerified: carrier.carrierRegistrationVerified,
@@ -2854,10 +2857,80 @@ async function checkTelnyx10dlcReadiness(options = {}) {
     resubmissionBlocked,
     failureReason,
     campaignActive,
+    brandId: currentBrandId,
     readyForDeliveryTest: numberAssigned && campaignActive,
     registrationStage,
     nextAction,
     summary
+  };
+}
+function telnyxCustomerCareCampaignDraft(readiness = {}, options = {}) {
+  const baseUrl = String(options.publicBaseUrl || PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+  const brandId = String(options.brandId || readiness.brandId || '').trim();
+  const usecase = String(options.usecase || readiness.usecaseQualificationUsecase || readiness.intendedUsecase || TELNYX_10DLC_USECASE || '').trim().toUpperCase();
+  if (!/^https:\/\//i.test(baseUrl)) {
+    const error = new Error('A public HTTPS WheelsonAuto URL is required before preparing the Telnyx campaign.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!brandId || readiness.brandVerified !== true) {
+    const error = new Error('A verified Telnyx brand is required before preparing the campaign.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (readiness.campaignActive || readiness.campaignId) {
+    const error = new Error('A current Telnyx campaign already exists. Review that campaign instead of creating a duplicate.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (readiness.usecaseQualificationChecked !== true || readiness.usecaseQualified !== true || readiness.resubmissionBlocked === true) {
+    const error = new Error('Telnyx must qualify the intended use case before a paid campaign can be prepared.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (usecase !== 'CUSTOMER_CARE') {
+    const error = new Error('WheelsonAuto campaign preparation is locked to the qualified CUSTOMER_CARE use case.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const payload = {
+    brandId,
+    usecase,
+    description: 'Wheels On Auto sends customer-care and account messages to current customers and applicants. Messages include application updates, secure account and card-setup links, payment reminders and receipts, pickup and service scheduling, maintenance reminders, document requests, and direct replies to customer questions. No promotional or third-party marketing messages are sent.',
+    sample1: 'Wheels On Auto: Hi {{first_name}}, your application for {{vehicle}} is ready for review. Sign in securely at ' + baseUrl + '/customer/login. Reply STOP to opt out or HELP for help.',
+    sample2: 'Wheels On Auto: Your weekly payment of ${{amount}} is due {{date}}. Use the secure link in your customer account or call (856) 839-1385. Reply STOP to opt out.',
+    sample3: 'Wheels On Auto: Your service appointment for {{vehicle}} is confirmed for {{date}} at {{time}}. Reply HELP for help or STOP to opt out.',
+    messageFlow: 'Applicants enter their mobile number and may select an unchecked SMS-consent box in the Wheels On Auto online application at ' + baseUrl + '/inventory. The disclosure states that message frequency varies, message and data rates may apply, consent is not a condition of purchase, and customers may reply STOP or HELP. Staff may separately record affirmative verbal consent after reading the same disclosure. A customer may also initiate a conversation by texting the published Wheels On Auto business number. Consent source and time are stored with the customer record.',
+    helpMessage: 'Wheels On Auto: Reply with your question, call (856) 839-1385, or email wheelsonauto@gmail.com. Reply STOP to opt out.',
+    optinKeywords: 'START,YES,UNSTOP',
+    optoutKeywords: 'STOP,STOPALL,UNSUBSCRIBE,CANCEL,END,QUIT',
+    helpKeywords: 'HELP,INFO',
+    embeddedLink: true,
+    embeddedPhone: true,
+    numberPool: false,
+    ageGated: false,
+    directLending: false,
+    subscriberOptin: true,
+    subscriberOptout: true,
+    subscriberHelp: true,
+    termsAndConditions: true,
+    autoRenewal: true,
+    privacyPolicyLink: baseUrl + '/privacy',
+    termsAndConditionsLink: baseUrl + '/terms',
+    embeddedLinkSample: baseUrl + '/customer/login',
+    webhookURL: baseUrl + '/api/webhooks/messages?provider=telnyx'
+  };
+  const fingerprint = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  const monthlyFee = Number(readiness.usecaseQualificationFees && readiness.usecaseQualificationFees.monthly || 0);
+  const confirmationPhrase = 'SUBMIT TELNYX CUSTOMER_CARE $' + TELNYX_10DLC_REVIEW_FEE_USD + (monthlyFee ? ' + $' + monthlyFee + '/MONTH' : ' + RECURRING FEES');
+  return {
+    preparedAt: new Date().toISOString(),
+    fingerprint,
+    payload,
+    reviewFeeUsd: TELNYX_10DLC_REVIEW_FEE_USD,
+    recurringMonthlyFeeUsd: monthlyFee,
+    confirmationPhrase,
+    warning: 'Preview only. Preparing this draft does not submit it, charge a carrier fee, assign a number, or enable messaging.'
   };
 }
 function publicTelnyx10dlcReadiness(readiness = {}) {
@@ -2868,6 +2941,7 @@ function publicTelnyx10dlcReadiness(readiness = {}) {
     assignmentStatus: readiness.assignmentStatus || '',
     campaignId: readiness.campaignId ? 'stored securely' : '',
     campaignStatus: readiness.campaignStatus || '',
+    campaignDraftReady: !!(readiness.brandVerified && !readiness.campaignId && readiness.usecaseQualificationChecked && readiness.usecaseQualified && !readiness.resubmissionBlocked),
     brandStatus: readiness.brandStatus || '',
     brandVerified: !!readiness.brandVerified,
     historicalCampaignStatus: readiness.historicalCampaignStatus || '',
@@ -10448,6 +10522,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/twilio/configure', 'Owner connects Twilio inbound SMS webhook'),
     route('POST', '/api/integrations/telnyx/configure', 'Owner connects Telnyx signed inbound SMS webhook'),
     route('POST', '/api/integrations/telnyx/readiness', 'Owner checks Telnyx 10DLC campaign and number assignment'),
+    route('GET', '/api/integrations/telnyx/campaign-draft', 'Owner previews the qualified Telnyx Customer Care campaign without submitting or charging a fee'),
     route('POST', '/api/integrations/telnyx/assign-10dlc', 'Owner attaches the Telnyx number to an approved active campaign'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
@@ -21406,6 +21481,21 @@ const server = http.createServer(async (req, res) => {
         return json(res, Number(err && err.statusCode || 502), { ok: false, error, messaging: publicMessagingStatus(data) });
       }
     }
+    if (url.pathname === '/api/integrations/telnyx/campaign-draft' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can review the paid Telnyx campaign draft.' });
+      try {
+        const readiness = await checkTelnyx10dlcReadiness();
+        const draft = telnyxCustomerCareCampaignDraft(readiness);
+        return json(res, 200, {
+          ok: true,
+          draft,
+          readiness: publicTelnyx10dlcReadiness(readiness),
+          submitted: false
+        });
+      } catch (err) {
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error: String(err && err.message || err), submitted: false });
+      }
+    }
     if (url.pathname === '/api/integrations/telnyx/assign-10dlc' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can attach the Telnyx number to a 10DLC campaign.' });
       const data = await readData();
@@ -23315,6 +23405,7 @@ module.exports = {
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
+  telnyxCustomerCareCampaignDraft,
   assignTelnyx10dlcCampaign,
   autoConfigureTelnyxMessagingProfile,
   applyTelnyxDeliveryEvent,

@@ -171,6 +171,7 @@ assert.strictEqual(telnyx.inboundVerified, true);
 assert.strictEqual(telnyx.provider, 'telnyx');
 assert.strictEqual(telnyx.brandVerified, true);
 assert.strictEqual(telnyx.numberAssigned, true);
+assert.strictEqual(telnyx.campaignDraftReady, false, 'An active campaign must never expose a duplicate corrected-campaign draft state.');
 assert.deepStrictEqual(telnyx.carrierUsecaseQualificationFees, { monthly: 10, quarterly: 30, annual: 120 }, 'Owner preflight may expose carrier pricing without exposing Telnyx credentials.');
 
 const staleTelnyx = clone(data);
@@ -215,6 +216,8 @@ assert.match(qualifiedReplacementTelnyxEvidence.error, /qualifies for CUSTOMER_C
 assert.doesNotMatch(qualifiedReplacementTelnyxEvidence.error, /blocked by the carrier rejection/i, 'Historical rejection text must not contradict a passed replacement-use-case qualification.');
 assert.strictEqual(qualifiedReplacementTelnyxEvidence.carrierUsecaseQualified, true);
 assert.strictEqual(qualifiedReplacementTelnyxEvidence.carrierUsecaseQualificationUsecase, 'CUSTOMER_CARE');
+assert.strictEqual(qualifiedReplacementTelnyxEvidence.campaignDraftReady, true, 'A verified brand with a qualified replacement use case should expose a no-charge campaign-preview state.');
+assert.strictEqual(qualifiedReplacementTelnyxEvidence.historicalCampaignStatus, 'TCR_FAILED', 'The failed legacy campaign must remain visible as history while the corrected draft is prepared.');
 
 const resend = resendLiveLaunchEvidence(data);
 assert.strictEqual(resend.live, true, 'Resend launch proof must require the verified WheelsonAuto sender plus fresh outbound and inbound provider evidence.');
