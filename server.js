@@ -6649,6 +6649,8 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
   vehicle.currentCustomer = selectedName;
   vehicle.status = 'Rented';
   vehicle.customerSyncedAt = now;
+  vehicle.manuallyEditedAt = now;
+  vehicle.assignmentLockedAt = now;
   vehicle.assignmentResolvedAt = now;
   vehicle.assignmentResolvedBy = user.name || user.username || 'Owner';
   vehicle.assignmentResolution = note;
