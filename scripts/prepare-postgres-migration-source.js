@@ -229,6 +229,7 @@ async function main() {
     outputCreated = true;
     await migrationSource.assertSourceUnchanged(sourceFile, source.sourceFileChecksum);
     const prepared = await migrationSource.readSource(outputFile);
+    const signedRepairs = collapsed.repairs.concat(vehicleIdentity.repairs, portalIdentity.repairs);
     const signedProvenance = migrationSource.createProvenanceManifest({
       preparedAt,
       source: sourceFile,
@@ -237,11 +238,12 @@ async function main() {
       protectedCopyChecksum: prepared.sourceFileChecksum,
       maintenanceLease: captureLease,
       policy: 'Canonical byte-equivalent records may be collapsed. Non-identical duplicate vehicles may be re-keyed only with unique VINs and uniquely matching dependent-reference evidence. Disabled same-person duplicate portal usernames may be archived only when exactly one active account remains. Assignments are never guessed.',
-      repairs: collapsed.repairs.concat(vehicleIdentity.repairs, portalIdentity.repairs)
+      repairs: signedRepairs
     });
     const manifest = {
       ...signedProvenance,
-      repairs: collapsed.repairs,
+      repairs: signedRepairs,
+      exactDuplicateRepairs: collapsed.repairs,
       deterministicVehicleIdentityRepairs: vehicleIdentity.repairs,
       deterministicVehicleReferenceRepairs: vehicleIdentity.referenceRepairs,
       deterministicVehicleResolvedReferences: vehicleIdentity.resolvedReferences,

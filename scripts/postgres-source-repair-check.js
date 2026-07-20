@@ -185,6 +185,13 @@ async function main() {
     assert(portalPrepared.migrationSourceRepairs.some(row => /disabled-portal-archive/.test(row.id)), 'Protected output must retain an auditable disabled-login archive record.');
     const portalManifest = JSON.parse(await fs.readFile(portalOutput + '.repair-manifest.json', 'utf8'));
     assert.strictEqual(portalManifest.archivedDisabledPortalIdentityRepairs.length, 1);
+    assert.strictEqual(portalManifest.repairs.length, 1, 'The signed repair list must include the archived portal identity.');
+    const portalVerifiedProvenance = await migrationSource.assertProvenanceManifest(portalOutput, portalReport.protectedCopyChecksum, {
+      ...captureEnvironment,
+      WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM: migrationSource.MIGRATION_PROVENANCE_CONFIRMATION,
+      WOA_POSTGRES_MIGRATION_SOURCE_MANIFEST: portalOutput + '.repair-manifest.json'
+    });
+    assert.strictEqual(portalVerifiedProvenance.protectedCopyChecksum, portalReport.protectedCopyChecksum, 'Portal repair provenance must authenticate before import.');
 
     const activePortalConflictSource = path.join(temp, 'active-portal-conflict-source.json');
     const activePortalConflictOutput = path.join(temp, 'active-portal-conflict-output.json');
@@ -253,6 +260,13 @@ async function main() {
     const vehicleManifest = JSON.parse(await fs.readFile(vehicleOutput + '.repair-manifest.json', 'utf8'));
     assert.strictEqual(vehicleManifest.deterministicVehicleIdentityRepairs.length, 1);
     assert.strictEqual(vehicleManifest.deterministicVehicleReferenceRepairs.length, 1);
+    assert.strictEqual(vehicleManifest.repairs.length, 1, 'The signed repair list must include the deterministic vehicle re-key.');
+    const vehicleVerifiedProvenance = await migrationSource.assertProvenanceManifest(vehicleOutput, vehicleRekeyReport.protectedCopyChecksum, {
+      ...captureEnvironment,
+      WOA_POSTGRES_MIGRATION_PROVENANCE_CONFIRM: migrationSource.MIGRATION_PROVENANCE_CONFIRMATION,
+      WOA_POSTGRES_MIGRATION_SOURCE_MANIFEST: vehicleOutput + '.repair-manifest.json'
+    });
+    assert.strictEqual(vehicleVerifiedProvenance.protectedCopyChecksum, vehicleRekeyReport.protectedCopyChecksum, 'Vehicle repair provenance must authenticate before import.');
 
     const ambiguousVehicleSource = path.join(temp, 'ambiguous-vehicle-source.json');
     const ambiguousVehicleOutput = path.join(temp, 'ambiguous-vehicle-output.json');
