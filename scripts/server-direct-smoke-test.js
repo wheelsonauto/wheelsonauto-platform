@@ -522,6 +522,19 @@ async function main() {
     ], integrations: partialRecurringState.integrations });
     assert(partialCoverageReadiness.eligibleRows === 1 && partialCoverageReadiness.quarantinedRows === 1 && partialCoverageReadiness.providerCoverageGapRows === 1 && partialCoverageReadiness.actionableQuarantinedRows === 0 && partialCoverageReadiness.quarantine.length === 0, 'A partial Clover response must keep omitted plans blocked while separating the provider coverage gap from actionable customer or duplicate-plan conflicts: ' + JSON.stringify(partialCoverageReadiness));
     assert(partialCoverageReadiness.lastCompleteRosterSubscriptionIds === 2 && partialCoverageReadiness.lastCompleteRosterConfigurationMatched === true, 'Readiness may expose count-only matching last-complete evidence for audit without using it to authorize cutover.');
+    cloverRecurringFixture = 'count-warning-preserve';
+    const countWarningState = { recurringPayments: [], integrations: { clover: {
+      recurringPlanSummary: { activePlans: 2, activeCustomers: 2, possibleWeekly: 458 },
+      recurringPlans: [{ id: 'saved-plan-229', plan: '229', customers: 2, status: 'Active' }],
+      recurringPlanMembers: [{ id: 'saved-omitted-row', cloverSubscriptionId: 'SUB-SAVED-OMITTED', customer: 'Saved Omitted Customer', status: 'Active' }]
+    } } };
+    const countWarningResult = await syncCloverRecurringPlans(countWarningState);
+    assert(countWarningResult.preservedSavedTotals === true && /less than saved Plan Manager total 2/.test(countWarningResult.warning), 'A current one-of-two Clover response must preserve the saved Plan Manager total.');
+    assert(countWarningState.integrations.clover.recurringPlanMembers.some(row => row.cloverSubscriptionId === 'SUB-DIRECT-229' && row.customer === 'Merchant Wide'), 'The count-warning branch must retain the exact current provider subscription and resolved customer identity.');
+    assert(countWarningState.integrations.clover.recurringPlanMembers.some(row => row.cloverSubscriptionId === 'SUB-SAVED-OMITTED'), 'The count-warning branch must retain the saved subscription omitted by Clover instead of deleting business history.');
+    const countWarningReadiness = cloverRecurringMigrationReadiness(countWarningState);
+    assert(countWarningReadiness.ready === true && countWarningReadiness.eligibleRows === 1, 'A partial Clover roster must allow its exact verified row to proceed through individual protected cutover.');
+    assert(countWarningReadiness.providerCoverageGapRows === 1 && countWarningReadiness.actionableQuarantinedRows === 0, 'The omitted saved row must remain quarantined as a provider coverage gap without becoming a false customer conflict.');
     cloverRecurringFixture = '';
     const currentDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-current-key', storageKey: 'documents/org-direct/doc-current-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' } }] });
     assert(currentDocumentKeyCoverage.ready === true && currentDocumentKeyCoverage.encryptedDocuments === 1 && currentDocumentKeyCoverage.requiredKeyVersions.includes('v1'), 'The launch gate must inventory encrypted documents covered by the active versioned key.');
