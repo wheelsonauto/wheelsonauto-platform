@@ -241,6 +241,8 @@ async function main() {
     calendarDayName,
     nextRecurringOccurrence,
     nextFutureRecurringDate,
+    allRecurringRows,
+    findRecurringRow,
     successfulRecurringPaymentEvidence,
     retryDelayPassed,
     recurringPlanIdFromSubscription,
@@ -274,6 +276,12 @@ async function main() {
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
+  const exactRecurringLookupState = {
+    recurringPayments: [{ id: 'local-operating-plan', customer: 'Local Operating Customer', amount: 239, cloverSubscriptionId: 'shared-provider-subscription', nextRun: '2026-07-24' }],
+    integrations: { clover: { recurringPlanMembers: [{ id: 'provider-mirror-plan', customer: 'Clover recurring customer', amount: 229, cloverSubscriptionId: 'shared-provider-subscription', cloverPaymentSource: 'provider-source' }] } }
+  };
+  assert(allRecurringRows(exactRecurringLookupState)[0].id === 'local-operating-plan', 'Server recurring lookup must prefer the local WheelsonAuto operating row over its provider mirror.');
+  assert(findRecurringRow(exactRecurringLookupState, 'shared-provider-subscription').id === 'local-operating-plan', 'Exact Clover subscription lookup must return the local operating schedule so charges and cutover actions cannot use stale provider-mirror fields.');
   assert(importedRecordEndedForDifferentRenter({ assignmentEndedAt: '2026-07-20T08:00:00.000Z', previousVehicleId: 'veh-direct-transfer' }, { id: 'veh-direct-transfer', currentCustomer: 'New Current Renter' }, 'Old Sheet Renter'), 'A historical spreadsheet renter must not reactivate after an owner-confirmed transfer.');
   assert(!importedRecordEndedForDifferentRenter({ assignmentEndedAt: '2026-07-20T08:00:00.000Z', previousVehicleId: 'veh-direct-transfer' }, { id: 'veh-direct-transfer', currentCustomer: 'Old Sheet Renter' }, 'Old Sheet Renter'), 'The spreadsheet importer may preserve an ended row only when the same customer is still authoritative on the vehicle.');
   const forgedLaunchState = stateForUserWrite({}, {

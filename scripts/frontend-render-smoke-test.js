@@ -477,6 +477,42 @@ async function mechanicInteractionSmoke() {
 
 function ownerSmoke() {
   const context = makeContext({ name: 'Owner Smoke', username: 'owner', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access', ownerAccess: { passwordLoginConfigured: true, passwordLoginStrong: true, passwordLoginVerified: true, passwordLoginVerifiedAt: '2026-07-19T09:30:00.000Z', passwordSessionVerified: true, pinFallbackAllowed: true, canDisablePinFallback: true } });
+  const originalRecurringRows = context.db.recurringPayments;
+  context.db.integrations = context.db.integrations || {};
+  context.db.integrations.clover = context.db.integrations.clover || {};
+  const originalCloverMembers = context.db.integrations.clover.recurringPlanMembers;
+  const providerMirror = {
+    id: 'provider-mirror-plan-a',
+    customer: 'Clover recurring customer',
+    amount: 229,
+    status: 'Active',
+    cloverSubscriptionId: 'frontend-shared-plan-a',
+    cloverPaymentSource: 'frontend-provider-source-a'
+  };
+  const localPlanA = {
+    id: 'local-plan-a',
+    customer: 'Frontend Multi Plan Customer',
+    amount: 239,
+    status: 'Active',
+    cloverSubscriptionId: 'frontend-shared-plan-a',
+    notes: 'WheelsonAuto operating schedule'
+  };
+  const localPlanB = {
+    id: 'local-plan-b',
+    customer: 'Frontend Multi Plan Customer',
+    amount: 189,
+    status: 'Active',
+    cloverSubscriptionId: 'frontend-shared-plan-b'
+  };
+  context.db.integrations.clover.recurringPlanMembers = [providerMirror];
+  context.db.recurringPayments = [localPlanA, localPlanB];
+  const reconciledMultiPlanRoster = context.recurringRoster();
+  assert(reconciledMultiPlanRoster.length === 2, 'The browser roster must merge the provider/local mirror for one exact Clover subscription without collapsing a second real plan.');
+  const reconciledPlanA = reconciledMultiPlanRoster.find(row => row.cloverSubscriptionId === 'frontend-shared-plan-a');
+  assert(reconciledPlanA && reconciledPlanA.id === 'local-plan-a' && reconciledPlanA.customer === 'Frontend Multi Plan Customer' && reconciledPlanA.amount === 239 && reconciledPlanA.cloverPaymentSource === 'frontend-provider-source-a', 'The reconciled roster must keep WheelsonAuto operating fields while retaining provider-only card evidence for the exact subscription.');
+  assert(context.uniqueRecurringMoneyRows([providerMirror, localPlanA, localPlanB]).length === 2, 'Money totals must deduplicate an exact provider/local subscription mirror while counting two distinct plans for the same customer.');
+  context.db.recurringPayments = originalRecurringRows;
+  context.db.integrations.clover.recurringPlanMembers = originalCloverMembers;
   assert(context.safeLink('https://wheelsonauto.com/toll-proof') === 'https://wheelsonauto.com/toll-proof' && context.safeLink('/toll-receipt/private-token') === '/toll-receipt/private-token', 'Trusted HTTP(S) and same-site proof links should remain clickable.');
   assert(context.safeLink('javascript:alert(1)') === '' && context.safeLink('//malicious.example/proof') === '', 'Script and protocol-relative proof links must not become clickable.');
   context.tollReceiptModal({ id: 'unsafe-proof', customer: 'Unsafe Proof Test', amount: 1, proofUrl: 'javascript:alert(1)' });
