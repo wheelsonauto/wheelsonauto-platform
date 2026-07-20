@@ -9,6 +9,7 @@ const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
 const encryptedStateBackup = require('../encrypted-state-backup');
 const stripeMigration = require('../stripe-migration');
+const { assignmentConflictPreflightClassification } = require('../server');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
 async function verifyGracefulShutdown(root, dataDir) {
@@ -69,6 +70,24 @@ async function verifyGracefulShutdown(root, dataDir) {
 
 async function main() {
   runCliArgumentChecks();
+  const staleReviewClassification = assignmentConflictPreflightClassification({
+    vehicles: [{ id: 'veh-review-only', year: 2025, make: 'Review', model: 'Only', vin: 'REVIEWONLYVIN', status: 'Rented', currentCustomer: 'Current Customer', assignmentConflict: 'Imported Name / Current Customer' }],
+    recurringPayments: [{ id: 'rec-review-only', customer: 'Current Customer', vehicleId: 'veh-review-only', status: 'Active' }]
+  });
+  assert.strictEqual(staleReviewClassification.all.length, 1, 'A saved assignment warning must remain visible for owner review.');
+  assert.strictEqual(staleReviewClassification.blocking.length, 0, 'A saved warning without two active assignment records must not falsely block PostgreSQL or Stripe launch.');
+  assert.strictEqual(staleReviewClassification.review.length, 1, 'A non-transactional assignment warning must stay in the explicit owner-review collection.');
+
+  const activeConflictClassification = assignmentConflictPreflightClassification({
+    vehicles: [{ id: 'veh-active-conflict', year: 2025, make: 'Active', model: 'Conflict', vin: 'ACTIVECONFLICTVIN', status: 'Rented', assignmentConflict: 'First Customer / Second Customer' }],
+    recurringPayments: [
+      { id: 'rec-active-conflict-one', customer: 'First Customer', vehicleId: 'veh-active-conflict', status: 'Active' },
+      { id: 'rec-active-conflict-two', customer: 'Second Customer', vehicleId: 'veh-active-conflict', status: 'Active' }
+    ]
+  });
+  assert.strictEqual(activeConflictClassification.blocking.length, 1, 'Two active customer claims for one vehicle must remain a launch-blocking transactional conflict.');
+  assert.strictEqual(activeConflictClassification.review.length, 0, 'A transactional assignment conflict must not be downgraded to a review-only warning.');
+
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-production-foundation-'));
   try {
     const seedFile = path.join(temp, 'seed.json');

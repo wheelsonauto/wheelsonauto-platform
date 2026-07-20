@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-assignment-triage-221';
+const ASSET_VERSION = 'platform-20260719-assignment-gate-222';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -6735,6 +6735,7 @@ function assignmentConflictPreflightClassification(data = {}) {
   });
   return {
     all,
+    blocking: structuralRows,
     structural: structuralRows,
     review: all.filter(row => !structuralVehicleIds.has(row.vehicleId))
   };
@@ -10683,6 +10684,7 @@ async function productionInfrastructurePreflight(data = null) {
   const identityConflicts = stateRepository.identityConflicts(state);
   const assignmentClassification = assignmentConflictPreflightClassification(state);
   const assignmentConflicts = assignmentClassification.all;
+  const blockingAssignmentConflicts = assignmentClassification.blocking;
   const identityWarnings = stateRepository.identityWarnings(state);
   const providerProofCollectionMissing = [];
   const providerEvidenceMissing = [];
@@ -10746,11 +10748,11 @@ async function productionInfrastructurePreflight(data = null) {
   else if (!ownerAuthentication.passwordLoginVerified) missing.push('verified owner password sign-in');
   if (ownerAuthentication.pinFallbackAllowed) missing.push('owner PIN fallback disabled');
   if (identityConflicts.length) missing.push('resolve duplicate provider identity conflicts');
-  if (assignmentConflicts.length) missing.push('resolve active vehicle assignment conflicts');
+  if (blockingAssignmentConflicts.length) missing.push('resolve active vehicle assignment conflicts');
   if (identityWarnings.length) missing.push('complete vehicle VIN identity review');
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) missing.push('HTTPS PUBLIC_BASE_URL');
   const providerProofCollectionReady = providerProofCollectionMissing.length === 0;
-  const dataReviewMissing = identityConflicts.length + assignmentConflicts.length + identityWarnings.length;
+  const dataReviewMissing = identityConflicts.length + blockingAssignmentConflicts.length + identityWarnings.length;
   const launchStage = missing.length === 0
     ? 'live_stripe_ready'
     : !providerProofCollectionReady
@@ -10783,6 +10785,7 @@ async function productionInfrastructurePreflight(data = null) {
     cloverRecurring,
     identityConflictCount: identityConflicts.length,
     assignmentConflictCount: assignmentConflicts.length,
+    blockingAssignmentConflictCount: blockingAssignmentConflicts.length,
     structuralAssignmentConflictCount: assignmentClassification.structural.length,
     assignmentReviewWarningCount: assignmentClassification.review.length,
     identityWarnings,
@@ -22478,6 +22481,7 @@ const server = http.createServer(async (req, res) => {
           ...infrastructure,
           identityConflicts: identityConflicts.slice(0, 20),
           assignmentConflicts: assignmentClassification.all.slice(0, 20),
+          blockingAssignmentConflicts: assignmentClassification.blocking.slice(0, 20),
           structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 20),
           assignmentReviewWarnings: assignmentClassification.review.slice(0, 20),
           identityWarnings: stateRepository.identityWarnings(data).slice(0, 20),
@@ -22493,12 +22497,14 @@ const server = http.createServer(async (req, res) => {
       const conflicts = stateRepository.identityConflicts(data);
       const assignmentClassification = assignmentConflictPreflightClassification(data);
       const assignmentConflicts = assignmentClassification.all;
+      const blockingAssignmentConflicts = assignmentClassification.blocking;
       const warnings = stateRepository.identityWarnings(data);
       return json(res, 200, {
-        ok: infrastructure.readyForLiveStripe && conflicts.length === 0 && assignmentConflicts.length === 0 && warnings.length === 0,
+        ok: infrastructure.readyForLiveStripe && conflicts.length === 0 && blockingAssignmentConflicts.length === 0 && warnings.length === 0,
         ...infrastructure,
         identityConflicts: conflicts.slice(0, 50),
         assignmentConflicts: assignmentConflicts.slice(0, 50),
+        blockingAssignmentConflicts: blockingAssignmentConflicts.slice(0, 50),
         structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 50),
         assignmentReviewWarnings: assignmentClassification.review.slice(0, 50),
         identityWarnings: warnings.slice(0, 50),
@@ -24106,6 +24112,7 @@ module.exports = {
   runVerificationMonitor,
   publicPassTimeReadiness,
   runPassTimeGpsSync,
+  assignmentConflictPreflightClassification,
   sessionSignature,
   verifySignedSessionCookie
 };
