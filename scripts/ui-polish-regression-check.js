@@ -81,6 +81,18 @@ for (const action of ['sync-all', 'reactivate-customer', 'new-autopay']) {
   if (count !== 1) fail('PaymentsFocused must expose one ' + action + ' action, found ' + count + '.');
 }
 
+const launchPreflight = activeFunction('liveLaunchPreflightModal');
+if (launchPreflight.includes('Two active assignment records block')) {
+  fail('live launch preflight must derive its assignment-blocker sentence from the current conflict count.');
+}
+[
+  "assignmentBlockerCount+' transactional assignment conflict'",
+  "assignmentWarningCount+' review-only warning'",
+  "alertsReady?'Current owner alert delivery test is verified.':'A current owner alert delivery test is required.'"
+].forEach(text => {
+  if (!launchPreflight.includes(text)) fail('live launch truth guard is missing: ' + text);
+});
+
 [
   '.main>.topbar>.account-actions{display:none!important}',
   '.account-settings-grid{display:grid',
