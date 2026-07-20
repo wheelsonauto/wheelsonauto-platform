@@ -28,12 +28,13 @@ const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'durableRateLimit',
   'webhookLeaseRecovery',
   'idempotencyLeaseRecovery',
+  'paidProviderActionHold',
   'snapshotRestore',
   'serverRestartRead',
   'stateChecksum',
   'migrationProof'
 ]);
-const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v5-webhook-ownership';
+const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v6-paid-provider-idempotency';
 const RECOVERY_DRILL_CONTRACT_VERSION = Object.freeze([
   'wheelsonauto-recovery-drill-v2',
   RECOVERY_DRILL_SCRIPT_VERSION,

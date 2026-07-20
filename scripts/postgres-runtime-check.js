@@ -390,6 +390,20 @@ async function main() {
     assert.strictEqual(reclaimedIdempotencyClaim.reclaimed, true, 'Expired PostgreSQL Stripe claim recovery must be labeled as reclaimed.');
     await competingRepository.failIdempotencyKey(idempotencyScope, staleIdempotencyKey, new Error('stale recovery cleanup'));
 
+    const paidProviderScope = 'telnyx_paid_campaign_submission';
+    const paidProviderFingerprint = 'a'.repeat(64);
+    const paidProviderRequest = { provider: 'telnyx', action: '10dlc_campaign_submission', fingerprint: paidProviderFingerprint, reviewFeeCents: 1500 };
+    const paidProviderClaim = await repository.claimIdempotencyKey(paidProviderScope, paidProviderFingerprint, paidProviderRequest, { holdClaimUntilSettled: true });
+    assert.strictEqual(paidProviderClaim.accepted, true, 'The first paid provider action must acquire a durable PostgreSQL claim.');
+    await repository.pool.query("UPDATE woa_idempotency_keys SET processing_started_at = now() - interval '15 minutes' WHERE organization_id = $1 AND scope = $2 AND key = $3", [organizationId, paidProviderScope, paidProviderFingerprint]);
+    const paidProviderDuplicate = await competingRepository.claimIdempotencyKey(paidProviderScope, paidProviderFingerprint, paidProviderRequest, { holdClaimUntilSettled: true });
+    assert.strictEqual(paidProviderDuplicate.inProgress, true, 'A paid provider action with an uncertain result must remain blocked after the normal processing lease instead of being retried.');
+    assert.strictEqual(await competingRepository.completeIdempotencyKey(paidProviderScope, paidProviderFingerprint, { status: 'submitted' }, { claimToken: 'wrong-paid-provider-token' }), false, 'A competing worker must not settle a paid provider action it does not own.');
+    assert.strictEqual(await repository.completeIdempotencyKey(paidProviderScope, paidProviderFingerprint, { status: 'submitted' }, { claimToken: paidProviderClaim.claimToken }), true, 'The owning worker must permanently settle the paid provider action.');
+    const paidProviderCompleted = await competingRepository.claimIdempotencyKey(paidProviderScope, paidProviderFingerprint, paidProviderRequest, { holdClaimUntilSettled: true });
+    assert.strictEqual(paidProviderCompleted.completed, true, 'A paid provider action must remain deduplicated across processes after settlement.');
+    assert.strictEqual(paidProviderCompleted.response.status, 'submitted', 'The durable paid-provider claim must retain its final reconciliation state.');
+
     const firstState = {
       vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1', status: 'Rented', currentCustomer: 'Version One Customer' }],
       customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com', vehicleId: 'vehicle-runtime-1', status: 'Active' }],
@@ -614,12 +628,13 @@ async function main() {
       durableRateLimit: true,
       webhookLeaseRecovery: true,
       idempotencyLeaseRecovery: true,
+      paidProviderActionHold: true,
       snapshotRestore: true,
       serverRestartRead: true,
       stateChecksum: true,
       migrationProof: true
     });
-    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, restart-safe security throttles, Stripe money-action idempotency, reviewable job errors, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
+    console.log('PostgreSQL runtime recovery check passed: durable autopay lock, restart-safe security throttles, Stripe money-action idempotency, non-expiring paid-provider action protection, reviewable job errors, write, import proof, snapshot, restore, server-restart read, audit, checksum, current recovery proof, Star quota, and cleanup verified.' + (recoveryDrillProof.recorded ? ' Fresh production recovery-drill evidence was recorded.' : ' Recovery-drill evidence was not recorded: ' + recoveryDrillProof.reason + '.'));
   } finally {
     await removeTestRows(repository, organizationId).catch(() => {});
     await removeTestRows(repository, foreignOrganizationId).catch(() => {});

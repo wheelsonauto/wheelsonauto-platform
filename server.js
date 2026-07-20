@@ -222,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-telnyx-paid-guard-215';
+const ASSET_VERSION = 'platform-20260719-telnyx-durable-216';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -250,6 +250,7 @@ const autoSyncStatus = {
   lastResult: null
 };
 let telnyxCampaignSubmissionInFlight = false;
+const TELNYX_CAMPAIGN_SUBMISSION_SCOPE = 'telnyx_paid_campaign_submission';
 const woaAutopayStatus = {
   enabled: true,
   intervalMs: WOA_AUTOPAY_MS,
@@ -2944,6 +2945,53 @@ function assertTelnyxCampaignSubmissionApproval(draft = {}, options = {}) {
     throw error;
   }
   return true;
+}
+function telnyxCampaignSubmissionClaimRequest(draft = {}) {
+  return {
+    provider: 'telnyx',
+    action: '10dlc_campaign_submission',
+    fingerprint: String(draft.fingerprint || '').trim().toLowerCase(),
+    usecase: String(draft.payload && draft.payload.usecase || '').trim(),
+    brandId: String(draft.payload && draft.payload.brandId || '').trim(),
+    reviewFeeCents: cents(draft.reviewFeeUsd),
+    recurringMonthlyFeeCents: cents(draft.recurringMonthlyFeeUsd)
+  };
+}
+async function claimTelnyxCampaignSubmission(repository, draft = {}) {
+  if (!repository || typeof repository.isTransactional !== 'function' || !repository.isTransactional()) {
+    const error = new Error('Paid Telnyx campaign submission requires transactional PostgreSQL so a restart or overlapping server cannot submit the carrier fee twice.');
+    error.statusCode = 409;
+    error.code = 'telnyx_campaign_postgres_required';
+    throw error;
+  }
+  const request = telnyxCampaignSubmissionClaimRequest(draft);
+  if (!/^[a-f0-9]{64}$/.test(request.fingerprint)) {
+    const error = new Error('The reviewed Telnyx campaign fingerprint is invalid. Reopen the campaign preview before submitting.');
+    error.statusCode = 409;
+    throw error;
+  }
+  return repository.claimIdempotencyKey(
+    TELNYX_CAMPAIGN_SUBMISSION_SCOPE,
+    request.fingerprint,
+    request,
+    { holdClaimUntilSettled: true }
+  );
+}
+function telnyxCampaignSubmissionSettlement(draft = {}, claim = {}, response = {}) {
+  return {
+    action: 'complete',
+    scope: TELNYX_CAMPAIGN_SUBMISSION_SCOPE,
+    key: String(draft.fingerprint || '').trim().toLowerCase(),
+    claimToken: String(claim.claimToken || '').trim(),
+    response: {
+      status: String(response.status || 'unknown').slice(0, 80),
+      campaignId: String(response.campaignId || '').slice(0, 180),
+      campaignStatus: String(response.campaignStatus || '').slice(0, 160),
+      submittedAt: String(response.submittedAt || ''),
+      reviewedAt: String(response.reviewedAt || ''),
+      error: String(response.error || '').slice(0, 800)
+    }
+  };
 }
 async function submitTelnyxCustomerCareCampaign(options = {}) {
   const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
@@ -21581,6 +21629,17 @@ const server = http.createServer(async (req, res) => {
             submitted: false
           });
         }
+        const durableClaim = await claimTelnyxCampaignSubmission(STATE_REPOSITORY, draft);
+        if (!durableClaim.accepted) {
+          return json(res, 409, {
+            ok: false,
+            error: durableClaim.completed
+              ? 'This exact paid campaign was already submitted or permanently reviewed. Check Telnyx before taking any other action.'
+              : 'This exact paid campaign submission is already protected by PostgreSQL. Check Telnyx before any retry.',
+            submission: publicTelnyxCampaignSubmission(existing),
+            submitted: false
+          });
+        }
         const requestedAt = new Date().toISOString();
         data.integrations.messaging.telnyx10dlc = readiness;
         data.integrations.messaging.telnyxCampaignSubmission = {
@@ -21593,35 +21652,22 @@ const server = http.createServer(async (req, res) => {
           error: ''
         };
         appendAuditLog(data, user, 'Telnyx paid campaign submission started', [draft.payload.usecase, '$' + draft.reviewFeeUsd + ' review fee', draft.recurringMonthlyFeeUsd ? '$' + draft.recurringMonthlyFeeUsd + '/month' : 'Recurring fee not returned', draft.fingerprint]);
-        await protectConcurrentLocalWrites(data, { preferIncoming: true });
-        await writeData(data);
         try {
-          const result = await submitTelnyxCustomerCareCampaign({
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        } catch (intentError) {
+          await STATE_REPOSITORY.failIdempotencyKey(TELNYX_CAMPAIGN_SUBMISSION_SCOPE, draft.fingerprint, intentError, { claimToken: durableClaim.claimToken }).catch(() => {});
+          throw intentError;
+        }
+        let result;
+        try {
+          result = await submitTelnyxCustomerCareCampaign({
             readiness,
             draft,
             fingerprint: payload.fingerprint,
             confirmationPhrase: payload.confirmationPhrase,
             acknowledgedFees: payload.acknowledgedFees === true
           });
-          const fresh = await readData();
-          fresh.integrations = fresh.integrations || {};
-          fresh.integrations.messaging = fresh.integrations.messaging || {};
-          fresh.integrations.messaging.telnyxCampaignSubmission = {
-            status: 'submitted',
-            fingerprint: result.fingerprint,
-            requestedAt,
-            submittedAt: result.submittedAt,
-            requestedBy: user.name || user.username || 'Owner',
-            campaignId: result.campaignId,
-            campaignStatus: result.campaignStatus,
-            reviewFeeUsd: result.reviewFeeUsd,
-            recurringMonthlyFeeUsd: result.recurringMonthlyFeeUsd,
-            error: ''
-          };
-          appendAuditLog(fresh, user, 'Telnyx paid campaign submitted', [draft.payload.usecase, result.campaignStatus, '$' + result.reviewFeeUsd + ' review fee']);
-          await protectConcurrentLocalWrites(fresh, { preferIncoming: true });
-          await writeData(fresh);
-          return json(res, 200, { ok: true, submitted: true, submission: publicTelnyxCampaignSubmission(fresh.integrations.messaging.telnyxCampaignSubmission) });
         } catch (err) {
           const fresh = await readData();
           fresh.integrations = fresh.integrations || {};
@@ -21639,11 +21685,42 @@ const server = http.createServer(async (req, res) => {
             error: String(err && err.message || err).slice(0, 800)
           };
           appendAuditLog(fresh, user, uncertain ? 'Telnyx campaign result requires manual review' : 'Telnyx campaign submission rejected', [draft.payload.usecase, fresh.integrations.messaging.telnyxCampaignSubmission.error, draft.fingerprint]);
+          stageStateTransactionEffects(fresh, { idempotencySettlements: [telnyxCampaignSubmissionSettlement(draft, durableClaim, fresh.integrations.messaging.telnyxCampaignSubmission)] });
           await protectConcurrentLocalWrites(fresh, { preferIncoming: true });
-          await writeData(fresh);
+          try {
+            await writeData(fresh);
+          } catch (stateError) {
+            await recordOperationalFailure('telnyx-campaign-state-commit', stateError, { route: 'Telnyx paid campaign submission', source: 'owner' });
+            return json(res, 502, { ok: false, error: 'Telnyx may have received the campaign request, but WheelsonAuto could not commit the final result. Review Telnyx manually; retry remains blocked.', submitted: false });
+          }
           await recordOperationalFailure('telnyx-campaign-submit', err, { route: 'Telnyx paid campaign submission', source: 'owner' });
           return json(res, statusCode, { ok: false, error: fresh.integrations.messaging.telnyxCampaignSubmission.error, submission: publicTelnyxCampaignSubmission(fresh.integrations.messaging.telnyxCampaignSubmission), submitted: false });
         }
+        const fresh = await readData();
+        fresh.integrations = fresh.integrations || {};
+        fresh.integrations.messaging = fresh.integrations.messaging || {};
+        fresh.integrations.messaging.telnyxCampaignSubmission = {
+          status: 'submitted',
+          fingerprint: result.fingerprint,
+          requestedAt,
+          submittedAt: result.submittedAt,
+          requestedBy: user.name || user.username || 'Owner',
+          campaignId: result.campaignId,
+          campaignStatus: result.campaignStatus,
+          reviewFeeUsd: result.reviewFeeUsd,
+          recurringMonthlyFeeUsd: result.recurringMonthlyFeeUsd,
+          error: ''
+        };
+        appendAuditLog(fresh, user, 'Telnyx paid campaign submitted', [draft.payload.usecase, result.campaignStatus, '$' + result.reviewFeeUsd + ' review fee']);
+        stageStateTransactionEffects(fresh, { idempotencySettlements: [telnyxCampaignSubmissionSettlement(draft, durableClaim, fresh.integrations.messaging.telnyxCampaignSubmission)] });
+        await protectConcurrentLocalWrites(fresh, { preferIncoming: true });
+        try {
+          await writeData(fresh);
+        } catch (stateError) {
+          await recordOperationalFailure('telnyx-campaign-state-commit', stateError, { route: 'Telnyx paid campaign submission', source: 'owner' });
+          return json(res, 502, { ok: false, error: 'Telnyx accepted the campaign, but WheelsonAuto could not commit the provider result. Review Telnyx manually; retry remains blocked.', submitted: false });
+        }
+        return json(res, 200, { ok: true, submitted: true, submission: publicTelnyxCampaignSubmission(fresh.integrations.messaging.telnyxCampaignSubmission) });
       } catch (err) {
         return json(res, Number(err && err.statusCode || 502), { ok: false, error: String(err && err.message || err), submitted: false });
       } finally {
@@ -23561,6 +23638,9 @@ module.exports = {
   checkTelnyx10dlcReadiness,
   telnyxCustomerCareCampaignDraft,
   assertTelnyxCampaignSubmissionApproval,
+  telnyxCampaignSubmissionClaimRequest,
+  claimTelnyxCampaignSubmission,
+  telnyxCampaignSubmissionSettlement,
   submitTelnyxCustomerCareCampaign,
   publicTelnyxCampaignSubmission,
   assignTelnyx10dlcCampaign,

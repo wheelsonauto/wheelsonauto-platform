@@ -24,6 +24,9 @@ const {
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
   telnyxCustomerCareCampaignDraft,
+  telnyxCampaignSubmissionClaimRequest,
+  claimTelnyxCampaignSubmission,
+  telnyxCampaignSubmissionSettlement,
   submitTelnyxCustomerCareCampaign,
   publicTelnyxCampaignSubmission,
   assignTelnyx10dlcCampaign
@@ -434,6 +437,45 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(qualifiedCampaignDraft.recurringMonthlyFeeUsd, 2);
   assert.strictEqual(qualifiedCampaignDraft.confirmationPhrase, 'SUBMIT TELNYX CUSTOMER_CARE $15 + $2/MONTH');
   assert(/does not submit/.test(qualifiedCampaignDraft.warning) && /^[a-f0-9]{64}$/.test(qualifiedCampaignDraft.fingerprint), 'Campaign preparation must be a fingerprinted no-side-effect preview.');
+  const campaignClaimRequest = telnyxCampaignSubmissionClaimRequest(qualifiedCampaignDraft);
+  assert.deepStrictEqual(campaignClaimRequest, {
+    provider: 'telnyx',
+    action: '10dlc_campaign_submission',
+    fingerprint: qualifiedCampaignDraft.fingerprint,
+    usecase: 'CUSTOMER_CARE',
+    brandId: 'brand-qualified',
+    reviewFeeCents: 1500,
+    recurringMonthlyFeeCents: 200
+  });
+  await assert.rejects(
+    () => claimTelnyxCampaignSubmission({ isTransactional: () => false }, qualifiedCampaignDraft),
+    error => error && error.code === 'telnyx_campaign_postgres_required',
+    'A paid Telnyx campaign must fail closed before PostgreSQL is active.'
+  );
+  let durableCampaignClaimCall = null;
+  const durableCampaignClaim = await claimTelnyxCampaignSubmission({
+    isTransactional: () => true,
+    async claimIdempotencyKey(scope, key, request, options) {
+      durableCampaignClaimCall = { scope, key, request, options };
+      return { accepted: true, claimToken: 'telnyx-campaign-claim-token' };
+    }
+  }, qualifiedCampaignDraft);
+  assert(durableCampaignClaim.accepted && durableCampaignClaim.claimToken === 'telnyx-campaign-claim-token');
+  assert.strictEqual(durableCampaignClaimCall.scope, 'telnyx_paid_campaign_submission');
+  assert.strictEqual(durableCampaignClaimCall.key, qualifiedCampaignDraft.fingerprint);
+  assert.deepStrictEqual(durableCampaignClaimCall.request, campaignClaimRequest);
+  assert.deepStrictEqual(durableCampaignClaimCall.options, { holdClaimUntilSettled: true }, 'The paid claim must never expire into an automatic retry after an uncertain provider result.');
+  const durableCampaignSettlement = telnyxCampaignSubmissionSettlement(qualifiedCampaignDraft, durableCampaignClaim, {
+    status: 'submitted',
+    campaignId: 'campaign-private-id',
+    campaignStatus: 'TCR_PENDING',
+    submittedAt: '2026-07-19T12:00:00.000Z'
+  });
+  assert.strictEqual(durableCampaignSettlement.action, 'complete');
+  assert.strictEqual(durableCampaignSettlement.scope, 'telnyx_paid_campaign_submission');
+  assert.strictEqual(durableCampaignSettlement.key, qualifiedCampaignDraft.fingerprint);
+  assert.strictEqual(durableCampaignSettlement.claimToken, 'telnyx-campaign-claim-token');
+  assert.strictEqual(durableCampaignSettlement.response.campaignId, 'campaign-private-id');
   const repeatedCampaignDraft = telnyxCustomerCareCampaignDraft(qualifiedRegistration, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com/' });
   assert.strictEqual(repeatedCampaignDraft.fingerprint, qualifiedCampaignDraft.fingerprint, 'Equivalent public URLs must produce the same campaign-review fingerprint.');
   assert.throws(() => telnyxCustomerCareCampaignDraft(failedRegistration, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com' }), /qualify the intended use case/, 'An unqualified campaign must fail closed before a paid submission can be prepared.');

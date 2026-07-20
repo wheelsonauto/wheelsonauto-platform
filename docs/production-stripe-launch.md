@@ -22,6 +22,12 @@ artifact and must never be committed as part of a code release.
   PostgreSQL backend, production-ready encrypted private object storage, and a
   dedicated encrypted offsite state-backup configuration are active. Clover
   setup and charging remain available during this infrastructure phase.
+- Do not submit a paid Telnyx 10DLC campaign while production still uses JSON.
+  The owner-only endpoint requires PostgreSQL, claims the exact reviewed
+  campaign fingerprint before contacting Telnyx, and never lets that claim
+  expire into an automatic retry. A timeout, restart, overlapping server, or
+  failed final state commit therefore requires manual Telnyx review instead of
+  risking a second non-refundable carrier review fee.
 - Do not start or retrieve live Stripe Identity sessions while production still
   uses JSON or local document storage. License/selfie verification uses the same
   PostgreSQL, encrypted private storage, and offsite-backup foundation gate.
