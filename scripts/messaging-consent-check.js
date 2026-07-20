@@ -16,7 +16,13 @@ fs.writeFileSync(path.join(isolatedDataDir, 'data.json'), JSON.stringify(isolate
 process.env.DATA_DIR = isolatedDataDir;
 
 const consent = require('../messaging-consent');
+const stateRepository = require('../state-repository');
 const { sendProviderSms, processMessagingWebhookEvent } = require('../server');
+const transactionalSmsRepository = stateRepository.createStateRepository({
+  backend: 'json',
+  organizationId: 'org-wheelsonauto-consent-test'
+});
+transactionalSmsRepository.isTransactional = () => true;
 
 (async () => {
   const data = {
@@ -82,7 +88,7 @@ const { sendProviderSms, processMessagingWebhookEvent } = require('../server');
     customerMessage: true,
     consentData: data,
     messagingSettings: { enabled: true }
-  });
+  }, { repository: transactionalSmsRepository });
   assert.strictEqual(providerBlocked.sent, false);
   assert.strictEqual(providerBlocked.status, 'Opted out');
 
@@ -109,7 +115,7 @@ const { sendProviderSms, processMessagingWebhookEvent } = require('../server');
     customerMessage: true,
     consentData: data,
     messagingSettings: { enabled: true }
-  });
+  }, { repository: transactionalSmsRepository });
   global.fetch = originalFetch;
   assert(providerAllowed.sent);
   assert.strictEqual(providerAllowed.externalId, 'message-consent-1');

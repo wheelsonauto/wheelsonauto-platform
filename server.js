@@ -222,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-telnyx-durable-216';
+const ASSET_VERSION = 'platform-20260719-sms-postgres-gate-217';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1458,9 +1458,15 @@ function usesVerifiedWheelsonAutoSendingDomain(value) {
   const domain = email.slice(at + 1).replace(/\.$/, '');
   return domain === 'wheelsonauto.com' || domain.endsWith('.wheelsonauto.com');
 }
-function telnyxLiveLaunchEvidence(data = {}) {
+function smsTransactionalDeliveryReady(repository = STATE_REPOSITORY) {
+  return !!(repository && typeof repository.isTransactional === 'function' && repository.isTransactional());
+}
+function telnyxLiveLaunchEvidence(data = {}, options = {}) {
   const saved = (((data.integrations || {}).messaging) || {});
   const settings = messageSettings(data);
+  const transactionalDeliveryReady = options.transactionalStateReady === undefined
+    ? smsTransactionalDeliveryReady()
+    : options.transactionalStateReady === true;
   const registration = saved.telnyx10dlc && typeof saved.telnyx10dlc === 'object' ? saved.telnyx10dlc : {};
   const carrier = telnyxCarrierReadiness(data, 'telnyx');
   const expectedFingerprint = messagingLaunchConfigurationFingerprint(data);
@@ -1479,7 +1485,7 @@ function telnyxLiveLaunchEvidence(data = {}) {
   );
   const deliveryVerified = !!(carrier.carrierDeliveryVerified && delivery.fresh && deliveryConfigurationMatched);
   const inboundVerified = !!(inbound.fresh && inboundConfigurationMatched);
-  const live = !!(configured && carrier.carrierRegistrationVerified && deliveryVerified && inboundVerified);
+  const live = !!(configured && transactionalDeliveryReady && carrier.carrierRegistrationVerified && deliveryVerified && inboundVerified);
   let error = '';
   if (MESSAGING_PROVIDER !== 'telnyx') error = 'Set WOA_MESSAGING_PROVIDER=telnyx before the Stripe launch.';
   else if (!settings.enabled) error = 'Turn on WheelsonAuto messaging before the Stripe launch.';
@@ -1499,6 +1505,7 @@ function telnyxLiveLaunchEvidence(data = {}) {
         : 'Finish Telnyx 10DLC approval and assign the number to an active campaign.';
     }
   }
+  else if (!transactionalDeliveryReady) error = 'Move production state to transactional PostgreSQL before live SMS. WheelsonAuto will keep texts as drafts so a server restart cannot send the same message twice.';
   else if (!deliveryVerified) error = deliveryConfigurationMatched && delivery.fresh ? 'Send a Telnyx test text and wait for a delivered carrier receipt.' : 'Run a fresh Telnyx delivery test after the current Render messaging configuration is deployed.';
   else if (!inboundVerified) error = inboundConfigurationMatched && inbound.fresh ? 'Reply to the Telnyx test text so WheelsonAuto records a signed inbound proof.' : 'Send a fresh signed inbound Telnyx reply after the current Render messaging configuration is deployed.';
   return {
@@ -1516,6 +1523,7 @@ function telnyxLiveLaunchEvidence(data = {}) {
     assignmentStatus: String(registration.assignmentStatus || '').slice(0, 160),
     carrierRegistrationVerified: carrier.carrierRegistrationVerified,
     carrierDeliveryVerified: carrier.carrierDeliveryVerified,
+    transactionalDeliveryReady,
     deliveryVerified,
     inboundVerified,
     deliveryConfigurationMatched,
@@ -1614,7 +1622,7 @@ function starAiLiveLaunchEvidence(data = {}) {
     error
   };
 }
-function publicMessagingStatus(data = {}) {
+function publicMessagingStatus(data = {}, options = {}) {
   const settings = messageSettings(data);
   const saved = (((data.integrations || {}).messaging) || {});
   const provider = MESSAGING_PROVIDER || 'not_configured';
@@ -1629,15 +1637,20 @@ function publicMessagingStatus(data = {}) {
   );
   const carrier = telnyxCarrierReadiness(data, provider);
   const aiReadiness = openAiProviderReadiness(data);
-  const telnyxLaunch = telnyxLiveLaunchEvidence(data);
+  const transactionalDeliveryReady = options.transactionalStateReady === undefined
+    ? smsTransactionalDeliveryReady()
+    : options.transactionalStateReady === true;
+  const telnyxLaunch = telnyxLiveLaunchEvidence(data, { transactionalStateReady: transactionalDeliveryReady });
   const resendLaunch = resendLiveLaunchEvidence(data);
   const starLaunch = starAiLiveLaunchEvidence(data);
-  const smsDeliveryLive = !!(configured && (provider !== 'telnyx' || carrier.carrierDeliveryVerified));
+  const smsDeliveryLive = !!(configured && transactionalDeliveryReady && (provider !== 'telnyx' || carrier.carrierDeliveryVerified));
   return {
     provider,
     enabled: settings.enabled,
     configured,
     smsDeliveryLive,
+    transactionalDeliveryReady,
+    smsDeliveryBlockedReason: transactionalDeliveryReady ? '' : 'Live SMS requires transactional PostgreSQL so restarts cannot duplicate a customer text.',
     fromNumber: MESSAGING_FROM_NUMBER ? maskPhone(MESSAGING_FROM_NUMBER) : '',
     voiceMode: provider === 'telnyx'
       ? 'Telnyx handles the platform inbox. Keep the T-Mobile number unchanged until the Telnyx test line passes and the final port is approved.'
@@ -2327,8 +2340,9 @@ function smsDeliveryIdempotencyKey(to, body, meta = {}) {
   });
   return 'woa-sms-' + crypto.createHash('sha256').update(canonical).digest('hex');
 }
-async function sendProviderSms(to, body, meta = {}) {
+async function sendProviderSms(to, body, meta = {}, options = {}) {
   const provider = MESSAGING_PROVIDER;
+  const repository = options.repository || STATE_REPOSITORY;
   if (!body) throw new Error('Message needs a message body.');
   if (!to) return { sent: false, status: 'Needs phone', provider: provider || 'not_configured', message: 'Add the customer phone number before sending.' };
   if (meta.customerMessage) {
@@ -2353,6 +2367,14 @@ async function sendProviderSms(to, body, meta = {}) {
   if (!MESSAGING_FROM_NUMBER) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Add the hosted SMS number in Render first.' };
   const providerReady = (provider === 'twilio' && TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) || (provider === 'telnyx' && TELNYX_API_KEY);
   if (!providerReady) return { sent: false, status: 'Ready to send', provider: provider || 'not_configured', message: 'Hosted SMS is not connected yet. Message saved in WheelsonAuto.' };
+  if (!smsTransactionalDeliveryReady(repository)) {
+    return {
+      sent: false,
+      status: 'PostgreSQL required',
+      provider: provider || 'not_configured',
+      message: 'Message saved as a draft. Live SMS requires transactional PostgreSQL so a server restart cannot send the same customer text twice.'
+    };
+  }
   const idempotencyKey = smsDeliveryIdempotencyKey(to, body, meta);
   const claimScope = 'outbound_sms_delivery';
   const request = {
@@ -2363,7 +2385,7 @@ async function sendProviderSms(to, body, meta = {}) {
     bodyHash: crypto.createHash('sha256').update(String(body)).digest('hex'),
     deliveryId: String(meta.deliveryId || meta.idempotencyKey || '')
   };
-  const claim = await STATE_REPOSITORY.claimIdempotencyKey(claimScope, idempotencyKey, request, { holdClaimUntilSettled: true });
+  const claim = await repository.claimIdempotencyKey(claimScope, idempotencyKey, request, { holdClaimUntilSettled: true });
   if (!claim.accepted) {
     if (claim.completed) return { ...(claim.response || {}), idempotencyKey, duplicate: true };
     return {
@@ -2423,7 +2445,7 @@ async function sendProviderSms(to, body, meta = {}) {
       const destination = Array.isArray(telnyxData.to) ? telnyxData.to[0] || {} : {};
       result = { sent: true, status: destination.status || telnyxData.status || 'Queued', provider: 'telnyx', channel: 'SMS', externalId: telnyxData.id || '', idempotencyKey, response: jsonBody };
     }
-    await STATE_REPOSITORY.completeIdempotencyKey(claimScope, idempotencyKey, {
+    await repository.completeIdempotencyKey(claimScope, idempotencyKey, {
       sent: true,
       status: result.status,
       provider: result.provider,
@@ -2434,7 +2456,7 @@ async function sendProviderSms(to, body, meta = {}) {
     return result;
   } catch (error) {
     if (error.providerRejected) {
-      await STATE_REPOSITORY.failIdempotencyKey(claimScope, idempotencyKey, error, { claimToken: claim.claimToken });
+      await repository.failIdempotencyKey(claimScope, idempotencyKey, error, { claimToken: claim.claimToken });
     } else {
       error.code = 'sms_confirmation_pending';
       error.ambiguous = true;
@@ -2444,7 +2466,8 @@ async function sendProviderSms(to, body, meta = {}) {
     throw error;
   }
 }
-async function reviewPendingSmsDelivery(data, payload = {}, user = {}) {
+async function reviewPendingSmsDelivery(data, payload = {}, user = {}, options = {}) {
+  const repository = options.repository || STATE_REPOSITORY;
   if (!isOwnerUser(user)) throw new Error('Only the owner can review an uncertain SMS delivery.');
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const message = data.messages.find(item => item.id === String(payload.messageId || payload.id || '').trim());
@@ -2458,7 +2481,7 @@ async function reviewPendingSmsDelivery(data, payload = {}, user = {}) {
   const now = new Date().toISOString();
   let claimSettled = false;
   if (action === 'confirm_delivered') {
-    claimSettled = await STATE_REPOSITORY.completeIdempotencyKey('outbound_sms_delivery', key, {
+    claimSettled = await repository.completeIdempotencyKey('outbound_sms_delivery', key, {
       sent: true,
       status: 'Delivered (owner verified)',
       provider: message.provider || MESSAGING_PROVIDER || 'not_configured',
@@ -2473,7 +2496,7 @@ async function reviewPendingSmsDelivery(data, payload = {}, user = {}) {
     message.error = '';
     message.deliveryReviewOutcome = 'delivered';
   } else {
-    claimSettled = await STATE_REPOSITORY.failIdempotencyKey('outbound_sms_delivery', key, new Error('Owner reviewed carrier history and released this exact SMS delivery for retry.'));
+    claimSettled = await repository.failIdempotencyKey('outbound_sms_delivery', key, new Error('Owner reviewed carrier history and released this exact SMS delivery for retry.'));
     message.status = 'Retry released by owner';
     message.tone = 'warn';
     message.deliveryReviewOutcome = 'retry_released';
@@ -23605,6 +23628,7 @@ module.exports = {
   enrichLinkedProfiles,
   nearEndpointNameMatch,
   publicMessagingStatus,
+  smsTransactionalDeliveryReady,
   hydrateIncomingEmail,
   verifyResendWebhook,
   verifyBillingWebhook,

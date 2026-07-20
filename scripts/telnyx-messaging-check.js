@@ -1,5 +1,6 @@
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const stateRepository = require('../state-repository');
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
 const publicDer = publicKey.export({ type: 'spki', format: 'der' });
@@ -32,6 +33,13 @@ const {
   assignTelnyx10dlcCampaign
 } = require('../server');
 
+const transactionalSmsRepository = stateRepository.createStateRepository({
+  backend: 'json',
+  organizationId: 'org-wheelsonauto-sms-test'
+});
+transactionalSmsRepository.isTransactional = () => true;
+const transactionalSmsDependencies = { repository: transactionalSmsRepository };
+
 function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000))) {
   const signature = crypto.sign(null, Buffer.from(timestamp + '|' + rawBody), privateKey).toString('base64');
   return { 'telnyx-timestamp': timestamp, 'telnyx-signature-ed25519': signature };
@@ -61,9 +69,21 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(inbound.body, 'Can I bring the car in Tuesday?');
   assert.strictEqual(inbound.externalId, 'telnyx-inbound-1');
 
+  const originalFetch = global.fetch;
+  let jsonBackendProviderCalls = 0;
+  global.fetch = async () => {
+    jsonBackendProviderCalls += 1;
+    throw new Error('The provider must not be called from the JSON backend.');
+  };
+  const jsonBackendBlocked = await sendProviderSms('+16095550198', 'JSON backend launch guard', { deliveryId: 'telnyx-json-backend-guard-1' });
+  global.fetch = originalFetch;
+  assert.strictEqual(jsonBackendBlocked.sent, false, 'Live SMS must remain a draft on the restart-unsafe JSON backend.');
+  assert.strictEqual(jsonBackendBlocked.status, 'PostgreSQL required');
+  assert.match(jsonBackendBlocked.message, /server restart cannot send the same customer text twice/i);
+  assert.strictEqual(jsonBackendProviderCalls, 0, 'The JSON backend launch guard must block before any carrier request.');
+
   let outboundRequest = null;
   let outboundRequestCount = 0;
-  const originalFetch = global.fetch;
   global.fetch = async (url, options = {}) => {
     outboundRequestCount += 1;
     outboundRequest = { url: String(url), options };
@@ -75,8 +95,8 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
       }
     };
   };
-  const outbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test', { deliveryId: 'telnyx-check-outbound-1' });
-  const duplicateOutbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test', { deliveryId: 'telnyx-check-outbound-1' });
+  const outbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test', { deliveryId: 'telnyx-check-outbound-1' }, transactionalSmsDependencies);
+  const duplicateOutbound = await sendProviderSms('+16095550102', 'WheelsonAuto Telnyx test', { deliveryId: 'telnyx-check-outbound-1' }, transactionalSmsDependencies);
   global.fetch = originalFetch;
   assert(outbound.sent && outbound.provider === 'telnyx' && outbound.externalId === 'telnyx-outbound-1');
   assert(/^woa-sms-[a-f0-9]{64}$/.test(outbound.idempotencyKey), 'A Telnyx send must carry a deterministic WheelsonAuto delivery key.');
@@ -96,14 +116,14 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     throw new TypeError('Controlled transport interruption');
   };
   try {
-    await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+    await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' }, transactionalSmsDependencies);
     assert.fail('The controlled Telnyx interruption should remain confirmation pending.');
   } catch (error) {
     assert(error && error.code === 'sms_confirmation_pending' && error.ambiguous === true && /^woa-sms-/.test(error.idempotencyKey || ''));
     ambiguousKey = error.idempotencyKey;
   }
   Date.now = () => originalDateNow() + 20 * 60 * 1000;
-  const ambiguousDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+  const ambiguousDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' }, transactionalSmsDependencies);
   Date.now = originalDateNow;
   global.fetch = originalFetch;
   assert(!ambiguousDuplicate.sent && ambiguousDuplicate.inProgress && ambiguousDuplicate.duplicate, 'An ambiguous Telnyx retry must remain confirmation pending instead of sending again.');
@@ -125,9 +145,9 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     messageId: 'message-ambiguous-confirmed',
     action: 'confirm_delivered',
     note: 'Checked Telnyx message history.'
-  }, { role: 'Owner', name: 'Test Owner' });
+  }, { role: 'Owner', name: 'Test Owner' }, transactionalSmsDependencies);
   assert(confirmedReview.claimSettled && confirmedReview.message.deliveryReviewOutcome === 'delivered', 'Owner confirmation should settle the protected SMS claim as delivered.');
-  const confirmedDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' });
+  const confirmedDuplicate = await sendProviderSms('+16095550103', 'WheelsonAuto ambiguous Telnyx test', { deliveryId: 'telnyx-check-ambiguous-1' }, transactionalSmsDependencies);
   assert(confirmedDuplicate.sent && confirmedDuplicate.duplicate && confirmedDuplicate.ownerVerified, 'A carrier-confirmed message must reuse the completed result without another provider call.');
   assert.strictEqual(ambiguousAttempts, 1, 'Owner-confirmed delivery must never call Telnyx again.');
 
@@ -138,7 +158,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     throw new TypeError('Controlled transport interruption for owner release');
   };
   try {
-    await sendProviderSms('+16095550105', 'WheelsonAuto owner release test', { deliveryId: 'telnyx-check-release-1' });
+    await sendProviderSms('+16095550105', 'WheelsonAuto owner release test', { deliveryId: 'telnyx-check-release-1' }, transactionalSmsDependencies);
     assert.fail('The controlled owner-release interruption should remain confirmation pending.');
   } catch (error) {
     assert(error && error.code === 'sms_confirmation_pending');
@@ -157,14 +177,14 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     }]
   };
   await assert.rejects(
-    () => reviewPendingSmsDelivery(releasedData, { messageId: 'message-ambiguous-released', action: 'release_retry' }, { role: 'Manager', name: 'Test Manager' }),
+    () => reviewPendingSmsDelivery(releasedData, { messageId: 'message-ambiguous-released', action: 'release_retry' }, { role: 'Manager', name: 'Test Manager' }, transactionalSmsDependencies),
     /Only the owner/
   );
   const releasedReview = await reviewPendingSmsDelivery(releasedData, {
     messageId: 'message-ambiguous-released',
     action: 'release_retry',
     note: 'Telnyx shows no message accepted.'
-  }, { role: 'Owner', name: 'Test Owner' });
+  }, { role: 'Owner', name: 'Test Owner' }, transactionalSmsDependencies);
   assert(releasedReview.claimSettled && releasedReview.message.deliveryReviewOutcome === 'retry_released', 'Owner release should settle the uncertain claim and permit a deliberate retry.');
   global.fetch = async () => {
     releasedAttempts += 1;
@@ -176,7 +196,7 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
       }
     };
   };
-  const releasedRetry = await sendProviderSms('+16095550105', 'WheelsonAuto owner release test', { deliveryId: 'telnyx-check-release-1' });
+  const releasedRetry = await sendProviderSms('+16095550105', 'WheelsonAuto owner release test', { deliveryId: 'telnyx-check-release-1' }, transactionalSmsDependencies);
   global.fetch = originalFetch;
   assert(releasedRetry.sent && releasedRetry.externalId === 'telnyx-owner-released-retry-1', 'An owner-released SMS should allow exactly one deliberate provider retry.');
   assert.strictEqual(releasedAttempts, 2, 'Owner release should result in one interrupted attempt and one deliberate retry.');
@@ -202,10 +222,10 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     };
   };
   await assert.rejects(
-    () => sendProviderSms('+16095550104', 'WheelsonAuto rejected Telnyx test', { deliveryId: 'telnyx-check-rejected-1' }),
+    () => sendProviderSms('+16095550104', 'WheelsonAuto rejected Telnyx test', { deliveryId: 'telnyx-check-rejected-1' }, transactionalSmsDependencies),
     error => error && error.providerRejected === true && error.statusCode === 422
   );
-  const rejectedRetry = await sendProviderSms('+16095550104', 'WheelsonAuto rejected Telnyx test', { deliveryId: 'telnyx-check-rejected-1' });
+  const rejectedRetry = await sendProviderSms('+16095550104', 'WheelsonAuto rejected Telnyx test', { deliveryId: 'telnyx-check-rejected-1' }, transactionalSmsDependencies);
   global.fetch = originalFetch;
   assert(rejectedRetry.sent && rejectedRetry.externalId === 'telnyx-outbound-retry-1', 'A definitive provider rejection must release the delivery identity for a corrected retry.');
   assert.strictEqual(rejectedAttempts, 2, 'A definitive provider rejection must allow one later provider retry.');
@@ -258,8 +278,9 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(failedPublicStatus.configured, true, 'Telnyx credentials and number should remain separately marked as configured.');
   assert.strictEqual(failedPublicStatus.smsDeliveryLive, false, 'A 10DLC rejection must never be presented as live SMS.');
   assert.strictEqual(failedPublicStatus.carrierRegistrationRequired, true);
-  const deliveredPublicStatus = publicMessagingStatus(messageData);
+  const deliveredPublicStatus = publicMessagingStatus(messageData, { transactionalStateReady: true });
   assert.strictEqual(deliveredPublicStatus.smsDeliveryLive, true, 'A carrier-confirmed delivery should unlock the live SMS state.');
+  assert.strictEqual(publicMessagingStatus(messageData).smsDeliveryLive, false, 'Carrier delivery evidence must not bypass the transactional PostgreSQL launch gate.');
 
   const latestLiveData = {
     messages: [{ id: 'message-local-2', externalId: 'telnyx-outbound-2', provider: 'telnyx', customer: 'Latest customer name', vehicleId: 'vehicle-latest', status: 'queued', tone: 'blue' }]

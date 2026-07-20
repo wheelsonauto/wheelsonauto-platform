@@ -164,7 +164,11 @@ assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('notifications@wheelson
 assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('notifications@fakewheelsonauto.com'), false, 'A suffix lookalike domain must fail closed.');
 assert.strictEqual(usesVerifiedWheelsonAutoSendingDomain('wheelsonauto@gmail.com'), false, 'An external mailbox must not masquerade as the verified sending domain.');
 
-const telnyx = telnyxLiveLaunchEvidence(data);
+const jsonBackendTelnyx = telnyxLiveLaunchEvidence(data);
+assert.strictEqual(jsonBackendTelnyx.live, false, 'A restart-unsafe JSON backend must never pass the live Telnyx launch gate.');
+assert.strictEqual(jsonBackendTelnyx.transactionalDeliveryReady, false);
+assert.match(jsonBackendTelnyx.error, /transactional PostgreSQL/i);
+const telnyx = telnyxLiveLaunchEvidence(data, { transactionalStateReady: true });
 assert.strictEqual(telnyx.live, true, 'Telnyx launch proof must require a connected profile, active 10DLC campaign, carrier delivery, and signed inbound evidence.');
 assert.strictEqual(telnyx.deliveryVerified, true);
 assert.strictEqual(telnyx.inboundVerified, true);
@@ -176,7 +180,7 @@ assert.deepStrictEqual(telnyx.carrierUsecaseQualificationFees, { monthly: 10, qu
 
 const staleTelnyx = clone(data);
 staleTelnyx.integrations.messaging.lastTelnyxInboundConfigurationFingerprint = 'stale-proof';
-assert.strictEqual(telnyxLiveLaunchEvidence(staleTelnyx).live, false, 'A Telnyx proof from another configuration must not unlock the launch gate.');
+assert.strictEqual(telnyxLiveLaunchEvidence(staleTelnyx, { transactionalStateReady: true }).live, false, 'A Telnyx proof from another configuration must not unlock the launch gate.');
 const rejectedTelnyx = clone(data);
 rejectedTelnyx.integrations.messaging.telnyx10dlc = {
   checkedAt: new Date().toISOString(),
@@ -187,7 +191,7 @@ rejectedTelnyx.integrations.messaging.telnyx10dlc = {
   historicalFailureReason: 'Brand does not qualify for submitted campaign use-case.',
   registrationStage: 'campaign_creation'
 };
-const rejectedTelnyxEvidence = telnyxLiveLaunchEvidence(rejectedTelnyx);
+const rejectedTelnyxEvidence = telnyxLiveLaunchEvidence(rejectedTelnyx, { transactionalStateReady: true });
 assert.strictEqual(rejectedTelnyxEvidence.live, false, 'A rejected 10DLC campaign must keep the live launch gate closed.');
 assert.match(rejectedTelnyxEvidence.error, /Brand does not qualify for submitted campaign use-case/, 'The live launch gate must preserve the actionable Telnyx carrier rejection reason.');
 assert.strictEqual(rejectedTelnyxEvidence.carrierRegistrationStage, 'campaign_creation', 'The Telnyx launch evidence must expose the current corrective stage without exposing secrets.');
@@ -210,7 +214,7 @@ qualifiedReplacementTelnyx.integrations.messaging.telnyx10dlc = {
   resubmissionBlocked: false,
   registrationStage: 'campaign_creation'
 };
-const qualifiedReplacementTelnyxEvidence = telnyxLiveLaunchEvidence(qualifiedReplacementTelnyx);
+const qualifiedReplacementTelnyxEvidence = telnyxLiveLaunchEvidence(qualifiedReplacementTelnyx, { transactionalStateReady: true });
 assert.strictEqual(qualifiedReplacementTelnyxEvidence.live, false, 'A qualified replacement use case still needs an approved campaign, assigned number, and delivery proof.');
 assert.match(qualifiedReplacementTelnyxEvidence.error, /qualifies for CUSTOMER_CARE.*corrected campaign/i, 'The launch gate should show the qualified corrective path instead of repeating the historical rejection.');
 assert.doesNotMatch(qualifiedReplacementTelnyxEvidence.error, /blocked by the carrier rejection/i, 'Historical rejection text must not contradict a passed replacement-use-case qualification.');
