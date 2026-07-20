@@ -21,6 +21,7 @@ const matrix = [
   ['encrypted offsite backup creation', 'scripts/encrypted-state-backup-check.js'],
   ['encrypted backup restore and tamper rejection', 'scripts/encrypted-state-recovery-check.js'],
   ['transactional PostgreSQL runtime and restart recovery', 'scripts/postgres-runtime-check.js'],
+  ['guarded isolated PostgreSQL recovery-drill orchestration', 'scripts/postgres-recovery-drill-runner-check.js'],
   ['private object storage read/write/delete safeguards', 'scripts/object-storage-runtime-check.js'],
   ['private document metadata and object atomicity', 'scripts/private-document-atomicity-check.js'],
   ['legacy private-document migration, read-back, and repeat safety', 'scripts/private-document-migration-check.js'],
