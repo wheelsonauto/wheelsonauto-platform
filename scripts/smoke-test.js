@@ -82,6 +82,7 @@ async function main() {
       ...process.env,
       DATA_DIR: dataDir,
       WOA_ADMIN_PIN: adminPin,
+      WOA_STAR_AI_ENABLED: '1',
       PORT: String(port),
       HOST: '127.0.0.1',
       WOA_AUTO_SYNC_MS: '3600000',
