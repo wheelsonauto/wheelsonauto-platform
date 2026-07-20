@@ -231,6 +231,7 @@ const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 6000
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
 const TWILIO_INBOUND_POLL_MS = Math.max(5000, Number(process.env.WOA_TWILIO_INBOUND_POLL_MS || 5000));
 const TELNYX_DELIVERY_POLL_MS = Math.max(15000, Number(process.env.WOA_TELNYX_DELIVERY_POLL_MS || 30000));
+const TELNYX_10DLC_SYNC_MS = Math.max(15 * 60 * 1000, Number(process.env.WOA_TELNYX_10DLC_SYNC_MS || 6 * 60 * 60 * 1000));
 const TELNYX_DELIVERY_PENDING_REVIEW_MS = Math.max(60000, Number(process.env.WOA_TELNYX_DELIVERY_PENDING_REVIEW_MS || 5 * 60 * 1000));
 const TELNYX_WEBHOOK_RECOVERY_MS = Math.max(30000, Number(process.env.WOA_TELNYX_WEBHOOK_RECOVERY_MS || 60000));
 const TELNYX_WEBHOOK_RECOVERY_LIMIT = Math.max(1, Math.min(50, Number(process.env.WOA_TELNYX_WEBHOOK_RECOVERY_LIMIT || 20)));
@@ -274,6 +275,17 @@ const telnyxDeliveryPollStatus = {
   inFlight: false,
   lastCheckedAt: '',
   lastUpdatedAt: '',
+  lastError: '',
+  lastResult: null,
+  lastLoggedAt: 0
+};
+const telnyx10dlcPollStatus = {
+  enabled: MESSAGING_PROVIDER === 'telnyx',
+  intervalMs: TELNYX_10DLC_SYNC_MS,
+  inFlight: false,
+  lastStartedAt: '',
+  lastFinishedAt: '',
+  lastChangedAt: '',
   lastError: '',
   lastResult: null,
   lastLoggedAt: 0
@@ -3112,6 +3124,49 @@ function publicTelnyx10dlcReadiness(readiness = {}) {
     assignmentRequestedAt: readiness.assignmentRequestedAt || '',
     summary: readiness.summary || ''
   };
+}
+function telnyx10dlcReadinessFingerprint(readiness = {}) {
+  const safe = publicTelnyx10dlcReadiness(readiness);
+  delete safe.checkedAt;
+  return crypto.createHash('sha256').update(JSON.stringify(safe)).digest('hex');
+}
+async function syncTelnyx10dlcReadiness(options = {}) {
+  const source = String(options.source || 'background').trim().slice(0, 80) || 'background';
+  if (MESSAGING_PROVIDER !== 'telnyx' || !TELNYX_API_KEY || !MESSAGING_FROM_NUMBER) {
+    return { skipped: true, reason: 'Telnyx carrier registration is not fully configured in Render.' };
+  }
+  if (telnyx10dlcPollStatus.inFlight) return { skipped: true, reason: 'Telnyx carrier status sync already running.' };
+  telnyx10dlcPollStatus.inFlight = true;
+  telnyx10dlcPollStatus.lastStartedAt = new Date().toISOString();
+  try {
+    await writeDataQueue.catch(() => {});
+    const data = await readData();
+    data.integrations = data.integrations || {};
+    data.integrations.messaging = data.integrations.messaging || {};
+    const previous = data.integrations.messaging.telnyx10dlc || {};
+    const readiness = await checkTelnyx10dlcReadiness();
+    const changed = telnyx10dlcReadinessFingerprint(previous) !== telnyx10dlcReadinessFingerprint(readiness);
+    data.integrations.messaging.telnyx10dlc = readiness;
+    data.integrations.messaging.lastTelnyx10dlcAutoSyncAt = readiness.checkedAt;
+    data.integrations.messaging.lastTelnyx10dlcAutoSyncError = '';
+    if (changed) {
+      data.integrations.messaging.lastTelnyx10dlcStatusChangedAt = readiness.checkedAt;
+      appendAuditLog(data, { name: 'WheelsonAuto system', role: 'Owner', organizationId: MAIN_ORG_ID }, 'Telnyx 10DLC status changed automatically', [readiness.summary, readiness.assignmentStatus, readiness.campaignStatus, source]);
+    }
+    await protectConcurrentLocalWrites(data, { preferIncoming: true });
+    await writeData(data);
+    telnyx10dlcPollStatus.lastFinishedAt = new Date().toISOString();
+    telnyx10dlcPollStatus.lastChangedAt = changed ? readiness.checkedAt : telnyx10dlcPollStatus.lastChangedAt;
+    telnyx10dlcPollStatus.lastError = '';
+    telnyx10dlcPollStatus.lastResult = publicTelnyx10dlcReadiness(readiness);
+    return { ok: true, changed, readiness: telnyx10dlcPollStatus.lastResult };
+  } catch (error) {
+    telnyx10dlcPollStatus.lastFinishedAt = new Date().toISOString();
+    telnyx10dlcPollStatus.lastError = String(error && error.message || error).slice(0, 800);
+    throw error;
+  } finally {
+    telnyx10dlcPollStatus.inFlight = false;
+  }
 }
 async function assignTelnyx10dlcCampaign(options = {}) {
   const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
@@ -23687,7 +23742,7 @@ async function gracefulShutdown(signal, exitCode = 0) {
     if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
   });
   const backgroundDeadline = Date.now() + 45000;
-  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, telnyxWebhookRecoveryStatus, passTimePollStatus, stateBackupStatus];
+  const backgroundStatuses = [autoSyncStatus, woaAutopayStatus, twilioInboundPollStatus, telnyxDeliveryPollStatus, telnyx10dlcPollStatus, telnyxWebhookRecoveryStatus, passTimePollStatus, stateBackupStatus];
   while (backgroundStatuses.some(status => status.inFlight) && Date.now() < backgroundDeadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -23780,6 +23835,19 @@ if (require.main === module) {
         telnyxWebhookRecoveryStatus.lastLoggedAt = Date.now();
         return reportBackgroundTaskFailure('telnyx-webhook-recovery', err, { route: 'Durable Telnyx webhook recovery', source: 'background' }, 'Telnyx webhook recovery');
       }), TELNYX_WEBHOOK_RECOVERY_MS);
+    setTimeout(() => syncTelnyx10dlcReadiness({ source: 'startup' })
+      .then(result => console.log(result && result.skipped ? 'Telnyx carrier status sync skipped: ' + result.reason : 'Telnyx carrier status synced' + (result.changed ? ' with a status change.' : '.')))
+      .catch(err => reportBackgroundTaskFailure('telnyx-10dlc-sync', err, { route: 'Telnyx 10DLC carrier status', source: 'startup' }, 'Startup Telnyx carrier status sync')), 8500);
+    setInterval(() => syncTelnyx10dlcReadiness({ source: 'background' })
+      .then(result => {
+        if (!result || result.skipped || !result.changed) return;
+        console.log('Telnyx carrier status changed to ' + String(result.readiness && result.readiness.campaignStatus || 'unknown') + '.');
+      })
+      .catch(err => {
+        if (Date.now() - telnyx10dlcPollStatus.lastLoggedAt < 60 * 1000) return;
+        telnyx10dlcPollStatus.lastLoggedAt = Date.now();
+        return reportBackgroundTaskFailure('telnyx-10dlc-sync', err, { route: 'Telnyx 10DLC carrier status', source: 'background' }, 'Background Telnyx carrier status sync');
+      }), TELNYX_10DLC_SYNC_MS);
     setTimeout(() => runAutoSync({ source: 'startup', force: true }).catch(err => reportBackgroundTaskFailure('clover-auto-sync', err, { route: 'WheelsonAuto automatic Clover sync', source: 'startup' }, 'Startup auto sync')), AUTO_SYNC_STARTUP_DELAY_MS);
     setInterval(() => runAutoSync({ source: 'background' }).catch(err => reportBackgroundTaskFailure('clover-auto-sync', err, { route: 'WheelsonAuto automatic Clover sync', source: 'background' }, 'Background auto sync')), AUTO_SYNC_MS);
     setTimeout(() => runWheelsonAutoAutopay({ source: 'startup' }).catch(err => reportBackgroundTaskFailure('autopay-run', err, { route: 'WheelsonAuto background autopay', source: 'startup' }, 'Startup WOA autopay')), AUTO_SYNC_STARTUP_DELAY_MS + 5000);
@@ -23852,6 +23920,8 @@ module.exports = {
   autoConfigureTwilioSmsWebhook,
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
+  telnyx10dlcReadinessFingerprint,
+  syncTelnyx10dlcReadiness,
   telnyxCustomerCareCampaignDraft,
   assertTelnyxCampaignSubmissionApproval,
   telnyxCampaignSubmissionClaimRequest,

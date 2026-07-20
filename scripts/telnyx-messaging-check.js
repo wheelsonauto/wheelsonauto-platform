@@ -24,6 +24,7 @@ const {
   reconcileTelnyxDeliveryRecords,
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
+  telnyx10dlcReadinessFingerprint,
   telnyxCustomerCareCampaignDraft,
   telnyxCampaignSubmissionClaimRequest,
   claimTelnyxCampaignSubmission,
@@ -344,6 +345,22 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
     }
   });
   assert(activeRegistration.numberAssigned && activeRegistration.campaignActive && activeRegistration.readyForDeliveryTest, 'Active 10DLC campaign plus number assignment should unlock the outbound delivery test.');
+  const activeFingerprint = telnyx10dlcReadinessFingerprint(activeRegistration);
+  assert.strictEqual(
+    activeFingerprint,
+    telnyx10dlcReadinessFingerprint({ ...activeRegistration, checkedAt: '2099-01-01T00:00:00.000Z' }),
+    'A new carrier check timestamp alone must not create a false 10DLC status change.'
+  );
+  assert.notStrictEqual(
+    activeFingerprint,
+    telnyx10dlcReadinessFingerprint({ ...activeRegistration, numberAssigned: false, assignmentStatus: 'Not assigned', readyForDeliveryTest: false }),
+    'A real phone-number assignment change must produce a new 10DLC status fingerprint.'
+  );
+  assert.notStrictEqual(
+    activeFingerprint,
+    telnyx10dlcReadinessFingerprint({ ...activeRegistration, campaignStatus: 'TCR_FAILED', campaignActive: false, readyForDeliveryTest: false }),
+    'A real campaign status change must produce a new 10DLC status fingerprint.'
+  );
   const staleFailureWithActiveRegistration = {
     integrations: { messaging: { telnyx10dlc: activeRegistration } },
     messages: [{ provider: 'telnyx', providerStatus: 'delivery_failed', providerErrorCode: '40010', providerErrorMessage: 'Old registration failure', deliveryUpdatedAt: '2026-07-15T12:00:00.000Z' }]
