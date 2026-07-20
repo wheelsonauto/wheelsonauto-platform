@@ -281,7 +281,9 @@ assertIncludes('Owner recovery operator surface', app, [
 assertIncludes('Password-backed staff and owner guidance', app, [
   'Manager and mechanic username/password accounts.',
   'Manager and mechanic accounts use their own username and password',
-  'Complete each owner-security step in order',
+  'Owner login & security',
+  'Set username & password',
+  'Disable PIN login after password setup',
   'Log out and sign back in with the owner password, not the PIN',
   'open-owner-pin-cutover',
   'confirm-owner-pin-disable',
@@ -296,7 +298,8 @@ assertIncludes('Lockout-safe owner password cutover', server, [
   "url.pathname === '/api/account/owner-access/disable-pin'",
   "['owner_stored', 'owner_environment_hash'].includes(passwordSource)",
   'This password version has not completed a verified sign-in yet',
-  'Owner recovery PIN disabled'
+  'Owner recovery PIN disabled',
+  'pinFallbackDisabled: currentOwnerLogin.pinFallbackDisabled === true'
 ]);
 if (app.includes('Manager and mechanic PIN accounts.') || app.includes('Manager and mechanic accounts use their own PIN')) {
   fail('Manager and mechanic access must not be described as PIN-based.');

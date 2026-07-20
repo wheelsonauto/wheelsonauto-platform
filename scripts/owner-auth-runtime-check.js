@@ -191,6 +191,22 @@ async function main() {
       const protectedCutoverState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
       assert.strictEqual(protectedCutoverState.security.ownerLogin.pinFallbackDisabled, true, 'A stale full-state save must not silently re-enable the recovery PIN.');
       assert(protectedCutoverState.security.ownerLogin.pinFallbackDisabledAt, 'A stale full-state save must preserve the owner PIN cutover audit time.');
+
+      const changedPassword = 'ChangedStoredOwnerPassword456!';
+      const passwordOnlyUpdate = await requestJson(server, 'POST', '/api/account/password', {
+        username: 'secure-owner',
+        currentPassword: newPassword,
+        newPassword: changedPassword
+      }, { cookie: verifiedSession });
+      assert.strictEqual(passwordOnlyUpdate.status, 200, 'A password-only owner must be able to change username and password.');
+      const changedOwnerState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      assert.strictEqual(changedOwnerState.security.ownerLogin.username, 'secure-owner', 'Changing the owner login must persist the new username.');
+      assert.strictEqual(changedOwnerState.security.ownerLogin.pinFallbackDisabled, true, 'Changing a password-only owner login must never re-enable PIN fallback.');
+      assert(changedOwnerState.security.ownerLogin.pinFallbackDisabledAt, 'Changing the owner login must preserve the PIN cutover audit time.');
+      const rejectedPinAfterPasswordChange = await request(server, 'POST', '/login', { username: 'secure-owner', pin: '9999' });
+      assert.strictEqual(rejectedPinAfterPasswordChange.status, 401, 'The old PIN must remain rejected after an owner password change.');
+      const changedPasswordLogin = await request(server, 'POST', '/login', { username: 'secure-owner', password: changedPassword });
+      assert.strictEqual(changedPasswordLogin.status, 302, 'The changed owner username and password must authenticate successfully.');
     } finally {
       try { server.close(); } catch (_) {}
     }
@@ -209,7 +225,7 @@ async function main() {
       const rejectedPin = await request(server, 'POST', '/login', { username: 'owner', pin: '9999' });
       assert.strictEqual(rejectedPin.status, 401, 'The hardened restart must reject the old owner PIN.');
 
-      const storedLogin = await request(server, 'POST', '/login', { username: 'owner', password: 'StoredOwnerPassword123!' });
+      const storedLogin = await request(server, 'POST', '/login', { username: 'secure-owner', password: 'ChangedStoredOwnerPassword456!' });
       assert.strictEqual(storedLogin.status, 302, 'The password stored through Settings must survive restart and remain usable after PIN removal.');
       const hardenedSession = cookieHeader(storedLogin);
       const sessionParts = hardenedSession.split('=')[1].split('.');

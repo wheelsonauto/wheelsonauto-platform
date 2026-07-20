@@ -336,7 +336,7 @@ async function actionModalSmoke(context) {
   const setupRecurring = context.recurringRoster().find(row => context.isCardSetupRow(row));
 
   const checks = [
-    ['reset-password', '', ['Reset password', 'New password']],
+    ['reset-password', '', ['owner username & password', 'New password', 'Save owner login']],
     ['new-autopay', '', ['Add recurring customer', 'Search ready fleet vehicle', 'First run date', 'Charge time']],
     ['new-vehicle', '', ['Add vehicle', 'VIN', 'Old temp tag']],
     ['new-maintenance', '', ['Add maintenance job', 'Vehicle', 'Due date']],
@@ -721,9 +721,12 @@ function ownerSmoke() {
   context.dashboardDetailState.Risk = 'Customers';
   assertHealthy('Dashboard customer risk', renderView(context, 'Dashboard', 'Risk'), ['Dashboard', 'Customer risk report', 'payment setup']);
   context.dashboardDetailState.Risk = 'Health';
-  const ownerAccount = renderView(context, 'Settings', 'Account');
-  assertHealthy('Owner Account cutover', ownerAccount, ['Account access', 'Strong password saved', 'Password login verified', 'Recovery PIN still active', 'Disable recovery PIN', 'Log out']);
-  assertNo('Owner Account cutover secret hygiene', ownerAccount, ['passwordHash', 'passwordSalt', 'passwordLoginVerifiedFingerprint']);
+  const ownerSecurity = renderView(context, 'Settings', 'Security');
+  assertHealthy('Owner Security cutover', ownerSecurity, ['Owner login & security', 'Strong password saved', 'Password login verified', 'Recovery PIN still active', 'Disable PIN login', 'Log out', 'Access matrix']);
+  assertNo('Owner Security cutover secret hygiene', ownerSecurity, ['passwordHash', 'passwordSalt', 'passwordLoginVerifiedFingerprint']);
+  const ownerSetupContext = makeContext({ name: 'Owner Setup', username: 'owner', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access', ownerAccess: { passwordLoginConfigured: false, passwordLoginStrong: false, passwordLoginVerified: false, passwordSessionVerified: false, pinFallbackAllowed: true, canDisablePinFallback: false } });
+  const ownerSetup = renderView(ownerSetupContext, 'Settings', 'Security');
+  assertHealthy('Owner credential setup', ownerSetup, ['Owner login & security', 'Set username &amp; password', 'Disable PIN login after password setup', 'PIN login active']);
   const ownerClaimsOpen = renderView(context, 'Claims & Issues', 'Open');
   assertNo('Owner Claims duplicate boards', ownerClaimsOpen, ['Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge']);
   const ownerPickups = renderView(context, 'Applications', 'Pickups');

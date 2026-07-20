@@ -115,12 +115,15 @@ assertExcludes('Mechanic mobile quickbar', mechanicQuickbar, ['Messages', 'Payme
 assertIncludes('Manager mobile quickbar', managerQuickbar, ['Messages', 'Reports', 'Settings']);
 
 if (!settingsFocused || !settingsAccountPanel) fail('Could not find focused role-safe Account settings.');
-if (!/allowed=isOwner\(\)\?\['Connections','Staff','CustomerLogins','Security','Website','Account'\]:\['Account'\]/.test(settingsFocused)) {
+if (!/allowed=isOwner\(\)\?\['Connections','Staff','CustomerLogins','Security','Website'\]:\['Account'\]/.test(settingsFocused)) {
   fail('Non-owner Settings must be restricted to the Account tab.');
 }
-['Account access', 'Reset password', '/logout'].forEach(text => {
+['Owner login & security', 'Set username & password', 'Disable PIN login', 'Account access', 'Reset password', '/logout'].forEach(text => {
   if (!settingsAccountPanel.includes(text)) fail('Account settings panel is missing: ' + text);
 });
+if (!settingsFocused.includes("if(selected==='Security')body+=settingsAccountPanel()+roleAccessMatrix()+auditTrailPanel()")) {
+  fail('Owner login controls must live in Security without a duplicate owner Account tab.');
+}
 ['Clover connection', 'Staff accounts', 'Website connection', 'Customer portal logins'].forEach(text => {
   if (settingsAccountPanel.includes(text)) fail('Account settings panel should not include: ' + text);
 });
@@ -228,7 +231,7 @@ if (!/protectConcurrentLocalWrites\(nextState,\s*\{\s*preferIncoming:\s*true,\s*
 ['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/tasks', '/api/account/password'].forEach(route => {
   const index = server.indexOf("url.pathname === '" + route + "'");
   if (index < 0) fail('Could not find direct-save route: ' + route);
-  const slice = server.slice(index, index + 2200);
+  const slice = server.slice(index, index + 3200);
   if (!slice.includes('preferIncoming: true')) fail(route + ' must preserve the just-saved row during concurrent-write protection.');
 });
 

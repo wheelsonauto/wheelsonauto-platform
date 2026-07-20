@@ -50,7 +50,8 @@ if (shell.includes('/logout')) fail('Log out must stay inside Settings.');
   "['Account','Account']",
   'data-action="reset-password"',
   'href="/logout"',
-  "if(selected==='Account')body+=settingsAccountPanel()"
+  "if(selected==='Account')body+=settingsAccountPanel()",
+  "if(selected==='Security')body+=settingsAccountPanel()+roleAccessMatrix()+auditTrailPanel()"
 ].forEach(text => {
   if (!app.includes(text)) fail('account settings guard is missing: ' + text);
 });

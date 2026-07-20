@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-immutable-cutover-plan-237';
+const ASSET_VERSION = 'platform-20260720-owner-security-238';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -23178,15 +23178,20 @@ const server = http.createServer(async (req, res) => {
       const record = createPasswordRecord(newPassword);
       if (isOwnerUser(user)) {
         data.security = data.security || {};
+        const currentOwnerLogin = data.security.ownerLogin || {};
+        const nextOwnerUsername = normalizeLogin(payload.username || user.username || LOGIN_USERNAME || 'admin');
+        if (!nextOwnerUsername) return json(res, 400, { ok: false, error: 'Enter an owner username.' });
+        const usernameConflict = (data.staffAccounts || []).find(item => normalizeLogin(item.username || item.email) === nextOwnerUsername);
+        if (usernameConflict) return json(res, 409, { ok: false, error: 'That username is already used by a staff account.' });
         data.security.ownerLogin = {
-          username: normalizeLogin(payload.username || user.username || LOGIN_USERNAME || 'admin'),
+          username: nextOwnerUsername,
           ...record,
           passwordLoginVerifiedAt: '',
           passwordLoginVerifiedFingerprint: '',
           passwordLoginVerifiedSource: '',
-          pinFallbackDisabled: false,
-          pinFallbackDisabledAt: '',
-          pinFallbackDisabledBy: ''
+          pinFallbackDisabled: currentOwnerLogin.pinFallbackDisabled === true,
+          pinFallbackDisabledAt: currentOwnerLogin.pinFallbackDisabledAt || '',
+          pinFallbackDisabledBy: currentOwnerLogin.pinFallbackDisabledBy || ''
         };
       } else {
         data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
