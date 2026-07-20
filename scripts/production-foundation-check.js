@@ -70,6 +70,26 @@ async function verifyGracefulShutdown(root, dataDir) {
 
 async function main() {
   runCliArgumentChecks();
+  const schemaContractRows = [
+    ...stateRepository.REQUIRED_SCHEMA_CONTRACT.constraints.map(([tableName, type, definition]) => ({
+      kind: 'constraint',
+      table_name: tableName,
+      type,
+      definition
+    })),
+    ...stateRepository.REQUIRED_SCHEMA_CONTRACT.indexes.map(([tableName, name, definitionParts]) => ({
+      kind: 'index',
+      table_name: tableName,
+      name,
+      definition: 'CREATE UNIQUE INDEX ' + name + ' ON ' + tableName + ' ' + definitionParts.slice(1).join(' ')
+    }))
+  ];
+  const completeSchemaContract = stateRepository.schemaContractEvidence(schemaContractRows, stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS);
+  assert.strictEqual(completeSchemaContract.ready, true, 'The exact production PostgreSQL schema contract fixture must be accepted.');
+  const driftedSchemaContract = stateRepository.schemaContractEvidence(schemaContractRows.slice(0, -1), stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.slice(0, -1));
+  assert.strictEqual(driftedSchemaContract.ready, false, 'Missing PostgreSQL migration and safety-index evidence must fail closed.');
+  assert.deepStrictEqual(driftedSchemaContract.missingMigrations, [stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.at(-1)], 'Schema evidence must name the exact missing migration.');
+  assert.deepStrictEqual(driftedSchemaContract.missingIndexes, [{ tableName: 'woa_job_errors', name: 'woa_job_errors_open_fingerprint_unique' }], 'Schema evidence must name the exact missing safety index.');
   const staleReviewClassification = assignmentConflictPreflightClassification({
     vehicles: [{ id: 'veh-review-only', year: 2025, make: 'Review', model: 'Only', vin: 'REVIEWONLYVIN', status: 'Rented', currentCustomer: 'Current Customer', assignmentConflict: 'Imported Name / Current Customer' }],
     recurringPayments: [{ id: 'rec-review-only', customer: 'Current Customer', vehicleId: 'veh-review-only', status: 'Active' }]

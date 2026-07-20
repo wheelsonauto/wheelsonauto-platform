@@ -42,9 +42,70 @@ const RECOVERY_DRILL_CONTRACT_VERSION = Object.freeze([
   ...RECOVERY_DRILL_REQUIRED_CHECKS
 ].join('|'));
 const DEFAULT_RECOVERY_DRILL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const REQUIRED_SCHEMA_CONTRACT = Object.freeze({
+  constraints: Object.freeze([
+    ['woa_state', 'p', 'PRIMARY KEY (organization_id)'],
+    ['woa_state_snapshots', 'p', 'PRIMARY KEY (id)'],
+    ['woa_state_snapshots', 'u', 'UNIQUE (organization_id, version)'],
+    ['woa_state_migration_proofs', 'p', 'PRIMARY KEY (organization_id)'],
+    ['woa_recovery_drills', 'p', 'PRIMARY KEY (organization_id)'],
+    ['woa_recovery_history', 'p', 'PRIMARY KEY (id)'],
+    ['woa_recovery_history', 'u', 'UNIQUE (organization_id, event_type, event_id)'],
+    ['woa_webhook_events', 'p', 'PRIMARY KEY (organization_id, provider, event_id)'],
+    ['woa_idempotency_keys', 'p', 'PRIMARY KEY (organization_id, scope, key)'],
+    ['woa_rate_limits', 'p', 'PRIMARY KEY (organization_id, scope, key_hash)'],
+    ['woa_identity_index', 'p', 'PRIMARY KEY (organization_id, kind, normalized_value)'],
+    ['woa_resource_index', 'p', 'PRIMARY KEY (organization_id, resource_type, resource_id)'],
+    ['woa_active_assignments', 'p', 'PRIMARY KEY (organization_id, vehicle_id)'],
+    ['woa_documents', 'p', 'PRIMARY KEY (organization_id, id)'],
+    ['woa_ai_usage', 'p', 'PRIMARY KEY (organization_id, period_type, period_key)']
+  ]),
+  indexes: Object.freeze([
+    ['woa_documents', 'woa_documents_provider_key_unique', ['unique index', '(storage_provider, object_key)', 'where']],
+    ['woa_job_errors', 'woa_job_errors_open_fingerprint_unique', ['unique index', '(organization_id, fingerprint)', 'where']]
+  ])
+});
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value === undefined ? {} : value));
+}
+
+function normalizeSchemaDefinition(value) {
+  return String(value || '').toLowerCase().replace(/["\s]+/g, ' ').trim();
+}
+
+function schemaContractEvidence(rows = [], migrationIds = []) {
+  const normalizedRows = (Array.isArray(rows) ? rows : []).map(row => ({
+    kind: String(row && row.kind || '').trim().toLowerCase(),
+    tableName: String(row && (row.table_name || row.tableName) || '').trim().toLowerCase(),
+    name: String(row && row.name || '').trim().toLowerCase(),
+    type: String(row && row.type || '').trim().toLowerCase(),
+    definition: normalizeSchemaDefinition(row && row.definition)
+  }));
+  const recordedMigrations = new Set((Array.isArray(migrationIds) ? migrationIds : []).map(value => String(value || '').trim()));
+  const missingMigrations = REQUIRED_SCHEMA_MIGRATION_IDS.filter(id => !recordedMigrations.has(id));
+  const missingConstraints = REQUIRED_SCHEMA_CONTRACT.constraints
+    .filter(([tableName, type, definition]) => !normalizedRows.some(row => (
+      row.kind === 'constraint'
+      && row.tableName === tableName
+      && row.type === type
+      && row.definition === normalizeSchemaDefinition(definition)
+    )))
+    .map(([tableName, type, definition]) => ({ tableName, type, definition }));
+  const missingIndexes = REQUIRED_SCHEMA_CONTRACT.indexes
+    .filter(([tableName, name, definitionParts]) => !normalizedRows.some(row => (
+      row.kind === 'index'
+      && row.tableName === tableName
+      && row.name === name
+      && definitionParts.every(part => row.definition.includes(normalizeSchemaDefinition(part)))
+    )))
+    .map(([tableName, name]) => ({ tableName, name }));
+  return {
+    ready: missingMigrations.length === 0 && missingConstraints.length === 0 && missingIndexes.length === 0,
+    missingMigrations,
+    missingConstraints,
+    missingIndexes
+  };
 }
 
 function normalizedStateTransactionEffects(options = {}) {
@@ -2890,9 +2951,43 @@ class PostgresStateRepository {
     }
   }
 
+  async schemaContract() {
+    await this.ensureSchema();
+    const [migrationResult, contractResult] = await Promise.all([
+      this.pool.query('SELECT id FROM woa_schema_migrations ORDER BY id'),
+      this.pool.query(`SELECT 'constraint'::text AS kind,
+        table_row.relname AS table_name,
+        constraint_row.conname AS name,
+        constraint_row.contype::text AS type,
+        pg_get_constraintdef(constraint_row.oid, true) AS definition
+      FROM pg_constraint AS constraint_row
+      JOIN pg_class AS table_row ON table_row.oid = constraint_row.conrelid
+      JOIN pg_namespace AS namespace_row ON namespace_row.oid = table_row.relnamespace
+      WHERE namespace_row.nspname = current_schema()
+        AND table_row.relname = ANY($1::text[])
+      UNION ALL
+      SELECT 'index'::text AS kind,
+        index_row.tablename AS table_name,
+        index_row.indexname AS name,
+        ''::text AS type,
+        index_row.indexdef AS definition
+      FROM pg_indexes AS index_row
+      WHERE index_row.schemaname = current_schema()
+        AND index_row.tablename = ANY($1::text[])`, [[...new Set([
+        ...REQUIRED_SCHEMA_CONTRACT.constraints.map(item => item[0]),
+        ...REQUIRED_SCHEMA_CONTRACT.indexes.map(item => item[0])
+      ])]])
+    ]);
+    return schemaContractEvidence(
+      contractResult.rows,
+      migrationResult.rows.map(row => row.id)
+    );
+  }
+
   async health(options = {}) {
     try {
       await this.ensureSchema();
+      const schemaContract = await this.schemaContract();
       const result = await this.pool.query(`SELECT state.state, state.version, state.checksum, state.updated_at,
         snapshot.id AS snapshot_id, snapshot.version AS snapshot_version, snapshot.checksum AS snapshot_checksum,
         snapshot.state AS snapshot_state, snapshot.created_at AS snapshot_created_at,
@@ -2945,6 +3040,8 @@ class PostgresStateRepository {
           connected: true,
           transactional: true,
           productionReady: false,
+          schemaContractReady: schemaContract.ready,
+          schemaContract,
           stateImported: false,
           integrity: 'missing',
           migrationProofIntegrity: 'missing',
@@ -3033,7 +3130,9 @@ class PostgresStateRepository {
         backend: 'postgres',
         connected: true,
         transactional: true,
-        productionReady: integrity.matches && indexes.allReady,
+        productionReady: integrity.matches && indexes.allReady && schemaContract.ready,
+        schemaContractReady: schemaContract.ready,
+        schemaContract,
         stateImported: true,
         integrity: integrity.matches ? 'verified' : 'failed',
         ...recovery,
@@ -3046,6 +3145,8 @@ class PostgresStateRepository {
         updatedAt: row.updated_at,
         error: !integrity.matches
           ? 'PostgreSQL state checksum verification failed.'
+          : !schemaContract.ready
+            ? 'PostgreSQL schema contract is incomplete. Refusing production readiness until required tenant keys, uniqueness constraints, and safety indexes are restored.'
           : !indexes.resourceIndexReady
             ? 'PostgreSQL critical-record index does not match the authoritative state. Refusing production readiness.'
             : !indexes.assignmentIndexReady
@@ -3099,11 +3200,13 @@ module.exports = {
   DEFAULT_ORGANIZATION_ID,
   RECOVERY_DRILL_SCRIPT_VERSION,
   RECOVERY_DRILL_CONTRACT_VERSION,
+  REQUIRED_SCHEMA_CONTRACT,
   clone,
   stableJson,
   checksum,
   idempotencyRequestHash,
   checksumEvidence,
+  schemaContractEvidence,
   assertChecksum,
   recoverySnapshotEvidence,
   recoveryDrillConfigurationFingerprint,

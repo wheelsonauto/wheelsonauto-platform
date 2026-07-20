@@ -608,6 +608,10 @@ async function main() {
     assert.strictEqual(readiness.connected, true, 'The lightweight PostgreSQL deployment probe must confirm database connectivity.');
     assert.strictEqual(readiness.stateAvailable, true, 'The lightweight PostgreSQL deployment probe must confirm the imported organization state without loading the full JSON document.');
     assert.strictEqual(health.productionReady, true, 'A reachable PostgreSQL state repository must report production-ready.');
+    assert.strictEqual(health.schemaContractReady, true, 'A production-ready PostgreSQL repository must verify every required tenant key, uniqueness constraint, and safety index.');
+    assert.deepStrictEqual(health.schemaContract.missingMigrations, [], 'PostgreSQL health must expose no missing required schema migrations.');
+    assert.deepStrictEqual(health.schemaContract.missingConstraints, [], 'PostgreSQL health must expose no missing required uniqueness or tenant constraints.');
+    assert.deepStrictEqual(health.schemaContract.missingIndexes, [], 'PostgreSQL health must expose no missing partial safety indexes.');
     assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
     assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');
     assert.strictEqual(health.resourceIndexReady, true, 'A production-ready PostgreSQL repository must have a complete critical-resource index.');
@@ -625,6 +629,28 @@ async function main() {
     assert.strictEqual(health.migrationProofReady, true, 'A verified PostgreSQL import proof must remain available after normal state changes and recovery.');
     assert.strictEqual(health.migrationSourceProvenanceReady, true, 'The PostgreSQL import proof must retain validated signed Render live-disk source provenance after restart and recovery.');
     assert.strictEqual(health.renderServiceId, 'srv-postgres-runtime-proof', 'Migration health must identify the Render service that captured the protected source.');
+    await repository.pool.query('DROP INDEX woa_job_errors_open_fingerprint_unique');
+    const driftedSchemaHealth = await repository.health();
+    assert.strictEqual(driftedSchemaHealth.productionReady, false, 'PostgreSQL health must fail closed when a required safety index drifts after startup.');
+    assert.strictEqual(driftedSchemaHealth.schemaContractReady, false, 'PostgreSQL health must identify schema drift without relying on the application write path.');
+    assert(driftedSchemaHealth.schemaContract.missingIndexes.some(item => item.name === 'woa_job_errors_open_fingerprint_unique'), 'Schema drift evidence must identify the exact missing safety index.');
+    const repairRepository = stateRepository.createStateRepository({
+      backend: 'postgres',
+      databaseUrl,
+      sslMode: databaseSslMode,
+      organizationId,
+      snapshotLimit: 12,
+      applicationName: 'wheelsonauto-postgres-schema-contract-repair',
+      seed: async () => ({ vehicles: [], customers: [], payments: [] })
+    });
+    try {
+      await repairRepository.ensureSchema();
+      const repairedSchemaHealth = await repairRepository.health();
+      assert.strictEqual(repairedSchemaHealth.schemaContractReady, true, 'A clean PostgreSQL startup must restore a missing idempotent safety index.');
+      assert.strictEqual(repairedSchemaHealth.productionReady, true, 'A PostgreSQL repository must return to production-ready after schema drift is repaired.');
+    } finally {
+      await repairRepository.close();
+    }
     const recoveryDrillProof = await recordRecoveryDrillProof(organizationId, {
       durableJobLock: true,
       durableRateLimit: true,
