@@ -13573,7 +13573,9 @@ function mergeConcurrentState(data, latest, options = {}) {
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
   });
-  if (options.preserveLatestIntegrations) data.integrations = latest.integrations || data.integrations || {};
+  data.integrations = options.preserveLatestIntegrations
+    ? (latest.integrations || data.integrations || {})
+    : mergeConcurrentValue(baseState.integrations || {}, data.integrations || {}, latest.integrations || {}, preferIncoming);
   return data;
 }
 async function protectConcurrentLocalWrites(data, options = {}) {

@@ -114,7 +114,26 @@ ownerConflict.recurringPayments[0].amount = 239;
 const latestConflict = mergeConcurrentState(backgroundConflict, ownerConflict, { preferIncoming: false, baseState: base });
 assert.strictEqual(latestConflict.recurringPayments[0].amount, 239, 'When both writers change the exact same field, latest-preferred synchronization must retain the database value.');
 
+const starHealthWrite = clone(base);
+starHealthWrite.integrations.messaging = {
+  lastAiHealthAt: '2026-07-20T10:30:00.000Z',
+  lastAiHealthStatus: 'OpenAI answered through the Responses API and Star sanitized the plan.',
+  lastAiProvider: 'openai'
+};
+const backgroundProviderWrite = clone(base);
+backgroundProviderWrite.integrations.verification = { lastMonitorAt: '2026-07-20T10:30:01.000Z', checked: 57 };
+const providerMerged = mergeConcurrentState(starHealthWrite, backgroundProviderWrite, { preferIncoming: true, baseState: base });
+assert.strictEqual(providerMerged.integrations.messaging.lastAiProvider, 'openai', 'A Star health proof must survive a concurrent background integration write.');
+assert.strictEqual(providerMerged.integrations.verification.checked, 57, 'A background provider update must survive the concurrent Star health proof write.');
+const delayedBackground = clone(base);
+delayedBackground.integrations.verification = { lastMonitorAt: '2026-07-20T10:30:02.000Z', checked: 58 };
+const proofAlreadySaved = clone(base);
+proofAlreadySaved.integrations.messaging = clone(starHealthWrite.integrations.messaging);
+const delayedProviderMerged = mergeConcurrentState(delayedBackground, proofAlreadySaved, { preferIncoming: true, baseState: base });
+assert.strictEqual(delayedProviderMerged.integrations.messaging.lastAiHealthAt, '2026-07-20T10:30:00.000Z', 'A delayed worker that read before the Star test must not erase the saved provider proof.');
+assert.strictEqual(delayedProviderMerged.integrations.verification.checked, 58, 'The delayed worker must still apply its own non-conflicting integration update.');
+
 assert.strictEqual(base.recurringPayments[0].amount, 229, 'Three-way merging must not mutate the read baseline.');
 assert.strictEqual(latest.payments[0].refundedAmount, 42.25, 'Three-way merging must not mutate the latest database state object.');
 
-console.log('Concurrent state merge check passed: staff edits, webhook/payment updates, nested history, additions, deletions, and server-only provider proof remain coherent.');
+console.log('Concurrent state merge check passed: staff edits, webhook/payment updates, nested history, additions, deletions, and concurrent provider proofs remain coherent.');
