@@ -283,7 +283,7 @@ assertIncludes('Password-backed staff and owner guidance', app, [
   'Manager and mechanic accounts use their own username and password',
   'Owner login & security',
   'Set username & password',
-  'Disable PIN login after password setup',
+  'Disable PIN login',
   'Log out and sign back in with the owner password, not the PIN',
   'open-owner-pin-cutover',
   'confirm-owner-pin-disable',
