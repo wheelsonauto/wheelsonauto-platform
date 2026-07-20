@@ -10505,10 +10505,10 @@ function recoveryDrillConfigurationFingerprint() {
   return stateRepository.recoveryDrillConfigurationFingerprint(SESSION_SIGNING_SECRET, process.env.DATABASE_URL || '', MAIN_ORG_ID);
 }
 function currentRecoveryDrillEvidence(database = {}) {
-  return stateRepository.recoveryDrillEvidence(database.recoveryDrill, {
-    configurationFingerprint: recoveryDrillConfigurationFingerprint(),
-    maxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
-  });
+  const evidence = database && database.recoveryDrill && typeof database.recoveryDrill === 'object'
+    ? database.recoveryDrill
+    : stateRepository.recoveryDrillEvidence(null);
+  return { ...evidence };
 }
 function privateDocumentStorageEvidence(data = {}, status = PRIVATE_DOCUMENT_STORE.status()) {
   const storageState = data && data.integrations && data.integrations.documentStorage || {};
@@ -10744,7 +10744,10 @@ function cloverRecurringMigrationReadiness(data = {}) {
   };
 }
 async function productionInfrastructurePreflight(data = null) {
-  const database = await STATE_REPOSITORY.health();
+  const database = await STATE_REPOSITORY.health({
+    recoveryDrillConfigurationFingerprint: recoveryDrillConfigurationFingerprint(),
+    recoveryDrillMaxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
+  });
   const databaseCredentialIsolation = {
     ready: !POSTGRES_DRILL_CREDENTIALS_CONFIGURED,
     configured: POSTGRES_DRILL_CREDENTIALS_CONFIGURED,

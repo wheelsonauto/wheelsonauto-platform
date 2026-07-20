@@ -2890,7 +2890,7 @@ class PostgresStateRepository {
     }
   }
 
-  async health() {
+  async health(options = {}) {
     try {
       await this.ensureSchema();
       const result = await this.pool.query(`SELECT state.state, state.version, state.checksum, state.updated_at,
@@ -3023,7 +3023,10 @@ class PostgresStateRepository {
         actor: row.recovery_drill_actor,
         verifiedAt: row.recovery_drill_verified_at
       };
-      const recoveryDrillEvidenceResult = recoveryDrillEvidence(recoveryDrill);
+      const recoveryDrillEvidenceResult = recoveryDrillEvidence(recoveryDrill, {
+        configurationFingerprint: String(options.recoveryDrillConfigurationFingerprint || ''),
+        maxAgeMs: options.recoveryDrillMaxAgeMs
+      });
       const checkedState = this.repair(clone(row.state));
       const indexes = transactionalIndexReadiness(checkedState, row);
       return {

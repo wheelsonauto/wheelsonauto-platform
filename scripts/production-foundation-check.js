@@ -508,6 +508,10 @@ async function main() {
     assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, checks: { ...recoveryDrillChecks, serverRestartRead: false } }, { configurationFingerprint: recoveryDrillFingerprint }).ready, false, 'A recovery drill missing a server-restart read must fail closed before live launch.');
     assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, configurationFingerprint: 'old-database-configuration' }, { configurationFingerprint: recoveryDrillFingerprint }).ready, false, 'A recovery drill from an older database configuration must not satisfy the current launch gate.');
     assert.strictEqual(stateRepository.recoveryDrillEvidence({ ...freshRecoveryDrill, verifiedAt: '2020-01-01T00:00:00.000Z' }, { configurationFingerprint: recoveryDrillFingerprint, maxAgeMs: 60 * 60 * 1000 }).ready, false, 'A stale recovery drill must not satisfy the current launch gate.');
+    assert(serverSource.includes('recoveryDrillConfigurationFingerprint: recoveryDrillConfigurationFingerprint()')
+      && stateRepositorySource.includes("configurationFingerprint: String(options.recoveryDrillConfigurationFingerprint || '')")
+      && postgresRuntimeCheckSource.includes('recoveryDrillConfigurationFingerprint: configurationFingerprint')
+      && !serverSource.includes('stateRepository.recoveryDrillEvidence(database.recoveryDrill'), 'Recovery-drill fingerprints must be validated inside PostgreSQL health before its safe evidence is sanitized; production preflight must not revalidate and accidentally discard that proof.');
     await assert.rejects(() => repository.recordRecoveryDrill(freshRecoveryDrill), /cannot record a PostgreSQL recovery drill/i, 'The JSON development fallback must never pretend it recorded a controlled PostgreSQL recovery drill.');
     const sourceCounts = stateRepository.migrationRecordCounts({ vehicles: [{}], customers: [{}], payments: [], auditLogs: [] });
     const migrationProofInput = {
