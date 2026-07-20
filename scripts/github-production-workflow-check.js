@@ -22,7 +22,7 @@ const required = [
   'uses: pnpm/action-setup@v4',
   'version: 11.9.0',
   'uses: actions/setup-node@v4',
-  'node-version: "20"',
+  'node-version: "24"',
   'pnpm install --frozen-lockfile',
   'pnpm run check'
 ];
@@ -30,6 +30,11 @@ const required = [
 required.forEach(value => {
   assert(workflow.includes(value), 'The production workflow must include: ' + value);
 });
+
+assert(
+  workflow.indexOf('uses: actions/setup-node@v4') < workflow.indexOf('uses: pnpm/action-setup@v4'),
+  'The production workflow must install Node.js before pnpm so pnpm uses the pinned supported runtime.'
+);
 
 assert(!/\b(?:DATABASE_URL|STRIPE_SECRET_KEY|OPENAI_API_KEY|TELNYX_API_KEY|RESEND_API_KEY)\s*:/i.test(workflow), 'The CI workflow must not inject production provider or database credentials.');
 assert(!/\b(?:deploy|render deploy|stripe trigger)\b/i.test(workflow), 'The verification workflow must not deploy or trigger paid provider actions.');
