@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { isTransientRenderRoutingError, requestWithRenderRetry } = require('../live-probe-request');
 
 function response(status, routing = '', additionalHeaders = {}) {
@@ -17,6 +19,32 @@ function response(status, routing = '', additionalHeaders = {}) {
 }
 
 async function main() {
+  const securityProbeSource = fs.readFileSync(path.join(__dirname, 'live-security-probe.js'), 'utf8');
+  [
+    '/api/onboarding/review',
+    '/api/card-setup-requests',
+    '/api/payment-links',
+    '/api/integrations/stripe/readiness',
+    '/api/integrations/payments/manual-charge',
+    '/api/integrations/payments/refunds/prepare',
+    '/api/integrations/payments/refunds/execute',
+    '/api/integrations/payments/refunds/complete-manual',
+    '/api/integrations/payments/disputes/action',
+    '/api/verification/document',
+    '/api/contract-template',
+    '/api/woa-autopay/status',
+    '/api/woa-autopay/run',
+    '/api/system/infrastructure/document-storage/validate',
+    '/api/system/infrastructure/state-backup/create',
+    '/api/system/infrastructure/state-backup/verify',
+    '/api/system/recovery/restore',
+    '/api/integrations/telnyx/readiness',
+    '/api/messages/ai-health',
+    '/api/notifications/email/test'
+  ].forEach(route => {
+    assert.ok(securityProbeSource.includes("'" + route + "'"), 'Live security probe must cover the launch-critical boundary ' + route + '.');
+  });
+
   assert.equal(isTransientRenderRoutingError(response(502, 'dynamic-paid-error')), true);
   assert.equal(isTransientRenderRoutingError(response(503, 'service-error')), true);
   assert.equal(isTransientRenderRoutingError(response(401, 'dynamic-paid-error')), false);
