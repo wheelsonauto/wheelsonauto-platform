@@ -6238,7 +6238,8 @@ function activeAssignmentClaimsForVehicle(data = {}, vehicleId = '') {
   const claims = [];
   const addRows = (rows, source) => {
     (Array.isArray(rows) ? rows : []).forEach(row => {
-      const candidate = activeAssignmentRecord(row);
+      const repositorySource = source === 'Customer record' ? 'customer' : source === 'Customer file' ? 'customer_file' : source;
+      const candidate = activeAssignmentRecord(row, repositorySource);
       if (!candidate || candidate.vehicleId !== id) return;
       claims.push({
         id: String(row.id || ''),
@@ -6487,8 +6488,8 @@ function sameProfileVehicle(a = {}, b = {}) {
   const vehicleB = normKey(b.vehicle);
   return !!(vehicleA && vehicleB && vehicleA === vehicleB);
 }
-function activeAssignmentRecord(row = {}) {
-  return stateRepository.activeAssignmentCandidate(row);
+function activeAssignmentRecord(row = {}, source = '') {
+  return stateRepository.activeAssignmentCandidate(row, source);
 }
 function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '', sameCustomer = sameAssignmentCustomer) {
   let changed = 0;
@@ -6525,7 +6526,8 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
   data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
   const byVehicle = new Map();
   const addCandidate = (row, source) => {
-    const candidate = activeAssignmentRecord(row);
+    const repositorySource = source === 'customers' ? 'customer' : source === 'contracts' ? 'customer_file' : source;
+    const candidate = activeAssignmentRecord(row, repositorySource);
     if (!candidate) return;
     const list = byVehicle.get(candidate.vehicleId) || [];
     list.push({ ...candidate, row, source });
@@ -6584,6 +6586,74 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     });
   });
   return { vehicleAssignmentsSynced, linkedRowsSynced, serviceRowsSynced, assignmentConflicts: conflicts };
+}
+function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = '', user = {}, reason = '') {
+  const review = assignmentConflictReview(data, vehicleId);
+  if (!review) throw Object.assign(new Error('Vehicle not found.'), { statusCode: 404 });
+  const selectedClaim = review.claims.find(row => normKey(row.customer) === normKey(currentCustomer));
+  if (!selectedClaim) throw Object.assign(new Error('Choose the current renter from the active claims for this exact vehicle.'), { statusCode: 400 });
+  const vehicle = (data.vehicles || []).find(row => String(row.id || '') === String(vehicleId || ''));
+  const selectedName = selectedClaim.customer;
+  const now = new Date().toISOString();
+  const note = String(reason || 'Owner confirmed a new renter for this vehicle.').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 500);
+  const archived = { recurringPayments: 0, cloverRecurring: 0, customerFiles: 0, customerProfiles: 0 };
+  const archiveRows = (rows, kind) => {
+    (Array.isArray(rows) ? rows : []).forEach(row => {
+      if (String(row.vehicleId || '') !== String(vehicleId || '')) return;
+      const rowCustomer = String(row.customer || row.name || '').trim();
+      if (!rowCustomer || sameApprovedAssignmentCustomer(data, vehicleId, rowCustomer, selectedName)) return;
+      row.previousVehicleId = row.previousVehicleId || row.vehicleId || '';
+      row.previousVehicle = row.previousVehicle || row.vehicle || review.vehicle.name || '';
+      row.previousVin = row.previousVin || row.vin || review.vehicle.vin || '';
+      row.previousPlate = row.previousPlate || row.licensePlate || row.plate || review.vehicle.plate || '';
+      row.vehicleId = '';
+      row.assignmentEndedAt = now;
+      row.assignmentEndReason = note;
+      row.vehicleLinkStatus = 'Previous renter - vehicle reassigned';
+      if (kind === 'recurringPayments') {
+        row.status = 'Removed';
+        row.nextRun = 'Ended - vehicle reassigned';
+        row.autoChargeEnabled = false;
+        row.autopayManagedBy = 'Stopped - vehicle reassigned';
+        row.removedAt = now;
+      } else if (kind === 'cloverRecurring') {
+        row.providerStatus = row.providerStatus || row.status || 'Active';
+        row.status = 'History - reassigned in WheelsonAuto';
+        row.autoChargeEnabled = false;
+        row.autopayManagedBy = 'WheelsonAuto stopped - verify legacy Clover recurring separately';
+        row.removedAt = now;
+      } else if (kind === 'customerFiles') {
+        row.status = 'Ended';
+        row.stage = 'History';
+        row.endedAt = now;
+        row.endReason = note;
+      } else {
+        row.status = 'History';
+        row.stage = 'History';
+        row.endedAt = now;
+      }
+      archived[kind] += 1;
+    });
+  };
+  archiveRows(data.recurringPayments, 'recurringPayments');
+  archiveRows((((data.integrations || {}).clover || {}).recurringPlanMembers), 'cloverRecurring');
+  archiveRows(data.contracts, 'customerFiles');
+  archiveRows(data.customers, 'customerProfiles');
+  const priorCustomer = String(vehicle.currentCustomer || '').trim();
+  const oldHumanClaim = review.claims.find(row => !sameApprovedAssignmentCustomer(data, vehicleId, row.customer, selectedName) && !assignmentReferenceLike(row.customer));
+  vehicle.previousCustomer = priorCustomer && !sameApprovedAssignmentCustomer(data, vehicleId, priorCustomer, selectedName)
+    ? priorCustomer
+    : (vehicle.previousCustomer || oldHumanClaim && oldHumanClaim.customer || '');
+  vehicle.currentCustomer = selectedName;
+  vehicle.status = 'Rented';
+  vehicle.customerSyncedAt = now;
+  vehicle.assignmentResolvedAt = now;
+  vehicle.assignmentResolvedBy = user.name || user.username || 'Owner';
+  vehicle.assignmentResolution = note;
+  if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
+  const synced = syncVehicleAssignmentsFromActiveRecords(data);
+  const inventory = syncOnlineInventoryFromFleetAssignments(data);
+  return { review: assignmentConflictReview(data, vehicleId), archived, synced, inventory, currentCustomer: selectedName };
 }
 function fleetPublicListingState(vehicle = {}) {
   const customer = String(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '').trim();
@@ -21600,6 +21670,30 @@ const server = http.createServer(async (req, res) => {
       const review = assignmentConflictReview(data, decodeURIComponent(assignmentReviewMatch[1] || ''));
       if (!review) return json(res, 404, { ok: false, error: 'Vehicle not found.' });
       return json(res, 200, { ok: true, review });
+      }
+      const assignmentTransferMatch = /^\/api\/vehicles\/([^/]+)\/assignment-transfer$/.exec(url.pathname);
+      if (assignmentTransferMatch && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can confirm a vehicle renter transfer.' });
+      const payload = await readJsonBody(req);
+      if (String(payload.confirmation || '') !== 'KEEP_CURRENT_RENTER_AND_END_OLD_ASSIGNMENTS') {
+        return json(res, 400, { ok: false, error: 'Confirm the selected current renter and the end of the old vehicle assignments before saving.' });
+      }
+      const data = await readData();
+      const vehicleId = decodeURIComponent(assignmentTransferMatch[1] || '');
+      try {
+        const result = transferVehicleAssignment(data, vehicleId, payload.currentCustomer, user, payload.reason);
+        appendAuditLog(data, user, 'Vehicle renter transfer resolved', [
+          result.review && result.review.vehicle && result.review.vehicle.name || vehicleId,
+          'Current renter ' + result.currentCustomer,
+          'Archived links ' + Object.values(result.archived).reduce((sum, value) => sum + Number(value || 0), 0),
+          result.archived.cloverRecurring ? 'Legacy Clover recurring row still requires provider-side verification.' : ''
+        ].filter(Boolean));
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, ...result });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
+      }
       }
       const assignmentAliasMatch = /^\/api\/vehicles\/([^/]+)\/assignment-alias$/.exec(url.pathname);
       if (assignmentAliasMatch && req.method === 'POST') {

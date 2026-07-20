@@ -761,12 +761,23 @@ function sameApprovedAssignmentCustomer(state = {}, vehicleId = '', a, b) {
   return false;
 }
 
-function activeAssignmentCandidate(row = {}) {
+function activeAssignmentCandidate(row = {}, source = '') {
   const customer = String(row.customer || row.name || '').trim();
   const vehicleId = String(row.vehicleId || '').trim();
   if (!customer || !vehicleId) return null;
   const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' '));
   if (INACTIVE_ASSIGNMENT_PATTERN.test(status)) return null;
+  const sourceKey = String(source || '').trim().toLowerCase();
+  const profileOnlySource = sourceKey === 'customer' || sourceKey === 'customer_file';
+  if (profileOnlySource) {
+    const explicitLifecycle = String([row.status, row.stage, row.state, row.contractStatus].filter(Boolean).join(' '));
+    const explicitlyActive = row.active === true || /\b(active|rented|assigned|current contract)\b/i.test(explicitLifecycle);
+    const needsMatch = /needs? (?:vehicle )?match|unmatched|previous vehicle|history/i.test(String(row.vehicleLinkStatus || ''));
+    // Clover contact profiles and historical customer files often retain an old
+    // vehicleId for lookup. They are evidence, not an active rental claim, until
+    // a lifecycle field explicitly marks the record active.
+    if (!explicitlyActive || needsMatch) return null;
+  }
   return { customer, vehicleId };
 }
 
@@ -780,7 +791,7 @@ function activeAssignmentIdentityConflicts(state = {}) {
   const claimsByVehicle = new Map();
   const addClaims = (records, source) => {
     (Array.isArray(records) ? records : []).forEach((record, index) => {
-      const candidate = activeAssignmentCandidate(record);
+      const candidate = activeAssignmentCandidate(record, source);
       if (!candidate || !vehicleById.has(candidate.vehicleId)) return;
       const list = claimsByVehicle.get(candidate.vehicleId) || [];
       list.push({
@@ -850,7 +861,7 @@ function activeAssignmentIndexRows(state = {}) {
   const claimsByVehicle = new Map();
   const addClaims = (records, source) => {
     (Array.isArray(records) ? records : []).forEach((record, index) => {
-      const candidate = activeAssignmentCandidate(record);
+      const candidate = activeAssignmentCandidate(record, source);
       if (!candidate) return;
       if (!vehicleById.has(candidate.vehicleId)) {
         const error = new Error('Active ' + source + ' record points to missing vehicle ' + candidate.vehicleId + '. Refusing to save a broken customer assignment.');
