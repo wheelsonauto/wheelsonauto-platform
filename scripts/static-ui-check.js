@@ -307,6 +307,18 @@ assertIncludes('Actionable Telnyx carrier rejection surface', app, [
   'campaign_qualification',
   'carrierRegistrationStatus||status.carrierRegistrationNextAction'
 ]);
+assertIncludes('Owner-approved Telnyx paid campaign flow', app + server, [
+  'review-telnyx-campaign',
+  '/api/integrations/telnyx/campaign-draft',
+  'telnyxCampaignDraftReview',
+  'telnyxCampaignFeeAcknowledged',
+  'telnyxCampaignConfirmationPhrase',
+  'submit-telnyx-campaign',
+  '/api/integrations/telnyx/campaign-submit',
+  'acknowledgedFees:true',
+  'Wait for carrier approval before assigning the number',
+  'Paid external action'
+]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
   'clarifyCoreReadinessLanguage',
   'Core operational check for environment keys',

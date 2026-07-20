@@ -497,6 +497,21 @@ function ownerSmoke() {
   assert(!detailedProviderForm.includes('<select id="apiStatus">') && !detailedProviderForm.includes('<option selected>Connected</option>'), 'An unfinished built-in provider must never expose a manual Connected selector.');
   const customProviderForm = context.apiProviderForm({ id: 'custom-provider', name: 'Custom provider', status: 'Testing - owner review' });
   assert(customProviderForm.includes('<select id="apiStatus">') && customProviderForm.includes('<option selected>Testing - owner review</option>'), 'Custom provider records should retain an editable exact status.');
+  assert(context.telnyxCampaignDraftAvailable({ carrierBrandVerified: true, carrierUsecaseQualified: true, carrierCampaignStatus: 'Not found', carrierResubmissionBlocked: false }) === true, 'A verified and qualified corrected Telnyx campaign must expose the owner review action.');
+  assert(context.telnyxCampaignDraftAvailable({ carrierBrandVerified: true, carrierUsecaseQualified: true, carrierCampaignStatus: 'ACTIVE', carrierActiveCampaignAvailable: true }) === false, 'An existing active Telnyx campaign must hide the paid duplicate-submission action.');
+  const telnyxCampaignReview = context.telnyxCampaignDraftReview({
+    draft: {
+      fingerprint: 'telnyx-review-fingerprint',
+      reviewFeeUsd: 15,
+      recurringMonthlyFeeUsd: 10,
+      confirmationPhrase: 'SUBMIT TELNYX CUSTOMER_CARE $15 + $10/MONTH',
+      warning: 'Preview only. No fee has been charged.',
+      payload: { usecase: 'CUSTOMER_CARE', description: 'Customer care only.', messageFlow: 'Unchecked consent box and customer-initiated messages.', sample1: 'Payment reminder sample.', sample2: 'Service reminder sample.', webhookURL: 'https://wheelsonauto-platform.onrender.com/api/webhooks/messages?provider=telnyx' }
+    },
+    readiness: { brandStatus: 'VERIFIED' },
+    submission: { status: 'not_started', retryBlocked: false }
+  });
+  assert(telnyxCampaignReview.includes('$15.00 review fee + $10.00/month') && telnyxCampaignReview.includes('telnyxCampaignFeeAcknowledged') && telnyxCampaignReview.includes('SUBMIT TELNYX CUSTOMER_CARE $15 + $10/MONTH') && telnyxCampaignReview.includes('Submit corrected campaign') && telnyxCampaignReview.includes('it does not enable texting'), 'The owner campaign modal must show exact dynamic fees, consent proof, the exact phrase gate, and the carrier-review warning before submission.');
   assert(context.isInventoryVehicle({ status: 'Ready', currentCustomer: '' }) === true, 'Ready unassigned cars should be available inventory.');
   assert(context.isInventoryVehicle({ status: 'Pending application', currentCustomer: '' }) === false, 'Pending-application cars must not appear in available fleet or autopay pickers.');
   assert(context.isInventoryVehicle({ status: 'Maintenance', currentCustomer: '' }) === false, 'Maintenance cars must not appear in available fleet or autopay pickers.');
