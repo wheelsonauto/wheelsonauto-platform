@@ -8585,32 +8585,35 @@ function preserveStaffLoginSecrets(current, incoming) {
   const next = { ...(incoming || {}) };
   if (current.security && current.security.ownerLogin) {
     next.security = next.security || {};
+    const incomingOwner = next.security.ownerLogin || {};
+    const ownerLoginSecurityWasExplicit = Object.prototype.hasOwnProperty.call(incomingOwner, 'loginSecurity');
     next.security.ownerLogin = {
-      ...(next.security.ownerLogin || {}),
-      passwordHash: (next.security.ownerLogin && next.security.ownerLogin.passwordHash) || current.security.ownerLogin.passwordHash || '',
-      passwordSalt: (next.security.ownerLogin && next.security.ownerLogin.passwordSalt) || current.security.ownerLogin.passwordSalt || '',
-      passwordUpdatedAt: (next.security.ownerLogin && next.security.ownerLogin.passwordUpdatedAt) || current.security.ownerLogin.passwordUpdatedAt || '',
-      username: (next.security.ownerLogin && next.security.ownerLogin.username) || current.security.ownerLogin.username || LOGIN_USERNAME || 'admin',
+      ...incomingOwner,
+      passwordHash: incomingOwner.passwordHash || current.security.ownerLogin.passwordHash || '',
+      passwordSalt: incomingOwner.passwordSalt || current.security.ownerLogin.passwordSalt || '',
+      passwordUpdatedAt: incomingOwner.passwordUpdatedAt || current.security.ownerLogin.passwordUpdatedAt || '',
+      username: incomingOwner.username || current.security.ownerLogin.username || LOGIN_USERNAME || 'admin',
       passwordLoginVerifiedAt: current.security.ownerLogin.passwordLoginVerifiedAt || '',
       passwordLoginVerifiedFingerprint: current.security.ownerLogin.passwordLoginVerifiedFingerprint || '',
       passwordLoginVerifiedSource: current.security.ownerLogin.passwordLoginVerifiedSource || '',
       pinFallbackDisabled: !!current.security.ownerLogin.pinFallbackDisabled,
       pinFallbackDisabledAt: current.security.ownerLogin.pinFallbackDisabledAt || '',
       pinFallbackDisabledBy: current.security.ownerLogin.pinFallbackDisabledBy || '',
-      loginSecurity: current.security.ownerLogin.loginSecurity || null,
-      email: (next.security.ownerLogin && next.security.ownerLogin.email) || current.security.ownerLogin.email || ''
+      loginSecurity: ownerLoginSecurityWasExplicit ? incomingOwner.loginSecurity : (current.security.ownerLogin.loginSecurity || null),
+      email: incomingOwner.email || current.security.ownerLogin.email || ''
     };
   }
   if (Array.isArray(next.staffAccounts)) {
     const existingById = new Map((current.staffAccounts || []).map(staff => [staff.id, staff]));
     next.staffAccounts = next.staffAccounts.map(staff => {
       const old = existingById.get(staff.id) || {};
+      const loginSecurityWasExplicit = Object.prototype.hasOwnProperty.call(staff, 'loginSecurity');
       return {
         ...staff,
         passwordHash: staff.passwordHash || old.passwordHash || '',
         passwordSalt: staff.passwordSalt || old.passwordSalt || '',
         passwordUpdatedAt: staff.passwordUpdatedAt || old.passwordUpdatedAt || '',
-        loginSecurity: old.loginSecurity || null
+        loginSecurity: loginSecurityWasExplicit ? staff.loginSecurity : (old.loginSecurity || null)
       };
     });
   }
@@ -8618,12 +8621,13 @@ function preserveStaffLoginSecrets(current, incoming) {
     const existingById = new Map((current.customerAccounts || []).map(account => [account.id, account]));
     next.customerAccounts = next.customerAccounts.map(account => {
       const old = existingById.get(account.id) || {};
+      const loginSecurityWasExplicit = Object.prototype.hasOwnProperty.call(account, 'loginSecurity');
       return {
         ...account,
         passwordHash: account.passwordHash || old.passwordHash || '',
         passwordSalt: account.passwordSalt || old.passwordSalt || '',
         passwordUpdatedAt: account.passwordUpdatedAt || old.passwordUpdatedAt || '',
-        loginSecurity: old.loginSecurity || null
+        loginSecurity: loginSecurityWasExplicit ? account.loginSecurity : (old.loginSecurity || null)
       };
     });
   }
@@ -8918,7 +8922,7 @@ async function publicActionLimit(req, action, limit, windowMs) {
   return STATE_REPOSITORY.consumeRateLimit('public-' + String(action || 'action'), requestIp(req), limit, windowMs);
 }
 function loginThrottleKey(req, realm, identity) {
-  return [realm || 'login', requestIp(req), normalizeLogin(identity || 'blank')].join('|');
+  return [realm || 'login', normalizeLogin(identity || 'blank')].join('|');
 }
 async function loginThrottleWaitMs(key) {
   const result = await STATE_REPOSITORY.checkRateLimit('login-failure', key, LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
@@ -9089,7 +9093,9 @@ function registerAccountLoginFailure(record = {}) {
   return record.loginSecurity;
 }
 function clearAccountLoginFailure(record = {}) {
-  delete record.loginSecurity;
+  // Null is an intentional unlock tombstone. It survives a concurrent merge,
+  // while redacted dashboard payloads that omit the property remain protected.
+  record.loginSecurity = null;
   return record;
 }
 function staffLoginTarget(data, username) {
@@ -9248,6 +9254,29 @@ async function completeAccountRecovery(data, target, code, newPassword) {
   }, 'Password recovered by email code', [target.kind, target.id, 'Password hash replaced', 'Account lock cleared', 'Fresh login required']);
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
+  const savedData = await readData();
+  const savedTarget = target.realm === 'staff'
+    ? staffLoginTarget(savedData, target.username)
+    : customerLoginTarget(savedData, target.username);
+  const savedPasswordRecord = savedTarget && savedTarget.kind === 'application'
+    ? {
+        passwordHash: savedTarget.record.pendingPasswordHash,
+        passwordSalt: savedTarget.record.pendingPasswordSalt,
+        passwordUpdatedAt: savedTarget.record.pendingPasswordUpdatedAt
+      }
+    : (savedTarget && savedTarget.record || {});
+  const recoveryPersisted = !!(
+    savedTarget
+    && savedTarget.kind === target.kind
+    && savedTarget.id === target.id
+    && !loginRecordLocked(savedTarget.record)
+    && verifyPasswordRecord(newPassword, savedPasswordRecord)
+  );
+  if (!recoveryPersisted) {
+    const error = new Error('The password recovery could not be verified after saving. Send a fresh recovery code and try again.');
+    error.statusCode = 503;
+    throw error;
+  }
   return { ok: true };
 }
 function loginPage(message = '', data = {}) {
@@ -13872,6 +13901,7 @@ function mergeConcurrentState(data, latest, options = {}) {
     const removed = new Set((deletedIds[key] || []).map(String));
     if (removed.size) data[key] = data[key].filter(row => !removed.has(String(row && row.id || '')));
   });
+  data.security = mergeConcurrentValue(baseState.security || {}, data.security || {}, latest.security || {}, preferIncoming);
   data.integrations = options.preserveLatestIntegrations
     ? (latest.integrations || data.integrations || {})
     : mergeConcurrentValue(baseState.integrations || {}, data.integrations || {}, latest.integrations || {}, preferIncoming);
@@ -20990,12 +21020,14 @@ const server = http.createServer(async (req, res) => {
       const environmentOwnerSource = target && target.kind === 'owner' ? ownerEnvironmentAuthSource(username, password, '', data) : '';
       if (environmentOwnerSource) {
         await clearLoginFailure(throttleKey);
+        const hadLoginSecurity = !!target.record.loginSecurity;
+        if (hadLoginSecurity) clearAccountLoginFailure(target.record);
+        let verificationSaved = false;
         if (environmentOwnerSource === 'owner_environment_hash') {
-          try { await recordOwnerPasswordLoginVerification(data, environmentOwnerSource); }
+          try { verificationSaved = await recordOwnerPasswordLoginVerification(data, environmentOwnerSource); }
           catch (error) { reportBackgroundTaskFailure('owner-password-verification', error, { route: '/login', source: environmentOwnerSource }, 'Owner password verification'); }
         }
-        if (target.record.loginSecurity) {
-          clearAccountLoginFailure(target.record);
+        if (hadLoginSecurity && !verificationSaved) {
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }
@@ -21003,10 +21035,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (target && target.kind === 'owner' && storedOwnerLoginMatches(data, username, password)) {
         await clearLoginFailure(throttleKey);
-        try { await recordOwnerPasswordLoginVerification(data, 'owner_stored'); }
+        const hadLoginSecurity = !!target.record.loginSecurity;
+        if (hadLoginSecurity) clearAccountLoginFailure(target.record);
+        let verificationSaved = false;
+        try { verificationSaved = await recordOwnerPasswordLoginVerification(data, 'owner_stored'); }
         catch (error) { reportBackgroundTaskFailure('owner-password-verification', error, { route: '/login', source: 'owner_stored' }, 'Owner password verification'); }
-        if (target.record.loginSecurity) {
-          clearAccountLoginFailure(target.record);
+        if (hadLoginSecurity && !verificationSaved) {
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }

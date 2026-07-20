@@ -124,11 +124,13 @@ async function main() {
       const storedLogin = await request(server, 'POST', '/login', { username: 'secure-owner', password: storedPassword });
       assert.strictEqual(storedLogin.status, 302, 'The exact stored username/password pair must authenticate.');
 
+      const originalProxyChain = { 'x-forwarded-for': '198.51.100.44, 10.0.0.11' };
+      const recoveryProxyChain = { 'x-forwarded-for': '198.51.100.44, 10.0.0.12' };
       for (let attempt = 1; attempt <= 4; attempt += 1) {
-        const failed = await request(server, 'POST', '/login', { username: 'secure-owner', password: 'WrongPassword' + attempt + '!' });
+        const failed = await request(server, 'POST', '/login', { username: 'secure-owner', password: 'WrongPassword' + attempt + '!' }, originalProxyChain);
         assert.strictEqual(failed.status, 401, 'Attempts one through four must fail without authenticating.');
       }
-      const fifthFailure = await request(server, 'POST', '/login', { username: 'secure-owner', password: 'WrongPassword5!' });
+      const fifthFailure = await request(server, 'POST', '/login', { username: 'secure-owner', password: 'WrongPassword5!' }, originalProxyChain);
       assert.strictEqual(fifthFailure.status, 303, 'The fifth failed attempt must send the account to recovery.');
       assert(fifthFailure.location.startsWith('/forgot?locked=1&username='), 'The lock response must lead to the account recovery page.');
       const correctWhileLocked = await request(server, 'POST', '/login', { username: 'secure-owner', password: storedPassword });
@@ -160,17 +162,18 @@ async function main() {
         code: '483920',
         newPassword: recoveredPassword,
         confirmPassword: recoveredPassword
-      });
+      }, recoveryProxyChain);
       assert.strictEqual(recoveryResult.status, 200, 'The exact one-time code must reset only its bound owner account.');
       assert(recoveryResult.text.includes('Password reset complete'));
 
       const oldPasswordAfterRecovery = await request(server, 'POST', '/login', { username: 'secure-owner', password: storedPassword });
       assert.strictEqual(oldPasswordAfterRecovery.status, 401, 'Recovery must revoke the previous password.');
-      const recoveredLogin = await request(server, 'POST', '/login', { username: 'secure-owner', password: recoveredPassword });
+      const recoveredLogin = await request(server, 'POST', '/login', { username: 'secure-owner', password: recoveredPassword }, originalProxyChain);
       assert.strictEqual(recoveredLogin.status, 302, 'Recovery must require a fresh login with the exact username and new password.');
+      assert(!recoveredLogin.location.startsWith('/forgot'), 'A changing internal proxy hop must not leave the recovered account trapped behind the old rate-limit key.');
 
       const finalState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
-      assert(!finalState.security.ownerLogin.loginSecurity, 'Successful recovery must clear the lock and one-time challenge.');
+      assert(!finalState.security.ownerLogin.loginSecurity, 'Successful recovery must clear the lock and one-time challenge: ' + JSON.stringify(finalState.security.ownerLogin.loginSecurity));
       assert(!JSON.stringify(finalState).includes('483920'), 'The recovery code must never appear in saved state.');
 
       const recoveredOwnerSession = cookieHeader(recoveredLogin);

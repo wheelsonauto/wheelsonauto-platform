@@ -13,6 +13,12 @@ function clone(value) {
 }
 
 const base = {
+  security: {
+    ownerLogin: {
+      username: 'adminwheelson',
+      loginSecurity: { failedAttempts: 5, recoveryRequired: true, lockedAt: '2026-07-20T10:00:00.000Z' }
+    }
+  },
   recurringPayments: [{
     id: 'rec-concurrent-1',
     customer: 'Concurrent Customer',
@@ -114,6 +120,16 @@ ownerConflict.recurringPayments[0].amount = 239;
 const latestConflict = mergeConcurrentState(backgroundConflict, ownerConflict, { preferIncoming: false, baseState: base });
 assert.strictEqual(latestConflict.recurringPayments[0].amount, 239, 'When both writers change the exact same field, latest-preferred synchronization must retain the database value.');
 
+const recoveryWrite = clone(base);
+recoveryWrite.security.ownerLogin.loginSecurity = null;
+const recoveryMerged = mergeConcurrentState(recoveryWrite, clone(base), { preferIncoming: true, baseState: base });
+assert.strictEqual(recoveryMerged.security.ownerLogin.loginSecurity, null, 'An explicit successful-recovery unlock must persist transactionally.');
+const staleDashboardWrite = clone(base);
+const unlockedLatest = clone(base);
+unlockedLatest.security.ownerLogin.loginSecurity = null;
+const staleDashboardMerged = mergeConcurrentState(staleDashboardWrite, unlockedLatest, { preferIncoming: true, baseState: base });
+assert.strictEqual(staleDashboardMerged.security.ownerLogin.loginSecurity, null, 'A stale dashboard save must never resurrect a cleared account lock.');
+
 const starHealthWrite = clone(base);
 starHealthWrite.integrations.messaging = {
   lastAiHealthAt: '2026-07-20T10:30:00.000Z',
@@ -136,4 +152,4 @@ assert.strictEqual(delayedProviderMerged.integrations.verification.checked, 58, 
 assert.strictEqual(base.recurringPayments[0].amount, 229, 'Three-way merging must not mutate the read baseline.');
 assert.strictEqual(latest.payments[0].refundedAmount, 42.25, 'Three-way merging must not mutate the latest database state object.');
 
-console.log('Concurrent state merge check passed: staff edits, webhook/payment updates, nested history, additions, deletions, and concurrent provider proofs remain coherent.');
+console.log('Concurrent state merge check passed: staff edits, webhook/payment updates, account unlocks, stale-dashboard lock protection, nested history, additions, deletions, and concurrent provider proofs remain coherent.');
