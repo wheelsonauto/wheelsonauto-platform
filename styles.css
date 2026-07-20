@@ -7803,6 +7803,22 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
 .assignment-claim-list>div>div:first-child span{text-align:left}
 .assignment-claim-action{display:flex;justify-content:flex-end;align-items:center;min-width:0}
 .assignment-claim-action .inline-action{font-size:10px;white-space:normal;text-align:right}
+.assignment-transfer-keep-list{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:6px;
+  margin-top:5px;
+}
+.assignment-transfer-keep-list .native-confirm{
+  min-width:0;
+  margin:0;
+  padding:8px 9px;
+  border:1px solid rgba(205,209,213,.14);
+  border-radius:8px;
+  background:rgba(230,233,236,.035);
+  color:#d5d4cf;
+  overflow-wrap:anywhere;
+}
 
 @media(max-width:680px){
   .assignment-review-head{align-items:start}
@@ -7814,6 +7830,7 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .assignment-claim-list span{text-align:left}
   .assignment-claim-action{justify-content:flex-start}
   .assignment-claim-action .inline-action{text-align:left}
+  .assignment-transfer-keep-list{grid-template-columns:1fr}
 }
 
 /* Launch evidence stays compact before the long provider and conflict tables. */

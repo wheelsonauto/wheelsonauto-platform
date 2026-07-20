@@ -627,7 +627,8 @@ function ownerSmoke() {
     providerSummary: {}
   });
   assert(multiIdentityResolver.includes('<option value="Customer Name" selected>') && multiIdentityResolver.includes('<option value="Old Spelling" selected>'), 'A multi-identity assignment review must automatically select the next pair that is not already connected.');
-  assert(multiIdentityResolver.includes('this review stays open and selects the next unresolved pair') && multiIdentityResolver.includes('Resolved name-link audit') && multiIdentityResolver.includes('Confirm this pair'), 'The assignment resolver must explain pairwise progress and label saved links as audit history instead of unresolved conflicts.');
+  assert(multiIdentityResolver.includes('"saved" means that pair is recorded and the review continues') && multiIdentityResolver.includes('Resolved name-link audit') && multiIdentityResolver.includes('Save this same-person pair'), 'The assignment resolver must explain pairwise progress and label saved links as audit history instead of unresolved conflicts.');
+  assert(multiIdentityResolver.includes('Names or references that belong to the current renter') && multiIdentityResolver.includes('assignment-transfer-keep') && multiIdentityResolver.includes('Every unchecked identity on this exact car moves to history'), 'The renter-transfer resolver must explicitly separate kept current-renter aliases from old renter identities.');
   const assignmentClaimActions = context.assignmentConflictEvidenceHtml({
     claims: [
       { id: 'file-exact-old-assignment', source: 'Customer file', customer: 'Old Assignment', status: 'Active' },

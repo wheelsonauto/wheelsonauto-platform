@@ -1148,8 +1148,11 @@ async function main() {
       { id: 'rec-direct-reference-name', organizationId: 'org-wheelsonauto', customer: 'Direct Reference Person', vehicleId: 'veh-direct-assignment-reference', amount: 113, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-reference-id', organizationId: 'org-wheelsonauto', customer: 'ABCD1234XYZ9', vehicleId: 'veh-direct-assignment-reference', amount: 113, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-transfer-old', organizationId: 'org-wheelsonauto', customer: 'Direct Old Driver', vehicleId: 'veh-direct-assignment-transfer', amount: 114, status: 'Active', nextRun: '2026-07-24' },
-      { id: 'rec-direct-transfer-new', organizationId: 'org-wheelsonauto', customer: 'Another New Renter', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' }
+      { id: 'rec-direct-transfer-new', organizationId: 'org-wheelsonauto', customer: 'Another New Renter', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' },
+      { id: 'rec-direct-transfer-new-reference', organizationId: 'org-wheelsonauto', customer: 'Alternate Billing Name', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' }
     );
+    assignmentConflictState.assignmentCustomerAliases = Array.isArray(assignmentConflictState.assignmentCustomerAliases) ? assignmentConflictState.assignmentCustomerAliases : [];
+    assignmentConflictState.assignmentCustomerAliases.unshift({ id: 'alias-direct-transfer-wrong', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-assignment-transfer', canonicalCustomer: 'Another New Renter', aliasCustomer: 'Direct Old Driver', aliases: ['Another New Renter', 'Direct Old Driver'], active: true, createdAt: '2026-07-20T12:00:00.000Z', createdBy: 'Regression setup' });
     assignmentConflictState.customers.unshift({ id: 'cus-direct-transfer-old-profile', organizationId: 'org-wheelsonauto', name: 'Direct Old Driver', vin: 'DIRECTTRANSFERVIN', status: 'Active', stage: 'Active contract', source: 'Clover' });
     assignmentConflictState.maintenance.unshift({ id: 'mnt-direct-open-inspection-no-checklist', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-assignment-alias', vehicle: '2025 Direct Alias Car', vin: 'DIRECTALIASVIN', plate: 'DIR-ALS', tracker: 'TRK-ALS', customer: 'Direct Alias Person', status: 'Scheduled', type: 'Inspection', issue: 'Open inspection checklist is completed at sign-off', due: '2026-07-30' });
     const assignmentConflictWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: assignmentConflictState });
@@ -1190,19 +1193,26 @@ async function main() {
       cookie: ownerCookie,
       json: {
         currentCustomer: 'Another New Renter',
+        keepCustomerNames: ['Another New Renter', 'Alternate Billing Name'],
         reason: 'Direct smoke new-renter transfer',
         confirmation: 'KEEP_CURRENT_RENTER_AND_END_OLD_ASSIGNMENTS'
       }
     });
-    assert(transferSaved.status === 200 && transferSaved.json && transferSaved.json.ok, 'Owner should be able to keep the verified new renter and end old links for only that vehicle.');
+    assert(transferSaved.status === 200 && transferSaved.json && transferSaved.json.ok && transferSaved.json.revokedNameLinks === 1, 'Owner should be able to keep the verified new renter, revoke a mistaken cross-renter alias, and end old links for only that vehicle. Got ' + transferSaved.status + ': ' + String(transferSaved.text || '').slice(0, 600));
     const transferSavedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const transferSavedVehicle = (transferSavedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-transfer');
     const transferOldAutopay = (transferSavedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-transfer-old');
     const transferNewAutopay = (transferSavedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-transfer-new');
+    const transferNewReferenceAutopay = (transferSavedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-transfer-new-reference');
     const transferOldCustomer = (transferSavedState.json.customers || []).find(row => row.id === 'cus-direct-transfer-old-profile');
+    const transferWrongAlias = (transferSavedState.json.assignmentCustomerAliases || []).find(row => row.id === 'alias-direct-transfer-wrong');
+    const transferCurrentAlias = (transferSavedState.json.assignmentCustomerAliases || []).find(row => row.vehicleId === 'veh-direct-assignment-transfer' && row.active !== false && row.canonicalCustomer === 'Another New Renter' && row.aliasCustomer === 'Alternate Billing Name');
     assert(transferSavedVehicle && transferSavedVehicle.currentCustomer === 'Another New Renter' && transferSavedVehicle.status === 'Rented' && transferSavedVehicle.manuallyEditedAt && transferSavedVehicle.assignmentLockedAt && !transferSavedVehicle.assignmentConflict, 'Renter transfer must make the chosen customer authoritative and lock the fleet record against stale spreadsheet imports.');
     assert(transferOldAutopay && transferOldAutopay.status === 'Removed' && !transferOldAutopay.vehicleId && transferOldAutopay.autoChargeEnabled === false, 'Renter transfer must stop and unlink the prior WheelsonAuto autopay for this car.');
     assert(transferNewAutopay && transferNewAutopay.status === 'Active' && transferNewAutopay.vehicleId === 'veh-direct-assignment-transfer', 'Renter transfer must keep the chosen current renter autopay active and linked.');
+    assert(transferNewReferenceAutopay && transferNewReferenceAutopay.status === 'Active' && transferNewReferenceAutopay.vehicleId === 'veh-direct-assignment-transfer', 'Renter transfer must keep every explicitly checked current-renter name/reference active and linked.');
+    assert(transferWrongAlias && transferWrongAlias.active === false && transferWrongAlias.revokedAt && /Different renter confirmed/.test(transferWrongAlias.revocationReason || ''), 'Renter transfer must revoke a mistaken alias that connected the prior renter to the current renter.');
+    assert(transferCurrentAlias, 'Renter transfer must preserve an auditable same-person link between the explicitly kept current-renter names.');
     assert(transferOldCustomer && transferOldCustomer.status === 'History' && transferOldCustomer.manuallyEditedAt && !transferOldCustomer.vehicleId && transferOldCustomer.previousVehicleId === 'veh-direct-assignment-transfer', 'Renter transfer must preserve an old customer profile matched by VIN in history and protect it from spreadsheet repair reactivation.');
     assert(!conflictReview.text.includes('856-555-1385') && !conflictReview.text.includes('direct.alias@example.com') && !conflictReview.text.includes('CLV-DIRECT-ONE'), 'Owner conflict review must not return raw contact details or Clover identifiers to the browser.');
     const aliasWithoutConfirmation = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias', {

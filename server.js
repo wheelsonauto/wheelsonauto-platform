@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-assignment-proof-227';
+const ASSET_VERSION = 'platform-20260720-renter-transfer-228';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -6587,13 +6587,29 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
   });
   return { vehicleAssignmentsSynced, linkedRowsSynced, serviceRowsSynced, assignmentConflicts: conflicts };
 }
-function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = '', user = {}, reason = '') {
+function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = '', user = {}, reason = '', keepCustomerNames = []) {
   const review = assignmentConflictReview(data, vehicleId);
   if (!review) throw Object.assign(new Error('Vehicle not found.'), { statusCode: 404 });
   const selectedClaim = review.claims.find(row => normKey(row.customer) === normKey(currentCustomer));
   if (!selectedClaim) throw Object.assign(new Error('Choose the current renter from the active claims for this exact vehicle.'), { statusCode: 400 });
   const vehicle = (data.vehicles || []).find(row => String(row.id || '') === String(vehicleId || ''));
   const selectedName = selectedClaim.customer;
+  const claimNames = [];
+  review.claims.forEach(claim => {
+    const name = String(claim && claim.customer || '').trim();
+    if (name && !claimNames.some(saved => normKey(saved) === normKey(name))) claimNames.push(name);
+  });
+  const requestedKeepNames = [selectedName].concat(Array.isArray(keepCustomerNames) ? keepCustomerNames : []);
+  const keptNames = [];
+  requestedKeepNames.forEach(name => {
+    const claimName = claimNames.find(saved => normKey(saved) === normKey(name));
+    if (!claimName) throw Object.assign(new Error('Every current-renter name must come from the active claims for this exact vehicle.'), { statusCode: 400 });
+    if (!keptNames.some(saved => normKey(saved) === normKey(claimName))) keptNames.push(claimName);
+  });
+  const keepKeys = new Set(keptNames.map(normKey));
+  const archivedNames = claimNames.filter(name => !keepKeys.has(normKey(name)));
+  if (!archivedNames.length) throw Object.assign(new Error('Choose at least one different old-renter name to end, or use the same-person name-link action instead.'), { statusCode: 400 });
+  const archivedKeys = new Set(archivedNames.map(normKey));
   const now = new Date().toISOString();
   const note = String(reason || 'Owner confirmed a new renter for this vehicle.').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 500);
   const archived = { recurringPayments: 0, cloverRecurring: 0, customerFiles: 0, customerProfiles: 0 };
@@ -6603,7 +6619,7 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
       const activeClaim = activeAssignmentRecord(row, repositorySource);
       if (!activeClaim || String(activeClaim.vehicleId || '') !== String(vehicleId || '')) return;
       const rowCustomer = String(row.customer || row.name || '').trim();
-      if (!rowCustomer || sameApprovedAssignmentCustomer(data, vehicleId, rowCustomer, selectedName)) return;
+      if (!rowCustomer || keepKeys.has(normKey(rowCustomer))) return;
       row.previousVehicleId = row.previousVehicleId || row.vehicleId || activeClaim.vehicleId || '';
       row.previousVehicle = row.previousVehicle || row.vehicle || review.vehicle.name || '';
       row.previousVin = row.previousVin || row.vin || review.vehicle.vin || '';
@@ -6642,9 +6658,37 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
   archiveRows((((data.integrations || {}).clover || {}).recurringPlanMembers), 'cloverRecurring');
   archiveRows(data.contracts, 'customerFiles');
   archiveRows(data.customers, 'customerProfiles');
+  let revokedNameLinks = 0;
+  (Array.isArray(data.assignmentCustomerAliases) ? data.assignmentCustomerAliases : []).forEach(row => {
+    if (!row || row.active === false || String(row.vehicleId || '') !== String(vehicleId || '')) return;
+    const linkedKeys = [row.canonicalCustomer, row.aliasCustomer].concat(row.aliases || []).map(normKey).filter(Boolean);
+    if (!linkedKeys.some(key => archivedKeys.has(key))) return;
+    row.active = false;
+    row.revokedAt = now;
+    row.revokedBy = user.name || user.username || 'Owner';
+    row.revocationReason = 'Different renter confirmed: ' + note;
+    revokedNameLinks += 1;
+  });
+  data.assignmentCustomerAliases = Array.isArray(data.assignmentCustomerAliases) ? data.assignmentCustomerAliases : [];
+  keptNames.slice(1).forEach(keptName => {
+    if (sameApprovedAssignmentCustomer(data, vehicleId, selectedName, keptName)) return;
+    data.assignmentCustomerAliases.unshift({
+      id: 'assignment-alias-' + crypto.randomBytes(8).toString('hex'),
+      organizationId: review.vehicle.organizationId || MAIN_ORG_ID,
+      vehicleId,
+      canonicalCustomer: selectedName,
+      aliasCustomer: keptName,
+      aliases: [selectedName, keptName],
+      reason: 'Kept as the same current renter during owner-confirmed vehicle transfer. ' + note,
+      source: 'renter_transfer',
+      active: true,
+      createdAt: now,
+      createdBy: user.name || user.username || 'Owner'
+    });
+  });
   const priorCustomer = String(vehicle.currentCustomer || '').trim();
-  const oldHumanClaim = review.claims.find(row => !sameApprovedAssignmentCustomer(data, vehicleId, row.customer, selectedName) && !assignmentReferenceLike(row.customer));
-  vehicle.previousCustomer = priorCustomer && !sameApprovedAssignmentCustomer(data, vehicleId, priorCustomer, selectedName)
+  const oldHumanClaim = review.claims.find(row => archivedKeys.has(normKey(row.customer)) && !assignmentReferenceLike(row.customer));
+  vehicle.previousCustomer = priorCustomer && archivedKeys.has(normKey(priorCustomer))
     ? priorCustomer
     : (vehicle.previousCustomer || oldHumanClaim && oldHumanClaim.customer || '');
   vehicle.currentCustomer = selectedName;
@@ -6658,7 +6702,7 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
   if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
   const synced = syncVehicleAssignmentsFromActiveRecords(data);
   const inventory = syncOnlineInventoryFromFleetAssignments(data);
-  return { review: assignmentConflictReview(data, vehicleId), archived, synced, inventory, currentCustomer: selectedName };
+  return { review: assignmentConflictReview(data, vehicleId), archived, synced, inventory, currentCustomer: selectedName, keptCustomerNames: keptNames, archivedCustomerNames: archivedNames, revokedNameLinks };
 }
 function fleetPublicListingState(vehicle = {}) {
   const customer = String(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '').trim();
@@ -21705,11 +21749,14 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const vehicleId = decodeURIComponent(assignmentTransferMatch[1] || '');
       try {
-        const result = transferVehicleAssignment(data, vehicleId, payload.currentCustomer, user, payload.reason);
+        const result = transferVehicleAssignment(data, vehicleId, payload.currentCustomer, user, payload.reason, payload.keepCustomerNames);
         appendAuditLog(data, user, 'Vehicle renter transfer resolved', [
           result.review && result.review.vehicle && result.review.vehicle.name || vehicleId,
           'Current renter ' + result.currentCustomer,
+          result.keptCustomerNames.length > 1 ? 'Current renter names kept ' + result.keptCustomerNames.join(' / ') : '',
+          'Previous renter names ended ' + result.archivedCustomerNames.join(' / '),
           'Archived links ' + Object.values(result.archived).reduce((sum, value) => sum + Number(value || 0), 0),
+          result.revokedNameLinks ? 'Revoked mistaken or historical name links ' + result.revokedNameLinks : '',
           result.archived.cloverRecurring ? 'Legacy Clover recurring row still requires provider-side verification.' : ''
         ].filter(Boolean));
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
