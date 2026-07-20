@@ -2,12 +2,33 @@
 
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { auditCandidates } = require('./dependency-vulnerability-check');
 
 const workflowFile = path.resolve(__dirname, '..', '.github', 'workflows', 'production-checks.yml');
 const lockfile = path.resolve(__dirname, '..', 'pnpm-lock.yaml');
 assert(fs.existsSync(workflowFile), 'The production GitHub Actions workflow is missing.');
 assert(fs.existsSync(lockfile), 'pnpm-lock.yaml is required for reproducible production dependency installs.');
+
+const auditFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'woa-audit-manager-'));
+try {
+  const pnpmOnly = path.join(auditFixture, 'pnpm');
+  const npmOnly = path.join(auditFixture, 'npm');
+  const both = path.join(auditFixture, 'both');
+  const empty = path.join(auditFixture, 'empty');
+  [pnpmOnly, npmOnly, both, empty].forEach(directory => fs.mkdirSync(directory));
+  fs.writeFileSync(path.join(pnpmOnly, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  fs.writeFileSync(path.join(npmOnly, 'package-lock.json'), '{}\n');
+  fs.writeFileSync(path.join(both, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+  fs.writeFileSync(path.join(both, 'package-lock.json'), '{}\n');
+  assert.deepStrictEqual(auditCandidates({ cwd: pnpmOnly, platform: 'linux' }).map(item => item.command), ['pnpm']);
+  assert.deepStrictEqual(auditCandidates({ cwd: npmOnly, platform: 'linux' }).map(item => item.command), ['npm']);
+  assert.deepStrictEqual(auditCandidates({ cwd: both, platform: 'win32' }).map(item => item.command), ['pnpm.cmd', 'npm.cmd']);
+  assert.deepStrictEqual(auditCandidates({ cwd: empty, platform: 'linux' }), []);
+} finally {
+  fs.rmSync(auditFixture, { recursive: true, force: true });
+}
 
 const workflow = fs.readFileSync(workflowFile, 'utf8');
 const required = [
