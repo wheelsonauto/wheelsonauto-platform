@@ -187,6 +187,22 @@ as a normal environment variable on `wheelsonauto-platform`; the live launch
 preflight and hardened startup gate deliberately reject a web runtime that can
 reach the dedicated drill database.
 
+On Render, a second logical database can live inside the same paid PostgreSQL
+instance without provisioning another instance. After production is already on
+PostgreSQL, run the guarded helper from a short-lived service Shell or One-Off
+Job. It creates or reuses only `wheelsonauto_recovery_drill`, refuses the live
+database name, rejects unrelated tables, runs the full drill, and records only
+signed proof metadata in production:
+
+```sh
+WOA_POSTGRES_RECOVERY_DRILL_CONFIRM='CREATE ISOLATED POSTGRES RECOVERY DRILL DATABASE' \
+pnpm run postgres-recovery-drill
+```
+
+Do not save `WOA_POSTGRES_RECOVERY_DRILL_CONFIRM` or the generated test URL as
+long-running service environment variables. The helper derives the isolated
+URL from `DATABASE_URL` inside the one-off process and never prints credentials.
+
 It creates a random test organization, proves write/snapshot/restore/checksum
 behavior, then removes only that generated test organization. Never point
 `WOA_TEST_DATABASE_URL` at the production database. This first test proves the
@@ -571,6 +587,10 @@ drill one more time. It runs all writes, snapshot restores, lease recovery,
 and simulated restart reads in the **separate test database**. It then writes
 only a small signed proof record into the already-imported production database;
 it does not run the test organization against production state:
+
+The recommended Render command is the guarded helper above. For a separately
+provisioned test instance or another hosting provider, the equivalent low-level
+command remains:
 
 ```sh
 WOA_TEST_DATABASE_URL='postgresql://...dedicated-test-database...' \
