@@ -614,6 +614,20 @@ function ownerSmoke() {
   const detachedConflictButton = { dataset: { id: 'veh-detached-review', vehicleName: '2023 Detached Review', vin: 'DETACHEDVIN', plate: 'DET-123', tracker: 'Tracker 9', claimedBy: 'One Name / Two Name' } };
   const detachedConflictVehicle = context.assignmentConflictVehicleFromButton(detachedConflictButton);
   assert(detachedConflictVehicle && detachedConflictVehicle.id === 'veh-detached-review' && detachedConflictVehicle.vin === 'DETACHEDVIN' && detachedConflictVehicle.assignmentConflict === 'One Name / Two Name', 'A preflight review must retain enough safe vehicle identity to open the exact server resolver even when that vehicle is absent from the current client list.');
+  const multiIdentityResolver = context.assignmentConflictResolverBody({
+    vehicle: { id: 'veh-multi-identity', name: '2025 Multi Identity', vin: 'MULTIIDENTITYVIN', conflict: 'Customer Name / PROVIDER123 / Old Spelling' },
+    claims: [
+      { customer: 'Customer Name', source: 'Customer file', status: 'Active' },
+      { customer: 'PROVIDER123', source: 'Clover recurring', status: 'Active' },
+      { customer: 'Old Spelling', source: 'WheelsonAuto autopay', status: 'Active' }
+    ],
+    aliases: [{ id: 'alias-multi-1', canonicalCustomer: 'Customer Name', aliasCustomer: 'PROVIDER123', aliases: ['Customer Name', 'PROVIDER123'] }],
+    identities: [],
+    sharedSignals: [],
+    providerSummary: {}
+  });
+  assert(multiIdentityResolver.includes('<option value="Customer Name" selected>') && multiIdentityResolver.includes('<option value="Old Spelling" selected>'), 'A multi-identity assignment review must automatically select the next pair that is not already connected.');
+  assert(multiIdentityResolver.includes('this review stays open and selects the next unresolved pair') && multiIdentityResolver.includes('Resolved name-link audit') && multiIdentityResolver.includes('Confirm this pair'), 'The assignment resolver must explain pairwise progress and label saved links as audit history instead of unresolved conflicts.');
   const assignmentClaimActions = context.assignmentConflictEvidenceHtml({
     claims: [
       { id: 'file-exact-old-assignment', source: 'Customer file', customer: 'Old Assignment', status: 'Active' },
