@@ -59,6 +59,7 @@ const verifyTelnyxWebhook = finalFunctionSlice(server, 'verifyTelnyxWebhook');
 const approveAiMessage = finalFunctionSlice(server, 'approveAiMessage');
 const publicMessagingStatus = finalFunctionSlice(server, 'publicMessagingStatus');
 const queueEmailNotification = finalFunctionSlice(server, 'queueEmailNotification');
+const findRecordedProviderDelivery = finalFunctionSlice(server, 'findRecordedProviderDelivery');
 const queueOwnerEmailNotification = finalFunctionSlice(server, 'queueOwnerEmailNotification');
 const messageContextFields = finalFunctionSlice(server, 'messageContextFields');
 const messageContactCandidates = finalFunctionSlice(server, 'messageContactCandidates');
@@ -76,7 +77,7 @@ const configureTelnyxMessagingProfile = finalFunctionSlice(server, 'configureTel
 const applyTelnyxDeliveryEvent = finalFunctionSlice(server, 'applyTelnyxDeliveryEvent');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !emailTransactionalDeliveryReady || !sendProviderSms || !smsDeliveryIdempotencyKey || !smsTransactionalDeliveryReady || !reviewPendingSmsDelivery || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !emailTransactionalDeliveryReady || !findRecordedProviderDelivery || !sendProviderSms || !smsDeliveryIdempotencyKey || !smsTransactionalDeliveryReady || !reviewPendingSmsDelivery || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging inbound SMS status', messagingStatus, 'smsWebhookConnected');
@@ -220,6 +221,7 @@ requireText('Live SMS PostgreSQL gate', sendProviderSms, 'PostgreSQL required');
 requireText('Live SMS durable claim hold', sendProviderSms, 'holdClaimUntilSettled: true');
 requireText('Inbound email owner notification', server, 'A customer email arrived in WheelsonAuto.');
 requireText('Email notification queue', queueEmailNotification, 'WheelsonAuto email notification');
+requireText('Recorded provider delivery reuse', queueEmailNotification, 'findRecordedProviderDelivery');
 requireText('Owner notification event filter', queueOwnerEmailNotification, 'settings.events.includes(event)');
 requireText('Daily closeout notification payload', server, 'dailyCloseoutNotificationPayload');
 requireText('Daily closeout paid-outside summary', server, 'paidOutsideAmount');

@@ -222,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-transactional-email-219';
+const ASSET_VERSION = 'platform-20260719-provider-dedupe-220';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -3505,6 +3505,26 @@ function emailDeliveryIdempotencyKey(emailPayload = {}, meta = {}) {
   });
   return 'woa-email-' + crypto.createHash('sha256').update(canonical).digest('hex');
 }
+function findRecordedProviderDelivery(data, idempotencyKey) {
+  const key = String(idempotencyKey || '').trim();
+  if (!key || !Array.isArray(data && data.messages)) return null;
+  return data.messages.find(item => {
+    if (String(item && item.providerIdempotencyKey || '').trim() !== key) return false;
+    const status = String(item.status || '').trim().toLowerCase();
+    return !!item.externalId
+      || String(item.deliveryReviewOutcome || '').toLowerCase() === 'delivered'
+      || ['send confirmation pending', 'postgresql required', 'mirror confirmation pending', 'notice confirmation pending'].includes(status);
+  }) || null;
+}
+function recordedProviderDeliveryState(record) {
+  const status = String(record && record.status || '').trim().toLowerCase();
+  const delivered = !!(record && (record.externalId || String(record.deliveryReviewOutcome || '').toLowerCase() === 'delivered'));
+  return {
+    delivered,
+    confirmationPending: !delivered && status.includes('confirmation pending'),
+    deliveryBlocked: !delivered && status === 'postgresql required'
+  };
+}
 async function completeProviderEmailDelivery(repository, provider, idempotencyKey, request, operation) {
   const claimScope = 'outbound_email_delivery';
   const claim = await repository.claimIdempotencyKey(claimScope, idempotencyKey, request, { holdClaimUntilSettled: true });
@@ -3662,6 +3682,15 @@ async function queueEmailNotification(data, payload = {}) {
     });
   } catch (err) {
     result = { sent: false, status: 'Email failed', provider: WOA_EMAIL_PROVIDER || 'not_configured', channel: 'Email', message: String(err && err.message || err) };
+  }
+  const existingDelivery = findRecordedProviderDelivery(data, result.idempotencyKey);
+  if (existingDelivery) {
+    const deliveryState = recordedProviderDeliveryState(existingDelivery);
+    data.integrations.notifications.emailEnabled = settings.emailEnabled;
+    data.integrations.notifications.emailRecipients = settings.emailRecipients;
+    data.integrations.notifications.lastStatus = existingDelivery.status || result.status || 'Email draft';
+    data.integrations.notifications.lastError = deliveryState.delivered ? '' : (result.message || existingDelivery.error || '');
+    return { sent: deliveryState.delivered, duplicate: true, confirmationPending: deliveryState.confirmationPending, deliveryBlocked: deliveryState.deliveryBlocked, result: { ...result, duplicate: true }, message: existingDelivery };
   }
   const record = {
     id: 'msg-notify-' + Date.now(),
@@ -12242,12 +12271,10 @@ async function sendTollReceipt(data, claim, channel, user, deliveryId = '') {
     result = { sent: false, status: err && err.code === 'sms_confirmation_pending' ? 'Send confirmation pending' : selectedChannel + ' draft', provider: selectedChannel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER, idempotencyKey: String(err && err.idempotencyKey || ''), message: String(err && err.message || err) };
   }
   data.messages = Array.isArray(data.messages) ? data.messages : [];
-  const existingReceipt = result.idempotencyKey && result.duplicate
-    ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending' || item.deliveryReviewOutcome === 'delivered'))
-    : null;
+  const existingReceipt = findRecordedProviderDelivery(data, result.idempotencyKey);
   if (existingReceipt) {
-    const confirmationPending = !existingReceipt.externalId && existingReceipt.deliveryReviewOutcome !== 'delivered';
-    return { sent: !confirmationPending, duplicate: true, confirmationPending, status: existingReceipt.status || 'Sent', channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: existingReceipt };
+    const deliveryState = recordedProviderDeliveryState(existingReceipt);
+    return { sent: deliveryState.delivered, duplicate: true, confirmationPending: deliveryState.confirmationPending, deliveryBlocked: deliveryState.deliveryBlocked, status: existingReceipt.status || 'Sent', channel: selectedChannel, receiptUrl: claim.receiptUrl || claim.proofUrl || '', message: existingReceipt };
   }
   const now = new Date().toISOString();
   const record = {
@@ -22053,12 +22080,15 @@ const server = http.createServer(async (req, res) => {
             deliveryId: payload.deliveryId || payload.idempotencyKey || '',
             messagingSettings: settings
           });
-        const existingDelivery = result.idempotencyKey && result.duplicate
-          ? data.messages.find(item => item.providerIdempotencyKey === result.idempotencyKey && (item.externalId || item.status === 'Send confirmation pending' || item.deliveryReviewOutcome === 'delivered'))
-          : null;
+        const existingDelivery = findRecordedProviderDelivery(data, result.idempotencyKey);
         if (existingDelivery) {
-          const confirmationPending = !existingDelivery.externalId && existingDelivery.deliveryReviewOutcome !== 'delivered';
-          return json(res, confirmationPending ? 202 : 200, { ok: true, sent: !confirmationPending, duplicate: true, confirmationPending, message: existingDelivery, provider: result.provider, ownerMirror: null, warning: confirmationPending ? 'This message is still waiting for provider confirmation. WheelsonAuto did not send another copy.' : 'This message was already accepted by the provider. WheelsonAuto did not send another copy.' });
+          const deliveryState = recordedProviderDeliveryState(existingDelivery);
+          const warning = deliveryState.confirmationPending
+            ? 'This message is still waiting for provider confirmation. WheelsonAuto did not send another copy.'
+            : deliveryState.deliveryBlocked
+              ? 'This exact message is already saved as a draft. Live delivery remains blocked until transactional PostgreSQL is active.'
+              : 'This message was already accepted by the provider. WheelsonAuto did not send another copy.';
+          return json(res, deliveryState.delivered ? 200 : 202, { ok: true, sent: deliveryState.delivered, duplicate: true, confirmationPending: deliveryState.confirmationPending, deliveryBlocked: deliveryState.deliveryBlocked, message: existingDelivery, provider: result.provider, ownerMirror: null, warning });
         }
         const record = {
           id: 'msg-out-' + Date.now(),

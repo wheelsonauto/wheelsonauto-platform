@@ -2236,6 +2236,13 @@ async function main() {
     const publicTollReceipt = await request(server, 'GET', new URL(directTollClaim.receiptUrl).pathname);
     assert(publicTollReceipt.status === 200 && publicTollReceipt.text.includes('Direct Toll Customer') && publicTollReceipt.text.includes('2026-07-13') && publicTollReceipt.text.includes('2026-07-15'), 'Private toll receipt should show customer, transaction date, and posting date.');
     assert(!publicTollReceipt.text.includes('$899.99') && !publicTollReceipt.text.includes('$999.99'), 'Customer toll receipt must not expose the private E-ZPass account balance.');
+    const tollReceiptSend = await request(server, 'POST', '/api/tolls/receipt/send', { cookie: ownerCookie, json: { id: directTollClaim.id, channel: 'Email', deliveryId: 'direct-toll-receipt' } });
+    assert(tollReceiptSend.status === 200 && tollReceiptSend.json.ok && tollReceiptSend.json.result.message.status === 'PostgreSQL required', 'A toll email must remain a tracked draft while JSON storage is active.');
+    const duplicateTollReceiptSend = await request(server, 'POST', '/api/tolls/receipt/send', { cookie: ownerCookie, json: { id: directTollClaim.id, channel: 'Email', deliveryId: 'direct-toll-receipt' } });
+    assert(duplicateTollReceiptSend.status === 200 && duplicateTollReceiptSend.json.ok && duplicateTollReceiptSend.json.result.duplicate === true && duplicateTollReceiptSend.json.result.deliveryBlocked === true && duplicateTollReceiptSend.json.result.message.id === tollReceiptSend.json.result.message.id, 'Retrying a blocked toll email must return the original draft row.');
+    const duplicateTollReceiptState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const duplicateTollReceiptRows = (duplicateTollReceiptState.json.messages || []).filter(item => item.providerIdempotencyKey && item.providerIdempotencyKey === tollReceiptSend.json.result.message.providerIdempotencyKey);
+    assert(duplicateTollReceiptRows.length === 1, 'Retrying a blocked toll email must not add another message row.');
     const ownerReport = await request(server, 'GET', '/api/reports/deep.csv', { cookie: ownerCookie });
     assert(ownerReport.status === 200 && /attachment; filename="wheelsonauto-deep-report-/.test(ownerReport.headers['Content-Disposition'] || ownerReport.headers['content-disposition'] || ''), 'Owner deep report should download with a dated filename.');
     assert(ownerReport.text.includes('Transactions') && ownerReport.text.includes('Autopay roster') && ownerReport.text.includes('Verification inbox') && ownerReport.text.includes('Messages / communications') && ownerReport.text.includes('Star QA') && ownerReport.text.includes('Audit trail'), 'Owner deep report should include money, customer, verification, communication, Star QA, and audit sections.');
@@ -2958,6 +2965,19 @@ async function main() {
     assert([200, 202].includes(notificationTest.status) && notificationTest.json.ok, 'Owner notification test failed.');
     assert(notificationTest.json.message.channel === 'Email', 'Notification test should save an Email message.');
     assert(notificationTest.json.message.direction === 'Outbound notification', 'Notification test should save as an outbound notification.');
+    const duplicateNotificationTest = await request(server, 'POST', '/api/notifications/email/test', {
+      cookie: ownerCookie,
+      json: {
+        to: 'notify@example.com',
+        subject: 'Direct notification test',
+        body: 'Direct smoke notification email body.',
+        event: 'direct_smoke'
+      }
+    });
+    assert([200, 202].includes(duplicateNotificationTest.status) && duplicateNotificationTest.json.ok && duplicateNotificationTest.json.message.id === notificationTest.json.message.id, 'Retrying a blocked notification email must return the original draft row.');
+    const duplicateNotificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const duplicateNotificationRows = (duplicateNotificationState.json.messages || []).filter(item => item.providerIdempotencyKey && item.providerIdempotencyKey === notificationTest.json.message.providerIdempotencyKey);
+    assert(duplicateNotificationRows.length === 1, 'Retrying a blocked notification email must not add another message row.');
     const linkedOutboundMessage = await request(server, 'POST', '/api/messages/send', {
       cookie: ownerCookie,
       json: {
@@ -4394,7 +4414,10 @@ async function main() {
       json: { customer: 'Direct Customer', email: 'direct-customer@example.com', channel: 'Email', body: 'Direct smoke email message.' }
     });
     const managerEmailCalls = providerEmailCalls.filter(call => String(call.options && call.options.body || '').includes('Direct smoke email message.'));
-    assert([200, 202].includes(duplicateManagerEmail.status) && managerEmailCalls.length === 0 && managerEmail.json.message.providerIdempotencyKey === duplicateManagerEmail.json.message.providerIdempotencyKey, 'Retrying a blocked JSON email must reuse one delivery identity without contacting Resend.');
+    assert([200, 202].includes(duplicateManagerEmail.status) && duplicateManagerEmail.json.duplicate === true && duplicateManagerEmail.json.deliveryBlocked === true && duplicateManagerEmail.json.confirmationPending === false && managerEmailCalls.length === 0 && managerEmail.json.message.providerIdempotencyKey === duplicateManagerEmail.json.message.providerIdempotencyKey && managerEmail.json.message.id === duplicateManagerEmail.json.message.id, 'Retrying a blocked JSON email must return the original draft identity without contacting Resend.');
+    const duplicateManagerEmailState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const duplicateManagerEmailRows = (duplicateManagerEmailState.json.messages || []).filter(item => item.providerIdempotencyKey === managerEmail.json.message.providerIdempotencyKey);
+    assert(duplicateManagerEmailRows.length === 1, 'Retrying a blocked JSON email must not add a duplicate message row.');
 
     const blockedInboundSms = await request(server, 'POST', '/api/webhooks/messages', {
       json: { MessageSid: 'direct-sms-blocked', From: '+13135550199', To: '+13135550000', Body: 'Unsigned inbound text.' }
