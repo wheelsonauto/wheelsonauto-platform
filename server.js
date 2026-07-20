@@ -6322,6 +6322,69 @@ function assignmentConflictIdentityEvidence(data = {}, claims = []) {
     }
   };
 }
+function assignmentReferenceLike(value) {
+  const raw = String(value || '').trim();
+  if (raw.length < 10 || raw.length > 64 || /\s/.test(raw)) return false;
+  return /^[a-z0-9_-]+$/i.test(raw) && /[a-z]/i.test(raw) && /\d/.test(raw);
+}
+function assignmentConflictTriage(claims = [], evidence = {}) {
+  const customers = [];
+  claims.forEach(claim => {
+    const customer = String(claim && claim.customer || '').trim();
+    if (customer && !customers.some(saved => normKey(saved) === normKey(customer))) customers.push(customer);
+  });
+  const providerReferences = customers.filter(assignmentReferenceLike);
+  const humanNames = customers.filter(customer => !assignmentReferenceLike(customer));
+  const sharedSignals = Array.isArray(evidence.sharedSignals) ? evidence.sharedSignals : [];
+  const nameVariationPairs = [];
+  for (let left = 0; left < humanNames.length; left += 1) {
+    for (let right = left + 1; right < humanNames.length; right += 1) {
+      if (softNameMatch(humanNames[left], humanNames[right])) nameVariationPairs.push([humanNames[left], humanNames[right]]);
+    }
+  }
+  if (sharedSignals.length) {
+    return {
+      kind: 'shared_contact',
+      priority: 3,
+      tone: 'warn',
+      label: 'Exact contact evidence',
+      summary: 'Two saved names share an exact phone or email. This supports a same-customer review, but the owner must still verify the person before linking names.',
+      providerReferences,
+      nameVariationPairs
+    };
+  }
+  if (providerReferences.length) {
+    return {
+      kind: 'provider_reference',
+      priority: 2,
+      tone: 'warn',
+      label: 'Provider reference in customer field',
+      summary: 'One active assignment uses an opaque provider reference instead of a verified customer name. Open the exact Clover-linked row before confirming any identity.',
+      providerReferences,
+      nameVariationPairs
+    };
+  }
+  if (nameVariationPairs.length) {
+    return {
+      kind: 'name_variation',
+      priority: 3,
+      tone: 'warn',
+      label: 'Possible spelling variation',
+      summary: 'The saved names look similar, but no exact phone or email evidence was found. Verify the customer outside the platform before linking them.',
+      providerReferences,
+      nameVariationPairs
+    };
+  }
+  return {
+    kind: 'competing_customers',
+    priority: 1,
+    tone: 'bad',
+    label: 'Possible customer transfer',
+    summary: 'Different active customer identities claim this vehicle with no reliable shared evidence. End or move the incorrect assignment; do not link the names unless they are truly one person.',
+    providerReferences,
+    nameVariationPairs
+  };
+}
 function assignmentConflictReview(data = {}, vehicleId = '') {
   const vehicle = (Array.isArray(data.vehicles) ? data.vehicles : []).find(row => String(row && row.id || '') === String(vehicleId || ''));
   if (!vehicle) return null;
@@ -6342,6 +6405,7 @@ function assignmentConflictReview(data = {}, vehicleId = '') {
     identities: evidence.identities,
     sharedSignals: evidence.sharedSignals,
     providerSummary: evidence.providerSummary,
+    triage: assignmentConflictTriage(claims, evidence),
     aliases: assignmentAliasRows(data, vehicle.id).map(row => ({
       id: row.id || '',
       canonicalCustomer: row.canonicalCustomer || '',
@@ -6611,6 +6675,7 @@ function assignmentConflictRows(data = {}) {
 function assignmentConflictPreflightRows(data = {}) {
   return assignmentConflictRows(data).map(vehicle => {
     const sources = [...new Set(activeAssignmentClaimsForVehicle(data, vehicle.id).map(claim => claim.source).filter(Boolean))];
+    const review = assignmentConflictReview(data, vehicle.id);
     return {
       vehicleId: String(vehicle.id || '').trim(),
       vehicle: vehicleNameFromParts(vehicle),
@@ -6620,7 +6685,8 @@ function assignmentConflictPreflightRows(data = {}) {
       status: String(vehicle.status || '').trim(),
       currentCustomer: String(vehicle.currentCustomer || '').trim(),
       claimedBy: String(vehicle.assignmentConflict || '').trim(),
-      sources
+      sources,
+      triage: review && review.triage || null
     };
   });
 }
@@ -6628,6 +6694,7 @@ function structuralAssignmentConflictPreflightRows(data = {}) {
   const vehicleById = new Map((Array.isArray(data.vehicles) ? data.vehicles : []).map(vehicle => [String(vehicle.id || '').trim(), vehicle]));
   return stateRepository.activeAssignmentIdentityConflicts(data).map(conflict => {
     const vehicle = vehicleById.get(conflict.vehicleId) || {};
+    const review = assignmentConflictReview(data, conflict.vehicleId);
     return {
       vehicleId: conflict.vehicleId,
       vehicle: vehicleNameFromParts(vehicle),
@@ -6637,7 +6704,8 @@ function structuralAssignmentConflictPreflightRows(data = {}) {
       status: String(vehicle.status || '').trim(),
       currentCustomer: String(vehicle.currentCustomer || '').trim(),
       claimedBy: conflict.customers.join(' / '),
-      sources: [...new Set(conflict.claims.map(claim => claim.source).filter(Boolean))]
+      sources: [...new Set(conflict.claims.map(claim => claim.source).filter(Boolean))],
+      triage: review && review.triage || null
     };
   });
 }
@@ -6655,10 +6723,14 @@ function assignmentConflictPreflightClassification(data = {}) {
     rowsByVehicleId.set(row.vehicleId, {
       ...existing,
       claimedBy: existing.claimedBy || row.claimedBy,
-      sources: [...new Set([...(existing.sources || []), ...(row.sources || [])])]
+      sources: [...new Set([...(existing.sources || []), ...(row.sources || [])])],
+      triage: row.triage || existing.triage || null
     });
   });
-  const all = [...rowsByVehicleId.values()].sort((left, right) => String(left.vehicle || left.vehicleId).localeCompare(String(right.vehicle || right.vehicleId)));
+  const all = [...rowsByVehicleId.values()].sort((left, right) => {
+    const priority = Number(left && left.triage && left.triage.priority || 9) - Number(right && right.triage && right.triage.priority || 9);
+    return priority || String(left.vehicle || left.vehicleId).localeCompare(String(right.vehicle || right.vehicleId));
+  });
   return {
     all,
     structural: structuralRows,
