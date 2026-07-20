@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-clover-roster-proof-234';
+const ASSET_VERSION = 'platform-20260720-renter-proof-235';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -6702,7 +6702,25 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
   if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
   const synced = syncVehicleAssignmentsFromActiveRecords(data);
   const inventory = syncOnlineInventoryFromFleetAssignments(data);
-  return { review: assignmentConflictReview(data, vehicleId), archived, synced, inventory, currentCustomer: selectedName, keptCustomerNames: keptNames, archivedCustomerNames: archivedNames, revokedNameLinks };
+  const archivedRecordCount = Object.values(archived).reduce((sum, value) => sum + Number(value || 0), 0);
+  return {
+    review: assignmentConflictReview(data, vehicleId),
+    archived,
+    synced,
+    inventory,
+    currentCustomer: selectedName,
+    keptCustomerNames: keptNames,
+    archivedCustomerNames: archivedNames,
+    revokedNameLinks,
+    resolution: {
+      currentRenter: selectedName,
+      samePersonNamesKept: keptNames.filter(name => normKey(name) !== normKey(selectedName)),
+      formerRentersEnded: archivedNames,
+      archivedRecordCount,
+      legacyCloverReviewRequired: archived.cloverRecurring > 0,
+      originalHistoriesRemainSeparate: true
+    }
+  };
 }
 function fleetPublicListingState(vehicle = {}) {
   const customer = String(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '').trim();

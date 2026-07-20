@@ -1208,6 +1208,9 @@ async function main() {
       }
     });
     assert(transferSaved.status === 200 && transferSaved.json && transferSaved.json.ok && transferSaved.json.revokedNameLinks === 1, 'Owner should be able to keep the verified new renter, revoke a mistaken cross-renter alias, and end old links for only that vehicle. Got ' + transferSaved.status + ': ' + String(transferSaved.text || '').slice(0, 600));
+    assert(JSON.stringify(transferSaved.json.resolution.formerRentersEnded) === JSON.stringify(['Direct Old Driver']), 'Transfer confirmation must name the former renter that moved to history.');
+    assert(JSON.stringify(transferSaved.json.resolution.samePersonNamesKept) === JSON.stringify(['Alternate Billing Name']), 'Transfer confirmation must separately name same-person references kept with the current renter.');
+    assert(transferSaved.json.resolution.currentRenter === 'Another New Renter' && transferSaved.json.resolution.originalHistoriesRemainSeparate === true && transferSaved.json.resolution.archivedRecordCount >= 2, 'Transfer confirmation must identify the authoritative renter and confirm that original histories remain separate.');
     const transferSavedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const transferSavedVehicle = (transferSavedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-transfer');
     const transferOldAutopay = (transferSavedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-transfer-old');
