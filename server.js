@@ -6598,11 +6598,13 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
   const note = String(reason || 'Owner confirmed a new renter for this vehicle.').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 500);
   const archived = { recurringPayments: 0, cloverRecurring: 0, customerFiles: 0, customerProfiles: 0 };
   const archiveRows = (rows, kind) => {
+    const repositorySource = kind === 'customerFiles' ? 'customer_file' : kind === 'customerProfiles' ? 'customer' : kind;
     (Array.isArray(rows) ? rows : []).forEach(row => {
-      if (String(row.vehicleId || '') !== String(vehicleId || '')) return;
+      const activeClaim = activeAssignmentRecord(row, repositorySource);
+      if (!activeClaim || String(activeClaim.vehicleId || '') !== String(vehicleId || '')) return;
       const rowCustomer = String(row.customer || row.name || '').trim();
       if (!rowCustomer || sameApprovedAssignmentCustomer(data, vehicleId, rowCustomer, selectedName)) return;
-      row.previousVehicleId = row.previousVehicleId || row.vehicleId || '';
+      row.previousVehicleId = row.previousVehicleId || row.vehicleId || activeClaim.vehicleId || '';
       row.previousVehicle = row.previousVehicle || row.vehicle || review.vehicle.name || '';
       row.previousVin = row.previousVin || row.vin || review.vehicle.vin || '';
       row.previousPlate = row.previousPlate || row.licensePlate || row.plate || review.vehicle.plate || '';

@@ -1146,7 +1146,7 @@ async function main() {
       { id: 'rec-direct-transfer-old', organizationId: 'org-wheelsonauto', customer: 'Direct Old Driver', vehicleId: 'veh-direct-assignment-transfer', amount: 114, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-transfer-new', organizationId: 'org-wheelsonauto', customer: 'Another New Renter', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' }
     );
-    assignmentConflictState.customers.unshift({ id: 'cus-direct-transfer-old-profile', organizationId: 'org-wheelsonauto', name: 'Direct Old Driver', vehicleId: 'veh-direct-assignment-transfer', status: 'Active', stage: 'Active contract', source: 'Clover' });
+    assignmentConflictState.customers.unshift({ id: 'cus-direct-transfer-old-profile', organizationId: 'org-wheelsonauto', name: 'Direct Old Driver', vin: 'DIRECTTRANSFERVIN', status: 'Active', stage: 'Active contract', source: 'Clover' });
     assignmentConflictState.maintenance.unshift({ id: 'mnt-direct-open-inspection-no-checklist', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-assignment-alias', vehicle: '2025 Direct Alias Car', vin: 'DIRECTALIASVIN', plate: 'DIR-ALS', tracker: 'TRK-ALS', customer: 'Direct Alias Person', status: 'Scheduled', type: 'Inspection', issue: 'Open inspection checklist is completed at sign-off', due: '2026-07-30' });
     const assignmentConflictWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: assignmentConflictState });
     assert(assignmentConflictWrite.status === 200 && assignmentConflictWrite.json.ok, 'Owner could not save assignment conflict scenario.');
@@ -1199,7 +1199,7 @@ async function main() {
     assert(transferSavedVehicle && transferSavedVehicle.currentCustomer === 'Another New Renter' && transferSavedVehicle.status === 'Rented' && !transferSavedVehicle.assignmentConflict, 'Renter transfer must make the chosen customer authoritative on the fleet record.');
     assert(transferOldAutopay && transferOldAutopay.status === 'Removed' && !transferOldAutopay.vehicleId && transferOldAutopay.autoChargeEnabled === false, 'Renter transfer must stop and unlink the prior WheelsonAuto autopay for this car.');
     assert(transferNewAutopay && transferNewAutopay.status === 'Active' && transferNewAutopay.vehicleId === 'veh-direct-assignment-transfer', 'Renter transfer must keep the chosen current renter autopay active and linked.');
-    assert(transferOldCustomer && transferOldCustomer.status === 'History' && !transferOldCustomer.vehicleId && transferOldCustomer.previousVehicleId === 'veh-direct-assignment-transfer', 'Renter transfer must preserve the old customer profile in history with previous-vehicle evidence.');
+    assert(transferOldCustomer && transferOldCustomer.status === 'History' && !transferOldCustomer.vehicleId && transferOldCustomer.previousVehicleId === 'veh-direct-assignment-transfer', 'Renter transfer must preserve an old customer profile matched by VIN in history with previous-vehicle evidence.');
     assert(!conflictReview.text.includes('856-555-1385') && !conflictReview.text.includes('direct.alias@example.com') && !conflictReview.text.includes('CLV-DIRECT-ONE'), 'Owner conflict review must not return raw contact details or Clover identifiers to the browser.');
     const aliasWithoutConfirmation = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias', {
       cookie: ownerCookie,
