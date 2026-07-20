@@ -157,10 +157,10 @@ async function recordRecoveryDrillProof(testOrganizationId, checks) {
       actor: 'controlled PostgreSQL runtime recovery check'
     });
     const health = await proofRepository.health();
-    const evidence = stateRepository.recoveryDrillEvidence(health.recoveryDrill, { configurationFingerprint });
     assert.strictEqual(saved.ready, true, 'The recorded PostgreSQL recovery drill must contain every successful test check.');
-    assert.strictEqual(evidence.ready, true, 'The production PostgreSQL recovery-drill record must be fresh and tied to the current protected database configuration.');
-    return { recorded: true, evidence };
+    assert.strictEqual(health.recoveryDrillReady, true, 'The production PostgreSQL recovery-drill record must be fresh and tied to the current protected database configuration.');
+    assert.strictEqual(health.recoveryDrill && health.recoveryDrill.ready, true, 'PostgreSQL health must expose the verified recovery-drill evidence used by the startup gate.');
+    return { recorded: true, evidence: health.recoveryDrill };
   } finally {
     await proofRepository.close();
   }
