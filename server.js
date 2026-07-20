@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-exact-cutover-plan-236';
+const ASSET_VERSION = 'platform-20260720-immutable-cutover-plan-237';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -15433,6 +15433,7 @@ function stripeMigrationRecordPatch(migration) {
     stripeMigrationStatus: stripeMigration.stateLabel(migration.state),
     stripeCutoverDate: migration.cutoverDate || '',
     stripeCutoverScheduledAt: migration.cutoverScheduledAt || '',
+    stripeCutoverCloverSubscriptionId: migration.scheduledCloverSubscriptionId || '',
     cloverStoppedConfirmedAt: migration.cloverStoppedConfirmedAt || '',
     cloverStoppedConfirmedBy: migration.cloverStoppedConfirmedBy || '',
     firstStripeChargeAt: migration.firstStripeChargeAt || '',
@@ -23627,6 +23628,7 @@ const server = http.createServer(async (req, res) => {
           by: user.name || user.username || 'Staff',
           cutoverDate: nextRun,
           cutoverScheduledAt: migrationBeforeUpdate.cutoverScheduledAt || updatedAt,
+          scheduledCloverSubscriptionId: migrationBeforeUpdate.scheduledCloverSubscriptionId || stripeMigration.cloverSubscriptionId(recurring),
           note: 'Protected Stripe cutover schedule updated from ' + (migrationBeforeUpdate.cutoverDate || recurring.nextRun || 'unscheduled') + ' to ' + nextRun + ' (' + frequency + ' at ' + chargeTime + '). Clover remains active until owner confirmation.'
         });
         Object.assign(patch, stripeMigrationRecordPatch(rescheduledMigration), {
@@ -23814,6 +23816,7 @@ const server = http.createServer(async (req, res) => {
               at: now,
               cutoverDate,
               cutoverScheduledAt: now,
+              scheduledCloverSubscriptionId: cutoverEligibility.subscriptionId,
               cardSavedAt: recurring.stripeCardSavedAt || migration.cardSavedAt || now,
               note: 'Protected Stripe cutover scheduled for ' + cutoverDate + '. Clover remains active until the owner confirms it was stopped.'
             }),
@@ -23836,7 +23839,16 @@ const server = http.createServer(async (req, res) => {
         if (payload.cloverStoppedConfirmed !== true) return json(res, 409, { ok: false, error: 'Confirm that the Clover recurring schedule was stopped before activating Stripe. This prevents duplicate charges.' });
         const exactCloverSubscriptionId = stripeMigration.cloverSubscriptionId(recurring);
         if (!exactCloverSubscriptionId) return json(res, 409, { ok: false, code: 'missing_clover_subscription_id', error: 'The exact Clover subscription ID is missing. Keep this plan on Clover until the subscription is linked.' });
-        if (String(payload.cloverSubscriptionConfirmation || '').trim() !== exactCloverSubscriptionId) {
+        const scheduledCloverSubscriptionId = String(migration.scheduledCloverSubscriptionId || '').trim();
+        if (!scheduledCloverSubscriptionId) return json(res, 409, { ok: false, code: 'cutover_subscription_binding_missing', error: 'This scheduled cutover has no immutable Clover subscription binding. WheelsonAuto left Clover active. Cancel and schedule the cutover again.' });
+        if (scheduledCloverSubscriptionId !== exactCloverSubscriptionId) {
+          return json(res, 409, {
+            ok: false,
+            code: 'cutover_subscription_changed_after_schedule',
+            error: 'The Clover subscription linked to this row changed after the cutover was scheduled. WheelsonAuto left Clover active. Cancel and reschedule the exact plan before stopping Clover.'
+          });
+        }
+        if (String(payload.cloverSubscriptionConfirmation || '').trim() !== scheduledCloverSubscriptionId) {
           return json(res, 409, {
             ok: false,
             code: 'clover_subscription_confirmation_mismatch',
@@ -23864,6 +23876,7 @@ const server = http.createServer(async (req, res) => {
           ...stripeMigrationPatch(recurring, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, {
             at: now,
             cutoverDate,
+            scheduledCloverSubscriptionId,
             cloverStoppedConfirmedAt: now,
             cloverStoppedConfirmedBy: actor,
             note: 'Owner confirmed the Clover recurring schedule was stopped. First Stripe charge is pending.'

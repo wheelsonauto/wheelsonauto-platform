@@ -193,6 +193,7 @@ function migrationRecord(row = {}) {
     cardSavedAt: text(source.cardSavedAt || row.stripeCardSavedAt),
     cutoverDate: validDateKey(source.cutoverDate || row.stripeCutoverDate),
     cutoverScheduledAt: text(source.cutoverScheduledAt || row.stripeCutoverScheduledAt),
+    scheduledCloverSubscriptionId: text(source.scheduledCloverSubscriptionId || row.stripeCutoverCloverSubscriptionId),
     cloverStoppedConfirmedAt: text(source.cloverStoppedConfirmedAt || row.cloverStoppedConfirmedAt),
     cloverStoppedConfirmedBy: text(source.cloverStoppedConfirmedBy || row.cloverStoppedConfirmedBy),
     firstStripeChargeAt: text(source.firstStripeChargeAt || row.firstStripeChargeAt),
@@ -426,6 +427,9 @@ function assertTransitionEvidence(row, currentState, nextState, migration) {
   if (nextState === STATES.CUTOVER_SCHEDULED && !validDateKey(migration.cutoverDate)) {
     throw migrationTransitionError(currentState, nextState, 'A protected cutover date is required before Stripe can be scheduled.');
   }
+  if (nextState === STATES.CUTOVER_SCHEDULED && hasCloverSource(row) && !text(migration.scheduledCloverSubscriptionId)) {
+    throw migrationTransitionError(currentState, nextState, 'The exact Clover subscription ID must be bound to the protected cutover before Stripe can be scheduled.');
+  }
   if (nextState === STATES.FIRST_STRIPE_CHARGE_PENDING && hasCloverSource(row)) {
     if (!validDateKey(migration.cutoverDate) || !text(migration.cloverStoppedConfirmedAt)) {
       throw migrationTransitionError(currentState, nextState, 'Confirm the exact cutover date and that Clover was stopped before the first Stripe charge can become pending.');
@@ -494,6 +498,7 @@ function rollbackToClover(row = {}, details = {}) {
     history: current.history.concat(entry).slice(-30),
     cutoverDate: '',
     cutoverScheduledAt: '',
+    scheduledCloverSubscriptionId: '',
     cloverStoppedConfirmedAt: '',
     cloverStoppedConfirmedBy: '',
     updatedAt: now

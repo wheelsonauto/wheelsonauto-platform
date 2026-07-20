@@ -942,7 +942,13 @@ async function main() {
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'stripe', '2026-07-17'), false, 'Stripe must remain inactive while card setup is only pending.');
     migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.STRIPE_CARD_SAVED, { at: '2026-07-17T10:01:00.000Z', cardSavedAt: '2026-07-17T10:01:00.000Z' });
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-17'), true, 'Saving a Stripe card must not stop Clover before a protected cutover.');
-    migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.CUTOVER_SCHEDULED, { at: '2026-07-17T10:02:00.000Z', cutoverDate: '2026-07-24' });
+    assert.throws(
+      () => stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.CUTOVER_SCHEDULED, { at: '2026-07-17T10:02:00.000Z', cutoverDate: '2026-07-24' }),
+      error => error && error.code === 'invalid_stripe_migration_transition' && /exact Clover subscription ID/i.test(error.message || ''),
+      'A cutover without an immutable Clover subscription binding must fail closed.'
+    );
+    migration = stripeMigration.transition({ ...recurring, stripeMigration: migration }, stripeMigration.STATES.CUTOVER_SCHEDULED, { at: '2026-07-17T10:02:00.000Z', cutoverDate: '2026-07-24', scheduledCloverSubscriptionId: 'clover-sub-foundation' });
+    assert.strictEqual(migration.scheduledCloverSubscriptionId, 'clover-sub-foundation', 'The migration record must preserve the exact Clover subscription bound at scheduling time.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-23'), true, 'Clover must remain chargeable for billing periods before the scheduled cutover.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-24'), false, 'A scheduled cutover must lock automatic Clover charging.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, stripeMigration: migration }, 'clover', '2026-07-25'), false, 'Clover must remain locked after the scheduled cutover date.');

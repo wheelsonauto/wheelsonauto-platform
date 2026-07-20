@@ -341,6 +341,9 @@ assertIncludes('Exact Clover subscription cutover confirmation', app + server, [
   'providerCloverSubscriptionConfirmation',
   'cloverSubscriptionConfirmation',
   'clover_subscription_confirmation_mismatch',
+  'scheduledCloverSubscriptionId',
+  'cutover_subscription_binding_missing',
+  'cutover_subscription_changed_after_schedule',
   'WheelsonAuto left Clover active and did not activate Stripe'
 ]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
@@ -436,7 +439,7 @@ assertIncludes('Clover reconciliation Operations repaint target', app, ["integra
 assertIncludes('Clover reconciliation review count', app, ["localReview=refundableRows.filter", 'reviewCount=serverUnmatched.length+localReview+queueGap', "serverUnmatched.length+' Clover / '+localReview+' local review'"]);
 assertIncludes('Missing Clover detail queue fallback', app, ['function integratedCloverQueueGapRow(count)', 'Clover record needs resync', 'Payment detail missing', 'integrated-refresh-clover', 'unmatched-serverUnmatched.length']);
 assertIncludes('Customer portal readiness UI', app, ['customerPortalLoginReady', 'customerPortalGapPanel', 'Active customers below do not have login-ready portal access yet', 'Finish portal', 'loginReady']);
-assertIncludes('Multi-identity assignment group UI', app, ['function assignmentAliasConnected', 'function assignmentIdentityGroupCount', 'assignment-alias-choice', 'Choose one primary name, check every other name/reference that belongs to that same person, and save once', 'Save checked names as one customer', 'Checked names saved together', 'separate identity group(s) remain', 'Resolved name-link audit']);
+assertIncludes('Multi-identity assignment group UI', app, ['function assignmentAliasConnected', 'function assignmentIdentityGroupCount', 'assignment-alias-choice', 'Choose one primary name, check every other name/reference that belongs to that same person, and save once', 'Link checked names', 'not fully resolved until no separate identity group remains', 'Partial review saved - assignment still open', 'this vehicle is not fully resolved', 'Assignment fully resolved', 'Resolved name-link audit']);
 assertIncludes('Explicit renter transfer identity selection', app, ['Names or references that belong to the current renter', 'assignment-transfer-keep', 'keepCustomerNames:keepCustomerNames', 'Every unchecked identity on this exact car moves to history', 'assignmentTransferSavedMessage', 'Original customer and payment histories remain separate']);
 assertIncludes('Dispute candidate evidence copy helper', functionSlice('applyClaimCandidate'), ['candidate.vin', 'candidate.plate', 'candidate.tracker', 'candidate.phone', 'candidate.email', 'candidate.cloverCustomerId']);
 assertIncludes('Stripe dispute provider-truth UI', functionSlice('integratedOpenDispute'), ['Submit evidence to Stripe', 'signed Stripe webhooks', 'cannot be entered manually', 'encrypted evidence packet']);

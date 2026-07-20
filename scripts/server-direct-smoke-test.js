@@ -3590,6 +3590,7 @@ async function main() {
     });
     assert(scheduledCutover.status === 200 && scheduledCutover.json.scheduled && scheduledCutover.json.paymentProvider === 'clover', 'Scheduling Stripe must leave Clover as the active provider until owner confirmation.');
     assert(scheduledCutover.json.recurring && scheduledCutover.json.recurring.stripeMigration && scheduledCutover.json.recurring.stripeMigration.state === 'cutover_scheduled', 'Scheduling must persist the protected cutover state.');
+    assert(scheduledCutover.json.recurring.stripeMigration.scheduledCloverSubscriptionId === 'direct-clover-sub-cutover', 'Scheduling must immutably bind the cutover to the exact Clover subscription ID.');
     const rescheduledCutoverDate = autopayDateOffset(1);
     const rescheduledCutover = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie: ownerCookie,
@@ -3605,7 +3606,7 @@ async function main() {
     assert(rescheduledCutover.status === 200 && rescheduledCutover.json.cutoverRescheduled === true && rescheduledCutover.json.stripeCutoverDate === rescheduledCutoverDate, 'Editing a scheduled migration must atomically move its protected Stripe cutover date with the recurring due date.');
     const rescheduledCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const rescheduledCutoverRow = rescheduledCutoverState.json.recurringPayments.find(row => row.id === cutoverRecurringId);
-    assert(rescheduledCutoverRow.nextRun === rescheduledCutoverDate && rescheduledCutoverRow.stripeMigration.cutoverDate === rescheduledCutoverDate && rescheduledCutoverRow.paymentProvider === 'clover' && rescheduledCutoverRow.stripeCutoverLocked === true, 'A cutover schedule edit must keep Clover active while the due date and migration lock remain synchronized.');
+    assert(rescheduledCutoverRow.nextRun === rescheduledCutoverDate && rescheduledCutoverRow.stripeMigration.cutoverDate === rescheduledCutoverDate && rescheduledCutoverRow.stripeMigration.scheduledCloverSubscriptionId === 'direct-clover-sub-cutover' && rescheduledCutoverRow.paymentProvider === 'clover' && rescheduledCutoverRow.stripeCutoverLocked === true, 'A cutover schedule edit must keep Clover active while the due date, immutable subscription binding, and migration lock remain synchronized.');
     const restoredCutoverDate = await request(server, 'POST', '/api/recurring-payments/update', {
       cookie: ownerCookie,
       json: {
@@ -3626,6 +3627,33 @@ async function main() {
     const wrongPlanState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const wrongPlanRow = wrongPlanState.json.recurringPayments.find(row => row.id === cutoverRecurringId);
     assert(wrongPlanRow.paymentProvider === 'clover' && wrongPlanRow.stripeMigration.state === 'cutover_scheduled', 'A wrong Clover subscription confirmation must leave the exact plan active on Clover and keep its protected cutover scheduled.');
+    wrongPlanRow.stripeMigration.scheduledCloverSubscriptionId = '';
+    wrongPlanRow.stripeCutoverCloverSubscriptionId = '';
+    const missingBindingWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: wrongPlanState.json });
+    assert(missingBindingWrite.status === 200 && missingBindingWrite.json.ok, 'Legacy missing-binding cutover test setup failed.');
+    const missingBindingActivation = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-clover-sub-cutover', confirmed: true }
+    });
+    assert(missingBindingActivation.status === 409 && missingBindingActivation.json.code === 'cutover_subscription_binding_missing', 'A legacy scheduled cutover without an immutable subscription binding must stay on Clover and require rescheduling.');
+    const changedPlanStateSetup = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const changedPlanSetupRow = changedPlanStateSetup.json.recurringPayments.find(row => row.id === cutoverRecurringId);
+    changedPlanSetupRow.stripeMigration.scheduledCloverSubscriptionId = 'direct-clover-sub-cutover';
+    changedPlanSetupRow.stripeCutoverCloverSubscriptionId = 'direct-clover-sub-cutover';
+    changedPlanSetupRow.cloverSubscriptionId = 'direct-clover-sub-replaced-after-schedule';
+    const changedPlanWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: changedPlanStateSetup.json });
+    assert(changedPlanWrite.status === 200 && changedPlanWrite.json.ok, 'Changed-plan cutover test setup failed.');
+    const changedPlanActivation = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-clover-sub-replaced-after-schedule', confirmed: true }
+    });
+    assert(changedPlanActivation.status === 409 && changedPlanActivation.json.code === 'cutover_subscription_changed_after_schedule', 'A row that changes to another Clover subscription after scheduling must stay on Clover even when the new ID is typed correctly.');
+    const changedPlanState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const changedPlanRow = changedPlanState.json.recurringPayments.find(row => row.id === cutoverRecurringId);
+    assert(changedPlanRow.paymentProvider === 'clover' && changedPlanRow.stripeMigration.state === 'cutover_scheduled' && changedPlanRow.stripeMigration.scheduledCloverSubscriptionId === 'direct-clover-sub-cutover', 'A post-schedule subscription change must preserve the original cutover binding and leave Clover active.');
+    changedPlanRow.cloverSubscriptionId = 'direct-clover-sub-cutover';
+    const restoredPlanWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: changedPlanState.json });
+    assert(restoredPlanWrite.status === 200 && restoredPlanWrite.json.ok, 'Restoring the exact Clover subscription after the fail-closed test failed.');
     const duplicateCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     duplicateCutoverState.json.payments.unshift({
       id: 'direct-cutover-existing-paid',
