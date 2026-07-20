@@ -63,6 +63,67 @@ async function writeExclusive(file, bytes) {
   }
 }
 
+function normalizedPortalIdentity(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function disabledPortalAccount(account = {}) {
+  return /disabled|removed|inactive|closed/i.test(String(account.status || ''))
+    || /denied|rejected|cancelled|removed/i.test(String(account.portalStage || ''));
+}
+
+function archiveDisabledDuplicatePortalUsernames(input = {}, options = {}) {
+  const state = JSON.parse(JSON.stringify(input || {}));
+  const accounts = Array.isArray(state.customerAccounts) ? state.customerAccounts : [];
+  const groups = new Map();
+  const used = new Set(accounts.map(account => normalizedPortalIdentity(account && account.username)).filter(Boolean));
+  accounts.forEach((account, index) => {
+    const username = normalizedPortalIdentity(account && account.username);
+    if (!username) return;
+    const rows = groups.get(username) || [];
+    rows.push({ account, index });
+    groups.set(username, rows);
+  });
+
+  const repairs = [];
+  groups.forEach((rows, username) => {
+    if (rows.length < 2) return;
+    const active = rows.filter(row => !disabledPortalAccount(row.account));
+    const archived = rows.filter(row => disabledPortalAccount(row.account));
+    const names = new Set(rows.map(row => normalizedPortalIdentity(row.account.name || row.account.customer)).filter(Boolean));
+    const samePerson = names.size === 1
+      && rows.every(row => normalizedPortalIdentity(row.account.email) === username);
+    if (active.length !== 1 || !archived.length || !samePerson) return;
+
+    archived.forEach(row => {
+      const accountId = String(row.account.id || ('customer-account-' + row.index)).trim();
+      let archivedUsername = 'archived-' + accountId + '@wheelsonauto.invalid';
+      let counter = 2;
+      while (used.has(normalizedPortalIdentity(archivedUsername))) {
+        archivedUsername = 'archived-' + accountId + '-' + counter + '@wheelsonauto.invalid';
+        counter += 1;
+      }
+      used.add(normalizedPortalIdentity(archivedUsername));
+      row.account.username = archivedUsername;
+      row.account.loginReady = false;
+      row.account.portalIdentityArchivedAt = String(options.preparedAt || new Date().toISOString());
+      row.account.portalIdentityArchiveReason = 'Duplicate disabled login archived during protected PostgreSQL source preparation; application and customer history retained.';
+      repairs.push({
+        collection: 'customerAccounts',
+        resourceType: 'customer_account',
+        resourceId: accountId,
+        authoritativeAccountId: String(active[0].account.id || '').trim(),
+        applicationId: String(row.account.applicationId || '').trim(),
+        previousUsername: username,
+        archivedUsername,
+        status: String(row.account.status || '').trim(),
+        portalStage: String(row.account.portalStage || '').trim()
+      });
+    });
+  });
+  return { state, repairs };
+}
+
 async function main() {
   const args = userArguments();
   if (args.length !== 2) throw new Error('Usage: node scripts/prepare-postgres-migration-source.js <live-data.json> <new-protected-copy.json>');
@@ -112,6 +173,11 @@ async function main() {
     await migrationSource.assertSourceUnchanged(sourceFile, source.sourceFileChecksum);
     const collapsed = stateRepository.collapseExactDuplicateCriticalResources(vehicleIdentity.state);
     const preparedAt = new Date().toISOString();
+    const portalIdentity = archiveDisabledDuplicatePortalUsernames(collapsed.state, { preparedAt });
+    if (portalIdentity.repairs.length && process.env.WOA_POSTGRES_SOURCE_DISABLED_PORTAL_ARCHIVE_CONFIRM !== 'ARCHIVE_DISABLED_DUPLICATE_LOGINS_ONLY') {
+      throw new Error('Set WOA_POSTGRES_SOURCE_DISABLED_PORTAL_ARCHIVE_CONFIRM=ARCHIVE_DISABLED_DUPLICATE_LOGINS_ONLY to archive only disabled or denied duplicate portal usernames when one active account for the same name and email remains authoritative.');
+    }
+    collapsed.state = portalIdentity.state;
     if (collapsed.repairs.length) {
       const repairId = 'postgres-source-repair-' + source.sourceFileChecksum.slice(0, 24);
       collapsed.state.migrationSourceRepairs = (Array.isArray(collapsed.state.migrationSourceRepairs) ? collapsed.state.migrationSourceRepairs : [])
@@ -145,6 +211,18 @@ async function main() {
         resolvedReferences: vehicleIdentity.resolvedReferences
       });
     }
+    if (portalIdentity.repairs.length) {
+      const portalRepairId = 'postgres-source-disabled-portal-archive-' + source.sourceFileChecksum.slice(0, 24);
+      collapsed.state.migrationSourceRepairs = (Array.isArray(collapsed.state.migrationSourceRepairs) ? collapsed.state.migrationSourceRepairs : [])
+        .filter(row => row && row.id !== portalRepairId);
+      collapsed.state.migrationSourceRepairs.push({
+        id: portalRepairId,
+        preparedAt,
+        sourceFileChecksum: source.sourceFileChecksum,
+        policy: 'duplicate portal username archived only on disabled or denied same-name, same-email accounts while exactly one active account remains authoritative',
+        repairs: portalIdentity.repairs
+      });
+    }
     const readiness = structuralReadiness(collapsed.state);
     const outputBytes = Buffer.from(JSON.stringify(collapsed.state, null, 2) + '\n', 'utf8');
     await writeExclusive(outputFile, outputBytes);
@@ -158,8 +236,8 @@ async function main() {
       protectedCopy: outputFile,
       protectedCopyChecksum: prepared.sourceFileChecksum,
       maintenanceLease: captureLease,
-      policy: 'Canonical byte-equivalent records may be collapsed. Non-identical duplicate vehicles may be re-keyed only with unique VINs and uniquely matching dependent-reference evidence. Assignments are never guessed.',
-      repairs: collapsed.repairs.concat(vehicleIdentity.repairs)
+      policy: 'Canonical byte-equivalent records may be collapsed. Non-identical duplicate vehicles may be re-keyed only with unique VINs and uniquely matching dependent-reference evidence. Disabled same-person duplicate portal usernames may be archived only when exactly one active account remains. Assignments are never guessed.',
+      repairs: collapsed.repairs.concat(vehicleIdentity.repairs, portalIdentity.repairs)
     });
     const manifest = {
       ...signedProvenance,
@@ -167,6 +245,7 @@ async function main() {
       deterministicVehicleIdentityRepairs: vehicleIdentity.repairs,
       deterministicVehicleReferenceRepairs: vehicleIdentity.referenceRepairs,
       deterministicVehicleResolvedReferences: vehicleIdentity.resolvedReferences,
+      archivedDisabledPortalIdentityRepairs: portalIdentity.repairs,
       readiness
     };
     await writeExclusive(manifestFile, Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'));
@@ -193,6 +272,7 @@ async function main() {
       exactDuplicateRepairs: collapsed.repairs,
       deterministicVehicleIdentityRepairs: vehicleIdentity.repairs,
       deterministicVehicleReferenceRepairs: vehicleIdentity.referenceRepairs,
+      archivedDisabledPortalIdentityRepairs: portalIdentity.repairs,
       ...readiness,
       message: readiness.postgresqlImportAllowed
         ? 'Signed Render live-disk PostgreSQL source is structurally ready. Use its protected-copy checksum and provenance manifest for preflight, import, and verification.'

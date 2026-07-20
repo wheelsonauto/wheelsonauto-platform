@@ -442,6 +442,7 @@ different records and never resolves a customer/vehicle assignment by guessing:
 WOA_POSTGRES_SOURCE_REPAIR_CONFIRM=EXACT_DUPLICATES_ONLY \
 WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM=1 \
 WOA_POSTGRES_SOURCE_REPAIR_SHA256='<frozen live sourceFileChecksum from preflight>' \
+WOA_POSTGRES_SOURCE_DISABLED_PORTAL_ARCHIVE_CONFIRM=ARCHIVE_DISABLED_DUPLICATE_LOGINS_ONLY \
 WOA_POSTGRES_SOURCE_ORIGIN_CONFIRM=RENDER_LIVE_DISK \
 WOA_MIGRATION_MAINTENANCE_MODE=1 \
 pnpm run prepare-postgres-migration-source -- \
@@ -466,6 +467,14 @@ shortened with `WOA_POSTGRES_MIGRATION_SOURCE_MAX_AGE_MS`; accepted values are
 one minute through 24 hours. The lease heartbeat age is independently bounded by
 `WOA_MIGRATION_MAINTENANCE_LEASE_MAX_AGE_MS`, accepted from 30 seconds through
 ten minutes and defaulting to two minutes.
+
+The disabled-portal confirmation is narrower than an account merge. It applies
+only when duplicate portal usernames share the same non-empty customer name and
+contact email, exactly one account remains active, and every other duplicate is
+already disabled or denied. The active username remains unchanged. Each disabled
+record receives a unique non-routable archival username while its email, phone,
+application, vehicle, password record, and history stay intact. Active-vs-active,
+different-name, or different-email conflicts remain blocked for owner review.
 
 If any duplicated ID contains different data, no copy is written. If an
 unrelated assignment or identity conflict remains, the review copy is retained

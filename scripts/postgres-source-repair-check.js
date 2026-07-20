@@ -130,6 +130,81 @@ async function main() {
     const preparedPreflight = run(preflightScript, [outputFile]);
     assert.strictEqual(preparedPreflight.status, 0, 'The repaired protected copy must pass the ordinary PostgreSQL preflight.');
 
+    const portalSource = path.join(temp, 'duplicate-portal-source.json');
+    const portalOutput = path.join(temp, 'duplicate-portal-output.json');
+    const portalState = {
+      vehicles: [], payments: [], customers: [], recurringPayments: [],
+      customerAccounts: [
+        {
+          id: 'customer-account-active', name: 'Same Customer', customer: 'Same Customer',
+          username: 'same.customer@example.com', email: 'same.customer@example.com', phone: '8565550101',
+          status: 'Active', portalStage: 'Application under review', passwordHash: 'active-hash', passwordSalt: 'active-salt'
+        },
+        {
+          id: 'customer-account-denied', name: 'Same Customer', customer: 'Same Customer',
+          username: 'same.customer@example.com', email: 'same.customer@example.com', phone: '8565550102',
+          status: 'Disabled', portalStage: 'Application denied', applicationId: 'application-denied-history',
+          vehicleId: 'vehicle-denied-history', passwordHash: 'denied-hash', passwordSalt: 'denied-salt'
+        }
+      ]
+    };
+    const portalBytes = JSON.stringify(portalState, null, 2) + '\n';
+    await fs.writeFile(portalSource, portalBytes, 'utf8');
+    const portalChecksum = (await migrationSource.readSource(portalSource)).sourceFileChecksum;
+    const portalArchiveUnconfirmed = run(repairScript, [portalSource, portalOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: portalChecksum
+    });
+    assert.notStrictEqual(portalArchiveUnconfirmed.status, 0, 'Archiving a disabled duplicate portal login must require its own narrow confirmation.');
+    assert.match(portalArchiveUnconfirmed.stderr, /WOA_POSTGRES_SOURCE_DISABLED_PORTAL_ARCHIVE_CONFIRM/);
+    assert.strictEqual(await exists(portalOutput), false, 'An unconfirmed portal archive must not create a protected output.');
+
+    const portalArchive = run(repairScript, [portalSource, portalOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: portalChecksum,
+      WOA_POSTGRES_SOURCE_DISABLED_PORTAL_ARCHIVE_CONFIRM: 'ARCHIVE_DISABLED_DUPLICATE_LOGINS_ONLY'
+    });
+    assert.strictEqual(portalArchive.status, 0, portalArchive.stderr || 'One active and one disabled same-person login should produce a safe protected copy.');
+    const portalReport = JSON.parse(portalArchive.stdout);
+    assert.strictEqual(portalReport.archivedDisabledPortalIdentityRepairs.length, 1);
+    assert.strictEqual(await fs.readFile(portalSource, 'utf8'), portalBytes, 'Portal identity preparation must preserve the live source byte-for-byte.');
+    const portalPrepared = JSON.parse(await fs.readFile(portalOutput, 'utf8'));
+    const activePortal = portalPrepared.customerAccounts.find(account => account.id === 'customer-account-active');
+    const archivedPortal = portalPrepared.customerAccounts.find(account => account.id === 'customer-account-denied');
+    assert.strictEqual(activePortal.username, 'same.customer@example.com', 'The active portal login must remain unchanged.');
+    assert.match(archivedPortal.username, /^archived-customer-account-denied@wheelsonauto\.invalid$/);
+    assert.strictEqual(archivedPortal.email, 'same.customer@example.com', 'The archived application contact email must remain intact.');
+    assert.strictEqual(archivedPortal.applicationId, 'application-denied-history', 'The denied application link must remain intact.');
+    assert.strictEqual(archivedPortal.vehicleId, 'vehicle-denied-history', 'The denied application vehicle link must remain intact.');
+    assert.strictEqual(archivedPortal.passwordHash, 'denied-hash', 'The migration must not rewrite or merge password material.');
+    assert.strictEqual(archivedPortal.loginReady, false, 'The archived duplicate login must remain unavailable.');
+    assert(portalPrepared.migrationSourceRepairs.some(row => /disabled-portal-archive/.test(row.id)), 'Protected output must retain an auditable disabled-login archive record.');
+    const portalManifest = JSON.parse(await fs.readFile(portalOutput + '.repair-manifest.json', 'utf8'));
+    assert.strictEqual(portalManifest.archivedDisabledPortalIdentityRepairs.length, 1);
+
+    const activePortalConflictSource = path.join(temp, 'active-portal-conflict-source.json');
+    const activePortalConflictOutput = path.join(temp, 'active-portal-conflict-output.json');
+    const activePortalConflictState = JSON.parse(JSON.stringify(portalState));
+    activePortalConflictState.customerAccounts[1].status = 'Active';
+    activePortalConflictState.customerAccounts[1].portalStage = 'Approved';
+    await fs.writeFile(activePortalConflictSource, JSON.stringify(activePortalConflictState, null, 2) + '\n', 'utf8');
+    const activePortalConflictChecksum = (await migrationSource.readSource(activePortalConflictSource)).sourceFileChecksum;
+    const activePortalConflict = run(repairScript, [activePortalConflictSource, activePortalConflictOutput], {
+      ...captureEnvironment,
+      WOA_POSTGRES_SOURCE_REPAIR_CONFIRM: 'EXACT_DUPLICATES_ONLY',
+      WOA_POSTGRES_SOURCE_REPAIR_MAINTENANCE_CONFIRM: '1',
+      WOA_POSTGRES_SOURCE_REPAIR_SHA256: activePortalConflictChecksum,
+      WOA_POSTGRES_SOURCE_DISABLED_PORTAL_ARCHIVE_CONFIRM: 'ARCHIVE_DISABLED_DUPLICATE_LOGINS_ONLY'
+    });
+    assert.strictEqual(activePortalConflict.status, 2, 'Two active accounts sharing one login must remain blocked for owner review.');
+    const activePortalConflictReport = JSON.parse(activePortalConflict.stdout);
+    assert.strictEqual(activePortalConflictReport.archivedDisabledPortalIdentityRepairs.length, 0);
+    assert(activePortalConflictReport.conflicts.some(conflict => conflict.kind === 'portal_username'));
+
     const vehicleSource = path.join(temp, 'duplicate-vehicle-source.json');
     const vehicleOutput = path.join(temp, 'duplicate-vehicle-output.json');
     const duplicateVehicleState = {
@@ -261,7 +336,7 @@ async function main() {
     assert.notStrictEqual(verifierBlocked.status, 0);
     assert.match(verifierBlocked.stderr, /multiple customers/i, 'Migration proof must reject an assignment conflict before opening PostgreSQL.');
 
-    console.log('PostgreSQL source repair check passed: live source preservation, checksum lock, maintenance lock, exact duplicate collapse, immutable manifest, no overwrite, non-identical refusal, assignment review, and pre-database importer/proof guards are verified.');
+    console.log('PostgreSQL source repair check passed: live source preservation, checksum lock, maintenance lock, exact duplicate collapse, disabled portal archive safety, immutable manifest, no overwrite, non-identical refusal, assignment review, and pre-database importer/proof guards are verified.');
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }
