@@ -109,6 +109,7 @@ requireText('Server notification test route', server, "/api/notifications/email/
 requireText('Server Twilio webhook setup route', server, "/api/integrations/twilio/configure");
 requireText('Server Telnyx webhook setup route', server, "/api/integrations/telnyx/configure");
 requireText('Server Telnyx no-charge campaign preview route', server, "/api/integrations/telnyx/campaign-draft");
+requireText('Server Telnyx exact-confirmation campaign submission route', server, "/api/integrations/telnyx/campaign-submit");
 requireText('Server daily closeout notification route', server, "/api/notifications/daily-closeout");
 requireText('Server public email webhook status', publicMessagingStatus, 'emailWebhookUrl');
 requireText('Server public webhook secret status', publicMessagingStatus, 'webhookSecretConfigured');

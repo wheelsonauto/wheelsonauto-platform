@@ -24,6 +24,8 @@ const {
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
   telnyxCustomerCareCampaignDraft,
+  submitTelnyxCustomerCareCampaign,
+  publicTelnyxCampaignSubmission,
   assignTelnyx10dlcCampaign
 } = require('../server');
 
@@ -436,6 +438,40 @@ function signedHeaders(rawBody, timestamp = String(Math.floor(Date.now() / 1000)
   assert.strictEqual(repeatedCampaignDraft.fingerprint, qualifiedCampaignDraft.fingerprint, 'Equivalent public URLs must produce the same campaign-review fingerprint.');
   assert.throws(() => telnyxCustomerCareCampaignDraft(failedRegistration, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com' }), /qualify the intended use case/, 'An unqualified campaign must fail closed before a paid submission can be prepared.');
   assert.throws(() => telnyxCustomerCareCampaignDraft({ ...qualifiedRegistration, campaignId: 'campaign-existing', campaignActive: true }, { publicBaseUrl: 'https://wheelsonauto-platform.onrender.com' }), /already exists/, 'An existing current campaign must block duplicate preparation.');
+  const paidSubmissionCalls = [];
+  const paidSubmissionFetch = async (url, options = {}) => {
+    paidSubmissionCalls.push({ url: String(url), options });
+    return { ok: true, status: 200, async json() { return { data: { campaignId: 'campaign-customer-care', campaignStatus: 'TCR_PENDING' } }; } };
+  };
+  await assert.rejects(() => submitTelnyxCustomerCareCampaign({
+    apiKey: 'KEY-test',
+    readiness: qualifiedRegistration,
+    draft: qualifiedCampaignDraft,
+    fingerprint: qualifiedCampaignDraft.fingerprint,
+    confirmationPhrase: 'SUBMIT TELNYX',
+    acknowledgedFees: true,
+    fetchImpl: paidSubmissionFetch
+  }), /exact fingerprint and fee phrase/, 'An inexact fee phrase must fail before the paid Telnyx endpoint is called.');
+  assert.strictEqual(paidSubmissionCalls.length, 0, 'A failed Telnyx approval gate must make zero provider calls.');
+  const paidSubmission = await submitTelnyxCustomerCareCampaign({
+    apiKey: 'KEY-test',
+    readiness: qualifiedRegistration,
+    draft: qualifiedCampaignDraft,
+    fingerprint: qualifiedCampaignDraft.fingerprint,
+    confirmationPhrase: qualifiedCampaignDraft.confirmationPhrase,
+    acknowledgedFees: true,
+    fetchImpl: paidSubmissionFetch
+  });
+  assert.strictEqual(paidSubmission.submitted, true);
+  assert.strictEqual(paidSubmission.campaignId, 'campaign-customer-care');
+  assert.strictEqual(paidSubmission.campaignStatus, 'TCR_PENDING');
+  assert.strictEqual(paidSubmissionCalls.length, 1, 'One approved action must make exactly one Telnyx campaign submission request.');
+  assert(paidSubmissionCalls[0].url.endsWith('/10dlc/campaignBuilder') && paidSubmissionCalls[0].options.method === 'POST', 'The paid campaign action must use the official Telnyx campaign-builder endpoint.');
+  assert.deepStrictEqual(JSON.parse(paidSubmissionCalls[0].options.body), qualifiedCampaignDraft.payload, 'The submitted payload must exactly match the fingerprinted preview.');
+  const publicPaidSubmission = publicTelnyxCampaignSubmission({ status: 'submitted', fingerprint: paidSubmission.fingerprint, campaignId: paidSubmission.campaignId, campaignStatus: paidSubmission.campaignStatus, reviewFeeUsd: 15, recurringMonthlyFeeUsd: 2 });
+  assert.strictEqual(publicPaidSubmission.campaignId, 'stored securely');
+  assert.strictEqual(publicPaidSubmission.retryBlocked, true);
+  assert(!JSON.stringify(publicPaidSubmission).includes('campaign-customer-care'), 'Public Telnyx submission state must not expose the provider campaign ID.');
   const unverifiedBrandRegistration = await checkTelnyx10dlcReadiness({
     apiKey: 'KEY-test',
     phoneNumber: '+16095550199',

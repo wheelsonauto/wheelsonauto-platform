@@ -1684,6 +1684,8 @@ async function main() {
     assert(managerTelnyxReadiness.status === 403, 'Manager must not inspect or mutate owner-only Telnyx carrier registration evidence.');
     const managerTelnyxCampaignDraft = await request(server, 'GET', '/api/integrations/telnyx/campaign-draft', { cookie: managerCookie });
     assert(managerTelnyxCampaignDraft.status === 403, 'Manager must not preview or approve the owner-only paid Telnyx campaign draft.');
+    const managerTelnyxCampaignSubmit = await request(server, 'POST', '/api/integrations/telnyx/campaign-submit', { cookie: managerCookie, json: {} });
+    assert(managerTelnyxCampaignSubmit.status === 403, 'Manager must not submit a paid Telnyx carrier campaign.');
     const managerStripeReadiness = await request(server, 'POST', '/api/integrations/stripe/readiness', { cookie: managerCookie, json: {} });
     assert(managerStripeReadiness.status === 403, 'Manager must not inspect or mutate owner-only Stripe account activation evidence.');
     const managerConflictReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-conflict/assignment-conflict', { cookie: managerCookie });

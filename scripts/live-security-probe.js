@@ -87,6 +87,7 @@ async function main() {
   await expectStatus('/api/state', 401, 'Dashboard state');
   await expectStatus('/api/system/infrastructure/preflight', 401, 'Owner launch preflight');
   await expectStatus('/api/integrations/telnyx/campaign-draft', 401, 'Owner Telnyx paid campaign preview');
+  await expectStatus('/api/integrations/telnyx/campaign-submit', 401, 'Owner Telnyx paid campaign submission', 'POST');
   await expectStatus('/api/system/recovery/snapshots', 401, 'Owner recovery history');
   await expectStatus('/api/system/recovery/restore', 401, 'Owner recovery restore', 'POST');
   await expectStatus('/api/onboarding/documents/security-probe-does-not-exist', 401, 'Private identity document');

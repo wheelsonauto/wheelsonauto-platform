@@ -222,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-telnyx-campaign-preview-214';
+const ASSET_VERSION = 'platform-20260719-telnyx-paid-guard-215';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -249,6 +249,7 @@ const autoSyncStatus = {
   lastWarning: '',
   lastResult: null
 };
+let telnyxCampaignSubmissionInFlight = false;
 const woaAutopayStatus = {
   enabled: true,
   intervalMs: WOA_AUTOPAY_MS,
@@ -2931,6 +2932,65 @@ function telnyxCustomerCareCampaignDraft(readiness = {}, options = {}) {
     recurringMonthlyFeeUsd: monthlyFee,
     confirmationPhrase,
     warning: 'Preview only. Preparing this draft does not submit it, charge a carrier fee, assign a number, or enable messaging.'
+  };
+}
+function assertTelnyxCampaignSubmissionApproval(draft = {}, options = {}) {
+  const submittedFingerprint = String(options.fingerprint || '').trim().toLowerCase();
+  const expectedFingerprint = String(draft.fingerprint || '').trim().toLowerCase();
+  const submittedPhrase = String(options.confirmationPhrase || '').trim();
+  if (options.acknowledgedFees !== true || !expectedFingerprint || submittedFingerprint !== expectedFingerprint || submittedPhrase !== draft.confirmationPhrase) {
+    const error = new Error('Reopen the Telnyx campaign preview and confirm its exact fingerprint and fee phrase before submitting.');
+    error.statusCode = 409;
+    throw error;
+  }
+  return true;
+}
+async function submitTelnyxCustomerCareCampaign(options = {}) {
+  const apiKey = String(options.apiKey || TELNYX_API_KEY || '').trim();
+  const fetchImpl = options.fetchImpl || fetch;
+  if (!apiKey) {
+    const error = new Error('Telnyx API key is not configured.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const readiness = options.readiness || await checkTelnyx10dlcReadiness({ apiKey, fetchImpl });
+  const draft = options.draft || telnyxCustomerCareCampaignDraft(readiness, options);
+  assertTelnyxCampaignSubmissionApproval(draft, options);
+  const body = await telnyxApiRequest(fetchImpl, apiKey, '/10dlc/campaignBuilder', {
+    method: 'POST',
+    body: JSON.stringify(draft.payload)
+  });
+  const campaign = body.data || body || {};
+  const campaignId = String(campaign.campaignId || campaign.campaign_id || campaign.id || '').trim();
+  if (!campaignId) {
+    const error = new Error('Telnyx accepted the request but did not return a campaign ID. Review Telnyx before any retry.');
+    error.statusCode = 502;
+    error.submissionUnknown = true;
+    throw error;
+  }
+  return {
+    submitted: true,
+    campaignId,
+    campaignStatus: String(campaign.campaignStatus || campaign.campaign_status || campaign.status || campaign.submissionStatus || campaign.submission_status || 'Submitted').trim().slice(0, 160),
+    fingerprint: draft.fingerprint,
+    submittedAt: new Date().toISOString(),
+    reviewFeeUsd: draft.reviewFeeUsd,
+    recurringMonthlyFeeUsd: draft.recurringMonthlyFeeUsd
+  };
+}
+function publicTelnyxCampaignSubmission(record = {}) {
+  return {
+    status: String(record.status || 'not_started').slice(0, 80),
+    fingerprint: record.fingerprint ? String(record.fingerprint).slice(0, 64) : '',
+    requestedAt: record.requestedAt || '',
+    submittedAt: record.submittedAt || '',
+    reviewedAt: record.reviewedAt || '',
+    campaignId: record.campaignId ? 'stored securely' : '',
+    campaignStatus: String(record.campaignStatus || '').slice(0, 160),
+    reviewFeeUsd: Number(record.reviewFeeUsd || 0),
+    recurringMonthlyFeeUsd: Number(record.recurringMonthlyFeeUsd || 0),
+    error: String(record.error || '').slice(0, 800),
+    retryBlocked: ['submitting', 'submitted', 'unknown', 'rejected'].includes(String(record.status || '').toLowerCase())
   };
 }
 function publicTelnyx10dlcReadiness(readiness = {}) {
@@ -10523,6 +10583,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/telnyx/configure', 'Owner connects Telnyx signed inbound SMS webhook'),
     route('POST', '/api/integrations/telnyx/readiness', 'Owner checks Telnyx 10DLC campaign and number assignment'),
     route('GET', '/api/integrations/telnyx/campaign-draft', 'Owner previews the qualified Telnyx Customer Care campaign without submitting or charging a fee'),
+    route('POST', '/api/integrations/telnyx/campaign-submit', 'Owner submits the fingerprinted Telnyx campaign after exact fee confirmation'),
     route('POST', '/api/integrations/telnyx/assign-10dlc', 'Owner attaches the Telnyx number to an approved active campaign'),
     route('POST', '/api/notifications/email/settings', 'Owner email notification recipients'),
     route('POST', '/api/notifications/email/test', 'Send or draft test email notification'),
@@ -21484,16 +21545,109 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/integrations/telnyx/campaign-draft' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can review the paid Telnyx campaign draft.' });
       try {
+        const data = await readData();
         const readiness = await checkTelnyx10dlcReadiness();
         const draft = telnyxCustomerCareCampaignDraft(readiness);
         return json(res, 200, {
           ok: true,
           draft,
           readiness: publicTelnyx10dlcReadiness(readiness),
+          submission: publicTelnyxCampaignSubmission((((data.integrations || {}).messaging || {}).telnyxCampaignSubmission) || {}),
           submitted: false
         });
       } catch (err) {
         return json(res, Number(err && err.statusCode || 502), { ok: false, error: String(err && err.message || err), submitted: false });
+      }
+    }
+    if (url.pathname === '/api/integrations/telnyx/campaign-submit' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can submit a paid Telnyx campaign.' });
+      if (telnyxCampaignSubmissionInFlight) return json(res, 409, { ok: false, error: 'A Telnyx campaign submission is already in progress. Review its result before retrying.', submitted: false });
+      telnyxCampaignSubmissionInFlight = true;
+      try {
+        const payload = await readJsonBody(req);
+        const data = await readData();
+        data.integrations = data.integrations || {};
+        data.integrations.messaging = data.integrations.messaging || {};
+        const readiness = await checkTelnyx10dlcReadiness();
+        const draft = telnyxCustomerCareCampaignDraft(readiness);
+        assertTelnyxCampaignSubmissionApproval(draft, payload);
+        const existing = data.integrations.messaging.telnyxCampaignSubmission || {};
+        const sameFingerprint = String(existing.fingerprint || '').trim() === draft.fingerprint;
+        if (sameFingerprint && publicTelnyxCampaignSubmission(existing).retryBlocked) {
+          return json(res, 409, {
+            ok: false,
+            error: 'This exact campaign already has a submission record. Review Telnyx before any retry.',
+            submission: publicTelnyxCampaignSubmission(existing),
+            submitted: false
+          });
+        }
+        const requestedAt = new Date().toISOString();
+        data.integrations.messaging.telnyx10dlc = readiness;
+        data.integrations.messaging.telnyxCampaignSubmission = {
+          status: 'submitting',
+          fingerprint: draft.fingerprint,
+          requestedAt,
+          requestedBy: user.name || user.username || 'Owner',
+          reviewFeeUsd: draft.reviewFeeUsd,
+          recurringMonthlyFeeUsd: draft.recurringMonthlyFeeUsd,
+          error: ''
+        };
+        appendAuditLog(data, user, 'Telnyx paid campaign submission started', [draft.payload.usecase, '$' + draft.reviewFeeUsd + ' review fee', draft.recurringMonthlyFeeUsd ? '$' + draft.recurringMonthlyFeeUsd + '/month' : 'Recurring fee not returned', draft.fingerprint]);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        try {
+          const result = await submitTelnyxCustomerCareCampaign({
+            readiness,
+            draft,
+            fingerprint: payload.fingerprint,
+            confirmationPhrase: payload.confirmationPhrase,
+            acknowledgedFees: payload.acknowledgedFees === true
+          });
+          const fresh = await readData();
+          fresh.integrations = fresh.integrations || {};
+          fresh.integrations.messaging = fresh.integrations.messaging || {};
+          fresh.integrations.messaging.telnyxCampaignSubmission = {
+            status: 'submitted',
+            fingerprint: result.fingerprint,
+            requestedAt,
+            submittedAt: result.submittedAt,
+            requestedBy: user.name || user.username || 'Owner',
+            campaignId: result.campaignId,
+            campaignStatus: result.campaignStatus,
+            reviewFeeUsd: result.reviewFeeUsd,
+            recurringMonthlyFeeUsd: result.recurringMonthlyFeeUsd,
+            error: ''
+          };
+          appendAuditLog(fresh, user, 'Telnyx paid campaign submitted', [draft.payload.usecase, result.campaignStatus, '$' + result.reviewFeeUsd + ' review fee']);
+          await protectConcurrentLocalWrites(fresh, { preferIncoming: true });
+          await writeData(fresh);
+          return json(res, 200, { ok: true, submitted: true, submission: publicTelnyxCampaignSubmission(fresh.integrations.messaging.telnyxCampaignSubmission) });
+        } catch (err) {
+          const fresh = await readData();
+          fresh.integrations = fresh.integrations || {};
+          fresh.integrations.messaging = fresh.integrations.messaging || {};
+          const statusCode = Number(err && err.statusCode || 502);
+          const uncertain = !!(err && err.submissionUnknown) || statusCode >= 500;
+          fresh.integrations.messaging.telnyxCampaignSubmission = {
+            status: uncertain ? 'unknown' : 'rejected',
+            fingerprint: draft.fingerprint,
+            requestedAt,
+            reviewedAt: new Date().toISOString(),
+            requestedBy: user.name || user.username || 'Owner',
+            reviewFeeUsd: draft.reviewFeeUsd,
+            recurringMonthlyFeeUsd: draft.recurringMonthlyFeeUsd,
+            error: String(err && err.message || err).slice(0, 800)
+          };
+          appendAuditLog(fresh, user, uncertain ? 'Telnyx campaign result requires manual review' : 'Telnyx campaign submission rejected', [draft.payload.usecase, fresh.integrations.messaging.telnyxCampaignSubmission.error, draft.fingerprint]);
+          await protectConcurrentLocalWrites(fresh, { preferIncoming: true });
+          await writeData(fresh);
+          await recordOperationalFailure('telnyx-campaign-submit', err, { route: 'Telnyx paid campaign submission', source: 'owner' });
+          return json(res, statusCode, { ok: false, error: fresh.integrations.messaging.telnyxCampaignSubmission.error, submission: publicTelnyxCampaignSubmission(fresh.integrations.messaging.telnyxCampaignSubmission), submitted: false });
+        }
+      } catch (err) {
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error: String(err && err.message || err), submitted: false });
+      } finally {
+        telnyxCampaignSubmissionInFlight = false;
       }
     }
     if (url.pathname === '/api/integrations/telnyx/assign-10dlc' && req.method === 'POST') {
@@ -23406,6 +23560,9 @@ module.exports = {
   configureTelnyxMessagingProfile,
   checkTelnyx10dlcReadiness,
   telnyxCustomerCareCampaignDraft,
+  assertTelnyxCampaignSubmissionApproval,
+  submitTelnyxCustomerCareCampaign,
+  publicTelnyxCampaignSubmission,
   assignTelnyx10dlcCampaign,
   autoConfigureTelnyxMessagingProfile,
   applyTelnyxDeliveryEvent,
