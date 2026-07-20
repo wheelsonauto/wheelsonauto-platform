@@ -69,7 +69,7 @@ async function main() {
     const environmentPassword = 'EnvironmentOwnerPassword123!';
     const salt = 'owner-auth-runtime-environment-salt';
     process.env.DATA_DIR = dataDir;
-    process.env.WOA_ADMIN_PIN = '9999';
+    process.env.WOA_ADMIN_PIN = 'LegacyPinPassword123!';
     process.env.WOA_ADMIN_USERNAME = 'owner';
     process.env.WOA_ADMIN_PASSWORD_HASH = 'pbkdf2$310000$' + crypto.pbkdf2Sync(environmentPassword, salt, 310000, 32, 'sha256').toString('hex');
     process.env.WOA_ADMIN_PASSWORD_SALT = salt;
@@ -93,9 +93,9 @@ async function main() {
       assert.strictEqual(blankUsername.status, 400, 'A correct password must never authenticate without a username.');
       const wrongUsername = await request(server, 'POST', '/login', { username: 'someone-else', password: environmentPassword });
       assert.strictEqual(wrongUsername.status, 401, 'A correct password must never authenticate a different username.');
-      const pinOnly = await request(server, 'POST', '/login', { username: 'owner', pin: '9999' });
+      const pinOnly = await request(server, 'POST', '/login', { username: 'owner', pin: process.env.WOA_ADMIN_PIN });
       assert.strictEqual(pinOnly.status, 400, 'PIN-only owner login must be permanently removed.');
-      const pinAsPassword = await request(server, 'POST', '/login', { username: 'owner', password: '9999' });
+      const pinAsPassword = await request(server, 'POST', '/login', { username: 'owner', password: process.env.WOA_ADMIN_PIN });
       assert.strictEqual(pinAsPassword.status, 401, 'The old PIN must not work through the password field.');
 
       const environmentLogin = await request(server, 'POST', '/login', { username: 'owner', password: environmentPassword });
@@ -156,7 +156,7 @@ async function main() {
       });
       assert.strictEqual(wrongRecoveryUsername.status, 400, 'A recovery code must not reset any other username.');
 
-      const recoveredPassword = 'RecoveredOwnerPassword789!';
+      const recoveredPassword = process.env.WOA_ADMIN_PIN;
       const recoveryResult = await request(server, 'POST', '/forgot/verify', {
         username: 'secure-owner',
         code: '483920',
@@ -169,7 +169,7 @@ async function main() {
       const oldPasswordAfterRecovery = await request(server, 'POST', '/login', { username: 'secure-owner', password: storedPassword });
       assert.strictEqual(oldPasswordAfterRecovery.status, 401, 'Recovery must revoke the previous password.');
       const recoveredLogin = await request(server, 'POST', '/login', { username: 'secure-owner', password: recoveredPassword }, originalProxyChain);
-      assert.strictEqual(recoveredLogin.status, 302, 'Recovery must require a fresh login with the exact username and new password.');
+      assert.strictEqual(recoveredLogin.status, 302, 'Recovery must require a fresh login with the exact username and new password, even when the chosen password matches the retired PIN value.');
       assert(!recoveredLogin.location.startsWith('/forgot'), 'A changing internal proxy hop must not leave the recovered account trapped behind the old rate-limit key.');
 
       const finalState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));

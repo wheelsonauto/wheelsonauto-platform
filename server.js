@@ -9058,7 +9058,9 @@ function storedOwnerLoginMatches(data, username, password) {
   const wantedUser = normalizeLogin(owner.username || LOGIN_USERNAME || 'admin');
   const enteredUser = normalizeLogin(username || '');
   if (!enteredUser || enteredUser !== wantedUser) return false;
-  if (LOGIN_PIN && secureCompare(password, LOGIN_PIN)) return false;
+  // Once the owner has created a stored password, it is authenticated only as
+  // an exact username/password pair. A legacy PIN with the same characters is
+  // no longer a PIN-only path and must not invalidate the saved password hash.
   return verifyPasswordRecord(password, owner);
 }
 function passwordMatchesCurrentUser(data, user, password) {
