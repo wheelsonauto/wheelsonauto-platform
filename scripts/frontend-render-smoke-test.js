@@ -435,6 +435,15 @@ async function ownerInteractionSmoke() {
   assertHealthy('Owner compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
   context.closeModal();
 
+  const defaultFetch = context.fetch;
+  context.fetch = async url => String(url).includes('/api/integrations/stripe/readiness')
+    ? { ok: true, status: 200, json: async () => ({ ok: true, stripeAccount: { keyMode: 'test', checkedKeyMode: 'test', detailsSubmitted: false, chargesEnabled: false, payoutsEnabled: false, currentlyDueCount: 1, successful: true, configurationMatched: true, fresh: true, checkedAt: '2026-07-20T12:00:00.000Z', live: false, error: 'Activate Stripe first.' } }) }
+    : defaultFetch(url);
+  await context.action('check-stripe-readiness', '', fakeButton(context, { action: 'check-stripe-readiness' }));
+  assertHealthy('Owner clicked Stripe account check', modalHtml(context), ['Stripe account activation', 'Stripe activation is not complete yet', 'Safe check only', 'Open Stripe account']);
+  context.closeModal();
+  context.fetch = defaultFetch;
+
   const searchButton = await dispatchClick(context, { localSearchRun: '1' });
   assert(searchButton.localSearchInput.focused, 'Local search button should focus the local search field.');
   localSearchSmoke(context);
@@ -512,6 +521,8 @@ function ownerSmoke() {
     submission: { status: 'not_started', retryBlocked: false }
   });
   assert(telnyxCampaignReview.includes('$15.00 review fee + $10.00/month') && telnyxCampaignReview.includes('telnyxCampaignFeeAcknowledged') && telnyxCampaignReview.includes('SUBMIT TELNYX CUSTOMER_CARE $15 + $10/MONTH') && telnyxCampaignReview.includes('Submit corrected campaign') && telnyxCampaignReview.includes('it does not enable texting'), 'The owner campaign modal must show exact dynamic fees, consent proof, the exact phrase gate, and the carrier-review warning before submission.');
+  const stripeActivationReview = context.stripeAccountReadinessReview({ configured: true, keyMode: 'test', checkedKeyMode: 'test', detailsSubmitted: false, chargesEnabled: false, payoutsEnabled: false, currentlyDueCount: 2, pastDueCount: 1, successful: true, configurationMatched: true, fresh: true, checkedAt: '2026-07-20T12:00:00.000Z', live: false, error: 'Activate the Stripe business account and add its live secret key before checking account readiness.' });
+  assert(stripeActivationReview.includes('Stripe activation is not complete yet') && stripeActivationReview.includes('3 Stripe requirements still open') && stripeActivationReview.includes('Finish Stripe business onboarding') && stripeActivationReview.includes('Stripe has not enabled live charges') && stripeActivationReview.includes('Stripe has not enabled live payouts') && stripeActivationReview.includes('Safe check only') && stripeActivationReview.includes('does not save a card, charge a customer, issue a refund, or change Clover') && stripeActivationReview.includes('Open Stripe account') && stripeActivationReview.includes('Live launch preflight'), 'Stripe account checking must open one compact owner handoff with exact activation gaps and a clear no-money-action guarantee.');
   assert(context.isInventoryVehicle({ status: 'Ready', currentCustomer: '' }) === true, 'Ready unassigned cars should be available inventory.');
   assert(context.isInventoryVehicle({ status: 'Pending application', currentCustomer: '' }) === false, 'Pending-application cars must not appear in available fleet or autopay pickers.');
   assert(context.isInventoryVehicle({ status: 'Maintenance', currentCustomer: '' }) === false, 'Maintenance cars must not appear in available fleet or autopay pickers.');

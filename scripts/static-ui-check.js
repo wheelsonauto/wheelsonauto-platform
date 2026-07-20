@@ -319,6 +319,19 @@ assertIncludes('Owner-approved Telnyx paid campaign flow', app + server, [
   'Wait for carrier approval before assigning the number',
   'Paid external action'
 ]);
+assertIncludes('Stripe owner activation review', app + server, [
+  'stripeAccountReadinessReview',
+  'Stripe account activation',
+  'Business details',
+  'API mode',
+  'Charges',
+  'Payouts',
+  'Fresh account proof',
+  'Safe check only',
+  'does not save a card, charge a customer, issue a refund, or change Clover',
+  'https://dashboard.stripe.com/settings/account',
+  'Live launch preflight'
+]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
   'clarifyCoreReadinessLanguage',
   'Core operational check for environment keys',
