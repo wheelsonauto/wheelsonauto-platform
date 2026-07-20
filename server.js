@@ -173,6 +173,8 @@ const WOA_STATE_BACKUP_ENABLED = process.env.WOA_STATE_BACKUP_ENABLED === '1';
 const WOA_STATE_BACKUP_INTERVAL_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STATE_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000));
 const WOA_STATE_BACKUP_STARTUP_DELAY_MS = Math.max(30 * 1000, Number(process.env.WOA_STATE_BACKUP_STARTUP_DELAY_MS || 2 * 60 * 1000));
 const WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS || 12 * 60 * 60 * 1000));
+const WOA_PREFLIGHT_CHECK_TIMEOUT_MS = Math.max(3000, Math.min(30000, Number(process.env.WOA_PREFLIGHT_CHECK_TIMEOUT_MS || 8000)));
+const WOA_PREFLIGHT_BACKUP_CACHE_MS = Math.max(5000, Math.min(5 * 60 * 1000, Number(process.env.WOA_PREFLIGHT_BACKUP_CACHE_MS || 60 * 1000)));
 const WOA_PRIVATE_ARTIFACT_INTERVAL_MS = Math.max(60 * 1000, Number(process.env.WOA_PRIVATE_ARTIFACT_INTERVAL_MS || 5 * 60 * 1000));
 const WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS = Math.max(10 * 1000, Number(process.env.WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS || 45 * 1000));
 const WOA_PRIVATE_ARTIFACT_BATCH_LIMIT = Math.max(1, Math.min(100, Number(process.env.WOA_PRIVATE_ARTIFACT_BATCH_LIMIT || 25)));
@@ -222,7 +224,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-password-recovery-240';
+const ASSET_VERSION = 'platform-20260720-fast-preflight-241';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -322,6 +324,8 @@ const stateBackupStatus = {
   lastError: '',
   lastResult: null
 };
+let preflightBackupEvidenceCache = null;
+let preflightBackupEvidenceInFlight = null;
 const privateArtifactStatus = {
   enabled: true,
   intervalMs: WOA_PRIVATE_ARTIFACT_INTERVAL_MS,
@@ -993,6 +997,7 @@ async function runEncryptedStateBackup(options = {}) {
   stateBackupStatus.lastStartedAt = new Date().toISOString();
   stateBackupStatus.lastSource = source;
   stateBackupStatus.lastError = '';
+  preflightBackupEvidenceCache = null;
   try {
     const snapshot = await captureStateBackupSnapshot();
     const created = await STATE_BACKUP_STORE.create(snapshot.state, { stateVersion: snapshot.version });
@@ -1058,6 +1063,65 @@ async function encryptedStateBackupEvidence() {
     };
   } catch (error) {
     return { ...base, error: String(error && error.message || error).slice(0, 500) };
+  }
+}
+function preflightCheckTimeout(promise, timeoutMs, label) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(label + ' did not answer within ' + Math.round(timeoutMs / 1000) + ' seconds.');
+      error.code = 'woa_preflight_timeout';
+      reject(error);
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+function stateBackupPreflightFailure(error) {
+  const configured = STATE_BACKUP_STORE.status();
+  return {
+    enabled: WOA_STATE_BACKUP_ENABLED,
+    configured: configured.configured,
+    productionReady: configured.productionReady,
+    dedicatedKeyConfigured: STATE_BACKUP_DEDICATED_KEY_CONFIGURED,
+    provider: configured.storage && configured.storage.provider || '',
+    secureTransport: !!(configured.storage && configured.storage.secureTransport),
+    keyVersion: configured.encryptionConfigured ? configured.keyVersion : '',
+    intervalHours: Math.round(WOA_STATE_BACKUP_INTERVAL_MS / (60 * 60 * 1000) * 10) / 10,
+    maxAgeHours: Math.round(WOA_STATE_BACKUP_VALIDATION_MAX_AGE_MS / (60 * 60 * 1000) * 10) / 10,
+    verified: false,
+    fresh: false,
+    live: false,
+    verificationDeferred: error && error.code === 'woa_preflight_timeout',
+    error: String(error && error.message || error || 'Encrypted state backup evidence is unavailable.').slice(0, 500)
+  };
+}
+async function preflightEncryptedStateBackupEvidence(options = {}) {
+  const now = Date.now();
+  const cacheMs = Math.max(0, Number(options.cacheMs == null ? WOA_PREFLIGHT_BACKUP_CACHE_MS : options.cacheMs));
+  const timeoutMs = Math.max(1, Number(options.timeoutMs || WOA_PREFLIGHT_CHECK_TIMEOUT_MS));
+  if (preflightBackupEvidenceCache && now - preflightBackupEvidenceCache.checkedAtMs <= cacheMs) {
+    return {
+      ...preflightBackupEvidenceCache.value,
+      cached: true,
+      cacheAgeMs: Math.max(0, now - preflightBackupEvidenceCache.checkedAtMs),
+      verificationDeferred: false
+    };
+  }
+  if (!preflightBackupEvidenceInFlight) {
+    const verification = encryptedStateBackupEvidence();
+    preflightBackupEvidenceInFlight = verification.then(value => {
+      preflightBackupEvidenceCache = { checkedAtMs: Date.now(), value };
+      return value;
+    }).finally(() => {
+      preflightBackupEvidenceInFlight = null;
+    });
+  }
+  try {
+    const value = await preflightCheckTimeout(preflightBackupEvidenceInFlight, timeoutMs, 'Encrypted backup verification');
+    return { ...value, cached: false, cacheAgeMs: 0, verificationDeferred: false };
+  } catch (error) {
+    return stateBackupPreflightFailure(error);
   }
 }
 function normKey(value) {
@@ -11069,11 +11133,49 @@ function cloverRecurringMigrationReadiness(data = {}) {
     error
   };
 }
-async function productionInfrastructurePreflight(data = null) {
-  const database = await STATE_REPOSITORY.health({
-    recoveryDrillConfigurationFingerprint: recoveryDrillConfigurationFingerprint(),
-    recoveryDrillMaxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
-  });
+async function productionInfrastructurePreflight(data = null, options = {}) {
+  const startedAtMs = Date.now();
+  const timeoutMs = Math.max(1, Number(options.timeoutMs || WOA_PREFLIGHT_CHECK_TIMEOUT_MS));
+  const repository = options.repository || STATE_REPOSITORY;
+  const checks = {};
+  async function runCheck(name, factory, fallback) {
+    const checkStartedAtMs = Date.now();
+    try {
+      const value = await preflightCheckTimeout(Promise.resolve().then(factory), timeoutMs, name);
+      checks[name] = { durationMs: Date.now() - checkStartedAtMs, timedOut: false, ok: true };
+      return value;
+    } catch (error) {
+      checks[name] = { durationMs: Date.now() - checkStartedAtMs, timedOut: error && error.code === 'woa_preflight_timeout', ok: false };
+      return fallback(error);
+    }
+  }
+  const [database, backendCutover, stateBackup, stateRead] = await Promise.all([
+    runCheck('database', () => repository.health({
+      recoveryDrillConfigurationFingerprint: recoveryDrillConfigurationFingerprint(),
+      recoveryDrillMaxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
+    }), error => ({
+      backend: repository.kind || WOA_DATA_BACKEND,
+      connected: false,
+      transactional: false,
+      productionReady: false,
+      snapshotRecoveryReady: false,
+      migrationProofReady: false,
+      migrationSourceProvenanceReady: false,
+      recoveryDrillReady: false,
+      error: String(error && error.message || error).slice(0, 500)
+    })),
+    runCheck('cutover sentinel', options.backendCutoverEvidence || dataBackendCutoverEvidence, error => ({
+      backend: repository.kind || WOA_DATA_BACKEND,
+      ready: false,
+      jsonBackendRetired: false,
+      error: String(error && error.message || error).slice(0, 500)
+    })),
+    runCheck('encrypted backup', options.stateBackupEvidence || (() => preflightEncryptedStateBackupEvidence({ timeoutMs })), stateBackupPreflightFailure),
+    runCheck('business state', () => data || (options.readState || readData)(), error => ({
+      __preflightStateReadFailed: true,
+      __preflightStateReadError: String(error && error.message || error).slice(0, 500)
+    }))
+  ]);
   const databaseCredentialIsolation = {
     ready: !POSTGRES_DRILL_CREDENTIALS_CONFIGURED,
     configured: POSTGRES_DRILL_CREDENTIALS_CONFIGURED,
@@ -11081,12 +11183,11 @@ async function productionInfrastructurePreflight(data = null) {
       ? 'Remove dedicated PostgreSQL drill credentials from the long-running production web service. Supply them only to a short-lived one-off recovery drill.'
       : 'Dedicated PostgreSQL drill credentials are isolated from the production web runtime.'
   };
-  const backendCutover = await dataBackendCutoverEvidence();
   const recoveryDrill = currentRecoveryDrillEvidence(database);
   const databaseWithRecoveryDrill = { ...database, recoveryDrill, recoveryDrillReady: recoveryDrill.ready };
-  const stateBackup = await encryptedStateBackupEvidence();
   const documentStorage = PRIVATE_DOCUMENT_STORE.status();
-  const state = data || await readData();
+  const stateReadReady = stateRead && stateRead.__preflightStateReadFailed !== true;
+  const state = stateReadReady ? stateRead : emptyPlatformState();
   const stripeAccount = stripeAccountLiveEvidence(state);
   const stripeWebhook = stripeLiveWebhookEvidence(state);
   const stripeIdentityWebhook = stripeIdentityLiveWebhookEvidence(state);
@@ -11107,6 +11208,7 @@ async function productionInfrastructurePreflight(data = null) {
   const providerProofCollectionMissing = [];
   const providerEvidenceMissing = [];
   const missing = [];
+  if (!stateReadReady) providerProofCollectionMissing.push('authoritative business state read');
   if (!databaseCredentialIsolation.ready) providerProofCollectionMissing.push('database credential isolation');
   if (!databaseWithRecoveryDrill.productionReady) providerProofCollectionMissing.push('PostgreSQL transactional state');
   if (!backendCutover.ready) providerProofCollectionMissing.push('persistent PostgreSQL cutover sentinel');
@@ -11128,6 +11230,7 @@ async function productionInfrastructurePreflight(data = null) {
   if (!starAi.live) providerEvidenceMissing.push('OpenAI Star Responses API health proof');
   if (!cloverRecurring.ready) providerEvidenceMissing.push('fresh Clover recurring roster');
   if (!databaseCredentialIsolation.ready) missing.push('remove dedicated PostgreSQL drill credentials from the production web runtime');
+  if (!stateReadReady) missing.push('authoritative business state read');
   if (!databaseWithRecoveryDrill.productionReady) missing.push('PostgreSQL transactional state');
   if (!backendCutover.ready) missing.push('persistent PostgreSQL cutover sentinel');
   if (!databaseWithRecoveryDrill.snapshotRecoveryReady) missing.push('verified PostgreSQL recovery snapshot');
@@ -11183,6 +11286,15 @@ async function productionInfrastructurePreflight(data = null) {
             ? 'enable_final_hardening'
             : 'launch_blocked';
   return {
+    stateRead: {
+      ready: stateReadReady,
+      error: stateReadReady ? '' : String(stateRead && stateRead.__preflightStateReadError || 'Authoritative business state is unavailable.')
+    },
+    checkTimings: {
+      ...checks,
+      totalMs: Date.now() - startedAtMs,
+      timeoutMs
+    },
     database: databaseWithRecoveryDrill,
     databaseCredentialIsolation,
     backendCutover,
@@ -22983,7 +23095,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/system/infrastructure/preflight' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view production infrastructure readiness.' });
       const data = await readData();
-      const infrastructure = await productionInfrastructurePreflight(data);
+      const [infrastructure, openJobErrors] = await Promise.all([
+        productionInfrastructurePreflight(data),
+        STATE_REPOSITORY.recentJobErrors(30).catch(() => [{
+          id: '',
+          source: 'launch-preflight',
+          severity: 'error',
+          message: 'Recent background job failures could not be loaded.',
+          context: {},
+          reviewable: false,
+          occurrenceCount: 1
+        }])
+      ]);
       const conflicts = stateRepository.identityConflicts(data);
       const assignmentClassification = assignmentConflictPreflightClassification(data);
       const assignmentConflicts = assignmentClassification.all;
@@ -22998,7 +23121,7 @@ const server = http.createServer(async (req, res) => {
         structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 50),
         assignmentReviewWarnings: assignmentClassification.review.slice(0, 50),
         identityWarnings: warnings.slice(0, 50),
-        openJobErrors: await STATE_REPOSITORY.recentJobErrors(30),
+        openJobErrors,
         requiredBeforeLiveStripe: [
           'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL and verified JSON-to-PostgreSQL import proof',
           'Current PostgreSQL snapshot checksum/version verification plus a fresh controlled test-database recovery drill record',
@@ -24565,6 +24688,7 @@ module.exports = {
   startMigrationMaintenanceLease,
   runEncryptedStateBackup,
   encryptedStateBackupEvidence,
+  preflightEncryptedStateBackupEvidence,
   documentStorageConfigurationFingerprint,
   privateDocumentStorageEvidence,
   privateDocumentKeyCoverage,

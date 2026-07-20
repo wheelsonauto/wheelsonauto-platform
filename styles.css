@@ -7837,6 +7837,12 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
 .modal .launch-preflight-stats{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:8px}
 .modal .launch-preflight-stats .stat{min-width:0}
 .modal .launch-preflight-stats small{overflow-wrap:anywhere}
+.launch-preflight-loading{min-height:180px;display:flex;align-items:center;justify-content:center;gap:16px;padding:28px;border:1px solid rgba(216,190,133,.24);border-radius:10px;background:rgba(255,255,255,.035);color:var(--text)}
+.launch-preflight-loading>div{min-width:0}
+.launch-preflight-loading strong{display:block;font-size:17px;margin-bottom:5px}
+.launch-preflight-loading p{margin:0;color:var(--muted);max-width:560px;line-height:1.5}
+.launch-preflight-spinner{width:28px;height:28px;flex:0 0 28px;border:2px solid rgba(216,190,133,.2);border-top-color:rgba(216,190,133,.9);border-radius:50%;animation:woa-preflight-spin .8s linear infinite}
+@keyframes woa-preflight-spin{to{transform:rotate(360deg)}}
 .launch-provider-console>.section-head{align-items:flex-start}
 .modal:has(.launch-provider-console){width:min(960px,calc(100vw - 36px))}
 .launch-provider-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}

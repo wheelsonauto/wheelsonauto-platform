@@ -3388,7 +3388,7 @@ function liveLaunchJobErrorReview(jobErrors){
   if(!jobErrors.length)return'<div class="notice good">No unresolved background job or webhook failures are waiting for owner review.</div>';
   var visible=jobErrors.slice(0,8),rows=visible.map(function(row){
     var severity=String(row.severity||'error').toLowerCase(),tone=severity==='warning'||severity==='warn'?'warn':'bad',occurrences=Math.max(1,Number(row.occurrenceCount||1)),firstSeen=row.firstSeenAt||row.createdAt||'',lastSeen=row.lastSeenAt||row.createdAt||'';
-    return['<strong>'+esc(shortDate(lastSeen)||lastSeen||'Unknown time')+'</strong>'+(occurrences>1?'<div class="muted">'+occurrences+' occurrences since '+esc(shortDate(firstSeen)||firstSeen)+'</div>':''),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>','<button class="btn" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>']
+    return['<strong>'+esc(shortDate(lastSeen)||lastSeen||'Unknown time')+'</strong>'+(occurrences>1?'<div class="muted">'+occurrences+' occurrences since '+esc(shortDate(firstSeen)||firstSeen)+'</div>':''),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>',row.reviewable===false?badge('Unavailable','warn'):'<button class="btn" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>']
   });
   return table(['When','Source','Failure','Action'],rows)+(jobErrors.length>visible.length?'<div class="notice mini">Showing the newest '+visible.length+' of '+jobErrors.length+'. Review these, then reopen preflight for the next set.</div>':'')
 }
@@ -3494,6 +3494,9 @@ function snapshotRestoreConfirmationModal(option){
   var id=Number(option&&option.value||0),phrase='RESTORE SNAPSHOT '+id,reason=option&&option.dataset.reason||'Protected state snapshot',created=option&&option.dataset.created||'',version=option&&option.dataset.version||'0',actor=option&&option.dataset.actor||'System',checksumPrefix=option&&option.dataset.checksumPrefix||'Not recorded';
   return'<div class="snapshot-restore-confirmation"><div class="notice bad"><strong>This replaces current PostgreSQL business state.</strong><br>The selected snapshot is verified before mutation. Current staff/customer access controls are preserved, a new safety snapshot is created, the restore is permanently audited, and every signed-in session is revoked.</div><div class="recovery-restore-facts"><div><span>Snapshot</span><strong>#'+esc(id)+' / version '+esc(version)+'</strong></div><div><span>Created</span><strong>'+esc(recoveryConsoleDate(created))+'</strong></div><div><span>Reason</span><strong>'+esc(reason)+'</strong></div><div><span>Actor</span><strong>'+esc(actor)+'</strong></div><div><span>Checksum</span><strong>'+esc(checksumPrefix)+'</strong></div></div><div class="field"><label for="recoveryConfirmationPhrase">Type exactly '+esc(phrase)+'</label><input id="recoveryConfirmationPhrase" autocomplete="off" spellcheck="false" placeholder="'+esc(phrase)+'"></div><label class="check recovery-confirm-check"><input id="recoveryConfirmationChecked" type="checkbox"> <span>I understand that this restores an older business-state snapshot and signs everyone out.</span></label><div class="actions"><button class="btn" data-action="open-recovery-console">Back to recovery log</button><button class="btn danger" data-action="confirm-snapshot-restore" data-snapshot-id="'+esc(id)+'">Restore snapshot</button></div></div>'
 }
+function liveLaunchPreflightLoading(){
+  return '<div class="launch-preflight-loading" role="status" aria-live="polite" aria-busy="true"><span class="launch-preflight-spinner" aria-hidden="true"></span><div><strong>Checking launch safeguards</strong><p>Reading PostgreSQL, encrypted backup proof, private storage, provider evidence, and recent job failures.</p></div></div>'
+}
 document.addEventListener('click',async function(event){
   var button=event.target.closest('button[data-action="open-live-launch-preflight"]');
   if(!button)return;
@@ -3503,12 +3506,13 @@ document.addEventListener('click',async function(event){
   if(roleName()!=='owner'){notify('Only the owner can view live launch readiness');return}
   button.disabled=true;
   button.classList.add('is-loading');
+  openModal('Controlled Stripe launch preflight',liveLaunchPreflightLoading());
   try{
     var response=await fetch('/api/system/infrastructure/preflight',{headers:{Accept:'application/json'},cache:'no-store'}),result=await response.json().catch(function(){return{}});
-    if(!response.ok||result.ok===false&&result.error){notify(result.error||'Live launch preflight failed');return}
+    if(!response.ok||result.ok===false&&result.error){openModal('Controlled Stripe launch preflight','<div class="notice bad"><strong>Launch check unavailable</strong><div>'+esc(result.error||'Live launch preflight failed')+'</div></div><div class="actions"><button class="btn" onclick="closeModal()">Close</button></div>');return}
     openModal('Controlled Stripe launch preflight',liveLaunchPreflightModal(result));
   }catch(error){
-    notify('Live launch preflight could not reach the server');
+    openModal('Controlled Stripe launch preflight','<div class="notice bad"><strong>Launch check unavailable</strong><div>The server could not answer the readiness check. No provider or customer data was changed.</div></div><div class="actions"><button class="btn" onclick="closeModal()">Close</button></div>');
   }finally{
     button.disabled=false;
     button.classList.remove('is-loading');
