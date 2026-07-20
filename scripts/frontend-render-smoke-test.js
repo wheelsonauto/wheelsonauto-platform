@@ -866,6 +866,16 @@ function cloverPartialRosterSmoke() {
   });
   assertHealthy('Partial Clover roster review', review, ['Partial Clover response - 47 saved subscription rows are waiting', 'last complete 55-subscription snapshot', 'retained for audit only; it does not authorize a cutover', 'No separate customer-identity or duplicate-plan conflict is actionable']);
   assert(!/Customer identity missing|clover_subscription_not_in_verified_roster/.test(review), 'A provider-wide partial roster must not render dozens of omitted subscriptions as customer-assignment conflicts.');
+  const completeCountReview = context.liveLaunchCloverQuarantineReview({
+    providerCoverageGapRows: 4,
+    providerRosterCountComplete: true,
+    providerSubscriptionRows: 55,
+    quarantine: []
+  });
+  ['Saved Clover review - 4 local rows are not in the current 55-subscription provider roster', 'Clover returned its full active subscription count', 'Another identical sync will not supply a missing subscription ID'].forEach(text => {
+    assert(completeCountReview.includes(text), 'Complete-count Clover saved-row review is missing: ' + text);
+  });
+  assert(!completeCountReview.includes('Partial Clover response'), 'A complete provider count with retained local history must not tell the owner to repeat the same Clover sync.');
 }
 
 async function refreshCoordinationSmoke() {

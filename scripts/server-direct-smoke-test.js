@@ -521,6 +521,7 @@ async function main() {
       { id: 'rec-partial-omitted', status: 'Active', paymentProvider: 'clover', customer: 'Saved Omitted Row', cloverCustomerId: 'clover-omitted', cloverSubscriptionId: 'SUB-COMPLETE-TWO' }
     ], integrations: partialRecurringState.integrations });
     assert(partialCoverageReadiness.eligibleRows === 1 && partialCoverageReadiness.quarantinedRows === 1 && partialCoverageReadiness.providerCoverageGapRows === 1 && partialCoverageReadiness.actionableQuarantinedRows === 0 && partialCoverageReadiness.quarantine.length === 0, 'A partial Clover response must keep omitted plans blocked while separating the provider coverage gap from actionable customer or duplicate-plan conflicts: ' + JSON.stringify(partialCoverageReadiness));
+    assert(partialCoverageReadiness.providerRosterCountComplete === false, 'A real one-of-two provider response must remain explicitly count-incomplete.');
     assert(partialCoverageReadiness.lastCompleteRosterSubscriptionIds === 2 && partialCoverageReadiness.lastCompleteRosterConfigurationMatched === true, 'Readiness may expose count-only matching last-complete evidence for audit without using it to authorize cutover.');
     cloverRecurringFixture = 'count-warning-preserve';
     const countWarningState = { recurringPayments: [], integrations: { clover: {
@@ -535,6 +536,7 @@ async function main() {
     const countWarningReadiness = cloverRecurringMigrationReadiness(countWarningState);
     assert(countWarningReadiness.ready === true && countWarningReadiness.eligibleRows === 1, 'A partial Clover roster must allow its exact verified row to proceed through individual protected cutover.');
     assert(countWarningReadiness.providerCoverageGapRows === 1 && countWarningReadiness.actionableQuarantinedRows === 0, 'The omitted saved row must remain quarantined as a provider coverage gap without becoming a false customer conflict.');
+    assert(countWarningReadiness.providerRosterCountComplete === true, 'A full current provider count with extra retained local history must not be mislabeled as a partial provider response.');
     cloverRecurringFixture = '';
     const currentDocumentKeyCoverage = privateDocumentKeyCoverage({ documents: [{ id: 'doc-current-key', storageKey: 'documents/org-direct/doc-current-key.enc', encryption: { algorithm: 'AES-256-GCM', keyVersion: 'v1' } }] });
     assert(currentDocumentKeyCoverage.ready === true && currentDocumentKeyCoverage.encryptedDocuments === 1 && currentDocumentKeyCoverage.requiredKeyVersions.includes('v1'), 'The launch gate must inventory encrypted documents covered by the active versioned key.');

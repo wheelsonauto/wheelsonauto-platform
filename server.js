@@ -224,7 +224,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-launch-audit-245';
+const ASSET_VERSION = 'platform-20260720-clover-review-246';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -11084,7 +11084,7 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const message = ready
     ? (requiresFreshRoster
       ? (reviewRequired
-        ? eligibleRows.length + ' Clover subscription row(s) are individually verified for protected cutover. ' + quarantinedRows.length + ' ambiguous row(s) remain quarantined on Clover. Multiple plans for one customer are allowed only when every plan has a distinct subscription ID.'
+        ? eligibleRows.length + ' Clover subscription row(s) are individually verified for protected cutover. ' + quarantinedRows.length + ' review row(s) remain quarantined on Clover. Multiple plans for one customer are allowed only when every plan has a distinct subscription ID.'
         : 'Fresh Clover recurring roster verified for ' + activeCustomers + ' active customer record(s).')
       : 'No active Clover recurring records currently require a Stripe cutover.')
     : '';
@@ -11099,6 +11099,10 @@ function cloverRecurringMigrationReadiness(data = {}) {
     preservedMembers: Number(clover.lastRecurringPlanSyncPreservedMembers || 0),
     providerSubscriptionRows: Number(coverage.providerSubscriptionRows || 0),
     expectedActiveSubscriptions: Number(coverage.expectedActiveSubscriptions || activeCustomers || 0),
+    providerRosterCountComplete: Number(coverage.expectedActiveSubscriptions || 0) > 0
+      && Number(coverage.providerSubscriptionRows || 0) >= Number(coverage.expectedActiveSubscriptions || 0),
+    providerIdentityCoverageComplete: Number(coverage.providerSubscriptionRows || 0) > 0
+      && Number(coverage.resolvedCustomerNames || 0) >= Number(coverage.providerSubscriptionRows || 0),
     resolvedCustomerNames: Number(coverage.resolvedCustomerNames || 0),
     unresolvedCustomerNames: Number(coverage.unresolvedCustomerNames || 0),
     rosterCoverageComplete: coverage.complete === true,
