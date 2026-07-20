@@ -3393,14 +3393,15 @@ function liveLaunchJobErrorReview(jobErrors){
 }
 function liveLaunchCloverQuarantineReview(cloverRecurring){
   cloverRecurring=cloverRecurring||{};
-  var rows=Array.isArray(cloverRecurring.quarantine)?cloverRecurring.quarantine:[];
-  if(!rows.length)return'<div class="notice good">No Clover recurring rows are quarantined.</div>';
+  var rows=Array.isArray(cloverRecurring.quarantine)?cloverRecurring.quarantine:[],providerGap=Math.max(0,Number(cloverRecurring.providerCoverageGapRows||0)),lastCompleteCount=Math.max(0,Number(cloverRecurring.lastCompleteRosterSubscriptionIds||0)),lastCompleteAt=cloverRecurring.lastCompleteRosterAt?shortDate(cloverRecurring.lastCompleteRosterAt):'',lastCompleteMatched=cloverRecurring.lastCompleteRosterConfigurationMatched===true;
+  var providerGapNote=providerGap?'<div class="notice warn"><strong>Partial Clover response - '+providerGap+' saved subscription row'+(providerGap===1?' is':'s are')+' waiting for a complete provider refresh.</strong><div>Keep these rows on Clover and do not edit customer or vehicle assignments just because the current provider response omitted them. Re-run Clover recurring sync. '+(lastCompleteCount&&lastCompleteMatched?'The last complete '+lastCompleteCount+'-subscription snapshot'+(lastCompleteAt?' from '+esc(lastCompleteAt):'')+' is retained for audit only; it does not authorize a cutover after this partial response.':'No matching complete roster snapshot is available for comparison.')+'</div></div>':'';
+  if(!rows.length)return providerGapNote+(providerGap?'<div class="notice">No separate customer-identity or duplicate-plan conflict is actionable until Clover returns a complete roster.</div>':'<div class="notice good">No Clover recurring rows are quarantined.</div>');
   var guidance={
     missing_clover_subscription_id:'Keep this plan on Clover. Link the exact Clover subscription ID before scheduling its Stripe cutover.',
     duplicate_clover_subscription_id:'Keep every matching row on Clover. Resolve which WheelsonAuto plan owns this subscription ID; never remove a plan by customer name alone.',
     missing_customer_identity:'Keep this subscription on Clover. Link it to one verified customer file before scheduling Stripe.'
   };
-  return table(['Customer','WheelsonAuto row','Reason','Safe next action'],rows.map(function(row){
+  return providerGapNote+table(['Customer','WheelsonAuto row','Reason','Safe next action'],rows.map(function(row){
     var identity=[row.recurringPaymentId?'Row '+row.recurringPaymentId:'Row ID missing',row.subscriptionId?'Clover '+row.subscriptionId:'Clover subscription missing'].filter(Boolean).join(' | ');
     return['<strong>'+esc(row.customer||'Customer identity missing')+'</strong>',esc(identity),'<strong>'+esc(row.code||'cutover_review_required')+'</strong><div class="muted">'+esc(row.message||'This row does not have enough exact evidence for cutover.')+'</div>',esc(guidance[row.code]||'Keep this row on Clover and verify its exact subscription and customer identity before cutover.')]
   }))+'<div class="notice warn mini">These rows are review-only. WheelsonAuto will not stop Clover, merge plans, or guess a customer assignment from a name.</div>'

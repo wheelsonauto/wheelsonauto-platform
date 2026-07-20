@@ -816,6 +816,19 @@ function recoveryConsoleSmoke() {
   assert(!confirmation.includes('f36a97584815d79ad622ee1a70b73438d57c7012c4816a8fc0f40f691071cb4a'), 'Recovery confirmation must not expose the complete database checksum.');
 }
 
+function cloverPartialRosterSmoke() {
+  const context = makeContext({ name: 'Owner Clover Review', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  const review = context.liveLaunchCloverQuarantineReview({
+    providerCoverageGapRows: 47,
+    lastCompleteRosterSubscriptionIds: 55,
+    lastCompleteRosterAt: '2026-07-20T12:30:00.000Z',
+    lastCompleteRosterConfigurationMatched: true,
+    quarantine: []
+  });
+  assertHealthy('Partial Clover roster review', review, ['Partial Clover response - 47 saved subscription rows are waiting', 'last complete 55-subscription snapshot', 'retained for audit only; it does not authorize a cutover', 'No separate customer-identity or duplicate-plan conflict is actionable']);
+  assert(!/Customer identity missing|clover_subscription_not_in_verified_roster/.test(review), 'A provider-wide partial roster must not render dozens of omitted subscriptions as customer-assignment conflicts.');
+}
+
 async function refreshCoordinationSmoke() {
   const context = makeContext({ name: 'Owner Refresh', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
   context.__woaLastDataVersion = 'same-version';
@@ -945,6 +958,7 @@ async function main() {
   await mechanicInteractionSmoke();
   publicSmoke();
   recoveryConsoleSmoke();
+  cloverPartialRosterSmoke();
   await refreshCoordinationSmoke();
   sessionExpirySmoke();
   starAutoSendDefaultSmoke();

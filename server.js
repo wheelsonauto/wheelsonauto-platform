@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-stripe-activation-233';
+const ASSET_VERSION = 'platform-20260720-clover-roster-proof-234';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -8692,7 +8692,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError', 'telnyx10dlc', 'aiUsage', 'smsWebhookConnected', 'smsWebhookConfiguredAt'];
-  const cloverProofFields = ['lastRecurringPlanSyncAt', 'lastRecurringPlanSyncError', 'lastRecurringPlanSyncWarning', 'lastRecurringMemberSyncWarning', 'lastRecurringPlanSyncDegradedAt', 'lastRecurringPlanSyncDegradedStatus', 'lastRecurringPlanSyncPreservedPlans', 'lastRecurringPlanSyncPreservedMembers', 'lastRecurringRosterCoverage', 'lastRecurringVerifiedSubscriptionIds', 'lastRecurringVerifiedSubscriptionIdsAt', 'lastRecurringVerifiedConfigurationFingerprint', 'lastRecurringSubscriptionSyncSource', 'lastRecurringPlanSyncSource', 'lastRecurringPlanSyncPaths', 'lastRecurringPlanSyncDetails', 'recurringPlanSummary'];
+  const cloverProofFields = ['lastRecurringPlanSyncAt', 'lastRecurringPlanSyncError', 'lastRecurringPlanSyncWarning', 'lastRecurringMemberSyncWarning', 'lastRecurringPlanSyncDegradedAt', 'lastRecurringPlanSyncDegradedStatus', 'lastRecurringPlanSyncPreservedPlans', 'lastRecurringPlanSyncPreservedMembers', 'lastRecurringRosterCoverage', 'lastRecurringVerifiedSubscriptionIds', 'lastRecurringVerifiedSubscriptionIdsAt', 'lastRecurringVerifiedConfigurationFingerprint', 'lastCompleteRecurringRosterEvidence', 'lastRecurringSubscriptionSyncSource', 'lastRecurringPlanSyncSource', 'lastRecurringPlanSyncPaths', 'lastRecurringPlanSyncDetails', 'recurringPlanSummary'];
   const preserveFields = (prior, candidate, fields) => {
     const safe = { ...(candidate || {}) };
     fields.forEach(field => {
@@ -10701,13 +10701,26 @@ function operationalAlertEvidence(data = {}) {
 function cloverRecurringMigrationReadiness(data = {}) {
   const clover = data.integrations && data.integrations.clover || {};
   const inactiveStatus = /removed|returned|history|archived|ended|inactive|cancelled|canceled|expired|disabled/;
-  const rows = allRecurringRows(data).filter(row => {
+  const requiresCutover = row => {
     if (!row || inactiveStatus.test(String(row.status || '').toLowerCase())) return false;
     const migration = stripeMigration.migrationRecord(row);
     if ([stripeMigration.STATES.CLOVER_DISABLED, stripeMigration.STATES.STRIPE_ACTIVE, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED].includes(migration.state)) return false;
     const provider = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover');
     return provider === 'clover' && stripeMigration.hasCloverSource(row);
-  });
+  };
+  const localRows = (Array.isArray(data.recurringPayments) ? data.recurringPayments : []).filter(requiresCutover);
+  const localSubscriptionIds = new Set(localRows.map(row => String(row.cloverSubscriptionId || row.subscriptionId || '').trim()).filter(Boolean));
+  const providerRows = (Array.isArray(clover.recurringPlanMembers) ? clover.recurringPlanMembers : [])
+    .filter(requiresCutover)
+    .filter(row => {
+      const subscriptionId = String(row.cloverSubscriptionId || row.subscriptionId || '').trim();
+      return !subscriptionId || !localSubscriptionIds.has(subscriptionId);
+    });
+  // The provider roster and local autopay table often mirror the same exact
+  // Clover subscription. Prefer the local operating row for readiness, while
+  // retaining every duplicated local row so a real ownership conflict still
+  // fails closed.
+  const rows = [...localRows, ...providerRows];
   const rowEligibility = rows.map(row => ({
     recurringPaymentId: String(row.id || '').trim(),
     customer: String(row.customer || row.customerName || '').trim(),
@@ -10732,6 +10745,13 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const warning = String(clover.lastRecurringPlanSyncWarning || clover.lastRecurringMemberSyncWarning || '').trim();
   const providerError = String(clover.lastRecurringPlanSyncError || '').trim();
   const coverage = clover.lastRecurringRosterCoverage && typeof clover.lastRecurringRosterCoverage === 'object' ? clover.lastRecurringRosterCoverage : {};
+  const lastCompleteRoster = clover.lastCompleteRecurringRosterEvidence && typeof clover.lastCompleteRecurringRosterEvidence === 'object'
+    ? clover.lastCompleteRecurringRosterEvidence
+    : {};
+  const providerCoverageGap = coverage.complete === false
+    ? quarantinedRows.filter(item => item.code === 'clover_subscription_not_in_verified_roster')
+    : [];
+  const actionableQuarantine = quarantinedRows.filter(item => !providerCoverageGap.includes(item));
   const degraded = currentDegradedFailure || !!providerError;
   const ageMs = Number.isFinite(checkedAtMs) ? Math.max(0, Date.now() - checkedAtMs) : Infinity;
   const fresh = Number.isFinite(checkedAtMs) && checkedAtMs <= Date.now() + 5 * 60 * 1000 && ageMs <= WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS;
@@ -10771,7 +10791,17 @@ function cloverRecurringMigrationReadiness(data = {}) {
     providerError,
     eligibleRows: eligibleRows.length,
     quarantinedRows: quarantinedRows.length,
-    quarantine: quarantinedRows.slice(0, 25),
+    quarantine: actionableQuarantine.slice(0, 25),
+    actionableQuarantinedRows: actionableQuarantine.length,
+    providerCoverageGapRows: providerCoverageGap.length,
+    lastCompleteRosterAt: String(lastCompleteRoster.checkedAt || ''),
+    lastCompleteRosterSubscriptionIds: Array.isArray(lastCompleteRoster.verifiedSubscriptionIds)
+      ? new Set(lastCompleteRoster.verifiedSubscriptionIds.map(value => String(value || '').trim()).filter(Boolean)).size
+      : 0,
+    lastCompleteRosterConfigurationMatched: evidenceFingerprintMatches(
+      String(lastCompleteRoster.configurationFingerprint || ''),
+      expectedConfigurationFingerprint
+    ),
     reviewRequired,
     fullRosterReady,
     requiresFreshRoster,
@@ -14648,6 +14678,17 @@ async function syncCloverRecurringPlans(data) {
     preservedSavedRoster: !!(countWarning || providerCoverageIncomplete),
     complete: !countWarning && !providerCoverageIncomplete && reconciledNamedMembers.length === providerSubscriptionRows
   };
+  if (data.integrations.clover.lastRecurringRosterCoverage.complete) {
+    data.integrations.clover.lastCompleteRecurringRosterEvidence = {
+      checkedAt: rosterCheckedAt,
+      configurationFingerprint: data.integrations.clover.lastRecurringVerifiedConfigurationFingerprint,
+      verifiedSubscriptionIds: data.integrations.clover.lastRecurringVerifiedSubscriptionIds.slice(),
+      expectedActiveSubscriptions,
+      providerSubscriptionRows,
+      resolvedCustomerNames: reconciledNamedMembers.length,
+      subscriptionSource: merchantSubscriptionsLoaded ? 'Merchant-wide subscriptions' : 'Per-plan fallback'
+    };
+  }
   if (countWarning) {
     clearCloverRecurringDegradedStatus(data.integrations.clover);
     data.integrations.clover.lastRecurringPlanSyncAt = new Date().toISOString();
