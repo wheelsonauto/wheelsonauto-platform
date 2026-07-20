@@ -223,7 +223,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-readiness-audit-230';
+const ASSET_VERSION = 'platform-20260720-assignment-review-231';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -21778,23 +21778,27 @@ const server = http.createServer(async (req, res) => {
       const review = assignmentConflictReview(data, vehicleId);
       if (!review) return json(res, 404, { ok: false, error: 'Vehicle not found.' });
       const canonicalKey = normKey(payload.canonicalCustomer);
-      const aliasKey = normKey(payload.aliasCustomer);
-      if (!canonicalKey || !aliasKey || canonicalKey === aliasKey) return json(res, 400, { ok: false, error: 'Choose two different names from this vehicle assignment review.' });
+      const requestedAliases = (Array.isArray(payload.aliasCustomers) ? payload.aliasCustomers : [payload.aliasCustomer])
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .filter((value, index, values) => values.findIndex(saved => normKey(saved) === normKey(value)) === index)
+        .filter(value => normKey(value) !== canonicalKey);
+      if (!canonicalKey || !requestedAliases.length) return json(res, 400, { ok: false, error: 'Choose a primary customer and at least one other name from this vehicle assignment review.' });
       const canonicalClaim = review.claims.find(row => normKey(row.customer) === canonicalKey);
-      const aliasClaim = review.claims.find(row => normKey(row.customer) === aliasKey);
-      if (!canonicalClaim || !aliasClaim) return json(res, 400, { ok: false, error: 'Both names must be active claims for this exact vehicle.' });
-      if (sameApprovedAssignmentCustomer(data, vehicleId, canonicalClaim.customer, aliasClaim.customer)) {
-        return json(res, 409, { ok: false, error: 'Those names are already treated as the same customer for this vehicle.' });
-      }
+      const aliasClaims = requestedAliases.map(name => review.claims.find(row => normKey(row.customer) === normKey(name)));
+      if (!canonicalClaim || aliasClaims.some(claim => !claim)) return json(res, 400, { ok: false, error: 'Every checked name must be an active claim for this exact vehicle.' });
+      const newAliasClaims = aliasClaims.filter(claim => !sameApprovedAssignmentCustomer(data, vehicleId, canonicalClaim.customer, claim.customer));
+      if (!newAliasClaims.length) return json(res, 409, { ok: false, error: 'Every checked name is already treated as this same customer for the vehicle.' });
       const now = new Date().toISOString();
+      const linkedNames = [canonicalClaim.customer].concat(newAliasClaims.map(claim => claim.customer));
       data.assignmentCustomerAliases = Array.isArray(data.assignmentCustomerAliases) ? data.assignmentCustomerAliases : [];
       data.assignmentCustomerAliases.unshift({
         id: 'assignment-alias-' + crypto.randomBytes(8).toString('hex'),
         organizationId: review.vehicle.organizationId || MAIN_ORG_ID,
         vehicleId,
         canonicalCustomer: canonicalClaim.customer,
-        aliasCustomer: aliasClaim.customer,
-        aliases: [canonicalClaim.customer, aliasClaim.customer],
+        aliasCustomer: newAliasClaims[0].customer,
+        aliases: linkedNames,
         reason: String(payload.reason || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 500),
         active: true,
         createdAt: now,
@@ -21805,12 +21809,12 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, 'Vehicle assignment names confirmed as same customer', [
         review.vehicle.name,
         review.vehicle.vin ? 'VIN ' + review.vehicle.vin : '',
-        canonicalClaim.customer + ' = ' + aliasClaim.customer,
+        linkedNames.join(' = '),
         'No customer, card, payment, or recurring record was merged or charged.'
       ].filter(Boolean));
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, review: assignmentConflictReview(data, vehicleId), synced });
+      return json(res, 200, { ok: true, review: assignmentConflictReview(data, vehicleId), savedCustomerNames: linkedNames, synced });
       }
       const assignmentAliasRevokeMatch = /^\/api\/vehicles\/([^/]+)\/assignment-alias\/([^/]+)\/revoke$/.exec(url.pathname);
       if (assignmentAliasRevokeMatch && req.method === 'POST') {

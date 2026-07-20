@@ -626,8 +626,8 @@ function ownerSmoke() {
     sharedSignals: [],
     providerSummary: {}
   });
-  assert(multiIdentityResolver.includes('<option value="Customer Name" selected>') && multiIdentityResolver.includes('<option value="Old Spelling" selected>'), 'A multi-identity assignment review must automatically select the next pair that is not already connected.');
-  assert(multiIdentityResolver.includes('"saved" means that pair is recorded and the review continues') && multiIdentityResolver.includes('Resolved name-link audit') && multiIdentityResolver.includes('Save this same-person pair'), 'The assignment resolver must explain pairwise progress and label saved links as audit history instead of unresolved conflicts.');
+  assert(multiIdentityResolver.includes('<option value="Customer Name" selected>') && multiIdentityResolver.includes('class="assignment-alias-choice"') && multiIdentityResolver.includes('data-customer="PROVIDER123"') && multiIdentityResolver.includes('data-customer="Old Spelling"'), 'A multi-identity assignment review must show one primary customer and a checked-name list that can resolve all verified same-person references in one save.');
+  assert(multiIdentityResolver.includes('Choose one primary name, check every other name/reference that belongs to that same person, and save once') && multiIdentityResolver.includes('Resolved name-link audit') && multiIdentityResolver.includes('Save checked names as one customer'), 'The assignment resolver must replace confusing pair-by-pair progress with one explicit checked-name save while retaining audit history.');
   assert(multiIdentityResolver.includes('Names or references that belong to the current renter') && multiIdentityResolver.includes('assignment-transfer-keep') && multiIdentityResolver.includes('Every unchecked identity on this exact car moves to history'), 'The renter-transfer resolver must explicitly separate kept current-renter aliases from old renter identities.');
   const assignmentClaimActions = context.assignmentConflictEvidenceHtml({
     claims: [

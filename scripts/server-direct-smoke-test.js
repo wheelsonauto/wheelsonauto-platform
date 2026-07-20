@@ -1224,27 +1224,12 @@ async function main() {
       cookie: ownerCookie,
       json: {
         canonicalCustomer: 'Direct Conflict One',
-        aliasCustomer: 'Direct Conflict Two',
-        reason: 'Controlled direct smoke spelling review',
+        aliasCustomers: ['Direct Conflict Two', 'Direct Conflict Three'],
+        reason: 'Controlled direct smoke grouped spelling review',
         confirmation: 'SAME_CUSTOMER_FOR_THIS_VEHICLE'
       }
     });
-    assert(aliasSaved.status === 200 && aliasSaved.json && aliasSaved.json.ok, 'Owner should be able to confirm a same-customer name link for one conflicted vehicle.');
-    const aliasPartiallyResolvedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    const aliasPartiallyResolvedVehicle = (aliasPartiallyResolvedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
-    assert(aliasPartiallyResolvedVehicle && /Direct Conflict Three/.test(aliasPartiallyResolvedVehicle.assignmentConflict || ''), 'Saving one same-customer pair must leave the third identity visible instead of falsely clearing the conflict.');
-    const aliasPartiallyResolvedReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-conflict/assignment-conflict', { cookie: ownerCookie });
-    assert(aliasPartiallyResolvedReview.status === 200 && aliasPartiallyResolvedReview.json.review.aliases.length === 1 && aliasPartiallyResolvedReview.json.review.identities.length === 3, 'The continued review must preserve the first audit link and all three original identities.');
-    const aliasSecondPairSaved = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias', {
-      cookie: ownerCookie,
-      json: {
-        canonicalCustomer: 'Direct Conflict One',
-        aliasCustomer: 'Direct Conflict Three',
-        reason: 'Controlled direct smoke second spelling review',
-        confirmation: 'SAME_CUSTOMER_FOR_THIS_VEHICLE'
-      }
-    });
-    assert(aliasSecondPairSaved.status === 200 && aliasSecondPairSaved.json && aliasSecondPairSaved.json.ok && !String(aliasSecondPairSaved.json.review.vehicle.conflict || '').trim(), 'The second confirmed pair should clear the three-name vehicle conflict only after every identity is connected.');
+    assert(aliasSaved.status === 200 && aliasSaved.json && aliasSaved.json.ok && Array.isArray(aliasSaved.json.savedCustomerNames) && aliasSaved.json.savedCustomerNames.length === 3 && !String(aliasSaved.json.review.vehicle.conflict || '').trim(), 'Owner should be able to confirm every checked same-customer name in one auditable save.');
     const aliasResolvedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const aliasResolvedVehicle = (aliasResolvedState.json.vehicles || []).find(row => row.id === 'veh-direct-assignment-conflict');
     const aliasRecurringOne = (aliasResolvedState.json.recurringPayments || []).find(row => row.id === 'rec-direct-conflict-one');
@@ -1253,9 +1238,9 @@ async function main() {
     assert(aliasResolvedVehicle && !aliasResolvedVehicle.assignmentConflict, 'A fully connected three-name review should clear this vehicle conflict without guessing at any other vehicle.');
     assert(aliasRecurringOne && aliasRecurringOne.customer === 'Direct Conflict One' && aliasRecurringTwo && aliasRecurringTwo.customer === 'Direct Conflict Two' && aliasRecurringThree && aliasRecurringThree.customer === 'Direct Conflict Three', 'Resolving multiple name variations must keep all original customer/payment records distinct and untouched.');
     const savedAliases = (aliasResolvedState.json.assignmentCustomerAliases || []).filter(row => row.vehicleId === 'veh-direct-assignment-conflict' && row.active !== false);
-    assert(savedAliases.length === 2, 'Each confirmed pair must persist as a separate, auditable vehicle-scoped record.');
-    const savedAlias = savedAliases.find(row => row.aliasCustomer === 'Direct Conflict Two');
-    assert(savedAlias && savedAlias.id, 'The first confirmed same-customer link must remain individually revocable.');
+    assert(savedAliases.length === 1 && savedAliases[0].aliases.length === 3, 'One checked-name save must persist one auditable vehicle-scoped identity group instead of forcing pair-by-pair work.');
+    const savedAlias = savedAliases[0];
+    assert(savedAlias && savedAlias.id, 'The confirmed same-customer group must remain individually revocable.');
     const aliasRevoked = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-conflict/assignment-alias/' + encodeURIComponent(savedAlias.id) + '/revoke', {
       cookie: ownerCookie,
       json: { confirmation: 'REMOVE_ASSIGNMENT_ALIAS' }
