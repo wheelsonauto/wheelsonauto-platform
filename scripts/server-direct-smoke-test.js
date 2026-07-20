@@ -3618,6 +3618,14 @@ async function main() {
       }
     });
     assert(restoredCutoverDate.status === 200 && restoredCutoverDate.json.cutoverRescheduled === true && restoredCutoverDate.json.stripeCutoverDate === autopayTodayKey, 'Moving the protected cutover back to today must keep both schedule records synchronized for the remaining duplicate-payment test.');
+    const wrongPlanActivation = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-wrong-plan', confirmed: true }
+    });
+    assert(wrongPlanActivation.status === 409 && wrongPlanActivation.json.code === 'clover_subscription_confirmation_mismatch', 'Stripe cutover must reject confirmation for a different Clover recurring subscription.');
+    const wrongPlanState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const wrongPlanRow = wrongPlanState.json.recurringPayments.find(row => row.id === cutoverRecurringId);
+    assert(wrongPlanRow.paymentProvider === 'clover' && wrongPlanRow.stripeMigration.state === 'cutover_scheduled', 'A wrong Clover subscription confirmation must leave the exact plan active on Clover and keep its protected cutover scheduled.');
     const duplicateCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     duplicateCutoverState.json.payments.unshift({
       id: 'direct-cutover-existing-paid',
@@ -3633,7 +3641,7 @@ async function main() {
     assert(duplicateCutoverWrite.status === 200 && duplicateCutoverWrite.json.ok, 'Existing billing-period payment setup failed.');
     const duplicateActivation = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
-      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-clover-sub-cutover', confirmed: true }
     });
     assert(duplicateActivation.status === 409 && /occupies/i.test(duplicateActivation.json.error || ''), 'A paid Clover billing period must block Stripe activation.');
     const processingCutoverState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -3642,7 +3650,7 @@ async function main() {
     assert(processingCutoverWrite.status === 200 && processingCutoverWrite.json.ok, 'Processing billing-period payment setup failed.');
     const processingActivation = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
-      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+      json: { recurringPaymentId: cutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-clover-sub-cutover', confirmed: true }
     });
     assert(processingActivation.status === 409 && /processing.*occupies/i.test(processingActivation.json.error || ''), 'An unresolved Clover billing period must block Stripe activation until reconciliation.');
     const cancelledCutover = await request(server, 'POST', '/api/payment-provider/switch', {
@@ -3814,7 +3822,7 @@ async function main() {
     assert(sharedPlanBScheduled.status === 200 && sharedPlanBScheduled.json.scheduled, 'Plan B should remain independently eligible for a protected cutover.');
     const sharedPlanBActivated = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
-      json: { recurringPaymentId: sharedCutoverPlanBId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+      json: { recurringPaymentId: sharedCutoverPlanBId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-shared-cutover-sub-b', confirmed: true }
     });
     assert(sharedPlanBActivated.status === 200 && sharedPlanBActivated.json.activated === true && sharedPlanBActivated.json.recurring.stripeMigration.state === 'first_stripe_charge_pending', 'A paid transaction explicitly linked to plan A must not block or complete plan B even when both share provider customer IDs.');
 
@@ -3860,7 +3868,7 @@ async function main() {
     assert(!(lockedCutoverState.json.payments || []).some(payment => payment.recurringPaymentId === cleanCutoverRecurringId), 'A provider-migration lock must not create a misleading failed payment transaction.');
     const activatedCutover = await request(server, 'POST', '/api/payment-provider/switch', {
       cookie: ownerCookie,
-      json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, confirmed: true }
+      json: { recurringPaymentId: cleanCutoverRecurringId, paymentProvider: 'stripe', action: 'activate', cloverStoppedConfirmed: true, cloverSubscriptionConfirmation: 'direct-clover-sub-cutover-clean', confirmed: true }
     });
     assert(activatedCutover.status === 200 && activatedCutover.json.activated && activatedCutover.json.paymentProvider === 'stripe', 'Stripe may activate only after the owner confirms Clover has stopped.');
     assert(activatedCutover.json.recurring.stripeMigration.state === 'first_stripe_charge_pending' && activatedCutover.json.recurring.cloverPaymentSource === 'direct-clover-cutover-clean-source', 'Clover records must be retained through the protected first Stripe charge.');

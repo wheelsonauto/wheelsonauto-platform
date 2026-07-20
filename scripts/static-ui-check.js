@@ -335,6 +335,14 @@ assertIncludes('Stripe owner activation review', app + server, [
   'https://dashboard.stripe.com/settings/account',
   'Live launch preflight'
 ]);
+assertIncludes('Exact Clover subscription cutover confirmation', app + server, [
+  'stripeCutoverPlanIdentity',
+  'Exact recurring plan',
+  'providerCloverSubscriptionConfirmation',
+  'cloverSubscriptionConfirmation',
+  'clover_subscription_confirmation_mismatch',
+  'WheelsonAuto left Clover active and did not activate Stripe'
+]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
   'clarifyCoreReadinessLanguage',
   'Core operational check for environment keys',

@@ -164,6 +164,8 @@ async function run() {
     "'/api/webhooks/stripe'",
     "'/api/payment-provider/switch'",
     'cloverStoppedConfirmed',
+    'cloverSubscriptionConfirmation',
+    'clover_subscription_confirmation_mismatch',
     'stripePaymentMethodId',
     'chargeStripeSavedCard',
     'stripeDisputeEvidencePacket',
@@ -209,6 +211,7 @@ async function run() {
     assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);
   });
   assert(app.includes('id="rPaymentProvider"'), 'Admin recurring setup must expose a Clover/Stripe provider choice.');
+  assert(app.includes('stripeCutoverPlanIdentity') && app.includes('providerCloverSubscriptionConfirmation') && app.includes('Exact recurring plan'), 'Admin Stripe cutover must show and require the exact Clover plan identity.');
   assert(app.includes("r.stripeCustomerId&&r.stripePaymentMethodId"), 'Admin charge readiness must recognize only complete Stripe saved-card records.');
   assert(app.includes('stripe card update required'), 'Admin payment status must clearly show when Stripe requires a customer card update.');
   assert(nativeSite.includes("recurring.stripeCustomerId && recurring.stripePaymentMethodId"), 'Public Stripe onboarding must require both Stripe customer and reusable payment-method references.');
