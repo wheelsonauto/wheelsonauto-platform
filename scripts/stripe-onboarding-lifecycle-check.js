@@ -268,6 +268,8 @@ async function main() {
   process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'StripeLifecycleOwner123!';
   process.env.WOA_SESSION_SECRET = 'stripe-lifecycle-session-secret';
   process.env.WOA_PAYMENT_PROVIDER = 'stripe';
   process.env.WOA_ONBOARDING_PAYMENT_PROVIDER = 'stripe';
@@ -325,7 +327,7 @@ async function main() {
     const customerCookie = String(customerLogin.cookie).split(';')[0];
     assert(customerLogin.status === 302 && customerCookie.includes('woa_customer_session='), 'The application must immediately create a secure customer login.');
 
-    const ownerLogin = await request(server, 'POST', '/login', { form: { pin: '7319' } });
+    const ownerLogin = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'StripeLifecycleOwner123!' } });
     const ownerCookie = String(ownerLogin.cookie).split(';')[0];
     assert(ownerLogin.status === 302 && ownerCookie.includes('woa_session='), 'The owner must be able to enter the review workflow.');
     const link = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId, paymentProvider: 'stripe' } });

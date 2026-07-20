@@ -113,6 +113,8 @@ async function main() {
   process.env.TZ = 'America/New_York';
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'StripeTimeoutOwner123!';
   process.env.WOA_SESSION_SECRET = 'stripe-timeout-session-secret';
   process.env.NODE_ENV = 'test';
   process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
@@ -176,7 +178,7 @@ async function main() {
   delete require.cache[require.resolve('../server.js')];
   const { server } = require('../server.js');
   try {
-    const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
+    const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'StripeTimeoutOwner123!' } });
     const ownerCookie = String(login.cookie).split(';')[0];
     assert(login.status === 302 && ownerCookie.includes('woa_session='), 'The owner test login must create a signed staff session.');
 

@@ -82,6 +82,8 @@ async function main() {
       ...process.env,
       DATA_DIR: dataDir,
       WOA_ADMIN_PIN: adminPin,
+      WOA_ADMIN_USERNAME: 'owner',
+      WOA_ADMIN_PASSWORD: 'SmokeOwnerPassword123!',
       WOA_STAR_AI_ENABLED: '1',
       PORT: String(port),
       HOST: '127.0.0.1',
@@ -101,7 +103,7 @@ async function main() {
     assert(loginPage.status === 200, 'Login page did not load.');
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
 
-    const ownerCookie = await login(base, { pin: adminPin });
+    const ownerCookie = await login(base, { username: 'owner', password: 'SmokeOwnerPassword123!' });
     const state = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
     assert(state.status === 200 && state.json, 'Owner could not read app state.');
 

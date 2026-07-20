@@ -118,7 +118,7 @@ if (!settingsFocused || !settingsAccountPanel) fail('Could not find focused role
 if (!/allowed=isOwner\(\)\?\['Connections','Staff','CustomerLogins','Security','Website'\]:\['Account'\]/.test(settingsFocused)) {
   fail('Non-owner Settings must be restricted to the Account tab.');
 }
-['Owner login & security', 'Set username & password', 'Disable PIN login', 'Account access', 'Reset password', '/logout'].forEach(text => {
+['Owner login & security', 'Set username & password', 'Password protected', 'Account recovery', 'Account access', 'Reset password', '/logout'].forEach(text => {
   if (!settingsAccountPanel.includes(text)) fail('Account settings panel is missing: ' + text);
 });
 if (!settingsFocused.includes("if(selected==='Security')body+=settingsAccountPanel()+roleAccessMatrix()+auditTrailPanel()")) {
@@ -169,20 +169,17 @@ assertExcludes('Manager command items', strings(managerCommandItems), ['charge-s
 assertIncludes('Mechanic command board', mechanicCommandBoard, ['Mechanic shop queue', 'No customer messaging or money tools', 'mechanic-command-board']);
 assertIncludes('Mechanic command items', mechanicCommandItems, ['Mechanic Portal', 'Maintenance', 'Fleet', 'Claims & Issues']);
 assertExcludes('Mechanic command items', strings(mechanicCommandItems), ['Messages', 'Reports', 'Payments', 'charge-saved-card', 'send-pay-link', 'compose-message', 'Text']);
-if (!/STAFF_PIN_LOGIN_ENABLED/.test(server) || !/if \(!STAFF_PIN_LOGIN_ENABLED\) return null;/.test(server)) fail('Staff PIN login should be disabled unless explicitly enabled.');
-if (!/authPolicy = require\('\.\/auth-policy'\)/.test(server) || !/WOA_OWNER_PIN_FALLBACK_ENABLED/.test(server)) {
-  fail('Owner authentication policy must be loaded and explicitly configurable.');
-}
+if (/function findStaffByPin/.test(server) || /form\.get\('pin'\)/.test(server)) fail('No staff or owner PIN login path may remain.');
+if (!/authPolicy = require\('\.\/auth-policy'\)/.test(server) || !/accountRecovery = require\('\.\/account-recovery'\)/.test(server)) fail('Owner password policy and account recovery must both be loaded.');
 const ownerLoginMatches = finalFunctionSlice(server, 'ownerLoginMatches');
 const staffLoginPage = finalFunctionSlice(server, 'loginPage');
 const productionInfrastructurePreflight = finalFunctionSlice(server, 'productionInfrastructurePreflight');
-if (!/ownerPinLoginAllowed\(data\)/.test(ownerLoginMatches) || !/ownerPinLoginAllowed\(data\)/.test(staffLoginPage)) {
-  fail('Owner PIN fallback must be policy-gated in both sign-in behavior and the login UI.');
-}
+if (!/!enteredUser \|\| !password \|\| enteredUser !== wantedUser/.test(ownerLoginMatches)) fail('Owner login must require the exact username and password.');
+if (!/name="username" autocomplete="username" required/.test(staffLoginPage) || !/name="password" type="password" autocomplete="current-password" required/.test(staffLoginPage) || /Access PIN/.test(staffLoginPage)) fail('Staff login must require both fields and expose no PIN input.');
 if (!/ownerAuthentication\.passwordLoginConfigured/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginStrong/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.passwordLoginVerified/.test(productionInfrastructurePreflight) || !/ownerAuthentication\.pinFallbackAllowed/.test(productionInfrastructurePreflight)) {
   fail('The production Stripe launch gate must require a verified password-backed owner sign-in with owner PIN fallback disabled.');
 }
-if (!/\/api\/account\/owner-access\/disable-pin/.test(server) || !/Only the owner can disable owner recovery PIN access/.test(server)) fail('Owner PIN cutover must remain an explicit owner-only API action.');
+if (!/\/api\/account\/owner-access\/disable-pin/.test(server) || !/PIN login has been permanently removed/.test(server)) fail('The retired owner PIN endpoint must fail closed.');
 if (!/cloverRecurringMigrationReadiness/.test(productionInfrastructurePreflight) || !/fresh Clover recurring roster for controlled cutover/.test(productionInfrastructurePreflight)) {
   fail('The production Stripe launch gate must require a fresh complete Clover recurring roster before cutover.');
 }
@@ -190,8 +187,8 @@ if (!/providerProofCollectionMissing/.test(productionInfrastructurePreflight) ||
   fail('The production launch preflight must distinguish safe provider-proof collection and reject maintenance mode as final launch readiness.');
 }
 if (!/staffLoginReady/.test(app) || !/Needs password/.test(accessCommandPanel)) fail('Staff access UI should focus on password-backed staff logins.');
-if (!/Customer password help requested/.test(server) || !/Staff password help requested/.test(server)) {
-  fail('Password help requests should be owner audit logged.');
+if (!/Password recovery code sent/.test(server) || !/Password recovered by email code/.test(server)) {
+  fail('Account-bound password recovery must be audit logged.');
 }
 
 if (!/role === 'mechanic' && pathname\.startsWith\('\/api\/messages'\)/.test(apiAllowedForUser)) fail('Mechanic API message routes are not blocked.');

@@ -10,6 +10,7 @@ const stateRepository = require('../state-repository.js');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
+const adminPassword = 'DirectOwnerBootstrap123!';
 
 function fail(message) {
   throw new Error(message);
@@ -173,6 +174,9 @@ async function main() {
   process.env.NODE_ENV = 'test';
   process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
   process.env.WOA_ADMIN_PIN = adminPin;
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = adminPassword;
+  process.env.WOA_OWNER_PIN_FALLBACK_ENABLED = '0';
   process.env.WOA_AUTO_SYNC_MS = '3600000';
   process.env.WOA_AUTOPAY_MS = '3600000';
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
@@ -787,30 +791,30 @@ async function main() {
     assert(unauthenticatedState.status === 401 && unauthenticatedState.json && unauthenticatedState.json.error === 'Authentication required.', 'Protected APIs must return a JSON 401 instead of rendering the staff login page.');
     assert(unauthenticatedState.headers['Cache-Control'] === 'no-store', 'Authenticated JSON APIs must not be cached by browsers or intermediaries.');
 
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       const badLogin = await request(server, 'POST', '/login', { form: { username: 'direct-rate-limit-staff', password: 'wrong-' + i } });
       assert(badLogin.status === 401, 'Bad staff login should fail before throttle limit.');
     }
     const throttledStaffLogin = await request(server, 'POST', '/login', { form: { username: 'direct-rate-limit-staff', password: 'still-wrong' } });
-    assert(throttledStaffLogin.status === 429 && throttledStaffLogin.text.includes('Too many failed login attempts') && String(throttledStaffLogin.headers['Retry-After'] || '').length, 'Repeated bad staff login should be throttled with retry guidance.');
-    for (let i = 0; i < 6; i += 1) {
+    assert(throttledStaffLogin.status === 303 && String(throttledStaffLogin.location || '').startsWith('/forgot?locked=1'), 'The fifth bad staff login should be routed to email recovery.');
+    for (let i = 0; i < 4; i += 1) {
       const badCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-rate-limit-customer', password: 'wrong-' + i } });
       assert(badCustomerLogin.status === 401, 'Bad customer login should fail before throttle limit.');
     }
     const throttledCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-rate-limit-customer', password: 'still-wrong' } });
-    assert(throttledCustomerLogin.status === 429 && throttledCustomerLogin.text.includes('Too many failed login attempts') && String(throttledCustomerLogin.headers['Retry-After'] || '').length, 'Repeated bad customer login should be throttled with retry guidance.');
-    for (let i = 0; i < 6; i += 1) {
+    assert(throttledCustomerLogin.status === 303 && String(throttledCustomerLogin.location || '').startsWith('/customer/forgot?locked=1'), 'The fifth bad customer login should be routed to email recovery.');
+    for (let i = 0; i < 4; i += 1) {
       const spoofedForwardedLogin = await request(server, 'POST', '/login', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.20' }, form: { username: 'direct-forwarded-rate-limit', password: 'wrong-' + i } });
       assert(spoofedForwardedLogin.status === 401, 'Forwarded-chain login attempt should fail before the throttle limit.');
     }
     const throttledForwardedLogin = await request(server, 'POST', '/login', { headers: { 'x-forwarded-for': '192.0.2.200, 198.51.100.20' }, form: { username: 'direct-forwarded-rate-limit', password: 'still-wrong' } });
-    assert(throttledForwardedLogin.status === 429, 'Login throttling must use the trusted end of the forwarded chain instead of a spoofable first address.');
+    assert(throttledForwardedLogin.status === 303 && String(throttledForwardedLogin.location || '').startsWith('/forgot?locked=1'), 'Login throttling must use the trusted end of the forwarded chain and route the fifth failure to recovery.');
     const oversizedStaffLogin = await request(server, 'POST', '/login', { form: { username: 'oversized-staff', password: 'x'.repeat(70 * 1024) } });
     assert(oversizedStaffLogin.status === 413, 'Oversized staff login bodies must be rejected before authentication work.');
     const oversizedCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: 'oversized-customer', password: 'x'.repeat(70 * 1024) } });
     assert(oversizedCustomerLogin.status === 413, 'Oversized customer login bodies must be rejected before authentication work.');
 
-    const ownerCookie = await login(server, { pin: adminPin });
+    const ownerCookie = await login(server, { username: 'owner', password: adminPassword });
     const crossOriginOwnerWrite = await request(server, 'POST', '/api/tasks', {
       cookie: ownerCookie,
       headers: { origin: 'https://malicious.example' },
@@ -1393,7 +1397,7 @@ async function main() {
     });
     assert(mechanic.status === 200 && mechanic.json && mechanic.json.ok, 'Owner could not create mechanic: ' + mechanic.status + ' ' + mechanic.text.slice(0, 240));
     const staffPinLoginAttempt = await request(server, 'POST', '/login', { form: { pin: '7811' } });
-    assert(staffPinLoginAttempt.status === 401, 'Staff PIN login should be disabled by default; staff should use username/password.');
+    assert(staffPinLoginAttempt.status === 400, 'Staff PIN-only login must be rejected because both username and password are required.');
 
     const manager = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
@@ -1427,14 +1431,9 @@ async function main() {
     const managerBeforeResetCookie = await login(server, { username: 'direct-manager', password: 'DirectManager123!' });
 
     const staffForgotPage = await request(server, 'GET', '/forgot');
-    assert(staffForgotPage.status === 200 && staffForgotPage.text.includes('Reset staff access'), 'Staff forgot-password page did not render.');
-    const staffResetRequest = await request(server, 'POST', '/forgot', { form: { identity: 'direct-manager' } });
-    assert(staffResetRequest.status === 200 && staffResetRequest.text.includes('request was sent'), 'Staff reset request did not save.');
-    const staffResetState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    assert(staffResetState.json.messages.some(message => message.event === 'staff_password_reset' && message.staffAccountId === 'direct-manager'), 'Staff reset request should be saved in Messages.');
-    assert((staffResetState.json.auditLogs || []).some(row => row.action === 'Staff password help requested' && String(row.details || '').includes('Direct Manager') && String(row.details || '').includes('Matched staff account')), 'Staff reset request should be owner audit logged.');
-    const resetRequestedStaff = (staffResetState.json.staffAccounts || []).find(account => account.id === 'direct-manager');
-    assert(resetRequestedStaff && resetRequestedStaff.passwordResetStatus === 'Requested' && resetRequestedStaff.passwordResetRequestedAt, 'Staff reset request should mark the staff login for owner follow-up.');
+    assert(staffForgotPage.status === 200 && staffForgotPage.text.includes('Reset staff password') && staffForgotPage.text.includes('one-time code'), 'Staff email recovery page did not render.');
+    const staffResetRequest = await request(server, 'POST', '/forgot', { form: { username: 'direct-manager' } });
+    assert(staffResetRequest.status === 503 && staffResetRequest.text.includes('recovery email could not be sent'), 'Non-transactional test mode must fail closed instead of pretending a staff recovery email was sent.');
     const resetManagerPassword = await request(server, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
       json: {
@@ -1776,7 +1775,7 @@ async function main() {
     const managerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: managerCookie });
     assert(managerLaunchPreflight.status === 403, 'Manager must not read the owner-only Stripe launch preflight or its infrastructure evidence.');
     const managerOwnerPinCutover = await request(server, 'POST', '/api/account/owner-access/disable-pin', { cookie: managerCookie, json: { currentPassword: 'DirectManager456!', confirmation: 'DISABLE PIN', acknowledged: true } });
-    assert(managerOwnerPinCutover.status === 403, 'Manager must not change owner recovery PIN access.');
+    assert(managerOwnerPinCutover.status === 410 && /permanently removed/i.test(managerOwnerPinCutover.json.error || ''), 'The retired PIN endpoint must fail closed for every role.');
     const ownerLaunchPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
     assert(ownerLaunchPreflight.status === 200 && ownerLaunchPreflight.json, 'Owner must be able to read the controlled Stripe launch preflight.');
     assert(ownerLaunchPreflight.json.launchStage === 'foundation_blocked' && ownerLaunchPreflight.json.providerProofCollection && ownerLaunchPreflight.json.providerProofCollection.ready === false, 'JSON development state must be identified as a foundation blocker instead of an ambiguous provider-proof failure.');
@@ -2318,7 +2317,6 @@ async function main() {
     assert(ownerReport.text.includes('Session signing secret') && ownerReport.text.includes('WOA_SESSION_SECRET'), 'Owner deep report should include the stable signed-session secret setup row.');
     assert(ownerReport.text.includes('login-ready customer portal account'), 'Owner deep report should treat draft customer portal records without passwords as unfinished access.');
     assert(ownerReport.text.includes('Possible match Direct Dispute Customer') && ownerReport.text.includes('DIRECTDISPUTEVIN') && ownerReport.text.includes('Tag DIR-DSP') && ownerReport.text.includes('Phone 3135550199') && ownerReport.text.includes('Email direct-dispute-customer@example.com'), 'Owner deep report should include possible dispute customer, vehicle, and contact evidence.');
-    assert(ownerReport.text.includes('staff_password_reset') && ownerReport.text.includes('Staff login direct-manager'), 'Owner deep report should include safe staff reset/help communication rows.');
     ['DirectManager123!', 'DirectManager456!', 'DirectCustomer123!', 'DirectCustomer456!', 'passwordHash', 'passwordSalt', 'sourceToken', 'paymentSource'].forEach(secret => {
       assert(!ownerReport.text.includes(secret), 'Owner deep report should not expose secret material: ' + secret);
     });
@@ -2379,15 +2377,11 @@ async function main() {
     assert(customerLoginPage.status === 200 && customerLoginPage.text.includes('My WheelsonAuto'), 'Customer login page did not render.');
     assert(customerLoginPage.text.includes('Forgot password?'), 'Customer login should include reset help.');
     const customerForgotPage = await request(server, 'GET', '/customer/forgot');
-    assert(customerForgotPage.status === 200 && customerForgotPage.text.includes('Reset access'), 'Customer forgot page did not render.');
+    assert(customerForgotPage.status === 200 && customerForgotPage.text.includes('Reset customer password') && customerForgotPage.text.includes('one-time code'), 'Customer forgot page did not render.');
 
-    const customerResetRequest = await request(server, 'POST', '/customer/forgot', { form: { identity: 'direct-customer' } });
-    assert(customerResetRequest.status === 200 && customerResetRequest.text.includes('request was sent'), 'Customer reset request did not save.');
+    const customerResetRequest = await request(server, 'POST', '/customer/forgot', { form: { username: 'direct-customer' } });
+    assert(customerResetRequest.status === 503 && customerResetRequest.text.includes('recovery email could not be sent'), 'Non-transactional test mode must fail closed instead of pretending a customer recovery email was sent.');
     const resetRequestState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    assert(resetRequestState.json.messages.some(message => message.event === 'customer_password_reset' && message.customer === 'Alicia Brown'), 'Customer reset request should be saved in Messages.');
-    assert((resetRequestState.json.auditLogs || []).some(row => row.action === 'Customer password help requested' && String(row.details || '').includes('Alicia Brown') && String(row.details || '').includes('Matched customer account')), 'Customer reset request should be owner audit logged.');
-    const resetRequestedAccount = (resetRequestState.json.customerAccounts || []).find(account => account.id === 'direct-customer-login');
-    assert(resetRequestedAccount && resetRequestedAccount.passwordResetStatus === 'Requested' && resetRequestedAccount.passwordResetRequestedAt, 'Customer reset request should mark the customer portal login for owner follow-up.');
 
     const portalPrivacyState = JSON.parse(JSON.stringify(resetRequestState.json));
     const paidOutsideDueDate = futureDateKey(30);
@@ -4695,7 +4689,7 @@ async function main() {
     const ownerAuditState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const auditLogs = ownerAuditState.json.auditLogs || [];
     const auditActions = auditLogs.map(row => row.action);
-    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Staff password help requested', 'Customer password help requested', 'Customer portal paid-outside reported', 'Customer portal receipt requested', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
+    ['Autopay created', 'Staff account created', 'Staff account updated', 'Customer login created', 'Customer login updated', 'Company account created', 'API provider saved', 'Customer portal paid-outside reported', 'Customer portal receipt requested', 'Customer portal service requested', 'Customer portal issue reported', 'Customer portal document submitted', 'Customer portal card setup link opened', 'Customer portal message received', 'Star AI reply drafted', 'Star AI approval drafted', 'Star AI reply approved'].forEach(action => {
       assert(auditActions.includes(action), 'Owner audit trail should include route action: ' + action);
     });
     assert(auditLogs.some(row => String(row.details || '').includes('Direct Autopay File Customer')), 'Owner audit trail should include customer names for autopay work.');
@@ -4774,7 +4768,7 @@ async function main() {
       cookie: ownerCookie,
       json: {
         username: 'direct-owner',
-        currentPassword: adminPin,
+        currentPassword: adminPassword,
         newPassword: 'DirectOwner456!'
       }
     });

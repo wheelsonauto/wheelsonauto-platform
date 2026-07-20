@@ -23,6 +23,7 @@ const dataBackendCutover = require('./data-backend-cutover');
 const fatalProcessMonitor = require('./fatal-process-monitor');
 const migrationMaintenanceLease = require('./migration-maintenance-lease');
 const vehicleIdentityRepair = require('./vehicle-identity-repair');
+const accountRecovery = require('./account-recovery');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -37,8 +38,6 @@ const LOGIN_USERNAME = process.env.WOA_ADMIN_USERNAME || process.env.WOA_OWNER_U
 const LOGIN_PASSWORD = process.env.WOA_ADMIN_PASSWORD || process.env.WOA_OWNER_PASSWORD || '';
 const LOGIN_PASSWORD_HASH = process.env.WOA_ADMIN_PASSWORD_HASH || process.env.WOA_OWNER_PASSWORD_HASH || '';
 const LOGIN_PASSWORD_SALT = process.env.WOA_ADMIN_PASSWORD_SALT || process.env.WOA_OWNER_PASSWORD_SALT || '';
-const STAFF_PIN_LOGIN_ENABLED = process.env.WOA_STAFF_PIN_LOGIN_ENABLED === '1';
-const WOA_OWNER_PIN_FALLBACK_ENABLED = process.env.WOA_OWNER_PIN_FALLBACK_ENABLED !== '0';
 const SESSION_VALUE = process.env.WOA_SESSION || ('woa-' + crypto.randomBytes(12).toString('hex'));
 const SESSION_SIGNING_SECRET = process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_SIGNING_SECRET_CONFIGURED = !!(process.env.WOA_SESSION_SECRET || process.env.WOA_COOKIE_SECRET);
@@ -223,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260720-owner-security-239';
+const ASSET_VERSION = 'platform-20260720-password-recovery-240';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -333,8 +332,9 @@ const privateArtifactStatus = {
   lastError: '',
   lastResult: null
 };
-const LOGIN_THROTTLE_LIMIT = Math.max(3, Number(process.env.WOA_LOGIN_THROTTLE_LIMIT || 6));
+const LOGIN_THROTTLE_LIMIT = 5;
 const LOGIN_THROTTLE_WINDOW_MS = Math.max(60000, Number(process.env.WOA_LOGIN_THROTTLE_WINDOW_MS || 10 * 60 * 1000));
+const LOGIN_RECOVERY_CODE_TTL_MS = Math.max(5 * 60 * 1000, Number(process.env.WOA_LOGIN_RECOVERY_CODE_TTL_MS || accountRecovery.DEFAULT_CODE_TTL_MS));
 const PUBLIC_APPLICATION_LIMIT = Math.max(3, Number(process.env.WOA_PUBLIC_APPLICATION_LIMIT || 8));
 const PUBLIC_APPLICATION_WINDOW_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_WINDOW_MS || 60 * 60 * 1000));
 const PUBLIC_APPLICATION_DUPLICATE_MS = Math.max(60000, Number(process.env.WOA_PUBLIC_APPLICATION_DUPLICATE_MS || 15 * 60 * 1000));
@@ -7870,7 +7870,6 @@ function sessionCredentialVersion(record = {}, source = 'account', revocationMar
     record.passwordHash || '',
     record.passwordSalt || '',
     record.passwordUpdatedAt || '',
-    record.pinHint || '',
     revocationMarker || ''
   ].map(value => String(value || ''));
   if (!credentialMaterial.some(Boolean)) return '';
@@ -8048,20 +8047,23 @@ function sanitizeMechanicCollectionWrite(key, currentRows = [], incomingRows = [
   if (key === 'maintenance') return scoped.map(scrubMechanicMoneyFields);
   return scoped;
 }
-function findStaffByPin(data, pin) {
-  if (!STAFF_PIN_LOGIN_ENABLED) return null;
-  const clean = String(pin || '').trim();
-  if (!clean) return null;
-  return (data.staffAccounts || []).find(staff => String(staff.status || 'Active').toLowerCase() !== 'disabled' && String(staff.pinHint || '').trim() === clean) || null;
-}
 function findStaffByLogin(data, username, password) {
   const cleanUser = normalizeLogin(username);
   if (!cleanUser || !password) return null;
   return (data.staffAccounts || []).find(staff => {
     if (String(staff.status || 'Active').toLowerCase() === 'disabled') return false;
-    const names = [staff.username, staff.email, staff.name].map(normalizeLogin).filter(Boolean);
+    const names = [staff.username, staff.email].map(normalizeLogin).filter(Boolean);
     return names.includes(cleanUser) && verifyPasswordRecord(password, staff);
   }) || null;
+}
+function findStaffByUsername(data, username) {
+  const cleanUser = normalizeLogin(username);
+  if (!cleanUser) return null;
+  const matches = (data.staffAccounts || []).filter(staff => {
+    if (String(staff.status || 'Active').toLowerCase() === 'disabled') return false;
+    return [staff.username, staff.email].map(normalizeLogin).filter(Boolean).includes(cleanUser);
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 function findStaffByIdentity(data, identity) {
   const key = normalizeLogin(identity);
@@ -8093,7 +8095,6 @@ function cleanStaffAccountPayload(payload, existing = null) {
     phone: String(payload.phone || '').trim(),
     email: String(payload.email || '').trim(),
     status: String(payload.status || existing && existing.status || 'Active').trim(),
-    pinHint: String(payload.pinHint || existing && existing.pinHint || '').trim(),
     notes: String(payload.notes || '').trim(),
     createdAt: existing && existing.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -8166,6 +8167,7 @@ function safeCustomerAccount(account = {}) {
   delete safe.passwordHash;
   delete safe.passwordSalt;
   delete safe.password;
+  delete safe.loginSecurity;
   return safe;
 }
 function customerLoginUser(account) {
@@ -8196,31 +8198,40 @@ function activeCustomerSessionAccount(data, user) {
   return currentVersion && secureCompare(user.credentialVersion, currentVersion) ? account : null;
 }
 function findCustomerAccountByLogin(data, username, password) {
+  const account = findCustomerAccountByUsername(data, username);
+  return account && password && verifyPasswordRecord(password, account) ? account : null;
+}
+function findCustomerAccountByUsername(data, username) {
   const cleanUser = normalizeLogin(username);
   const cleanPhone = phoneKey(username);
-  if (!cleanUser || !password) return null;
-  return (data.customerAccounts || []).find(account => {
+  if (!cleanUser) return null;
+  const matches = (data.customerAccounts || []).filter(account => {
     if (!staffStatusActive(account)) return false;
-    const names = [account.username, account.email, account.phone, account.name, account.customer].map(normalizeLogin).filter(Boolean);
+    const names = [account.username, account.email, account.phone].map(normalizeLogin).filter(Boolean);
     const phones = [account.phone, account.username].map(phoneKey).filter(Boolean);
-    return (names.includes(cleanUser) || cleanPhone && phones.includes(cleanPhone)) && verifyPasswordRecord(password, account);
-  }) || null;
+    return names.includes(cleanUser) || !!(cleanPhone && phones.includes(cleanPhone));
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 function findPendingApplicationByLogin(data, username, password) {
+  const application = findPendingApplicationByUsername(data, username);
+  return application && password && verifyPasswordRecord(password, {
+    passwordHash: application.pendingPasswordHash,
+    passwordSalt: application.pendingPasswordSalt
+  }) ? application : null;
+}
+function findPendingApplicationByUsername(data, username) {
   const cleanUser = normalizeLogin(username);
   const cleanPhone = phoneKey(username);
-  if (!cleanUser || !password) return null;
-  return (data.applications || []).find(application => {
+  if (!cleanUser) return null;
+  const matches = (data.applications || []).filter(application => {
     if (!application.pendingPasswordHash || !application.pendingPasswordSalt) return false;
     if (/denied|rejected|cancelled|removed/i.test(String(application.status || application.stage || ''))) return false;
-    const names = [application.email, application.phone, application.name].map(normalizeLogin).filter(Boolean);
+    const names = [application.email, application.phone].map(normalizeLogin).filter(Boolean);
     const phones = [application.phone].map(phoneKey).filter(Boolean);
-    const identityMatches = names.includes(cleanUser) || cleanPhone && phones.includes(cleanPhone);
-    return identityMatches && verifyPasswordRecord(password, {
-      passwordHash: application.pendingPasswordHash,
-      passwordSalt: application.pendingPasswordSalt
-    });
-  }) || null;
+    return names.includes(cleanUser) || !!(cleanPhone && phones.includes(cleanPhone));
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 function customerPortalAccountForName(data = {}, name = '') {
   const key = normKey(name);
@@ -8585,7 +8596,9 @@ function preserveStaffLoginSecrets(current, incoming) {
       passwordLoginVerifiedSource: current.security.ownerLogin.passwordLoginVerifiedSource || '',
       pinFallbackDisabled: !!current.security.ownerLogin.pinFallbackDisabled,
       pinFallbackDisabledAt: current.security.ownerLogin.pinFallbackDisabledAt || '',
-      pinFallbackDisabledBy: current.security.ownerLogin.pinFallbackDisabledBy || ''
+      pinFallbackDisabledBy: current.security.ownerLogin.pinFallbackDisabledBy || '',
+      loginSecurity: current.security.ownerLogin.loginSecurity || null,
+      email: (next.security.ownerLogin && next.security.ownerLogin.email) || current.security.ownerLogin.email || ''
     };
   }
   if (Array.isArray(next.staffAccounts)) {
@@ -8596,7 +8609,8 @@ function preserveStaffLoginSecrets(current, incoming) {
         ...staff,
         passwordHash: staff.passwordHash || old.passwordHash || '',
         passwordSalt: staff.passwordSalt || old.passwordSalt || '',
-        passwordUpdatedAt: staff.passwordUpdatedAt || old.passwordUpdatedAt || ''
+        passwordUpdatedAt: staff.passwordUpdatedAt || old.passwordUpdatedAt || '',
+        loginSecurity: old.loginSecurity || null
       };
     });
   }
@@ -8608,7 +8622,8 @@ function preserveStaffLoginSecrets(current, incoming) {
         ...account,
         passwordHash: account.passwordHash || old.passwordHash || '',
         passwordSalt: account.passwordSalt || old.passwordSalt || '',
-        passwordUpdatedAt: account.passwordUpdatedAt || old.passwordUpdatedAt || ''
+        passwordUpdatedAt: account.passwordUpdatedAt || old.passwordUpdatedAt || '',
+        loginSecurity: old.loginSecurity || null
       };
     });
   }
@@ -8739,6 +8754,7 @@ function redactStaffSecrets(data) {
   safe.staffAccounts = (safe.staffAccounts || []).map(staff => {
     delete staff.passwordHash;
     delete staff.passwordSalt;
+    delete staff.loginSecurity;
     return staff;
   });
   safe.customerAccounts = (safe.customerAccounts || []).map(safeCustomerAccount);
@@ -8746,6 +8762,7 @@ function redactStaffSecrets(data) {
     delete safe.security.ownerLogin.passwordHash;
     delete safe.security.ownerLogin.passwordSalt;
     delete safe.security.ownerLogin.passwordLoginVerifiedFingerprint;
+    delete safe.security.ownerLogin.loginSecurity;
   }
   if (safe.integrations && safe.integrations.stripe) {
     delete safe.integrations.stripe.lastWebhookConfigurationFingerprint;
@@ -8958,14 +8975,14 @@ function ownerAuthenticationOptions(data) {
     },
     state: data || {},
     productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
-    ownerPinFallbackEnabled: WOA_OWNER_PIN_FALLBACK_ENABLED
+    ownerPinFallbackEnabled: false
   };
 }
 function ownerPinLoginAllowed(data) {
-  return authPolicy.ownerPinFallbackAllowed(ownerAuthenticationOptions(data));
+  return false;
 }
 function ownerAuthenticationReadiness(data) {
-  return authPolicy.ownerAuthenticationReadiness(ownerAuthenticationOptions(data));
+  return { ...authPolicy.ownerAuthenticationReadiness(ownerAuthenticationOptions(data)), pinFallbackAllowed: false };
 }
 function ownerPasswordRecordForSource(data, source) {
   if (source === 'owner_stored') return data && data.security && data.security.ownerLogin || {};
@@ -8989,29 +9006,28 @@ async function recordOwnerPasswordLoginVerification(data, source) {
   await writeData(data);
   return true;
 }
-function ownerLoginMatches(username, password, pin, data = {}) {
-  if (ownerPinLoginAllowed(data) && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return true;
-  if (!password) return false;
+function ownerLoginMatches(username, password, _pin, data = {}) {
   const wantedUser = normalizeLogin(LOGIN_USERNAME || 'admin');
   const enteredUser = normalizeLogin(username || '');
-  if (wantedUser && enteredUser && enteredUser !== wantedUser) return false;
+  if (!enteredUser || !password || enteredUser !== wantedUser) return false;
+  if (LOGIN_PIN && secureCompare(password, LOGIN_PIN)) return false;
+  if (passwordPolicyError(password, 'Password')) return false;
   if (LOGIN_PASSWORD && secureCompare(password, LOGIN_PASSWORD)) return true;
   if (LOGIN_PASSWORD_HASH && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return true;
-  return !LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed(data) && LOGIN_PIN && secureCompare(password, LOGIN_PIN);
+  return false;
 }
 function ownerEnvironmentAuthSource(username, password, pin, data = {}) {
+  const storedOwner = data && data.security && data.security.ownerLogin || {};
+  if (storedOwner.passwordHash) return '';
   if (!ownerLoginMatches(username, password, pin, data)) return '';
-  if (ownerPinLoginAllowed(data) && LOGIN_PIN && pin && secureCompare(pin, LOGIN_PIN)) return 'owner_environment_pin';
   if (LOGIN_PASSWORD && password && secureCompare(password, LOGIN_PASSWORD)) return 'owner_environment_password';
   if (LOGIN_PASSWORD_HASH && password && verifyPasswordRecord(password, { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT })) return 'owner_environment_hash';
-  if (!LOGIN_PASSWORD && !LOGIN_PASSWORD_HASH && ownerPinLoginAllowed(data) && LOGIN_PIN && password && secureCompare(password, LOGIN_PIN)) return 'owner_environment_pin';
   return '';
 }
 function ownerEnvironmentCredentialVersion(source, ownerRecord = {}) {
   const cleanSource = String(source || '');
   let record = {};
-  if (cleanSource === 'owner_environment_pin') record = { passwordHash: LOGIN_PIN };
-  else if (cleanSource === 'owner_environment_password') record = { passwordHash: LOGIN_PASSWORD };
+  if (cleanSource === 'owner_environment_password') record = { passwordHash: LOGIN_PASSWORD };
   else if (cleanSource === 'owner_environment_hash') record = { passwordHash: LOGIN_PASSWORD_HASH, passwordSalt: LOGIN_PASSWORD_SALT };
   return sessionCredentialVersion(record, cleanSource, ownerRecord && ownerRecord.passwordUpdatedAt || '');
 }
@@ -9037,27 +9053,211 @@ function storedOwnerLoginMatches(data, username, password) {
   if (!owner.passwordHash || !password) return false;
   const wantedUser = normalizeLogin(owner.username || LOGIN_USERNAME || 'admin');
   const enteredUser = normalizeLogin(username || '');
-  if (wantedUser && enteredUser && enteredUser !== wantedUser) return false;
+  if (!enteredUser || enteredUser !== wantedUser) return false;
+  if (LOGIN_PIN && secureCompare(password, LOGIN_PIN)) return false;
   return verifyPasswordRecord(password, owner);
 }
 function passwordMatchesCurrentUser(data, user, password) {
   if (!user || !password) return false;
-  if (isOwnerUser(user)) return ownerLoginMatches(user.username || LOGIN_USERNAME || 'admin', password, password, data) || storedOwnerLoginMatches(data, user.username || LOGIN_USERNAME || 'admin', password);
+  if (isOwnerUser(user)) return ownerLoginMatches(user.username || LOGIN_USERNAME || 'admin', password, '', data) || storedOwnerLoginMatches(data, user.username || LOGIN_USERNAME || 'admin', password);
   const staff = (data.staffAccounts || []).find(item => item.id === user.id);
   return !!(staff && verifyPasswordRecord(password, staff));
 }
-function loginPage(message = '', data = {}) {
-  const pinFallback = ownerPinLoginAllowed(data) && !!LOGIN_PIN;
-  const pinFields = pinFallback
-    ? '<div class="login-divider"><span>or</span></div><label>Access PIN<input name="pin" type="password" autocomplete="one-time-code"></label>'
-    : '';
-  const accessHelp = pinFallback
-    ? 'Use username/password for staff accounts. Owner PIN remains a temporary recovery fallback.'
-    : 'Use your username and password. Staff password changes stay owner-approved.';
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label>' + pinFields + '<button>Sign in</button><div class="login-pin">' + accessHelp + '</div><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
+function ownerLoginRecord(data) {
+  data.security = data.security || {};
+  data.security.ownerLogin = data.security.ownerLogin || { username: normalizeLogin(LOGIN_USERNAME || 'admin') };
+  return data.security.ownerLogin;
 }
-function staffForgotPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Staff Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Staff help</div><h1>Reset staff access</h1><p>Send the owner a secure request. Password changes stay owner-approved.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, staff passwords are reset by the owner after account verification.</div><a class="btn" href="/login" style="margin-top:10px;text-align:center">Back to staff login</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
+function ownerUsernameMatches(data, username) {
+  const record = data && data.security && data.security.ownerLogin || {};
+  const wanted = normalizeLogin(record.username || LOGIN_USERNAME || 'admin');
+  return !!wanted && normalizeLogin(username) === wanted;
+}
+function loginSecurityRecord(record = {}) {
+  return record.loginSecurity && typeof record.loginSecurity === 'object' ? record.loginSecurity : {};
+}
+function loginRecordLocked(record = {}) {
+  return accountRecovery.loginLocked(loginSecurityRecord(record));
+}
+function registerAccountLoginFailure(record = {}) {
+  const existing = loginSecurityRecord(record);
+  record.loginSecurity = {
+    ...existing,
+    ...accountRecovery.registerLoginFailure(existing, { maxAttempts: LOGIN_THROTTLE_LIMIT }),
+    passwordRecovery: existing.passwordRecovery || null
+  };
+  return record.loginSecurity;
+}
+function clearAccountLoginFailure(record = {}) {
+  delete record.loginSecurity;
+  return record;
+}
+function staffLoginTarget(data, username) {
+  const ownerMatch = ownerUsernameMatches(data, username);
+  const staff = findStaffByUsername(data, username);
+  if (ownerMatch && staff) return null;
+  if (ownerMatch) {
+    const record = ownerLoginRecord(data);
+    return {
+      kind: 'owner',
+      realm: 'staff',
+      id: 'owner',
+      username: normalizeLogin(record.username || LOGIN_USERNAME || 'admin'),
+      email: String(record.email || WOA_EMAIL_OWNER_NOTIFY || '').trim(),
+      name: 'Owner admin',
+      record
+    };
+  }
+  if (!staff) return null;
+  return {
+    kind: 'staff',
+    realm: 'staff',
+    id: String(staff.id || ''),
+    username: normalizeLogin(staff.username || staff.email),
+    email: String(staff.email || '').trim(),
+    name: staff.name || staff.username || 'Staff',
+    record: staff
+  };
+}
+function customerLoginTarget(data, username) {
+  const account = findCustomerAccountByUsername(data, username);
+  if (account) {
+    return {
+      kind: 'customer',
+      realm: 'customer',
+      id: String(account.id || ''),
+      username: normalizeLogin(account.username || account.email || account.phone),
+      email: String(account.email || '').trim(),
+      name: account.name || account.customer || account.username || 'Customer',
+      record: account
+    };
+  }
+  const application = findPendingApplicationByUsername(data, username);
+  if (!application) return null;
+  return {
+    kind: 'application',
+    realm: 'customer',
+    id: String(application.id || ''),
+    username: normalizeLogin(application.email || application.phone),
+    email: String(application.email || '').trim(),
+    name: application.name || application.email || 'Applicant',
+    record: application
+  };
+}
+function recoveryAccountId(target = {}) {
+  return [target.realm || 'account', target.kind || 'account', target.id || 'missing'].join(':');
+}
+function validRecoveryEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+function recoveryRoleLabel(target = {}) {
+  if (target.kind === 'owner') return 'Owner';
+  if (target.kind === 'customer') return 'Customer portal';
+  if (target.kind === 'application') return 'Customer applicant';
+  return 'Staff';
+}
+async function sendAccountRecoveryCode(data, target) {
+  if (!target || !target.record || !validRecoveryEmail(target.email)) return { sent: false, error: 'That account does not have a verified recovery email.' };
+  const challenge = accountRecovery.createRecoveryChallenge({
+    secret: SESSION_SIGNING_SECRET,
+    accountId: recoveryAccountId(target),
+    ttlMs: LOGIN_RECOVERY_CODE_TTL_MS
+  });
+  let result;
+  try {
+    result = await sendProviderEmail(target.email, 'WheelsonAuto password recovery code', [
+      'A password reset was requested for your WheelsonAuto account.',
+      '',
+      'Recovery code: ' + challenge.code,
+      '',
+      'This code expires in 15 minutes and can only reset the account tied to this email. It cannot sign in by itself.',
+      'If you did not request this, do not share the code and contact WheelsonAuto.'
+    ].join('\n'), {
+      customer: target.name,
+      deliveryId: 'password-recovery-' + target.realm + '-' + target.id + '-' + challenge.record.createdAt,
+      ownerCopy: false,
+      organizationId: target.record.organizationId || MAIN_ORG_ID,
+      messagingSettings: { emailEnabled: true }
+    });
+  } catch (error) {
+    return { sent: false, error: String(error && error.message || error || 'Recovery email could not be sent.') };
+  }
+  if (!result || !result.sent) return { sent: false, error: result && result.message || 'Recovery email provider is not ready.' };
+  const existing = loginSecurityRecord(target.record);
+  target.record.loginSecurity = {
+    ...existing,
+    passwordRecovery: challenge.record,
+    recoveryRequired: true,
+    lockedAt: existing.lockedAt || new Date().toISOString()
+  };
+  appendAuditLog(data, {
+    id: target.id,
+    name: target.name,
+    username: target.username,
+    role: recoveryRoleLabel(target),
+    organizationId: target.record.organizationId || MAIN_ORG_ID
+  }, 'Password recovery code sent', [target.kind, maskEmail(target.email), '15 minute expiry', 'Account-bound one-time code']);
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return { sent: true, maskedEmail: maskEmail(target.email) };
+}
+async function completeAccountRecovery(data, target, code, newPassword) {
+  if (!target || !target.record) return { ok: false, status: 400, error: 'Recovery request is invalid.' };
+  const security = loginSecurityRecord(target.record);
+  const verification = accountRecovery.verifyRecoveryChallenge(security.passwordRecovery || {}, {
+    secret: SESSION_SIGNING_SECRET,
+    accountId: recoveryAccountId(target),
+    code
+  });
+  if (!verification.ok) {
+    target.record.loginSecurity = { ...security, passwordRecovery: verification.record };
+    await protectConcurrentLocalWrites(data, { preferIncoming: true });
+    await writeData(data);
+    const expired = ['expired', 'attempts_exhausted', 'consumed'].includes(verification.reason);
+    return { ok: false, status: expired ? 410 : 400, error: expired ? 'That recovery code expired or is no longer usable. Send a new code.' : 'That recovery code did not match this account.' };
+  }
+  const record = createPasswordRecord(newPassword);
+  if (target.kind === 'owner') {
+    const username = normalizeLogin(target.record.username || target.username || LOGIN_USERNAME || 'admin');
+    Object.assign(target.record, record, {
+      username,
+      passwordLoginVerifiedAt: '',
+      passwordLoginVerifiedFingerprint: '',
+      passwordLoginVerifiedSource: '',
+      pinFallbackDisabled: true,
+      pinFallbackDisabledAt: target.record.pinFallbackDisabledAt || new Date().toISOString(),
+      pinFallbackDisabledBy: target.record.pinFallbackDisabledBy || 'password recovery'
+    });
+  } else if (target.kind === 'application') {
+    Object.assign(target.record, {
+      pendingPasswordHash: record.passwordHash,
+      pendingPasswordSalt: record.passwordSalt,
+      pendingPasswordUpdatedAt: record.passwordUpdatedAt,
+      updatedAt: new Date().toISOString()
+    });
+  } else {
+    Object.assign(target.record, record, { updatedAt: new Date().toISOString() });
+  }
+  clearAccountLoginFailure(target.record);
+  appendAuditLog(data, {
+    id: target.id,
+    name: target.name,
+    username: target.username,
+    role: recoveryRoleLabel(target),
+    organizationId: target.record.organizationId || MAIN_ORG_ID
+  }, 'Password recovered by email code', [target.kind, target.id, 'Password hash replaced', 'Account lock cleared', 'Fresh login required']);
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return { ok: true };
+}
+function loginPage(message = '', data = {}) {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure access</div><h1>WheelsonAuto Portal</h1><p>Owner, manager, and mechanic accounts each open the right workspace.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div class="login-pin">Both the exact username and password are required. Five failed attempts lock the account until email recovery is completed.</div><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Customer login</a></form></main></body></html>';
+}
+function staffForgotPage(message = '', username = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Staff Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure recovery</div><h1>Reset staff password</h1><p>Enter the exact username. A one-time code is sent only to the email already saved on that account.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" required autofocus></label><button>Send recovery code</button><div class="login-pin">The code cannot sign in by itself and expires after 15 minutes.</div><a class="btn" href="/login" style="margin-top:10px;text-align:center">Back to staff login</a><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Customer recovery</a></form></main></body></html>';
+}
+function staffRecoveryPage(username = '', message = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Staff Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot/verify"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Email verification</div><h1>Choose a new password</h1><p>Enter the six-digit code from the saved account email. You will still sign in afterward with the exact username and new password.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" readonly required></label><label>Recovery code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" required></label><button>Reset password</button><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Send another code</a></form></main></body></html>';
 }
 function customerSessionCookie(account) {
   return signedSessionCookie('customer', customerLoginUser(account));
@@ -9072,10 +9272,13 @@ function customerSessionUser(req) {
   }
 }
 function customerLoginPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>View your application, vehicle, payment schedule, service reminders, and account messages.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Email, phone, or username<input name="username" inputmode="email" autocomplete="username" autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password"></label><button>Sign in</button><div class="login-pin">Use the email, mobile number, or username on your customer account. Staff should use the main WheelsonAuto Portal login.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>View your application, vehicle, payment schedule, service reminders, and account messages.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div class="login-pin">Both fields must match the same account. Five failed attempts require email recovery.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
 }
-function customerForgotPage(message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Help</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer help</div><h1>Reset access</h1><p>Send the office a secure request. We will verify the account before changing any login.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Name, username, phone, or email<input name="identity" autocomplete="username" autofocus></label><button>Request help</button><div class="login-pin">For security, passwords are changed by WheelsonAuto after account verification.</div><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Back to customer login</a></form></main></body></html>';
+function customerForgotPage(message = '', username = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure recovery</div><h1>Reset customer password</h1><p>Enter the exact username, email, or phone used to sign in. A one-time code goes only to the email already saved on that account.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" required autofocus></label><button>Send recovery code</button><div class="login-pin">The code cannot open the account and expires after 15 minutes.</div><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Back to customer login</a></form></main></body></html>';
+}
+function customerRecoveryPage(username = '', message = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot/verify"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Email verification</div><h1>Choose a new password</h1><p>The recovery code is tied to this one customer account. After resetting, sign in with the same username and the new password.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" readonly required></label><label>Recovery code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" required></label><button>Reset password</button><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Send another code</a></form></main></body></html>';
 }
 function findCustomerAccountByIdentity(data, identity) {
   const key = normalizeLogin(identity);
@@ -11126,9 +11329,13 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const routes = [
     route('GET', '/api/state', 'Dashboard state'),
     route('PUT', '/api/state', 'Role-aware dashboard saves'),
-    route('GET', '/forgot', 'Staff password help request page'),
-    route('POST', '/forgot', 'Staff password help request'),
+    route('GET', '/forgot', 'Staff email password recovery page'),
+    route('POST', '/forgot', 'Send account-bound staff recovery code'),
+    route('POST', '/forgot/verify', 'Verify staff recovery code and reset one account'),
     route('GET', '/customer/login', 'Customer login page'),
+    route('GET', '/customer/forgot', 'Customer email password recovery page'),
+    route('POST', '/customer/forgot', 'Send account-bound customer recovery code'),
+    route('POST', '/customer/forgot/verify', 'Verify customer recovery code and reset one account'),
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
     route('POST', '/customer/receipt-request', 'Customer portal receipt request'),
@@ -19808,10 +20015,15 @@ const server = http.createServer(async (req, res) => {
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = form.get('username') || '';
       const password = form.get('password') || '';
+      if (!normalizeLogin(username) || !password) return send(res, 400, customerLoginPage('Enter both your username and password.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const throttleKey = loginThrottleKey(req, 'customer', username);
       const waitMs = await loginThrottleWaitMs(throttleKey);
-      if (waitMs) return send(res, 429, customerLoginPage(loginThrottleMessage(waitMs)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const data = await readData();
+      const target = customerLoginTarget(data, username);
+      if (target && loginRecordLocked(target.record)) {
+        return send(res, 303, '', 'text/plain', { Location: '/customer/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store' });
+      }
+      if (waitMs) return send(res, 303, '', 'text/plain', { Location: '/customer/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       let account = findCustomerAccountByLogin(data, username, password);
       if (!account) {
         const application = findPendingApplicationByLogin(data, username, password);
@@ -19829,67 +20041,69 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (!account) {
-        await recordLoginFailure(throttleKey);
+        const failure = await recordLoginFailure(throttleKey);
+        let accountLocked = false;
+        if (target) {
+          const loginSecurity = registerAccountLoginFailure(target.record);
+          accountLocked = loginSecurity.recoveryRequired === true;
+          appendAuditLog(data, {
+            id: target.id,
+            name: target.name,
+            username: target.username,
+            role: target.kind === 'application' ? 'Customer applicant' : 'Customer portal',
+            organizationId: target.record.organizationId || MAIN_ORG_ID
+          }, accountLocked ? 'Customer login locked after failed attempts' : 'Customer login failed', [loginSecurity.failedAttempts + ' of ' + LOGIN_THROTTLE_LIMIT, accountLocked ? 'Email recovery required' : 'Login rejected']);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
+        if (accountLocked || Number(failure && failure.count || 0) >= LOGIN_THROTTLE_LIMIT) {
+          return send(res, 303, '', 'text/plain', { Location: '/customer/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store' });
+        }
         return send(res, 401, customerLoginPage('That customer login did not match an active account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       }
       await clearLoginFailure(throttleKey);
+      if (target && target.record.loginSecurity) {
+        clearAccountLoginFailure(target.record);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      }
       return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: '/customer' });
     }
-    if (url.pathname === '/customer/forgot' && req.method === 'GET') return send(res, 200, customerForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    if (url.pathname === '/customer/forgot' && req.method === 'GET') {
+      const username = String(url.searchParams.get('username') || '');
+      const message = url.searchParams.get('locked') === '1' ? 'This account is locked after five failed attempts. Send an email recovery code to continue.' : '';
+      return send(res, 200, customerForgotPage(message, username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
     if (url.pathname === '/customer/forgot' && req.method === 'POST') {
       const helpRate = await publicActionLimit(req, 'customer-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
       if (!helpRate.allowed) return send(res, 429, customerForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
-      const identity = String(form.get('identity') || '').trim();
-      if (!identity) return send(res, 400, customerForgotPage('Enter your name, username, phone, or email so we can find the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const username = String(form.get('username') || '').trim();
+      if (!username) return send(res, 400, customerForgotPage('Enter the exact username, email, or phone used to sign in.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
-      const account = findCustomerAccountByIdentity(data, identity);
-      const customer = account && (account.name || account.customer) || identity;
-      if (account) {
-        account.passwordResetRequestedAt = new Date().toISOString();
-        account.passwordResetStatus = 'Requested';
-        account.passwordResetIdentity = identity;
-      }
-      data.messages = Array.isArray(data.messages) ? data.messages : [];
-      data.messages.unshift({
-        id: 'msg-customer-reset-' + Date.now(),
-        date: new Date().toLocaleString('en-US'),
-        createdAt: new Date().toISOString(),
-        customer,
-        phone: account && account.phone || '',
-        email: account && account.email || '',
-        direction: 'Customer portal request',
-        channel: 'Portal',
-        template: 'Password reset request',
-        subject: 'Customer portal password help',
-        status: account ? 'Needs admin reset' : 'Needs account match',
-        tone: account ? 'warn' : 'bad',
-        body: 'Customer requested login help for: ' + identity + '. Verify identity before changing the password.',
-        source: 'Customer portal',
-        event: 'customer_password_reset',
-        customerAccountId: account && account.id || ''
-      });
-      await queueOwnerEmailNotification(data, 'customer_password_reset', {
-        customer,
-        subject: 'Customer password reset request - ' + customer,
-        body: [
-          'A customer requested portal login help.',
-          'Entered identity: ' + identity,
-          'Matched customer: ' + (account ? customer : 'No exact customer login match'),
-          'Phone: ' + (account && account.phone || 'Not available'),
-          'Email: ' + (account && account.email || 'Not available'),
-          'Action: verify the customer, then update their customer portal password from Settings.'
-        ].join('\n')
-      });
-      appendAuditLog(data, {
-        name: customer,
-        username: account && (account.username || account.email || account.phone) || identity,
-        role: 'Customer login help',
-        organizationId: account && account.organizationId || MAIN_ORG_ID,
-        companyName: companyNameById(data, account && account.organizationId || MAIN_ORG_ID)
-      }, 'Customer password help requested', [customer, account ? 'Matched customer account' : 'Needs account match', identity]);
-      await writeData(data);
-      return send(res, 200, customerForgotPage('Your request was sent to WheelsonAuto. We will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const target = customerLoginTarget(data, username);
+      const result = await sendAccountRecoveryCode(data, target);
+      if (!result.sent) return send(res, 503, customerForgotPage('A recovery email could not be sent. Confirm the exact login and saved email, or contact WheelsonAuto.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 200, customerRecoveryPage(username, 'A six-digit code was sent to ' + result.maskedEmail + '.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer/forgot/verify' && req.method === 'POST') {
+      const verifyRate = await publicActionLimit(req, 'customer-password-verify', LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
+      if (!verifyRate.allowed) return send(res, 429, customerForgotPage('Too many recovery attempts. Send a new code after the wait.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(verifyRate.retryAfterSeconds) });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const username = String(form.get('username') || '').trim();
+      const code = String(form.get('code') || '').trim();
+      const newPassword = String(form.get('newPassword') || '');
+      const confirmPassword = String(form.get('confirmPassword') || '');
+      const policyError = passwordPolicyError(newPassword, 'New password');
+      if (!username || !/^\d{6}$/.test(code)) return send(res, 400, customerRecoveryPage(username, 'Enter the account username and six-digit recovery code.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (policyError) return send(res, 400, customerRecoveryPage(username, policyError), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (newPassword !== confirmPassword) return send(res, 400, customerRecoveryPage(username, 'The new passwords do not match.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const data = await readData();
+      const target = customerLoginTarget(data, username);
+      const result = await completeAccountRecovery(data, target, code, newPassword);
+      if (!result.ok) return send(res, result.status || 400, customerRecoveryPage(username, result.error), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      await clearLoginFailure(loginThrottleKey(req, 'customer', username));
+      return send(res, 200, customerLoginPage('Password reset complete. Sign in with the same username and your new password.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
     if (url.pathname === '/customer/message' && req.method === 'POST') {
@@ -20725,96 +20939,107 @@ const server = http.createServer(async (req, res) => {
       if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
       return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
     }
-    if (url.pathname === '/forgot' && req.method === 'GET') return send(res, 200, staffForgotPage(), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    if (url.pathname === '/forgot' && req.method === 'GET') {
+      const username = String(url.searchParams.get('username') || '');
+      const message = url.searchParams.get('locked') === '1' ? 'This account is locked after five failed attempts. Email recovery is required.' : '';
+      return send(res, 200, staffForgotPage(message, username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
     if (url.pathname === '/forgot' && req.method === 'POST') {
       const helpRate = await publicActionLimit(req, 'staff-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
       if (!helpRate.allowed) return send(res, 429, staffForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
-      const identity = String(form.get('identity') || '').trim();
-      if (!identity) return send(res, 400, staffForgotPage('Enter your name, username, phone, or email so the owner can find the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const username = String(form.get('username') || '').trim();
+      if (!username) return send(res, 400, staffForgotPage('Enter the exact username for the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
-      const staff = findStaffByIdentity(data, identity);
-      const staffName = staff && staff.name || identity;
-      if (staff) {
-        staff.passwordResetRequestedAt = new Date().toISOString();
-        staff.passwordResetStatus = 'Requested';
-        staff.passwordResetIdentity = identity;
-      }
-      data.messages = Array.isArray(data.messages) ? data.messages : [];
-      data.messages.unshift({
-        id: 'msg-staff-reset-' + Date.now(),
-        date: new Date().toLocaleString('en-US'),
-        createdAt: new Date().toISOString(),
-        customer: staffName,
-        phone: staff && staff.phone || '',
-        email: staff && staff.email || '',
-        direction: 'Staff login request',
-        channel: 'Portal',
-        template: 'Staff password reset request',
-        subject: 'Staff portal password help',
-        status: staff ? 'Needs owner reset' : 'Needs staff match',
-        tone: staff ? 'warn' : 'bad',
-        body: 'Staff requested login help for: ' + identity + '. Verify identity before changing the password.',
-        source: 'Staff portal',
-        event: 'staff_password_reset',
-        staffAccountId: staff && staff.id || ''
-      });
-      await queueOwnerEmailNotification(data, 'staff_password_reset', {
-        customer: staffName,
-        subject: 'Staff password reset request - ' + staffName,
-        body: [
-          'A staff member requested portal login help.',
-          'Entered identity: ' + identity,
-          'Matched staff: ' + (staff ? staffName : 'No exact staff login match'),
-          'Role: ' + (staff && staff.role || 'Not available'),
-          'Phone: ' + (staff && staff.phone || 'Not available'),
-          'Email: ' + (staff && staff.email || 'Not available'),
-          'Action: verify the staff member, then update their password from Settings.'
-        ].join('\n')
-      });
-      appendAuditLog(data, {
-        name: staffName,
-        username: staff && (staff.username || staff.email || staff.phone) || identity,
-        role: 'Staff login help',
-        organizationId: staff && staff.organizationId || MAIN_ORG_ID,
-        companyName: companyNameById(data, staff && staff.organizationId || MAIN_ORG_ID)
-      }, 'Staff password help requested', [staffName, staff ? 'Matched staff account' : 'Needs staff match', staff && staff.role || 'Unknown role']);
-      await writeData(data);
-      return send(res, 200, staffForgotPage('Your request was sent to the owner. They will verify the account before changing access.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const target = staffLoginTarget(data, username);
+      const result = await sendAccountRecoveryCode(data, target);
+      if (!result.sent) return send(res, 503, staffForgotPage('A recovery email could not be sent. Confirm the exact username and saved email, or contact the owner.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 200, staffRecoveryPage(username, 'A six-digit code was sent to ' + result.maskedEmail + '.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/forgot/verify' && req.method === 'POST') {
+      const verifyRate = await publicActionLimit(req, 'staff-password-verify', LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
+      if (!verifyRate.allowed) return send(res, 429, staffForgotPage('Too many recovery attempts. Send a new code after the wait.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(verifyRate.retryAfterSeconds) });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const username = String(form.get('username') || '').trim();
+      const code = String(form.get('code') || '').trim();
+      const newPassword = String(form.get('newPassword') || '');
+      const confirmPassword = String(form.get('confirmPassword') || '');
+      const policyError = passwordPolicyError(newPassword, 'New password');
+      if (!username || !/^\d{6}$/.test(code)) return send(res, 400, staffRecoveryPage(username, 'Enter the account username and six-digit recovery code.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (policyError) return send(res, 400, staffRecoveryPage(username, policyError), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (newPassword !== confirmPassword) return send(res, 400, staffRecoveryPage(username, 'The new passwords do not match.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const data = await readData();
+      const target = staffLoginTarget(data, username);
+      const result = await completeAccountRecovery(data, target, code, newPassword);
+      if (!result.ok) return send(res, result.status || 400, staffRecoveryPage(username, result.error), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      await clearLoginFailure(loginThrottleKey(req, 'staff', username));
+      return send(res, 200, loginPage('Password reset complete. Sign in with the same username and your new password.', data), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = form.get('username') || '';
       const password = form.get('password') || '';
-      const pin = form.get('pin') || '';
-      const throttleKey = loginThrottleKey(req, 'staff', username || (pin ? 'pin-login' : 'blank'));
+      if (!normalizeLogin(username) || !password) return send(res, 400, loginPage('Enter both your username and password.', await readData()), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const throttleKey = loginThrottleKey(req, 'staff', username);
       const data = await readData();
+      const target = staffLoginTarget(data, username);
+      if (target && loginRecordLocked(target.record)) return send(res, 303, '', 'text/plain', { Location: '/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store' });
       const waitMs = await loginThrottleWaitMs(throttleKey);
-      if (waitMs) return send(res, 429, loginPage(loginThrottleMessage(waitMs), data), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
+      if (waitMs) return send(res, 303, '', 'text/plain', { Location: '/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       const ownerRecord = data.security && data.security.ownerLogin || {};
-      const environmentOwnerSource = ownerEnvironmentAuthSource(username, password, pin, data);
+      const environmentOwnerSource = target && target.kind === 'owner' ? ownerEnvironmentAuthSource(username, password, '', data) : '';
       if (environmentOwnerSource) {
         await clearLoginFailure(throttleKey);
         if (environmentOwnerSource === 'owner_environment_hash') {
           try { await recordOwnerPasswordLoginVerification(data, environmentOwnerSource); }
           catch (error) { reportBackgroundTaskFailure('owner-password-verification', error, { route: '/login', source: environmentOwnerSource }, 'Owner password verification'); }
         }
+        if (target.record.loginSecurity) {
+          clearAccountLoginFailure(target.record);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser(environmentOwnerSource, ownerRecord))), Location: '/' });
       }
-      if (storedOwnerLoginMatches(data, username, password)) {
+      if (target && target.kind === 'owner' && storedOwnerLoginMatches(data, username, password)) {
         await clearLoginFailure(throttleKey);
         try { await recordOwnerPasswordLoginVerification(data, 'owner_stored'); }
         catch (error) { reportBackgroundTaskFailure('owner-password-verification', error, { route: '/login', source: 'owner_stored' }, 'Owner password verification'); }
+        if (target.record.loginSecurity) {
+          clearAccountLoginFailure(target.record);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(ownerSessionUser('owner_stored', ownerRecord))), Location: '/' });
       }
-      const staff = findStaffByLogin(data, username, password) || findStaffByPin(data, pin);
+      const staff = target && target.kind === 'staff' ? findStaffByLogin(data, username, password) : null;
       if (staff) {
         await clearLoginFailure(throttleKey);
+        if (staff.loginSecurity) {
+          clearAccountLoginFailure(staff);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+        }
         const user = staffLoginUser(staff);
         user.companyName = companyNameById(data, user.organizationId);
         return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', sessionCookie(user)), Location: '/' });
       }
-      await recordLoginFailure(throttleKey);
+      const failure = await recordLoginFailure(throttleKey);
+      let accountLocked = false;
+      if (target) {
+        const loginSecurity = registerAccountLoginFailure(target.record);
+        accountLocked = loginSecurity.recoveryRequired === true;
+        appendAuditLog(data, {
+          id: target.id,
+          name: target.name,
+          username: target.username,
+          role: target.kind === 'owner' ? 'Owner' : 'Staff',
+          organizationId: target.record.organizationId || MAIN_ORG_ID
+        }, accountLocked ? 'Staff login locked after failed attempts' : 'Staff login failed', [loginSecurity.failedAttempts + ' of ' + LOGIN_THROTTLE_LIMIT, accountLocked ? 'Email recovery required' : 'Login rejected']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      }
+      if (accountLocked || Number(failure && failure.count || 0) >= LOGIN_THROTTLE_LIMIT) return send(res, 303, '', 'text/plain', { Location: '/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store' });
       return send(res, 401, loginPage('That login did not match an active account.', data));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });
@@ -23174,7 +23399,7 @@ const server = http.createServer(async (req, res) => {
       const accountPolicyError = passwordPolicyError(newPassword, 'New password');
       if (accountPolicyError) return json(res, 400, { ok: false, error: accountPolicyError });
       const data = await readData();
-      if (!passwordMatchesCurrentUser(data, user, currentPassword)) return json(res, 403, { ok: false, error: 'Current password or PIN did not match.' });
+      if (!passwordMatchesCurrentUser(data, user, currentPassword)) return json(res, 403, { ok: false, error: 'Current password did not match.' });
       const record = createPasswordRecord(newPassword);
       if (isOwnerUser(user)) {
         data.security = data.security || {};
@@ -23186,59 +23411,28 @@ const server = http.createServer(async (req, res) => {
         data.security.ownerLogin = {
           username: nextOwnerUsername,
           ...record,
+          email: currentOwnerLogin.email || WOA_EMAIL_OWNER_NOTIFY || '',
           passwordLoginVerifiedAt: '',
           passwordLoginVerifiedFingerprint: '',
           passwordLoginVerifiedSource: '',
-          pinFallbackDisabled: currentOwnerLogin.pinFallbackDisabled === true,
-          pinFallbackDisabledAt: currentOwnerLogin.pinFallbackDisabledAt || '',
-          pinFallbackDisabledBy: currentOwnerLogin.pinFallbackDisabledBy || ''
+          pinFallbackDisabled: true,
+          pinFallbackDisabledAt: currentOwnerLogin.pinFallbackDisabledAt || new Date().toISOString(),
+          pinFallbackDisabledBy: currentOwnerLogin.pinFallbackDisabledBy || 'password-only authentication'
         };
       } else {
         data.staffAccounts = Array.isArray(data.staffAccounts) ? data.staffAccounts : [];
         const staff = data.staffAccounts.find(item => item.id === user.id);
         if (!staff) return json(res, 404, { ok: false, error: 'Staff account was not found.' });
         Object.assign(staff, record, { updatedAt: new Date().toISOString() });
+        clearAccountLoginFailure(staff);
       }
       appendAuditLog(data, user, 'Password changed', [isOwnerUser(user) ? 'Owner login' : 'Staff login ' + (user.name || user.username || user.id), 'Password hash updated']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt, reauthenticate: true, nextStep: isOwnerUser(user) ? 'Sign back in with the new password before disabling recovery PIN access.' : 'Sign back in with the new password.' }, { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }) });
+      return json(res, 200, { ok: true, updatedAt: record.passwordUpdatedAt, reauthenticate: true, nextStep: 'Sign back in with the exact username and new password.' }, { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }) });
     }
     if (url.pathname === '/api/account/owner-access/disable-pin' && req.method === 'POST') {
-      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can disable owner recovery PIN access.' });
-      const payload = await readJsonBody(req);
-      if (String(payload.confirmation || '').trim() !== 'DISABLE PIN' || payload.acknowledged !== true) {
-        return json(res, 400, { ok: false, error: 'Type DISABLE PIN and confirm the lockout warning.' });
-      }
-      const passwordSource = String(user.authSource || '');
-      if (!['owner_stored', 'owner_environment_hash'].includes(passwordSource)) {
-        return json(res, 409, { ok: false, error: 'Sign out, then sign in with the owner password before disabling the recovery PIN.' });
-      }
-      const data = await readData();
-      const currentPassword = String(payload.currentPassword || '');
-      if (!currentPassword || !passwordMatchesCurrentUser(data, user, currentPassword)) {
-        return json(res, 403, { ok: false, error: 'The current owner password did not match.' });
-      }
-      const readiness = ownerAuthenticationReadiness(data);
-      if (!readiness.passwordLoginStrong) return json(res, 409, { ok: false, error: 'Save a PBKDF2-backed owner password before disabling the recovery PIN.' });
-      const fingerprint = authPolicy.passwordRecordFingerprint(ownerPasswordRecordForSource(data, passwordSource));
-      const owner = data.security && data.security.ownerLogin || {};
-      if (!fingerprint || owner.passwordLoginVerifiedFingerprint !== fingerprint || !owner.passwordLoginVerifiedAt) {
-        return json(res, 409, { ok: false, error: 'This password version has not completed a verified sign-in yet. Sign out and sign back in with it first.' });
-      }
-      const disabledAt = new Date().toISOString();
-      owner.pinFallbackDisabled = true;
-      owner.pinFallbackDisabledAt = disabledAt;
-      owner.pinFallbackDisabledBy = user.username || 'owner';
-      appendAuditLog(data, user, 'Owner recovery PIN disabled', ['Verified password sign-in', 'Explicit owner confirmation', 'Password login remains active']);
-      await protectConcurrentLocalWrites(data, { preferIncoming: true });
-      await writeData(data);
-      return json(res, 200, {
-        ok: true,
-        disabledAt,
-        ownerAuthentication: ownerAuthenticationReadiness(data),
-        message: 'Recovery PIN access is disabled. The verified owner password remains active.'
-      });
+      return json(res, 410, { ok: false, error: 'PIN login has been permanently removed. Every account requires its exact username and password.' });
     }
     if (url.pathname === '/api/staff-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage staff logins.' });
@@ -23257,14 +23451,18 @@ const server = http.createServer(async (req, res) => {
       staff.companyName = companyNameById(data, staff.organizationId);
       const duplicate = data.staffAccounts.find(item => item.id !== staff.id && normalizeLogin(item.username || item.email) === staff.username);
       if (duplicate) return json(res, 409, { ok: false, error: 'That username is already used by another staff account.' });
-      if (existing) Object.assign(existing, staff);
-      else data.staffAccounts.unshift(staff);
+      if (ownerUsernameMatches(data, staff.username)) return json(res, 409, { ok: false, error: 'That username is already used by the owner account.' });
+      if (existing) {
+        Object.assign(existing, staff);
+        if (String(payload.password || '').trim()) clearAccountLoginFailure(existing);
+      } else data.staffAccounts.unshift(staff);
       appendAuditLog(data, user, existing ? 'Staff account updated' : 'Staff account created', [staff.name || staff.username, staff.role, staff.companyName || companyNameById(data, staff.organizationId), staff.status || 'Active']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       const safeStaff = { ...staff };
       delete safeStaff.passwordHash;
       delete safeStaff.passwordSalt;
+      delete safeStaff.loginSecurity;
       return json(res, 200, { ok: true, staff: safeStaff });
     }
     if (url.pathname === '/api/customer-accounts' && req.method === 'POST') {
@@ -23282,8 +23480,10 @@ const server = http.createServer(async (req, res) => {
       if (!existing && !account.passwordHash) return json(res, 400, { ok: false, error: 'Enter a password for the new customer login.' });
       const duplicate = data.customerAccounts.find(item => item.id !== account.id && normalizeLogin(item.username || item.email || item.phone) === account.username);
       if (duplicate) return json(res, 409, { ok: false, error: 'That customer login is already used by another account.' });
-      if (existing) Object.assign(existing, account);
-      else data.customerAccounts.unshift(account);
+      if (existing) {
+        Object.assign(existing, account);
+        if (String(payload.password || '').trim()) clearAccountLoginFailure(existing);
+      } else data.customerAccounts.unshift(account);
       appendAuditLog(data, user, existing ? 'Customer login updated' : 'Customer login created', [account.customer || account.name || account.username, account.status || 'Active', account.passwordUpdatedAt ? 'Password set' : 'No new password']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);

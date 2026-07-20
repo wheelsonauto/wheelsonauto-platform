@@ -92,6 +92,8 @@ async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-risk-routes-'));
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '4321';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'RiskRouteOwner123!';
   process.env.PUBLIC_BASE_URL = 'https://wheelsonauto-platform.onrender.com';
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
   process.env.WOA_AUTO_SYNC_MS = '3600000';
@@ -107,7 +109,7 @@ async function main() {
   const { server } = require('../server.js');
 
   try {
-    const ownerCookie = await login(server, { pin: '4321' });
+    const ownerCookie = await login(server, { username: 'owner', password: 'RiskRouteOwner123!' });
     await createStaff(server, ownerCookie, {
       id: 'risk-route-manager', name: 'Risk Route Manager', username: 'risk-route-manager',
       password: 'RiskRouteManager123!', role: 'Manager', organizationId: 'org-wheelsonauto', status: 'Active'

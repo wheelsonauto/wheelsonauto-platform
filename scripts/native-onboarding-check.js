@@ -128,6 +128,8 @@ async function main() {
   process.env.TZ = 'America/New_York';
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'NativeOnboardingOwner123!';
   process.env.WOA_SESSION_SECRET = 'native-onboarding-session-secret';
   process.env.CLOVER_WEBHOOK_SECRET = webhookSecret;
   process.env.CLOVER_HCO_WEBHOOK_SECRET = webhookSecret;
@@ -201,7 +203,7 @@ async function main() {
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(saved.customerAccounts.some(row => row.applicationId === 'app-legacy-pending-login') && !saved.applications.find(row => row.id === 'app-legacy-pending-login').pendingPasswordHash, 'Legacy pending login migration should move the password hash into one customer account and remove the application copy.');
 
-    const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
+    const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'NativeOnboardingOwner123!' } });
     assert(login.status === 302 && String(login.cookie).includes('woa_session='), 'Owner login should provide a signed staff session.');
     const ownerCookie = String(login.cookie).split(';')[0];
     const linkResponse = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId } });

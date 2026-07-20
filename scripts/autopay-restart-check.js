@@ -99,7 +99,7 @@ function loadServer() {
 }
 
 async function ownerCookie(server) {
-  const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
+  const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'AutopayRestartOwner123!' } });
   const cookie = String(login.cookie).split(';')[0];
   assert(login.status === 302 && cookie.includes('woa_session='), 'The restart test owner login must create a signed session.');
   return cookie;
@@ -114,6 +114,8 @@ async function main() {
   process.env.TZ = 'America/New_York';
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'AutopayRestartOwner123!';
   process.env.WOA_SESSION_SECRET = 'autopay-restart-session-secret';
   process.env.WOA_PAYMENT_PROVIDER = 'clover';
   process.env.CLOVER_MERCHANT_ID = 'merchant_restart_test';

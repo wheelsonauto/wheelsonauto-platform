@@ -66,7 +66,7 @@ async function main() {
     WOA_SERVICE_ID: 'srv-maintenance-runtime-check',
     WOA_DEPLOY_COMMIT: 'abcdef1234567890abcdef1234567890abcdef12',
     WOA_ADMIN_USERNAME: 'maintenance-owner',
-    WOA_ADMIN_PASSWORD: 'maintenance-owner-password',
+    WOA_ADMIN_PASSWORD: 'MaintenanceOwner123!',
     WOA_ADMIN_PIN: '',
     WOA_OWNER_PIN_FALLBACK_ENABLED: '0',
     CLOVER_ACCESS_TOKEN: '',
@@ -104,7 +104,7 @@ async function main() {
     const blockedCustomerLogin = await request(port, 'POST', '/customer/login', 'username=customer&password=test', { 'Content-Type': 'application/x-www-form-urlencoded' });
     assert.strictEqual(blockedCustomerLogin.status, 503, 'Customer login activation must not create a portal record during the migration window.');
 
-    const staffLogin = await request(port, 'POST', '/login', 'username=maintenance-owner&password=maintenance-owner-password', { 'Content-Type': 'application/x-www-form-urlencoded' });
+    const staffLogin = await request(port, 'POST', '/login', 'username=maintenance-owner&password=MaintenanceOwner123%21', { 'Content-Type': 'application/x-www-form-urlencoded' });
     assert.strictEqual(staffLogin.status, 302, 'Existing staff must still be able to establish a read-only session during maintenance.');
 
     const publicRead = await request(port, 'GET', '/site-preview');

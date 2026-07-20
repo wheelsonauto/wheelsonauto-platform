@@ -138,6 +138,8 @@ async function main() {
   process.env.WOA_ALLOW_ISOLATED_PROVIDER_TESTS = '1';
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'StripeIdentityOwner123!';
   process.env.WOA_SESSION_SECRET = 'stripe-identity-session-secret';
   process.env.WOA_IDENTITY_PROVIDER = 'stripe';
   process.env.STRIPE_SECRET_KEY = 'sk_test_wheelsonauto_identity';
@@ -164,7 +166,7 @@ async function main() {
   delete require.cache[require.resolve('../server.js')];
   const { server } = require('../server.js');
   try {
-    const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
+    const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'StripeIdentityOwner123!' } });
     const ownerCookie = String(login.cookie).split(';')[0];
     assert(login.status === 302 && ownerCookie.includes('woa_session='), 'Owner login should create a signed session.');
     const link = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId: 'app-identity-1', paymentProvider: 'stripe' } });

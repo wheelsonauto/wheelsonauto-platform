@@ -278,28 +278,29 @@ assertIncludes('Owner recovery operator surface', app, [
   'Current staff/customer access controls are preserved',
   'every signed-in session is revoked'
 ]);
-assertIncludes('Password-backed staff and owner guidance', app, [
+assertIncludes('Password-only staff and owner guidance', app, [
   'Manager and mechanic username/password accounts.',
   'Manager and mechanic accounts use their own username and password',
   'Owner login & security',
   'Set username & password',
-  'Disable PIN login',
-  'Log out and sign back in with the owner password, not the PIN',
-  'open-owner-pin-cutover',
-  'confirm-owner-pin-disable',
-  '/api/account/owner-access/disable-pin',
-  'Type DISABLE PIN',
+  'Password protected',
+  '5 attempt lock',
+  'Account recovery',
+  'exact username and password',
+  'Recovery email',
   '8+ characters with a letter and number'
 ]);
-assertIncludes('Lockout-safe owner password cutover', server, [
+assertIncludes('Exact-login and account-bound recovery', server, [
   'recordOwnerPasswordLoginVerification',
   'passwordLoginVerifiedFingerprint',
-  'pinFallbackDisabledAt',
-  "url.pathname === '/api/account/owner-access/disable-pin'",
-  "['owner_stored', 'owner_environment_hash'].includes(passwordSource)",
-  'This password version has not completed a verified sign-in yet',
-  'Owner recovery PIN disabled',
-  'pinFallbackDisabled: currentOwnerLogin.pinFallbackDisabled === true'
+  'LOGIN_THROTTLE_LIMIT = 5',
+  'registerAccountLoginFailure',
+  'recoveryAccountId',
+  'completeAccountRecovery',
+  "url.pathname === '/forgot/verify'",
+  "url.pathname === '/customer/forgot/verify'",
+  'PIN login has been permanently removed',
+  'Enter both your username and password.'
 ]);
 if (app.includes('Manager and mechanic PIN accounts.') || app.includes('Manager and mechanic accounts use their own PIN')) {
   fail('Manager and mechanic access must not be described as PIN-based.');

@@ -722,11 +722,11 @@ function ownerSmoke() {
   assertHealthy('Dashboard customer risk', renderView(context, 'Dashboard', 'Risk'), ['Dashboard', 'Customer risk report', 'payment setup']);
   context.dashboardDetailState.Risk = 'Health';
   const ownerSecurity = renderView(context, 'Settings', 'Security');
-  assertHealthy('Owner Security cutover', ownerSecurity, ['Owner login & security', 'Strong password saved', 'Password login verified', 'Recovery PIN still active', 'Disable PIN login', 'Log out', 'Access matrix']);
+  assertHealthy('Owner password security', ownerSecurity, ['Owner login & security', 'Strong password saved', 'Password login verified', 'Password protected', '5 attempt lock', 'Account recovery', 'Log out', 'Access matrix']);
   assertNo('Owner Security cutover secret hygiene', ownerSecurity, ['passwordHash', 'passwordSalt', 'passwordLoginVerifiedFingerprint']);
   const ownerSetupContext = makeContext({ name: 'Owner Setup', username: 'owner', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access', ownerAccess: { passwordLoginConfigured: false, passwordLoginStrong: false, passwordLoginVerified: false, passwordSessionVerified: false, pinFallbackAllowed: true, canDisablePinFallback: false } });
   const ownerSetup = renderView(ownerSetupContext, 'Settings', 'Security');
-  assertHealthy('Owner credential setup', ownerSetup, ['Owner login & security', 'Set username &amp; password', 'Disable PIN login', 'PIN login active']);
+  assertHealthy('Owner credential setup', ownerSetup, ['Owner login & security', 'Set username &amp; password', 'Password protected', '5 attempt lock', 'Account recovery']);
   const ownerClaimsOpen = renderView(context, 'Claims & Issues', 'Open');
   assertNo('Owner Claims duplicate boards', ownerClaimsOpen, ['Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge']);
   const ownerPickups = renderView(context, 'Applications', 'Pickups');

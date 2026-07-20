@@ -83,6 +83,8 @@ async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-public-links-'));
   process.env.DATA_DIR = dataDir;
   process.env.WOA_ADMIN_PIN = '7319';
+  process.env.WOA_ADMIN_USERNAME = 'owner';
+  process.env.WOA_ADMIN_PASSWORD = 'PublicLinkOwner123!';
   process.env.WOA_SESSION_SECRET = 'public-link-security-session-secret';
   process.env.WOA_PUBLIC_SECURE_LINK_LIMIT = '10';
   process.env.WOA_PUBLIC_SECURE_LINK_WINDOW_MS = '900000';
@@ -176,7 +178,7 @@ async function main() {
     assert(revokedToll.status === 404 && !revokedToll.text.includes('Revoked Toll Customer') && publicHeaders(revokedToll), 'Revoked toll proof must fail closed without leaking customer details.');
     assert(missingOnboarding.status === 404 && publicHeaders(missingOnboarding) && !missingOnboarding.text.includes('4'.repeat(56)), 'Missing onboarding bearer links must fail privately without echoing the attempted token.');
 
-    const login = await request(server, 'POST', '/login', { form: { pin: '7319' } });
+    const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'PublicLinkOwner123!' } });
     const cookie = String(login.cookie || '').split(';')[0];
     const generatedPayment = await request(server, 'POST', '/api/payment-links', { cookie, json: { recurringPaymentId: 'rec-public-link', customer: 'Generated Payment', amount: 229 } });
     const generatedSetup = await request(server, 'POST', '/api/card-setup-requests', { cookie, json: { customer: 'Generated Setup', amount: 229, frequency: 'Weekly', paymentProvider: 'clover', deferVehicleAssignment: true } });
