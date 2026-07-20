@@ -537,7 +537,7 @@ function repairVehicleSheetLinkConflicts(data) {
       repaired += clearWrongVehicleClaims(data, vehicle, customerName, 'Vehicle link cleared automatically because the vehicle sheet assigns this car to ' + customerName + '. Payment history was kept.');
     }
     const customer = data.customers.find(item => item.id === importRowId(row, 'cus-sheet-') || String(item.importedVehicleRow || '') === String(row.rowNumber));
-    if (customer && String(customer.source || '').includes('Vehicle sheet import') && !customer.manuallyEditedAt) {
+    if (customer && String(customer.source || '').includes('Vehicle sheet import') && !customer.manuallyEditedAt && !importedRecordEndedForDifferentRenter(customer, vehicle, customerName)) {
       const wantsPatch = customer.vehicleId !== patch.vehicleId || normKey(customer.vin) !== normKey(patch.vin) || normKey(customer.name || customer.customer) !== normKey(customerName);
       if (wantsPatch) {
         Object.assign(customer, {
@@ -6612,6 +6612,7 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
       row.assignmentEndedAt = now;
       row.assignmentEndReason = note;
       row.vehicleLinkStatus = 'Previous renter - vehicle reassigned';
+      row.manuallyEditedAt = now;
       if (kind === 'recurringPayments') {
         row.status = 'Removed';
         row.nextRun = 'Ended - vehicle reassigned';
