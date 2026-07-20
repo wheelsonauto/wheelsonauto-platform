@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { firstUserArgument } = require('./cli-arguments');
+const { requestWithRenderRetry } = require('../live-probe-request');
 
 const target = String(firstUserArgument() || process.env.WOA_LIVE_PROBE_BASE_URL || '').trim().replace(/\/+$/, '');
 if (!/^https:\/\//i.test(target)) {
@@ -9,7 +10,7 @@ if (!/^https:\/\//i.test(target)) {
 
 async function request(pathname, method = 'GET') {
   const separator = pathname.includes('?') ? '&' : '?';
-  return fetch(target + pathname + separator + 'security_probe=' + Date.now(), {
+  return requestWithRenderRetry(target + pathname + separator + 'security_probe=' + Date.now(), {
     method,
     redirect: 'manual',
     headers: {

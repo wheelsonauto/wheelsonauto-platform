@@ -103,6 +103,7 @@ async function main() {
     const renderBlueprint = await fs.readFile(path.resolve(__dirname, '..', 'render.yaml'), 'utf8');
     const productionWorkflow = await fs.readFile(path.resolve(__dirname, '..', '.github', 'workflows', 'production-gate.yml'), 'utf8');
     const liveSecurityProbeSource = await fs.readFile(path.resolve(__dirname, 'live-security-probe.js'), 'utf8');
+    const liveProbeRequestSource = await fs.readFile(path.resolve(__dirname, '..', 'live-probe-request.js'), 'utf8');
     const publicLinkSecurityCheckSource = await fs.readFile(path.resolve(__dirname, 'public-link-security-check.js'), 'utf8');
     assert(serverSource.includes("url.pathname === '/healthz'") && serverSource.includes("release: ASSET_VERSION"), 'Production must expose a minimal unauthenticated health route without loading the staff workspace.');
     assert(serverSource.includes('process.env.RENDER_GIT_COMMIT') && serverSource.includes('commit: WOA_DEPLOY_COMMIT'), 'Production health must expose the short Render commit SHA for exact deploy verification.');
@@ -132,6 +133,10 @@ async function main() {
       assert(liveSecurityProbeSource.includes(label), 'The live security probe must cover the ' + label + ' boundary.');
     });
     assert(liveSecurityProbeSource.includes("assert.deepEqual(Object.keys(body).sort(), ['error', 'ok']"), 'Anonymous API failures must be checked for metadata leakage, not only an HTTP status.');
+    assert(liveSecurityProbeSource.includes('requestWithRenderRetry')
+      && liveProbeRequestSource.includes("response.headers?.get?.('x-render-routing')")
+      && liveProbeRequestSource.includes('attempt === maxAttempts')
+      && liveProbeRequestSource.includes('Math.min(3'), 'The live probe must retry only confirmed Render routing errors, keep retries bounded, and leave application failures visible.');
     assert(packageSource.includes('node scripts/public-link-security-check.js')
       && publicLinkSecurityCheckSource.includes('Unsigned failure returns must not mutate payment or recurring status')
       && publicLinkSecurityCheckSource.includes('A completed card setup token must be single-use')

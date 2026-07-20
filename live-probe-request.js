@@ -1,0 +1,31 @@
+'use strict';
+
+const TRANSIENT_RENDER_STATUSES = new Set([502, 503, 504]);
+
+function isTransientRenderRoutingError(response) {
+  if (!response || !TRANSIENT_RENDER_STATUSES.has(Number(response.status))) return false;
+  return /error/i.test(String(response.headers?.get?.('x-render-routing') || ''));
+}
+
+async function requestWithRenderRetry(url, options, configuration = {}) {
+  const fetchImpl = configuration.fetchImpl || fetch;
+  const delay = configuration.delay || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
+  const maxAttempts = Math.max(1, Math.min(3, Number(configuration.maxAttempts) || 3));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetchImpl(url, options);
+    if (!isTransientRenderRoutingError(response) || attempt === maxAttempts) return response;
+
+    if (response.body && typeof response.body.cancel === 'function') {
+      await response.body.cancel().catch(() => {});
+    }
+    await delay(attempt * 500);
+  }
+
+  throw new Error('Render retry loop ended without a response.');
+}
+
+module.exports = {
+  isTransientRenderRoutingError,
+  requestWithRenderRetry
+};
