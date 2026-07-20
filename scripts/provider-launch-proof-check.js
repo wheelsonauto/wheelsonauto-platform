@@ -223,7 +223,11 @@ assert.strictEqual(qualifiedReplacementTelnyxEvidence.carrierUsecaseQualificatio
 assert.strictEqual(qualifiedReplacementTelnyxEvidence.campaignDraftReady, true, 'A verified brand with a qualified replacement use case should expose a no-charge campaign-preview state.');
 assert.strictEqual(qualifiedReplacementTelnyxEvidence.historicalCampaignStatus, 'TCR_FAILED', 'The failed legacy campaign must remain visible as history while the corrected draft is prepared.');
 
-const resend = resendLiveLaunchEvidence(data);
+const jsonBackendResend = resendLiveLaunchEvidence(data);
+assert.strictEqual(jsonBackendResend.live, false, 'A restart-unsafe JSON backend must never pass the live Resend launch gate.');
+assert.strictEqual(jsonBackendResend.transactionalDeliveryReady, false);
+assert.match(jsonBackendResend.error, /transactional PostgreSQL/i);
+const resend = resendLiveLaunchEvidence(data, { transactionalStateReady: true });
 assert.strictEqual(resend.live, true, 'Resend launch proof must require the verified WheelsonAuto sender plus fresh outbound and inbound provider evidence.');
 assert.strictEqual(resend.senderDomainVerified, true);
 assert.strictEqual(resend.senderDomain, 'notify.wheelsonauto.com');
@@ -232,7 +236,7 @@ assert.strictEqual(resend.inboundVerified, true);
 
 const staleResend = clone(data);
 staleResend.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint = 'stale-proof';
-assert.strictEqual(resendLiveLaunchEvidence(staleResend).live, false, 'An inbound Resend proof from another configuration must not unlock the launch gate.');
+assert.strictEqual(resendLiveLaunchEvidence(staleResend, { transactionalStateReady: true }).live, false, 'An inbound Resend proof from another configuration must not unlock the launch gate.');
 
 const star = starAiLiveLaunchEvidence(data);
 assert.strictEqual(star.live, true, 'Star launch proof must require an operational OpenAI health result tied to the current settings.');

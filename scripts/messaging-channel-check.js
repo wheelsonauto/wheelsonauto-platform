@@ -46,6 +46,7 @@ const messagesView = finalFunctionSlice(app, 'Messages');
 const messageTemplateDefaults = finalFunctionSlice(app, 'messageTemplateDefaults');
 const sendProviderEmail = finalFunctionSlice(server, 'sendProviderEmail');
 const emailDeliveryIdempotencyKey = finalFunctionSlice(server, 'emailDeliveryIdempotencyKey');
+const emailTransactionalDeliveryReady = finalFunctionSlice(server, 'emailTransactionalDeliveryReady');
 const sendProviderSms = finalFunctionSlice(server, 'sendProviderSms');
 const smsDeliveryIdempotencyKey = finalFunctionSlice(server, 'smsDeliveryIdempotencyKey');
 const smsTransactionalDeliveryReady = finalFunctionSlice(server, 'smsTransactionalDeliveryReady');
@@ -75,7 +76,7 @@ const configureTelnyxMessagingProfile = finalFunctionSlice(server, 'configureTel
 const applyTelnyxDeliveryEvent = finalFunctionSlice(server, 'applyTelnyxDeliveryEvent');
 
 if (!messagingStatus || !messageSetupPanel || !openComposeMessage || !messagesView || !messageTemplateDefaults) fail('Missing active frontend messaging functions.');
-if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !sendProviderSms || !smsDeliveryIdempotencyKey || !smsTransactionalDeliveryReady || !reviewPendingSmsDelivery || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
+if (!sendProviderEmail || !emailDeliveryIdempotencyKey || !emailTransactionalDeliveryReady || !sendProviderSms || !smsDeliveryIdempotencyKey || !smsTransactionalDeliveryReady || !reviewPendingSmsDelivery || !parseIncomingEmail || !hydrateIncomingEmail || !verifyResendWebhook || !verifyTwilioWebhook || !verifyTelnyxWebhook || !approveAiMessage || !publicMessagingStatus || !queueEmailNotification || !queueOwnerEmailNotification || !messageContextFields || !messageContactCandidates || !createAiMessageDraft || !smsScamAssessment || !smsSensitiveActionAssessment || !smsBridgeCode || !rememberSmsBridgeThread || !resolveOwnerSmsBridge || !sendOwnerSmsMirror || !handleOwnerSmsBridge || !configureTwilioSmsWebhook || !configureTelnyxMessagingProfile || !applyTelnyxDeliveryEvent) fail('Missing server messaging channel functions.');
 
 requireText('Messaging status', messagingStatus, 'emailWebhook');
 requireText('Messaging inbound SMS status', messagingStatus, 'smsWebhookConnected');
@@ -125,7 +126,7 @@ requireText('Server live SMS truth', server, 'smsDeliveryLive');
 requireText('Frontend live SMS truth', app, 'status.configured=status.smsDeliveryLive');
 requireText('Server outbound email truth', server, 'emailOutboundVerified');
 requireText('Server inbound email truth', server, 'emailInboundVerified');
-requireText('Frontend outbound email truth', app, 'status.emailConfigured=status.emailOutboundVerified');
+requireText('Frontend live email truth', app, 'status.emailConfigured=status.emailDeliveryLive');
 requireText('Messaging setup inbound email warning', app, 'Inbound replies are not verified yet');
 requireText('Server Star operational truth', server, 'aiProviderOperational');
 requireText('Server Star credit truth', server, 'aiProviderCreditRequired');
@@ -204,6 +205,11 @@ requireText('Message-history contact fallback', messageContactCandidates, 'messa
 requireText('Message-history contact phone', messageContactCandidates, 'row.phone || row.from || row.to');
 requireText('Resend support', sendProviderEmail, 'api.resend.com/emails');
 requireText('Resend provider idempotency header', sendProviderEmail, "'Idempotency-Key': idempotencyKey");
+requireText('Email PostgreSQL delivery guard', sendProviderEmail, 'Live email requires transactional PostgreSQL');
+requireText('Email durable provider claim', server, "claimScope = 'outbound_email_delivery'");
+requireText('Public transactional email status', publicMessagingStatus, 'emailTransactionalDeliveryReady');
+requireText('Public live email status', publicMessagingStatus, 'emailDeliveryLive');
+requireText('Frontend live email truth', app, 'status.emailConfigured=status.emailDeliveryLive');
 requireText('Deterministic email delivery key', emailDeliveryIdempotencyKey, "createHash('sha256')");
 requireText('Resend reply-to support', sendProviderEmail, 'emailPayload.reply_to');
 requireText('Resend owner-copy support', sendProviderEmail, 'emailPayload.bcc');
@@ -244,7 +250,7 @@ requireText('Daily closeout audit row summary', server, 'auditRows');
 requireText('Card setup completion notification', server, 'card_setup_completed');
 requireText('Star approval email send', approveAiMessage, 'sendProviderEmail');
 requireText('Star approval delivery identity', approveAiMessage, "deliveryId: 'star-draft:' + draft.id");
-requireText('Completed Star delivery server guard', approveAiMessage, 'existingSent');
+requireText('Completed or blocked Star delivery server guard', approveAiMessage, 'existingDelivery');
 requireText('Message context helper vehicle id', messageContextFields, 'vehicleId');
 requireText('Message context helper company scope', messageContextFields, 'organizationId');
 requireText('Message context helper VIN', messageContextFields, 'vin');

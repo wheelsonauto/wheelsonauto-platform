@@ -901,6 +901,14 @@ two-way inbox. The hardened Stripe launch requires those fresh outbound and
 inbound records to match the active Resend configuration. A test sent from an
 old sender, key, or webhook secret cannot clear the launch gate.
 
+Live email delivery is also PostgreSQL-gated. While production still uses the
+JSON fallback, Resend/SendGrid messages remain labeled drafts and the platform
+makes no outbound provider request. With transactional PostgreSQL active, each
+exact email first claims a durable `outbound_email_delivery` identity; an exact
+retry returns the recorded provider result instead of sending twice. An
+interrupted response stays confirmation-pending for review instead of releasing
+an uncertain delivery for an automatic resend.
+
 ### Record Live Provider Evidence From WheelsonAuto
 
 After the current Render settings are deployed, use an owner-controlled test

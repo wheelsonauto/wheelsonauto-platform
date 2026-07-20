@@ -222,7 +222,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260719-launch-stages-218';
+const ASSET_VERSION = 'platform-20260719-transactional-email-219';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1461,6 +1461,9 @@ function usesVerifiedWheelsonAutoSendingDomain(value) {
 function smsTransactionalDeliveryReady(repository = STATE_REPOSITORY) {
   return !!(repository && typeof repository.isTransactional === 'function' && repository.isTransactional());
 }
+function emailTransactionalDeliveryReady(repository = STATE_REPOSITORY) {
+  return !!(repository && typeof repository.isTransactional === 'function' && repository.isTransactional());
+}
 function telnyxLiveLaunchEvidence(data = {}, options = {}) {
   const saved = (((data.integrations || {}).messaging) || {});
   const settings = messageSettings(data);
@@ -1547,8 +1550,11 @@ function telnyxLiveLaunchEvidence(data = {}, options = {}) {
     nextAction: carrier.carrierRegistrationNextAction || error
   };
 }
-function resendLiveLaunchEvidence(data = {}) {
+function resendLiveLaunchEvidence(data = {}, options = {}) {
   const settings = messageSettings(data);
+  const transactionalDeliveryReady = options.transactionalStateReady === undefined
+    ? emailTransactionalDeliveryReady()
+    : options.transactionalStateReady === true;
   const configured = !!(
     WOA_EMAIL_PROVIDER === 'resend' &&
     settings.emailEnabled &&
@@ -1568,12 +1574,13 @@ function resendLiveLaunchEvidence(data = {}) {
   const signedInbound = record => isInbound(record) && String(record && record.source || '') === 'Email webhook' && !!String(record && record.externalId || '').trim();
   const matchingOutbound = records.find(record => successfulOutbound(record) && evidenceFingerprintMatches(record.providerConfigurationFingerprint, expectedFingerprint) && recordFresh(record).fresh) || null;
   const matchingInbound = records.find(record => signedInbound(record) && evidenceFingerprintMatches(record.providerConfigurationFingerprint, expectedFingerprint) && recordFresh(record).fresh) || null;
-  const live = !!(configured && readiness.emailOutboundVerified && readiness.emailInboundVerified && matchingOutbound && matchingInbound);
+  const live = !!(configured && transactionalDeliveryReady && readiness.emailOutboundVerified && readiness.emailInboundVerified && matchingOutbound && matchingInbound);
   let error = '';
   if (WOA_EMAIL_PROVIDER !== 'resend') error = 'Set WOA_EMAIL_PROVIDER=resend before the Stripe launch.';
   else if (!settings.emailEnabled || !WOA_EMAIL_ENABLED) error = 'Turn on email messaging in WheelsonAuto and Render before the Stripe launch.';
   else if (!RESEND_API_KEY || !RESEND_WEBHOOK_SECRET) error = 'Configure the Resend API key and signed inbound webhook secret in Render.';
   else if (!usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM)) error = 'Use a Resend-verified sender under wheelsonauto.com before the Stripe launch.';
+  else if (!transactionalDeliveryReady) error = 'Move production state to transactional PostgreSQL before live email. WheelsonAuto will keep emails as drafts so a restart cannot duplicate or lose a customer delivery record.';
   else if (!readiness.emailOutboundVerified || !matchingOutbound) error = 'Send a fresh Resend email accepted by the provider after the current Render email configuration is deployed.';
   else if (!readiness.emailInboundVerified || !matchingInbound) error = 'Send a reply into the signed Resend inbound webhook after the current Render email configuration is deployed.';
   return {
@@ -1581,6 +1588,7 @@ function resendLiveLaunchEvidence(data = {}) {
     configured,
     senderDomain: emailAddressFromSender(WOA_EMAIL_FROM).split('@')[1] || '',
     senderDomainVerified: usesVerifiedWheelsonAutoSendingDomain(WOA_EMAIL_FROM),
+    transactionalDeliveryReady,
     outboundVerified: !!(readiness.emailOutboundVerified && matchingOutbound),
     inboundVerified: !!(readiness.emailInboundVerified && matchingInbound),
     outbound: matchingOutbound ? providerEvidenceFreshness(recordTime(matchingOutbound), WOA_EMAIL_VALIDATION_MAX_AGE_MS) : providerEvidenceFreshness('', WOA_EMAIL_VALIDATION_MAX_AGE_MS),
@@ -1641,9 +1649,10 @@ function publicMessagingStatus(data = {}, options = {}) {
     ? smsTransactionalDeliveryReady()
     : options.transactionalStateReady === true;
   const telnyxLaunch = telnyxLiveLaunchEvidence(data, { transactionalStateReady: transactionalDeliveryReady });
-  const resendLaunch = resendLiveLaunchEvidence(data);
+  const resendLaunch = resendLiveLaunchEvidence(data, { transactionalStateReady: transactionalDeliveryReady });
   const starLaunch = starAiLiveLaunchEvidence(data);
   const smsDeliveryLive = !!(configured && transactionalDeliveryReady && (provider !== 'telnyx' || carrier.carrierDeliveryVerified));
+  const emailDeliveryLive = !!(emailConfigured && transactionalDeliveryReady);
   return {
     provider,
     enabled: settings.enabled,
@@ -1704,6 +1713,9 @@ function publicMessagingStatus(data = {}, options = {}) {
     emailEnabled: settings.emailEnabled,
     emailProvider,
     emailConfigured,
+    emailDeliveryLive,
+    emailTransactionalDeliveryReady: transactionalDeliveryReady,
+    emailDeliveryBlockedReason: transactionalDeliveryReady ? '' : 'Live email requires transactional PostgreSQL so restarts cannot duplicate or lose a customer delivery record.',
     ...emailReadiness,
     emailLaunchReady: resendLaunch.live,
     emailLaunchIssue: resendLaunch.error,
@@ -1712,7 +1724,9 @@ function publicMessagingStatus(data = {}, options = {}) {
     emailOwnerCopy: WOA_EMAIL_OWNER_NOTIFY ? maskEmail(WOA_EMAIL_OWNER_NOTIFY) : '',
     notificationEmail: settings.emailEnabled ? maskEmail(emailNotificationSettings(data).emailRecipients[0] || '') : '',
     notificationsEnabled: emailNotificationSettings(data).emailEnabled,
-    emailMode: emailConfigured ? 'Email can send customer replies, receipts, approvals, documents, and follow-ups.' : 'Email channel is built in and will save drafts until an email provider is connected.',
+    emailMode: emailDeliveryLive
+      ? 'Email can send customer replies, receipts, approvals, documents, and follow-ups.'
+      : (emailConfigured ? 'Email is configured but stays in draft mode until transactional PostgreSQL is active.' : 'Email channel is built in and will save drafts until an email provider is connected.'),
     aiGuardrails: 'AI can answer normal texts/emails and send safe links. Charges, card changes, autopay edits, removals, disputes, receipts after payment, and unclear money requests require admin approval.'
   };
 }
@@ -3491,8 +3505,48 @@ function emailDeliveryIdempotencyKey(emailPayload = {}, meta = {}) {
   });
   return 'woa-email-' + crypto.createHash('sha256').update(canonical).digest('hex');
 }
-async function sendProviderEmail(to, subject, body, meta = {}) {
+async function completeProviderEmailDelivery(repository, provider, idempotencyKey, request, operation) {
+  const claimScope = 'outbound_email_delivery';
+  const claim = await repository.claimIdempotencyKey(claimScope, idempotencyKey, request, { holdClaimUntilSettled: true });
+  if (!claim.accepted) {
+    if (claim.completed) return { ...(claim.response || {}), idempotencyKey, duplicate: true };
+    return {
+      sent: false,
+      status: 'Send confirmation pending',
+      provider,
+      channel: 'Email',
+      idempotencyKey,
+      duplicate: true,
+      inProgress: true,
+      message: 'This exact email is already being processed. WheelsonAuto did not send another copy.'
+    };
+  }
+  try {
+    const result = await operation();
+    await repository.completeIdempotencyKey(claimScope, idempotencyKey, {
+      sent: true,
+      status: result.status,
+      provider: result.provider,
+      channel: 'Email',
+      externalId: result.externalId,
+      idempotencyKey
+    }, { claimToken: claim.claimToken });
+    return result;
+  } catch (error) {
+    if (error.providerRejected) {
+      await repository.failIdempotencyKey(claimScope, idempotencyKey, error, { claimToken: claim.claimToken });
+    } else {
+      error.code = 'email_confirmation_pending';
+      error.ambiguous = true;
+      error.statusCode = 503;
+      error.idempotencyKey = idempotencyKey;
+    }
+    throw error;
+  }
+}
+async function sendProviderEmail(to, subject, body, meta = {}, options = {}) {
   const provider = String(WOA_EMAIL_PROVIDER || 'not_configured').toLowerCase();
+  const repository = options.repository || STATE_REPOSITORY;
   if (!body) throw new Error('Email needs a message body.');
   if (!to) return { sent: false, status: 'Needs email', provider, channel: 'Email', message: 'Add the customer email before sending.' };
   const settings = meta.messagingSettings || { emailEnabled: WOA_EMAIL_ENABLED };
@@ -3506,30 +3560,86 @@ async function sendProviderEmail(to, subject, body, meta = {}) {
     if (WOA_EMAIL_REPLY_TO) emailPayload.reply_to = WOA_EMAIL_REPLY_TO;
     if (ownerCopy) emailPayload.bcc = [ownerCopy];
     const idempotencyKey = emailDeliveryIdempotencyKey(emailPayload, meta);
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-      body: JSON.stringify(emailPayload)
+    if (!emailTransactionalDeliveryReady(repository)) {
+      return {
+        sent: false,
+        status: 'PostgreSQL required',
+        provider: 'resend',
+        channel: 'Email',
+        idempotencyKey,
+        message: 'Email saved as a draft. Live email requires transactional PostgreSQL so a server restart cannot duplicate or lose the customer delivery record.'
+      };
+    }
+    const request = {
+      provider: 'resend',
+      organizationId: String(meta.organizationId || MAIN_ORG_ID),
+      from: emailAddressFromSender(WOA_EMAIL_FROM),
+      to: recipient.toLowerCase(),
+      subjectHash: crypto.createHash('sha256').update(safeSubject).digest('hex'),
+      bodyHash: crypto.createHash('sha256').update(String(body)).digest('hex'),
+      deliveryId: String(meta.deliveryId || meta.idempotencyKey || '')
+    };
+    return completeProviderEmailDelivery(repository, 'resend', idempotencyKey, request, async () => {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(emailPayload)
+      });
+      const jsonBody = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const error = new Error(jsonBody.message || jsonBody.error || 'Resend email failed.');
+        error.providerRejected = true;
+        error.statusCode = response.status;
+        throw error;
+      }
+      return { sent: true, status: 'Sent', provider: 'resend', channel: 'Email', externalId: jsonBody.id || '', idempotencyKey, response: jsonBody };
     });
-    const jsonBody = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(jsonBody.message || jsonBody.error || 'Resend email failed.');
-    return { sent: true, status: 'Sent', provider: 'resend', channel: 'Email', externalId: jsonBody.id || '', idempotencyKey, response: jsonBody };
   }
   if (provider === 'sendgrid' && SENDGRID_API_KEY) {
-    const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + SENDGRID_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        personalizations: [{ to: [{ email: recipient }], bcc: ownerCopy ? [{ email: ownerCopy }] : undefined }],
-        from: { email: WOA_EMAIL_FROM },
-        reply_to: WOA_EMAIL_REPLY_TO ? { email: WOA_EMAIL_REPLY_TO } : undefined,
-        subject: safeSubject,
-        content: [{ type: 'text/plain', value: body }]
-      })
+    const emailPayload = { from: WOA_EMAIL_FROM, to: [recipient], subject: safeSubject, text: body };
+    if (WOA_EMAIL_REPLY_TO) emailPayload.reply_to = WOA_EMAIL_REPLY_TO;
+    if (ownerCopy) emailPayload.bcc = [ownerCopy];
+    const idempotencyKey = emailDeliveryIdempotencyKey(emailPayload, meta);
+    if (!emailTransactionalDeliveryReady(repository)) {
+      return {
+        sent: false,
+        status: 'PostgreSQL required',
+        provider: 'sendgrid',
+        channel: 'Email',
+        idempotencyKey,
+        message: 'Email saved as a draft. Live email requires transactional PostgreSQL so a server restart cannot duplicate or lose the customer delivery record.'
+      };
+    }
+    const request = {
+      provider: 'sendgrid',
+      organizationId: String(meta.organizationId || MAIN_ORG_ID),
+      from: emailAddressFromSender(WOA_EMAIL_FROM),
+      to: recipient.toLowerCase(),
+      subjectHash: crypto.createHash('sha256').update(safeSubject).digest('hex'),
+      bodyHash: crypto.createHash('sha256').update(String(body)).digest('hex'),
+      deliveryId: String(meta.deliveryId || meta.idempotencyKey || '')
+    };
+    return completeProviderEmailDelivery(repository, 'sendgrid', idempotencyKey, request, async () => {
+      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + SENDGRID_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: recipient }], bcc: ownerCopy ? [{ email: ownerCopy }] : undefined }],
+          from: { email: WOA_EMAIL_FROM },
+          reply_to: WOA_EMAIL_REPLY_TO ? { email: WOA_EMAIL_REPLY_TO } : undefined,
+          subject: safeSubject,
+          content: [{ type: 'text/plain', value: body }]
+        })
+      });
+      const text = await response.text().catch(() => '');
+      if (!response.ok) {
+        const error = new Error(text || 'SendGrid email failed.');
+        error.providerRejected = true;
+        error.statusCode = response.status;
+        throw error;
+      }
+      return { sent: true, status: 'Sent', provider: 'sendgrid', channel: 'Email', externalId: response.headers.get('x-message-id') || '', idempotencyKey, response: text };
     });
-    const text = await response.text().catch(() => '');
-    if (!response.ok) throw new Error(text || 'SendGrid email failed.');
-    return { sent: true, status: 'Sent', provider: 'sendgrid', channel: 'Email', externalId: response.headers.get('x-message-id') || '', response: text };
   }
   return { sent: false, status: 'Email draft', provider, channel: 'Email', message: 'Email provider is not connected yet. Email saved in WheelsonAuto.' };
 }
@@ -5874,20 +5984,21 @@ async function approveAiMessage(data, payload = {}) {
   data.messages = Array.isArray(data.messages) ? data.messages : [];
   const draft = data.messages.find(item => item.id === id);
   if (!draft) throw new Error('AI draft was not found.');
-  const existingSent = data.messages.find(item => item.aiDraftId === id && item.externalId && /outbound/i.test(String(item.direction || '')));
-  if (existingSent) {
-    draft.status = 'Approved + sent';
-    draft.tone = 'good';
-    draft.approvedAt = draft.approvedAt || existingSent.aiApprovedAt || existingSent.createdAt || '';
+  const existingDelivery = data.messages.find(item => item.aiDraftId === id && (item.externalId || item.providerIdempotencyKey) && /outbound/i.test(String(item.direction || '')));
+  if (existingDelivery) {
+    const delivered = !!existingDelivery.externalId;
+    draft.status = delivered ? 'Approved + sent' : 'Approved + saved';
+    draft.tone = delivered ? 'good' : 'warn';
+    draft.approvedAt = draft.approvedAt || existingDelivery.aiApprovedAt || existingDelivery.createdAt || '';
     return {
-      sent: existingSent,
+      sent: existingDelivery,
       result: {
-        sent: true,
-        status: existingSent.status || 'Sent',
-        provider: existingSent.provider || '',
-        channel: existingSent.channel || '',
-        externalId: existingSent.externalId,
-        idempotencyKey: existingSent.providerIdempotencyKey || '',
+        sent: delivered,
+        status: existingDelivery.status || (delivered ? 'Sent' : 'Ready to send'),
+        provider: existingDelivery.provider || '',
+        channel: existingDelivery.channel || '',
+        externalId: existingDelivery.externalId || '',
+        idempotencyKey: existingDelivery.providerIdempotencyKey || '',
         duplicate: true
       },
       draft,
@@ -5918,8 +6029,8 @@ async function approveAiMessage(data, payload = {}) {
       messagingSettings: settings
     });
   if (result.inProgress) {
-    const error = new Error(result.message || 'This Star reply is waiting for SMS provider confirmation.');
-    error.code = 'sms_confirmation_pending';
+    const error = new Error(result.message || 'This Star reply is waiting for provider confirmation.');
+    error.code = deliveryChannel === 'email' ? 'email_confirmation_pending' : 'sms_confirmation_pending';
     error.statusCode = 503;
     error.idempotencyKey = result.idempotencyKey || '';
     throw error;
@@ -22097,11 +22208,12 @@ const server = http.createServer(async (req, res) => {
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastAiApprovalAt: new Date().toISOString(), lastError: '' };
         appendAuditLog(data, user, 'Star AI reply approved', [approved.sent.customer || approved.draft.customer || 'Unknown customer', approved.sent.channel || approved.draft.deliveryChannel || 'Message', approved.sent.status || 'Draft saved']);
         await writeData(data);
-        return json(res, approved.result.sent ? 200 : 202, { ok: true, sent: !!approved.result.sent, message: approved.sent, draft: approved.draft, warning: approved.result.message || '' });
+        return json(res, approved.result.sent ? 200 : 202, { ok: true, sent: !!approved.result.sent, duplicate: approved.duplicate === true, message: approved.sent, draft: approved.draft, warning: approved.result.message || '' });
       } catch (err) {
-        if (err && err.code === 'sms_confirmation_pending' && pendingDraft) {
+        if (err && ['sms_confirmation_pending', 'email_confirmation_pending'].includes(err.code) && pendingDraft) {
           const key = String(err.idempotencyKey || '').trim();
           const now = new Date().toISOString();
+          const pendingChannel = err.code === 'email_confirmation_pending' ? 'Email' : 'SMS';
           let pendingRecord = (data.messages || []).find(item => item.providerIdempotencyKey === key && item.aiDraftId === pendingDraft.id);
           if (!pendingRecord) {
             pendingRecord = {
@@ -22113,15 +22225,15 @@ const server = http.createServer(async (req, res) => {
               phone: pendingDraft.phone || '',
               email: pendingDraft.email || '',
               direction: 'Outbound',
-              channel: 'SMS',
+              channel: pendingChannel,
               template: 'Star approved reply',
               subject: pendingDraft.subject || 'Star reply',
               status: 'Send confirmation pending',
               tone: 'warn',
               body: pendingDraft.body || '',
-              provider: MESSAGING_PROVIDER || 'not_configured',
+              provider: pendingChannel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
               providerIdempotencyKey: key,
-              source: 'Star AI + SMS provider confirmation',
+              source: 'Star AI + ' + pendingChannel + ' provider confirmation',
               aiApprovedAt: now,
               aiDraftId: pendingDraft.id,
               customerId: pendingDraft.customerId || '',
@@ -22145,9 +22257,9 @@ const server = http.createServer(async (req, res) => {
           pendingDraft.approvedAt = pendingDraft.approvedAt || now;
           data.integrations = data.integrations || {};
           data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastConfirmationPendingAt: now, lastError: String(err.message || err) };
-          appendAuditLog(data, user, 'Star AI reply confirmation pending', [pendingDraft.customer || 'Unknown customer', 'SMS', key || 'Protected delivery']);
+          appendAuditLog(data, user, 'Star AI reply confirmation pending', [pendingDraft.customer || 'Unknown customer', pendingChannel, key || 'Protected delivery']);
           await writeData(data);
-          return json(res, 503, { ok: false, confirmationPending: true, retry: false, error: 'The SMS provider response was interrupted. WheelsonAuto blocked another Star send until the owner reviews carrier delivery.', message: pendingRecord });
+          return json(res, 503, { ok: false, confirmationPending: true, retry: false, error: 'The ' + pendingChannel + ' provider response was interrupted. WheelsonAuto blocked another Star send until the owner reviews provider delivery.', message: pendingRecord });
         }
         return json(res, 409, { ok: false, error: String(err && err.message || err) });
       }
@@ -23677,6 +23789,7 @@ module.exports = {
   nearEndpointNameMatch,
   publicMessagingStatus,
   smsTransactionalDeliveryReady,
+  emailTransactionalDeliveryReady,
   hydrateIncomingEmail,
   verifyResendWebhook,
   verifyBillingWebhook,
@@ -23685,6 +23798,7 @@ module.exports = {
   providerWebhookEventId,
   parseIncomingEmail,
   parseIncomingMessage,
+  sendProviderEmail,
   sendProviderSms,
   reviewPendingSmsDelivery,
   smsScamAssessment,

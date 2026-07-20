@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const onboarding = require('../onboarding-service.js');
 const secureDocumentStore = require('../secure-document-store.js');
+const stateRepository = require('../state-repository.js');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
@@ -264,6 +265,7 @@ async function main() {
     operationalAlertEvidence,
     recordOperationalFailure,
     reportBackgroundTaskFailure,
+    sendProviderEmail,
     sessionSignature,
     verifySignedSessionCookie
   } = require('../server.js');
@@ -407,6 +409,20 @@ async function main() {
   };
 
   try {
+    const transactionalEmailRepository = new stateRepository.JsonStateRepository({
+      dataFile: path.join(dataDir, 'transactional-email-test.json'),
+      seedFile: path.join(dataDir, 'transactional-email-seed.json'),
+      organizationId: 'org-wheelsonauto'
+    });
+    transactionalEmailRepository.isTransactional = () => true;
+    const transactionalEmailCallsBefore = providerEmailCalls.length;
+    const transactionalEmailMeta = { deliveryId: 'direct-transactional-email', organizationId: 'org-wheelsonauto', ownerCopy: false };
+    const transactionalEmailFirst = await sendProviderEmail('transactional-email@example.com', 'Transactional delivery', 'One durable provider email.', transactionalEmailMeta, { repository: transactionalEmailRepository });
+    const transactionalEmailDuplicate = await sendProviderEmail('transactional-email@example.com', 'Transactional delivery', 'One durable provider email.', transactionalEmailMeta, { repository: transactionalEmailRepository });
+    assert(transactionalEmailFirst.sent === true && transactionalEmailDuplicate.sent === true && transactionalEmailDuplicate.duplicate === true, 'Transactional email delivery must return the completed provider result for an exact duplicate.');
+    assert(providerEmailCalls.length === transactionalEmailCallsBefore + 1, 'Transactional email delivery must call Resend exactly once for duplicate requests.');
+    assert(transactionalEmailFirst.idempotencyKey === transactionalEmailDuplicate.idempotencyKey && /^woa-email-[a-f0-9]{64}$/.test(transactionalEmailFirst.idempotencyKey), 'Transactional email retries must retain one durable delivery identity.');
+
     const recurringCountWarning = cloverRecurringCountWarning({ activeCustomers: 57 }, { activeCustomers: 55 });
     assert(/55 active subscriptions/.test(recurringCountWarning) && /saved Plan Manager total 57/.test(recurringCountWarning), 'A lower Clover recurring count must remain a preservation warning instead of deleting saved customers or failing the whole sync.');
     assert(cloverRecurringCountWarning({ activeCustomers: 55 }, { activeCustomers: 57 }) === '', 'A complete or larger Clover recurring result must not create a false preservation warning.');
@@ -1772,8 +1788,8 @@ async function main() {
     } finally {
       global.fetch = operationalAlertFetch;
     }
-    assert(ownerOperationalAlertValidation.status === 200 && ownerOperationalAlertValidation.json.ok && ownerOperationalAlertValidation.json.operationalAlerts && ownerOperationalAlertValidation.json.operationalAlerts.live === true, 'Owner operational-alert validation must prove a real provider handoff tied to the active email configuration.');
-    assert(operationalAlertCalls.length === 1 && String(operationalAlertCalls[0].options.body || '').includes('operational-alert delivery test'), 'Operational-alert validation must send the controlled owner test through the configured email provider.');
+    assert(ownerOperationalAlertValidation.status === 502 && !ownerOperationalAlertValidation.json.ok && /transactional PostgreSQL/i.test(ownerOperationalAlertValidation.json.error || ''), 'JSON development storage must block operational-alert provider delivery until restart-safe PostgreSQL is active.');
+    assert(operationalAlertCalls.length === 0, 'A blocked JSON operational-alert validation must make zero email provider calls.');
     const operationalAlertState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(operationalAlertState.status === 200 && operationalAlertState.json.integrations && operationalAlertState.json.integrations.notifications && !Object.prototype.hasOwnProperty.call(operationalAlertState.json.integrations.notifications, 'lastOperationalAlertConfigurationFingerprint'), 'Operational alert configuration proof must stay server-only even in owner state responses.');
     const operationalAlertFingerprint = operationalAlertConfigurationFingerprint({ integrations: { notifications: { emailRecipients: ['owner-alerts@example.com'] } } });
@@ -2038,7 +2054,7 @@ async function main() {
     const proofTamperPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
     assert(proofTamperPreflight.status === 200 && proofTamperPreflight.json.stripeWebhook.live === true && proofTamperPreflight.json.stripeWebhook.configurationMatched === true, 'A browser state write must not be able to alter signed Stripe webhook evidence.');
     assert(proofTamperPreflight.json.documentStorageValidation && proofTamperPreflight.json.documentStorageValidation.verified === true && proofTamperPreflight.json.documentStorageValidation.proofVersionMatched === true && proofTamperPreflight.json.documentStorageValidation.immutableWriteProtected === true && proofTamperPreflight.json.documentStorageValidation.objectDeleted === true && proofTamperPreflight.json.documentStorageValidation.configurationMatched === true && proofTamperPreflight.json.documentStorageValidation.fresh === true, 'A browser state write must not be able to alter private-storage validation evidence.');
-    assert(proofTamperPreflight.json.operationalAlerts && proofTamperPreflight.json.operationalAlerts.live === true && proofTamperPreflight.json.operationalAlerts.configurationMatched === true, 'A browser state write must not be able to alter verified operational-alert evidence.');
+    assert(proofTamperPreflight.json.operationalAlerts && proofTamperPreflight.json.operationalAlerts.live === false && !/Browser override attempt/i.test(proofTamperPreflight.json.operationalAlerts.error || ''), 'A browser state write must not be able to forge operational-alert evidence while PostgreSQL delivery is blocked.');
 
     const managerDisputeAction = await request(server, 'POST', '/api/integrations/clover/disputes/action', { cookie: managerCookie, json: { claimId: 'claim-direct-dispute', action: 'evidence_ready', confirmed: true } });
     assert(managerDisputeAction.status === 403, 'Manager must not change Clover dispute response status.');
@@ -4371,14 +4387,14 @@ async function main() {
     assert([200, 202].includes(managerEmail.status) && managerEmail.json.ok, 'Manager email draft/send failed.');
     assert(managerEmail.json.message.channel === 'Email', 'Email message should be saved as Email channel.');
     const managerEmailCall = providerEmailCalls.find(call => String(call.options && call.options.body || '').includes('Direct smoke email message.'));
-    assert(managerEmailCall && /^woa-email-[a-f0-9]{64}$/.test(String(managerEmailCall.options.headers && managerEmailCall.options.headers['Idempotency-Key'] || '')), 'Resend customer email requests must carry a deterministic provider idempotency key.');
-    assert(managerEmail.json.message.providerIdempotencyKey === managerEmailCall.options.headers['Idempotency-Key'], 'The customer message audit row must retain the exact Resend idempotency key.');
+    assert(!managerEmailCall && managerEmail.json.message.status === 'PostgreSQL required', 'JSON development storage must save customer email as a draft and make zero Resend calls.');
+    assert(/^woa-email-[a-f0-9]{64}$/.test(String(managerEmail.json.message.providerIdempotencyKey || '')), 'A blocked customer email draft must retain its deterministic provider idempotency key.');
     const duplicateManagerEmail = await request(server, 'POST', '/api/messages/send', {
       cookie: managerCookie,
       json: { customer: 'Direct Customer', email: 'direct-customer@example.com', channel: 'Email', body: 'Direct smoke email message.' }
     });
     const managerEmailCalls = providerEmailCalls.filter(call => String(call.options && call.options.body || '').includes('Direct smoke email message.'));
-    assert([200, 202].includes(duplicateManagerEmail.status) && managerEmailCalls.length === 2 && managerEmailCalls[0].options.headers['Idempotency-Key'] === managerEmailCalls[1].options.headers['Idempotency-Key'], 'Retrying the same email payload must reuse one Resend idempotency key instead of creating a duplicate delivery.');
+    assert([200, 202].includes(duplicateManagerEmail.status) && managerEmailCalls.length === 0 && managerEmail.json.message.providerIdempotencyKey === duplicateManagerEmail.json.message.providerIdempotencyKey, 'Retrying a blocked JSON email must reuse one delivery identity without contacting Resend.');
 
     const blockedInboundSms = await request(server, 'POST', '/api/webhooks/messages', {
       json: { MessageSid: 'direct-sms-blocked', From: '+13135550199', To: '+13135550000', Body: 'Unsigned inbound text.' }
@@ -4470,14 +4486,15 @@ async function main() {
       json: { draftId: starDraft.json.draft.id, channel: 'Email' }
     });
     assert([200, 202].includes(starSend.status) && starSend.json.ok, 'Star email approval failed.');
+    assert(starSend.json.message.status === 'PostgreSQL required' && !starSend.json.message.externalId, 'Star must save an approved email draft without contacting Resend while JSON storage is active.');
     const starProviderCallsBeforeDuplicate = providerEmailCalls.length;
     const duplicateStarSend = await request(server, 'POST', '/api/messages/ai-action', {
       cookie: managerCookie,
       json: { draftId: starDraft.json.draft.id, channel: 'Email' }
     });
-    assert(duplicateStarSend.status === 200 && duplicateStarSend.json.ok && duplicateStarSend.json.message.externalId === starSend.json.message.externalId, 'A completed Star email approval must return the existing provider delivery.');
-    assert(providerEmailCalls.length === starProviderCallsBeforeDuplicate, 'A completed Star email approval must not call Resend a second time.');
-    assert(starSend.json.message.providerIdempotencyKey && starSend.json.message.providerIdempotencyKey === duplicateStarSend.json.message.providerIdempotencyKey, 'Star email audit history must retain one stable Resend delivery key.');
+    assert([200, 202].includes(duplicateStarSend.status) && duplicateStarSend.json.ok && duplicateStarSend.json.duplicate === true && duplicateStarSend.json.message.id === starSend.json.message.id, 'A repeated Star approval must return the existing blocked delivery record instead of creating another draft.');
+    assert(providerEmailCalls.length === starProviderCallsBeforeDuplicate, 'A blocked Star email approval must make zero Resend calls on every retry.');
+    assert(starSend.json.message.providerIdempotencyKey && starSend.json.message.providerIdempotencyKey === duplicateStarSend.json.message.providerIdempotencyKey, 'Star email audit history must retain one stable delivery key.');
 
     const starChargeDraft = await request(server, 'POST', '/api/messages/ai-reply', {
       cookie: managerCookie,
