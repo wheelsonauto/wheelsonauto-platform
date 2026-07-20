@@ -30,6 +30,7 @@ function buildProductionReadinessAudit({ environment = {}, infrastructure = {}, 
   const storageKeys = infrastructure.documentEncryptionKeys || {};
   const artifacts = infrastructure.privateArtifacts || {};
   const backup = infrastructure.stateBackup || {};
+  const schemaContract = database.schemaContract || {};
   const providerProof = infrastructure.providerProofCollection || {};
   const environmentMissing = uniqueStrings(environment.missing);
   const infrastructureMissing = uniqueStrings(infrastructure.missing);
@@ -52,6 +53,10 @@ function buildProductionReadinessAudit({ environment = {}, infrastructure = {}, 
         connected: bool(database.connected),
         transactional: bool(database.transactional),
         productionReady: bool(database.productionReady),
+        schemaContractReady: bool(database.schemaContractReady || schemaContract.ready),
+        missingSchemaMigrations: Array.isArray(schemaContract.missingMigrations) ? schemaContract.missingMigrations.length : 0,
+        missingSchemaConstraints: Array.isArray(schemaContract.missingConstraints) ? schemaContract.missingConstraints.length : 0,
+        missingSchemaIndexes: Array.isArray(schemaContract.missingIndexes) ? schemaContract.missingIndexes.length : 0,
         stateImported: bool(database.stateImported),
         integrityVerified: String(database.integrity || '').toLowerCase() === 'verified',
         migrationProofReady: bool(database.migrationProofReady),

@@ -12,6 +12,8 @@ function readyInfrastructure() {
       connected: true,
       transactional: true,
       productionReady: true,
+      schemaContractReady: true,
+      schemaContract: { ready: true, missingMigrations: [], missingConstraints: [], missingIndexes: [] },
       stateImported: true,
       integrity: 'verified',
       migrationProofReady: true,
@@ -55,6 +57,10 @@ const ready = buildProductionReadinessAudit({
 });
 assert.strictEqual(ready.readyForLiveStripe, true);
 assert.strictEqual(ready.foundation.postgres.productionReady, true);
+assert.strictEqual(ready.foundation.postgres.schemaContractReady, true);
+assert.strictEqual(ready.foundation.postgres.missingSchemaMigrations, 0);
+assert.strictEqual(ready.foundation.postgres.missingSchemaConstraints, 0);
+assert.strictEqual(ready.foundation.postgres.missingSchemaIndexes, 0);
 assert.strictEqual(ready.foundation.privateStorage.validationLive, true);
 assert.strictEqual(ready.foundation.ownerAccess.pinFallbackDisabled, true);
 assert.strictEqual(ready.providers.cloverRecurringRoster.quarantinedRows, 2, 'Ambiguous Clover plans must remain visible without falsely blocking individually eligible rows.');
@@ -79,6 +85,13 @@ blockedInfrastructure.providerProofCollection = {
 blockedInfrastructure.missing = ['Stripe live secret key', 'Stripe live account activation proof', 'owner username/password login'];
 blockedInfrastructure.ownerAuthentication = { pinFallbackAllowed: true };
 blockedInfrastructure.identityWarnings = [{ vin: 'PRIVATEVIN1234567', customer: 'Private Customer' }];
+blockedInfrastructure.database.schemaContractReady = false;
+blockedInfrastructure.database.schemaContract = {
+  ready: false,
+  missingMigrations: ['private_migration_identifier'],
+  missingConstraints: [{ tableName: 'private_table_identifier' }],
+  missingIndexes: [{ name: 'private_index_identifier' }]
+};
 
 const blocked = buildProductionReadinessAudit({
   environment: { ready: false, missing: ['STRIPE_SECRET_KEY', 'WOA_PRODUCTION_HARDENING_REQUIRED'] },
@@ -87,11 +100,15 @@ const blocked = buildProductionReadinessAudit({
 assert.strictEqual(blocked.readyForLiveStripe, false);
 assert.strictEqual(blocked.safety.stripeMoneyActionsLocked, true);
 assert.strictEqual(blocked.foundation.ownerAccess.pinFallbackDisabled, false);
+assert.strictEqual(blocked.foundation.postgres.schemaContractReady, false);
+assert.strictEqual(blocked.foundation.postgres.missingSchemaMigrations, 1);
+assert.strictEqual(blocked.foundation.postgres.missingSchemaConstraints, 1);
+assert.strictEqual(blocked.foundation.postgres.missingSchemaIndexes, 1);
 assert(blocked.nextActions.includes('STRIPE_SECRET_KEY') && blocked.nextActions.includes('Stripe live account activation proof'));
 assert.strictEqual(blocked.nextActions.filter(item => item === 'Stripe live account activation proof').length, 1, 'Repeated readiness gaps must be deduplicated.');
 const serialized = JSON.stringify(blocked);
 assert(!serialized.includes('secret-sk_live_should_never_appear'), 'Provider error text and secret-like values must not leak through the read-only audit.');
-['acct_private_identifier', 'evt_private_identifier', 'PRIVATEVIN1234567', 'Private Customer'].forEach(identifier => {
+['acct_private_identifier', 'evt_private_identifier', 'PRIVATEVIN1234567', 'Private Customer', 'private_migration_identifier', 'private_table_identifier', 'private_index_identifier'].forEach(identifier => {
   assert(!serialized.includes(identifier), 'The readiness audit must remain aggregate and omit customer/provider identifiers.');
 });
 
