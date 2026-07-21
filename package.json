@@ -47,6 +47,7 @@
     "production-environment-check": "node scripts/production-environment-check.js",
     "validate-production-environment": "node scripts/validate-production-environment.js",
     "production-readiness-audit": "node scripts/production-readiness-audit.js",
+    "production-provider-readiness-audit": "node scripts/production-readiness-audit.js --provider-proof",
     "production-readiness-audit-check": "node scripts/production-readiness-audit-check.js",
     "render-production-blueprint-check": "node scripts/render-production-blueprint-check.js",
     "fatal-process-monitor-check": "node scripts/fatal-process-monitor-check.js",

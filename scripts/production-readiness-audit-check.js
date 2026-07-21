@@ -2,6 +2,7 @@
 
 const assert = require('node:assert');
 const { buildProductionReadinessAudit } = require('../production-readiness-audit');
+const { auditPasses, providerProofOnly } = require('./production-readiness-audit');
 
 function readyInfrastructure() {
   return {
@@ -46,6 +47,14 @@ function readyInfrastructure() {
     assignmentReviewWarningCount: 2,
     identityWarnings: [],
     providerProofCollection: { ready: true, missing: [], providerEvidenceMissing: [], stripeMoneyActionsLocked: false },
+    controlledStripePilot: {
+      required: true,
+      approved: true,
+      readyForApproval: true,
+      candidate: { ready: true, missing: [], sessionId: 'pilot_private_session', customer: 'Pilot Private Customer' }
+    },
+    readyForCustomerMigration: true,
+    launchMissing: [],
     missing: []
   };
 }
@@ -56,6 +65,7 @@ const ready = buildProductionReadinessAudit({
   infrastructure: readyInfrastructure()
 });
 assert.strictEqual(ready.readyForLiveStripe, true);
+assert.strictEqual(ready.readyForCustomerMigration, true);
 assert.strictEqual(ready.foundation.postgres.productionReady, true);
 assert.strictEqual(ready.foundation.postgres.schemaContractReady, true);
 assert.strictEqual(ready.foundation.postgres.missingSchemaMigrations, 0);
@@ -66,7 +76,34 @@ assert.strictEqual(ready.foundation.ownerAccess.pinFallbackDisabled, true);
 assert.strictEqual(ready.providers.cloverRecurringRoster.quarantinedRows, 2, 'Ambiguous Clover plans must remain visible without falsely blocking individually eligible rows.');
 assert.strictEqual(ready.dataReview.blockingAssignmentConflicts, 0, 'Review-only renter history must remain distinct from an active assignment conflict.');
 assert.strictEqual(ready.safety.stripeMoneyActionsLocked, false);
+assert.strictEqual(ready.safety.customerMigrationLocked, false);
+assert.strictEqual(ready.controlledPilot.approved, true);
+assert.strictEqual(ready.controlledPilot.candidateReady, true);
+assert.strictEqual(auditPasses(ready, ['node', 'audit.js']), true, 'The default audit must pass only at customer-migration clearance.');
 assert.deepStrictEqual(ready.nextActions, []);
+
+const pilotBlockedInfrastructure = readyInfrastructure();
+pilotBlockedInfrastructure.launchStage = 'live_pilot_required';
+pilotBlockedInfrastructure.readyForCustomerMigration = false;
+pilotBlockedInfrastructure.controlledStripePilot = {
+  required: true,
+  approved: false,
+  readyForApproval: false,
+  candidate: { ready: false, missing: ['Live Identity', 'First weekly payment'], sessionId: 'pilot_private_session', customer: 'Pilot Private Customer' }
+};
+pilotBlockedInfrastructure.launchMissing = ['owner-approved complete live Stripe onboarding pilot'];
+const pilotBlocked = buildProductionReadinessAudit({
+  environment: { ready: true, missing: [] },
+  infrastructure: pilotBlockedInfrastructure
+});
+assert.strictEqual(pilotBlocked.readyForLiveStripe, true, 'Live provider proof may be ready before the real pilot.');
+assert.strictEqual(pilotBlocked.readyForCustomerMigration, false, 'Customer migration must remain locked before owner pilot approval.');
+assert.strictEqual(pilotBlocked.controlledPilot.candidateMissingChecks, 2);
+assert.strictEqual(pilotBlocked.safety.customerMigrationLocked, true);
+assert.strictEqual(auditPasses(pilotBlocked, ['node', 'audit.js']), false, 'The default production audit must fail before the owner-approved pilot.');
+assert.strictEqual(auditPasses(pilotBlocked, ['node', 'audit.js', '--provider-proof']), true, 'Explicit provider-proof mode may pass before the pilot.');
+assert.strictEqual(providerProofOnly(['node', 'audit.js', '--', '--provider-proof']), true, 'The package-run delimiter must preserve provider-proof mode.');
+assert(pilotBlocked.nextActions.includes('owner-approved complete live Stripe onboarding pilot'));
 
 const blockedInfrastructure = readyInfrastructure();
 blockedInfrastructure.readyForLiveStripe = false;
@@ -111,5 +148,9 @@ assert(!serialized.includes('secret-sk_live_should_never_appear'), 'Provider err
 ['acct_private_identifier', 'evt_private_identifier', 'PRIVATEVIN1234567', 'Private Customer', 'private_migration_identifier', 'private_table_identifier', 'private_index_identifier'].forEach(identifier => {
   assert(!serialized.includes(identifier), 'The readiness audit must remain aggregate and omit customer/provider identifiers.');
 });
+const pilotSerialized = JSON.stringify(pilotBlocked);
+['pilot_private_session', 'Pilot Private Customer', 'Live Identity', 'First weekly payment'].forEach(identifier => {
+  assert(!pilotSerialized.includes(identifier), 'The aggregate pilot audit must not expose customer, session, or checklist details.');
+});
 
-console.log('Production readiness audit check passed: aggregate launch evidence is read-only, deduplicated, provider-safe, and keeps historical renter warnings separate from active conflicts.');
+console.log('Production readiness audit check passed: the default audit requires owner-approved live pilot clearance, provider-only mode is explicit, and aggregate evidence remains read-only and private.');

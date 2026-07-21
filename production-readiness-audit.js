@@ -32,16 +32,20 @@ function buildProductionReadinessAudit({ environment = {}, infrastructure = {}, 
   const backup = infrastructure.stateBackup || {};
   const schemaContract = database.schemaContract || {};
   const providerProof = infrastructure.providerProofCollection || {};
+  const controlledPilot = infrastructure.controlledStripePilot || {};
   const environmentMissing = uniqueStrings(environment.missing);
   const infrastructureMissing = uniqueStrings(infrastructure.missing);
-  const nextActions = uniqueStrings([...environmentMissing, ...infrastructureMissing]);
+  const launchMissing = uniqueStrings(infrastructure.launchMissing);
+  const nextActions = uniqueStrings([...environmentMissing, ...(launchMissing.length ? launchMissing : infrastructureMissing)]);
   const foundationReady = bool(providerProof.ready);
   const readyForLiveStripe = bool(environment.ready) && bool(infrastructure.readyForLiveStripe);
+  const readyForCustomerMigration = bool(environment.ready) && bool(infrastructure.readyForCustomerMigration);
 
   return {
     checkedAt,
     phase: 'controlled-clover-to-stripe-launch',
     readyForLiveStripe,
+    readyForCustomerMigration,
     launchStage: String(infrastructure.launchStage || (foundationReady ? 'provider_proof_collection' : 'foundation_blocked')),
     environment: {
       ready: bool(environment.ready),
@@ -120,9 +124,21 @@ function buildProductionReadinessAudit({ environment = {}, infrastructure = {}, 
       assignmentReviewWarnings: Math.max(0, Number(infrastructure.assignmentReviewWarningCount || 0)),
       vehicleIdentityWarnings: Array.isArray(infrastructure.identityWarnings) ? infrastructure.identityWarnings.length : 0
     },
+    controlledPilot: {
+      required: controlledPilot.required !== false,
+      approved: bool(controlledPilot.approved),
+      approvalInvalidated: bool(controlledPilot.approvalInvalidated),
+      readyForApproval: bool(controlledPilot.readyForApproval),
+      candidatePresent: !!controlledPilot.candidate,
+      candidateReady: bool(controlledPilot.candidate && controlledPilot.candidate.ready),
+      candidateMissingChecks: Array.isArray(controlledPilot.candidate && controlledPilot.candidate.missing)
+        ? controlledPilot.candidate.missing.length
+        : 0
+    },
     safety: {
       stripeMoneyActionsLocked: providerProof.stripeMoneyActionsLocked !== false,
       hardeningEnabled: bool(infrastructure.hardeningRequired),
+      customerMigrationLocked: !readyForCustomerMigration,
       noLiveActionPerformed: true,
       auditMode: 'read_only'
     },

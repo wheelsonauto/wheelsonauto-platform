@@ -1110,6 +1110,26 @@ headers, while public mutation routes use persistent rate limits.
 
 ## 9. Final Launch Matrix
 
+Run the read-only aggregate audit before treating the platform as cleared for
+customer migration:
+
+```sh
+pnpm run production-readiness-audit
+```
+
+The default command exits successfully only when the production environment,
+live provider evidence, data review, final hardening, and one exact
+owner-approved live Stripe onboarding pilot are all current. During the earlier
+provider-setup checkpoint, use the narrower command explicitly:
+
+```sh
+pnpm run production-provider-readiness-audit
+```
+
+That provider-only command can clear the first live pilot to run, but it is not
+permission to migrate an existing Clover customer. Both reports are aggregate,
+read-only, and omit customer, session, document, and provider identifiers.
+
 Before moving more customers, explicitly verify:
 
 - successful, declined, timed-out, duplicate, and delayed Stripe charges
