@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-setupintent-253';
+const ASSET_VERSION = 'platform-20260721-stripe-setup-recovery-254';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -1220,7 +1220,7 @@ function emailNotificationSettings(data = {}) {
   const rawRecipients = Array.isArray(saved.emailRecipients) ? saved.emailRecipients : String(saved.emailRecipients || saved.emailTo || '').split(',');
   const recipients = rawRecipients.map(item => String(item || '').trim()).filter(Boolean);
   if (!recipients.length && WOA_EMAIL_OWNER_NOTIFY) recipients.push(WOA_EMAIL_OWNER_NOTIFY);
-  const defaultEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'customer_message', 'system_error'];
+  const defaultEvents = ['payment_failed', 'payment_not_found', 'application_submitted', 'maintenance_due', 'claim_dispute', 'daily_closeout', 'customer_password_reset', 'staff_password_reset', 'card_setup_completed', 'card_setup_failed', 'customer_message', 'system_error'];
   const events = Array.isArray(saved.events) && saved.events.length ? saved.events.slice() : defaultEvents.slice();
   return {
     emailEnabled: WOA_EMAIL_ENABLED && saved.emailEnabled !== false,
@@ -15669,6 +15669,84 @@ async function attachStripeCardSetupCheckout(data, request, req) {
 function stripeObjectId(value) {
   return typeof value === 'string' ? value : String(value && value.id || '');
 }
+async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
+  assertStripeCardPreparationReady();
+  assertStripeLiveResult(setupIntent && setupIntent.livemode, 'Stripe SetupIntent');
+  const metadata = setupIntent && setupIntent.metadata || {};
+  if (String(metadata.wheelsonauto || '').toLowerCase() !== 'true' || metadata.flow !== 'card_setup' || metadata.cardSetupRequestId !== request.id) {
+    throw new Error('Stripe SetupIntent did not contain the exact WheelsonAuto card-setup reference.');
+  }
+  if (request.stripeCustomerId && stripeObjectId(setupIntent.customer) && stripeObjectId(setupIntent.customer) !== request.stripeCustomerId) {
+    throw new Error('Stripe SetupIntent customer did not match this WheelsonAuto request.');
+  }
+  if (request.stripePaymentMethodId && /stripe card saved/i.test(String(request.status || ''))) {
+    return { recurring: stripeRecurringRowsForRequest(data, request)[0] || null, alreadyCompleted: true };
+  }
+  const eventType = String(type || '').toLowerCase();
+  const cancelled = eventType === 'setup_intent.canceled';
+  const actionRequired = eventType === 'setup_intent.requires_action';
+  const providerError = setupIntent && setupIntent.last_setup_error || {};
+  const providerReason = String(providerError.message || providerError.decline_code || providerError.code || '').trim().slice(0, 500);
+  const publicReason = cancelled
+    ? 'Stripe card setup was cancelled. Send a fresh secure setup link.'
+    : actionRequired
+      ? 'Stripe needs the customer to complete an additional card verification step.'
+      : 'Stripe could not save this card. The customer must retry with a valid payment method.';
+  const recordedReason = [publicReason, providerReason].filter(Boolean).join(' ').slice(0, 900);
+  const failedAt = new Date().toISOString();
+  Object.assign(request, {
+    status: cancelled ? 'Stripe setup cancelled - fresh link required' : actionRequired ? 'Stripe setup action required' : 'Stripe setup failed - customer retry needed',
+    stripeCardSetupStatus: cancelled ? 'Cancelled' : actionRequired ? 'Action required' : 'Failed',
+    stripeCardSetupError: recordedReason,
+    stripeCardSetupFailedAt: failedAt,
+    lastStripeSetupIntentId: stripeObjectId(setupIntent),
+    lastFailedAt: failedAt,
+    lastError: recordedReason,
+    ...(cancelled ? { closedAt: failedAt } : {})
+  });
+  const rows = stripeRecurringRowsForRequest(data, request);
+  rows.forEach(row => {
+    const hasClover = normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover') === 'clover' && stripeMigration.hasCloverSource(row);
+    Object.assign(row, {
+      stripeCardSetupStatus: request.stripeCardSetupStatus,
+      stripeCardSetupError: recordedReason,
+      stripeCardSetupFailedAt: failedAt,
+      lastStripeSetupIntentId: stripeObjectId(setupIntent),
+      pendingCardProvider: 'stripe',
+      cardChangePendingAt: row.cardChangePendingAt || failedAt,
+      stripeMigrationStatus: hasClover
+        ? 'Stripe setup needs attention - Clover remains active'
+        : 'Stripe card setup needs customer attention',
+      updatedAt: failedAt
+    });
+    if (!hasClover) Object.assign(row, {
+      paymentSetup: cancelled ? 'Stripe setup cancelled - send fresh link' : actionRequired ? 'Stripe verification required' : 'Stripe setup failed - retry needed',
+      status: 'Setup needed',
+      tone: 'warn',
+      autoChargeEnabled: false
+    });
+  });
+  const onboardingSession = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
+  if (onboardingSession && !onboardingSession.cardCompletedAt) Object.assign(onboardingSession, {
+    status: cancelled ? 'Card setup cancelled' : actionRequired ? 'Card verification required' : 'Card setup needed',
+    cardSetupError: recordedReason,
+    cardSetupFailedAt: failedAt
+  });
+  await queueOwnerEmailNotification(data, 'card_setup_failed', {
+    customer: request.customer || 'Customer',
+    subject: (cancelled ? 'Stripe card setup cancelled - ' : actionRequired ? 'Stripe card verification needed - ' : 'Stripe card setup failed - ') + (request.customer || 'Customer'),
+    body: [
+      publicReason,
+      'Customer: ' + (request.customer || 'Customer'),
+      'Vehicle: ' + (request.vehicle || request.vin || 'Not linked'),
+      'Amount: ' + moneyText(request.amount || 0),
+      'Stripe intent: ' + (stripeObjectId(setupIntent) || 'Not provided'),
+      providerReason ? 'Stripe reason: ' + providerReason : '',
+      rows.some(row => normalizedPaymentProvider(row.paymentProvider || row.provider) === 'clover') ? 'Clover remains active. Do not stop it.' : 'No Stripe charge is authorized until card setup succeeds.'
+    ].filter(Boolean).join('\n')
+  });
+  return { recurring: rows[0] || null, alreadyCompleted: false, failed: true, cancelled, actionRequired };
+}
 async function completeStripeCardSetup(data, request, sessionInput) {
   if (publicLinkExplicitlyRevoked(request)) throw stripeMigration.stripeLaunchSafetyError('This Stripe card setup request was cancelled or revoked. Send a fresh secure link before saving another card.', 'stripe_setup_link_revoked', ['Fresh owner-issued Stripe setup link'], 409);
   assertStripeCardPreparationReady();
@@ -15740,7 +15818,13 @@ async function completeStripeCardSetup(data, request, sessionInput) {
     stripeCardLast4: card.last4 || '',
     stripeCardSavedAt: completedAt,
     stripeLivemode: session.livemode === true && setupIntent.livemode === true,
-    stripeMigrationStatus: 'Stripe card ready - Clover remains active until owner confirmation'
+    stripeMigrationStatus: 'Stripe card ready - Clover remains active until owner confirmation',
+    stripeCardSetupStatus: 'Saved',
+    stripeCardSetupError: '',
+    stripeCardSetupFailedAt: '',
+    lastFailedAt: '',
+    lastError: '',
+    closedAt: ''
   });
   const rows = stripeRecurringRowsForRequest(data, request);
   rows.forEach(row => {
@@ -15771,6 +15855,9 @@ async function completeStripeCardSetup(data, request, sessionInput) {
             : 'Stripe card saved for an existing Stripe schedule.'
       }),
       pendingCardProvider: '',
+      stripeCardSetupStatus: 'Saved',
+      stripeCardSetupError: '',
+      stripeCardSetupFailedAt: '',
       cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
       cardChangePendingAt: '',
       stripeCardAuthenticationSetupNeeded: false,
@@ -15798,7 +15885,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
   const profile = (data.customers || []).find(row => request.customer && normKey(row.name || row.customer) === normKey(request.customer));
   if (profile) Object.assign(profile, { stripeCustomerId: customerId, stripePaymentMethodId: paymentMethodId, stripeCardBrand: card.brand || '', stripeCardLast4: card.last4 || '', stripeCardSavedAt: completedAt, stripeLivemode: session.livemode === true && setupIntent.livemode === true, updatedAt: completedAt });
   const onboardingSession = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
-  if (onboardingSession) Object.assign(onboardingSession, { cardCompletedAt: completedAt, autopayConsentAt: request.autopayConsentAt || completedAt, status: 'Card linked' });
+  if (onboardingSession) Object.assign(onboardingSession, { cardCompletedAt: completedAt, autopayConsentAt: request.autopayConsentAt || completedAt, status: 'Card linked', cardSetupError: '', cardSetupFailedAt: '' });
   await queueOwnerEmailNotification(data, 'card_setup_completed', {
     customer: request.customer || 'Customer',
     subject: 'Stripe card ready - ' + (request.customer || 'Customer'),
@@ -18623,6 +18710,17 @@ async function recordStripeWebhookEvent(event = {}) {
       : null;
     if (request) {
       await completeStripeCardSetup(data, request, object);
+      cardSetupRequestId = request.id;
+    }
+  }
+  if (/^setup_intent\.(setup_failed|canceled|requires_action)$/.test(type)) {
+    const metadata = object.metadata || {};
+    const exactRequestId = String(metadata.cardSetupRequestId || '').trim();
+    const request = String(metadata.wheelsonauto || '').toLowerCase() === 'true' && metadata.flow === 'card_setup' && exactRequestId
+      ? (data.cardSetupRequests || []).find(row => row.id === exactRequestId)
+      : null;
+    if (request) {
+      await recordStripeCardSetupFailure(data, request, object, type);
       cardSetupRequestId = request.id;
     }
   }
