@@ -107,6 +107,10 @@ services:
         sync: false
       - key: CLOVER_ACCESS_TOKEN
         sync: false
+      # Optional merchant API token dedicated to recurring plans/subscriptions.
+      # Use this when core customer/payment sync works but recurring access is 401.
+      - key: CLOVER_RECURRING_ACCESS_TOKEN
+        sync: false
       - key: CLOVER_API_ACCESS_KEY
         sync: false
       - key: CLOVER_ECOMMERCE_PUBLIC_KEY

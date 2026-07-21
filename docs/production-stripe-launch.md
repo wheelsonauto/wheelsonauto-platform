@@ -909,20 +909,27 @@ and a same-period duplicate charge. The same lock applies to staff manual
 saved-card charges: a manual Clover charge cannot bypass the cutover date, and
 a blocked migration action must not count as a failed customer card attempt.
 
-The Clover recurring roster uses the documented `/recurring/v1/plans` and
-`/recurring/v1/plans/{planId}/subscriptions` endpoints with the merchant ID in
-the `X-Clover-Merchant-Id` header. If Clover returns `401`, `403`, or `404`
+The Clover recurring roster uses the documented `/recurring/v1/plans`,
+`/recurring/v1/subscriptions`, and per-plan subscription endpoints with the
+merchant ID in the `X-Clover-Merchant-Id` header. `CLOVER_ACCESS_TOKEN` remains
+the customer/payment token. `CLOVER_RECURRING_ACCESS_TOKEN` can hold a separate
+merchant-specific API token for plans and subscriptions; when it is absent,
+recurring calls deliberately fall back to `CLOVER_ACCESS_TOKEN`. This lets the
+recurring credential be repaired without risking the working core sync.
+
+If Clover returns `401`, `403`, or `404`
 while a verified roster already exists, WheelsonAuto preserves that roster and
 continues customer/payment synchronization, but records a degraded recurring
 warning. Treat the preserved roster as read-only evidence until the Clover
-merchant API token is corrected; do not schedule a customer cutover from a
-stale roster alone.
+recurring token is corrected; do not schedule a customer cutover from a stale
+roster alone.
 
 The owner **Live launch preflight** enforces this rule as a separate Clover
 cutover-roster gate. Provider subscription evidence has its own timestamp; a
 manual Plan Manager import cannot refresh it. The evidence is also bound to the
-deployed Clover environment, API base, merchant ID, and API token. Changing any
-of those values invalidates the old evidence until a new provider sync passes.
+deployed Clover environment, API base, merchant ID, and effective recurring API
+token. Changing any of those values invalidates the old evidence until a new
+provider sync passes.
 A current `401`, `403`, `404`, changed configuration, or roster older than six
 hours keeps the gate blocked even if a generic import is current or older job
 errors are marked reviewed. `WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS` may

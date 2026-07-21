@@ -44,6 +44,8 @@ const SESSION_SIGNING_SECRET_CONFIGURED = !!(process.env.WOA_SESSION_SECRET || p
 const STAFF_SESSION_TTL_SECONDS = Math.max(15 * 60, Math.min(24 * 60 * 60, Number(process.env.WOA_STAFF_SESSION_TTL_SECONDS || 12 * 60 * 60)));
 const CUSTOMER_SESSION_TTL_SECONDS = Math.max(15 * 60, Math.min(30 * 24 * 60 * 60, Number(process.env.WOA_CUSTOMER_SESSION_TTL_SECONDS || 7 * 24 * 60 * 60)));
 const CLOVER_TOKEN = process.env.CLOVER_ACCESS_TOKEN || '';
+const CLOVER_RECURRING_TOKEN = process.env.CLOVER_RECURRING_ACCESS_TOKEN || CLOVER_TOKEN;
+const CLOVER_RECURRING_TOKEN_IS_DEDICATED = !!process.env.CLOVER_RECURRING_ACCESS_TOKEN;
 const CLOVER_MERCHANT_ID = process.env.CLOVER_MERCHANT_ID || '';
 const CLOVER_ENV = process.env.CLOVER_ENV || 'production';
 const CLOVER_API_BASE = CLOVER_ENV === 'sandbox' ? 'https://sandbox.dev.clover.com' : 'https://api.clover.com';
@@ -256,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-identity-proof-guidance-272';
+const ASSET_VERSION = 'platform-20260721-clover-recurring-token-273';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -1525,9 +1527,14 @@ function cloverRecurringConfigurationFingerprint() {
   return launchConfigurationFingerprint([
     CLOVER_ENV,
     CLOVER_API_BASE,
-    CLOVER_TOKEN,
+    CLOVER_RECURRING_TOKEN,
     CLOVER_MERCHANT_ID
   ]);
+}
+function cloverRecurringTokenRecoveryGuidance() {
+  return CLOVER_RECURRING_TOKEN_IS_DEDICATED
+    ? 'Replace CLOVER_RECURRING_ACCESS_TOKEN in Render with a current merchant-specific Clover API token that can read recurring plans and subscriptions.'
+    : 'Add a current merchant-specific Clover API token as CLOVER_RECURRING_ACCESS_TOKEN in Render so recurring access can be repaired without replacing the core customer/payment token.';
 }
 function emailLaunchConfigurationFingerprint(data = {}) {
   const settings = messageSettings(data);
@@ -11497,7 +11504,7 @@ function cloverRecurringMigrationReadiness(data = {}) {
   const reviewRequired = requiresFreshRoster && (!!warning || coverage.complete === false || quarantinedRows.length > 0);
   const ready = !requiresFreshRoster || (fresh && configurationMatched && !degraded && eligibleRows.length > 0);
   let error = '';
-  if (requiresFreshRoster && currentDegradedFailure) error = 'Clover recurring refresh is degraded (HTTP ' + Number(clover.lastRecurringPlanSyncDegradedStatus || 0) + '). Keep the preserved roster read-only and correct the Clover merchant API token before scheduling Stripe cutovers.';
+  if (requiresFreshRoster && currentDegradedFailure) error = 'Clover recurring refresh is degraded (HTTP ' + Number(clover.lastRecurringPlanSyncDegradedStatus || 0) + '). Keep the preserved roster read-only. ' + cloverRecurringTokenRecoveryGuidance() + ' Do not schedule Stripe cutovers until a fresh complete roster passes.';
   else if (requiresFreshRoster && providerError) error = 'Clover recurring refresh has not recovered. Correct the provider connection before scheduling Stripe cutovers.';
   else if (requiresFreshRoster && !checkedAt) error = 'Run a successful Clover provider recurring roster refresh before scheduling Stripe cutovers. A manual Plan Manager import is not provider verification.';
   else if (requiresFreshRoster && !configurationMatched) error = 'The verified Clover roster belongs to an older or different merchant configuration. Run a fresh Clover recurring sync with the currently deployed merchant API credentials.';
@@ -11889,7 +11896,8 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const env = key => process.env[key] ? 'Set' : 'Missing';
   const route = (method, path, purpose, status = 'Ready') => ({ method, path, purpose, status });
   const envChecks = [
-    ['CLOVER_ACCESS_TOKEN', env('CLOVER_ACCESS_TOKEN'), 'Clover customer/payment/recurring sync'],
+    ['CLOVER_ACCESS_TOKEN', env('CLOVER_ACCESS_TOKEN'), 'Clover customer and payment sync'],
+    ['CLOVER_RECURRING_ACCESS_TOKEN', CLOVER_RECURRING_TOKEN_IS_DEDICATED ? 'Set' : 'Core token fallback', 'Optional dedicated merchant API token for recurring plans/subscriptions; recommended when core sync works but recurring access returns 401'],
     ['CLOVER_MERCHANT_ID', env('CLOVER_MERCHANT_ID'), 'Clover merchant account'],
     ['CLOVER_ECOMMERCE_PUBLIC_KEY', env('CLOVER_ECOMMERCE_PUBLIC_KEY') === 'Set' || env('CLOVER_API_ACCESS_KEY') === 'Set' ? 'Set' : 'Missing', 'Clover card setup public key'],
     ['CLOVER_ECOMMERCE_PRIVATE_KEY', env('CLOVER_ECOMMERCE_PRIVATE_KEY'), 'Clover saved-card charges and card-on-file setup'],
@@ -12501,7 +12509,7 @@ async function cloverPostRecurring(pathname, payload) {
   const response = await fetch(CLOVER_HCO_BASE + pathname, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + CLOVER_TOKEN,
+      Authorization: 'Bearer ' + CLOVER_RECURRING_TOKEN,
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'User-Agent': 'WheelsonAuto/1.0',
@@ -12528,7 +12536,7 @@ async function cloverGetRecurring(pathname) {
   cloverReady();
   const response = await fetch(CLOVER_API_BASE + pathname, {
     headers: {
-      Authorization: 'Bearer ' + CLOVER_TOKEN,
+      Authorization: 'Bearer ' + CLOVER_RECURRING_TOKEN,
       Accept: 'application/json',
       'X-Clover-Merchant-Id': CLOVER_MERCHANT_ID
     }
@@ -13513,7 +13521,7 @@ function defaultApiProviderRows(data = {}) {
       group: 'Money',
       status: CLOVER_TOKEN && CLOVER_MERCHANT_ID ? 'Testing' : 'Ready for credentials',
       owner: 'Owner',
-      envKeys: 'CLOVER_ACCESS_TOKEN, CLOVER_MERCHANT_ID',
+      envKeys: 'CLOVER_ACCESS_TOKEN, optional CLOVER_RECURRING_ACCESS_TOKEN, CLOVER_MERCHANT_ID',
       endpoint: '/api/integrations/clover/sync-all',
       liveTest: 'Sync customers, payments, recurring roster, then compare Today closeout.'
     },
@@ -14940,7 +14948,7 @@ function preserveCloverRecurringRosterAfterProviderError(data = {}, error = {}) 
   const localRows = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
   const preserved = savedPlans.length + savedMembers.length + localRows.length;
   if (![401, 403, 404].includes(status) || !preserved) return null;
-  const warning = 'Clover recurring roster refresh returned ' + status + '. Keeping the last verified recurring roster while customer and payment sync continue. Review the Clover merchant API token before relying on roster changes.';
+  const warning = 'Clover recurring roster refresh returned ' + status + '. Keeping the last verified recurring roster while customer and payment sync continue. ' + cloverRecurringTokenRecoveryGuidance();
   clover.lastRecurringPlanSyncWarning = warning;
   clover.lastRecurringPlanSyncDegradedAt = new Date().toISOString();
   clover.lastRecurringPlanSyncDegradedStatus = status;

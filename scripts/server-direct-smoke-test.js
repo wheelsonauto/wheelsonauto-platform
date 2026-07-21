@@ -185,6 +185,7 @@ async function main() {
   process.env.CLOVER_WEBHOOK_SECRET = 'direct-clover-secret';
   process.env.CLOVER_HCO_WEBHOOK_SECRET = 'direct-clover-hosted-checkout-secret';
   process.env.CLOVER_ACCESS_TOKEN = 'direct-clover-token';
+  process.env.CLOVER_RECURRING_ACCESS_TOKEN = 'direct-clover-recurring-token';
   process.env.CLOVER_MERCHANT_ID = 'direct-clover-merchant';
   process.env.CLOVER_ECOMMERCE_PUBLIC_KEY = 'direct-clover-public-key';
   process.env.CLOVER_ECOMMERCE_PRIVATE_KEY = 'direct-clover-private-key';
@@ -371,6 +372,7 @@ async function main() {
   const providerEmailCalls = [];
   let cloverRecurringFixture = '';
   const cloverRecurringRequests = [];
+  const cloverRecurringAuthorizationHeaders = [];
   const providerResponse = (status, body) => ({
     ok: status >= 200 && status < 300,
     status,
@@ -392,6 +394,7 @@ async function main() {
     }
     if (cloverRecurringFixture && requestUrl.includes('/recurring/v1/')) {
       cloverRecurringRequests.push(requestUrl);
+      cloverRecurringAuthorizationHeaders.push(String(options.headers && options.headers.Authorization || ''));
       if (requestUrl.includes('/recurring/v1/plans?')) {
         if (cloverRecurringFixture === 'recover-from-plan-401') return providerResponse(401, { message: 'Unauthorized plan listing' });
         return providerResponse(200, [{ id: 'PLAN-DIRECT-229', name: 'Weekly 229', amount: 22900, interval: 'WEEK', active: true, activeSubscriptionCount: cloverRecurringFixture === 'partial-plan-fallback' ? 2 : 1 }]);
@@ -447,7 +450,7 @@ async function main() {
     const recurringUnauthorized = Object.assign(new Error('Clover recurring API 401: Unauthorized'), { statusCode: 401 });
     const recurringPreserved = preserveCloverRecurringRosterAfterProviderError(recurringProviderFallbackState, recurringUnauthorized);
     assert(recurringPreserved && recurringPreserved.preservedSavedRoster === true && recurringPreserved.recurringPlans === 1 && recurringPreserved.recurringMembers === 1 && recurringPreserved.localRecurring === 1, 'A Clover recurring authorization failure must preserve the last verified roster and local schedule records.');
-    assert(/401/.test(recurringPreserved.warning) && /Review the Clover merchant API token/.test(recurringPreserved.warning), 'A preserved Clover recurring roster must remain an explicit token warning instead of being reported healthy.');
+    assert(/401/.test(recurringPreserved.warning) && /Replace CLOVER_RECURRING_ACCESS_TOKEN/.test(recurringPreserved.warning), 'A preserved Clover recurring roster must name the dedicated recurring-token repair without being reported healthy.');
     assert(preserveCloverRecurringRosterAfterProviderError({ recurringPayments: [], integrations: { clover: {} } }, recurringUnauthorized) === null, 'An empty Clover recurring state must not hide an authorization failure behind a preservation warning.');
     assert(preserveCloverRecurringRosterAfterProviderError(recurringProviderFallbackState, Object.assign(new Error('Clover recurring API 500: failure'), { statusCode: 500 })) === null, 'Unexpected Clover server failures must remain hard sync errors.');
     const currentCloverConfigurationFingerprint = cloverRecurringConfigurationFingerprint();
@@ -494,8 +497,10 @@ async function main() {
 
     cloverRecurringFixture = 'recover-from-plan-401';
     cloverRecurringRequests.length = 0;
+    cloverRecurringAuthorizationHeaders.length = 0;
     const merchantWideRecoveryState = { recurringPayments: [], integrations: { clover: { recurringPlanMembers: [{ id: 'saved-stale-provider-row', cloverSubscriptionId: 'SUB-NOT-CURRENT', customer: 'Old recurring customer' }] } } };
     const merchantWideRecovery = await syncCloverRecurringPlans(merchantWideRecoveryState);
+    assert(cloverRecurringAuthorizationHeaders.length > 0 && cloverRecurringAuthorizationHeaders.every(value => value === 'Bearer direct-clover-recurring-token'), 'Every recurring-plan and subscription request must use the dedicated merchant recurring token without replacing the core customer/payment token.');
     assert(merchantWideRecovery.recurringPlans === 1 && merchantWideRecovery.summary.activeCustomers === 1, 'The merchant-wide subscriptions endpoint must recover a complete Clover roster when the plan-list endpoint returns 401.');
     assert(merchantWideRecoveryState.integrations.clover.recurringPlanMembers.length === 1 && merchantWideRecoveryState.integrations.clover.recurringPlanMembers[0].customer === 'Merchant Wide', 'Recovered merchant-wide subscriptions must retain the customer identity instead of becoming unmatched.');
     assert(/401/.test(merchantWideRecoveryState.integrations.clover.lastRecurringPlanFetchError) && merchantWideRecoveryState.integrations.clover.lastRecurringPlanSyncError === '', 'A recovered plan-list failure must remain diagnostic metadata without falsely marking the complete merchant-wide roster failed.');
