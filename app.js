@@ -3429,12 +3429,19 @@ function liveLaunchGateDetail(item,ready,fallback){
   if(ready)return item&&item.message||item&&item.summary||fallback||'Current proof is present.';
   return item&&item.error||item&&item.message||fallback||'Current proof is missing or stale.'
 }
+function liveLaunchJobAssignmentVehicleId(row){
+  var context=row&&row.context&&typeof row.context==='object'?row.context:{},vehicleId=String(context.vehicleId||'').trim();
+  if(vehicleId)return vehicleId;
+  var match=String(row&&row.message||'').match(/^Vehicle\s+([^\s]+)\s+has active records for multiple customers:/i);
+  return match?String(match[1]||'').trim():''
+}
 function liveLaunchJobErrorReview(jobErrors){
   jobErrors=Array.isArray(jobErrors)?jobErrors:[];
   if(!jobErrors.length)return'<div class="notice good">No unresolved background job or webhook failures are waiting for owner review.</div>';
   var visible=jobErrors.slice(0,8),rows=visible.map(function(row){
-    var severity=String(row.severity||'error').toLowerCase(),tone=severity==='warning'||severity==='warn'?'warn':'bad',occurrences=Math.max(1,Number(row.occurrenceCount||1)),firstSeen=row.firstSeenAt||row.createdAt||'',lastSeen=row.lastSeenAt||row.createdAt||'';
-    return['<strong>'+esc(shortDate(lastSeen)||lastSeen||'Unknown time')+'</strong>'+(occurrences>1?'<div class="muted">'+occurrences+' occurrences since '+esc(shortDate(firstSeen)||firstSeen)+'</div>':''),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>',row.reviewable===false?badge('Unavailable','warn'):'<button class="btn" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>']
+    var severity=String(row.severity||'error').toLowerCase(),tone=severity==='warning'||severity==='warn'?'warn':'bad',occurrences=Math.max(1,Number(row.occurrenceCount||1)),firstSeen=row.firstSeenAt||row.createdAt||'',lastSeen=row.lastSeenAt||row.createdAt||'',vehicleId=liveLaunchJobAssignmentVehicleId(row),context=row.context||{},customers=Array.isArray(context.customers)?context.customers:[],reviewAction=vehicleId?'<button class="btn gold" data-action="resolve-assignment-conflict" data-id="'+esc(vehicleId)+'" data-claimed-by="'+esc(customers.join(' / '))+'">Review assignment</button>':'';
+    var closeAction=row.reviewable===false?badge('Unavailable','warn'):'<button class="inline-action" data-action="resolve-job-error" data-error-id="'+esc(row.id||'')+'">Mark reviewed</button>',action=reviewAction?'<div class="actions compact">'+reviewAction+closeAction+'</div>':closeAction;
+    return['<strong>'+esc(shortDate(lastSeen)||lastSeen||'Unknown time')+'</strong>'+(occurrences>1?'<div class="muted">'+occurrences+' occurrences since '+esc(shortDate(firstSeen)||firstSeen)+'</div>':''),esc(row.source||'server'),badge(severity,tone)+'<div class="muted">'+esc(row.message||'Unknown failure')+'</div>',action]
   });
   return table(['When','Source','Failure','Action'],rows)+(jobErrors.length>visible.length?'<div class="notice mini">Showing the newest '+visible.length+' of '+jobErrors.length+'. Review these, then reopen preflight for the next set.</div>':'')
 }

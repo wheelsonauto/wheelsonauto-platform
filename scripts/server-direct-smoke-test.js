@@ -1845,6 +1845,18 @@ async function main() {
     const monitoredFailureRow = ((monitoredFailureHealth.json.infrastructure || {}).openJobErrors || []).find(row => row.source === 'direct-background-monitor');
     assert(monitoredFailureRow && monitoredFailureRow.context && monitoredFailureRow.context.route === 'Direct background worker' && monitoredFailureRow.context.source === 'background', 'Owner health must expose the safe source and route for a monitored background failure.');
     assert(!JSON.stringify(monitoredFailureRow.context).includes('must-not-be-persisted'), 'Operational failure records must whitelist safe context instead of storing arbitrary secrets.');
+    const assignmentOperationalFailure = new Error('Vehicle veh-direct-assignment-conflict has active records for multiple customers: Direct Conflict One / Direct Conflict Two. Refusing an ambiguous assignment write.');
+    assignmentOperationalFailure.code = 'woa_assignment_identity_conflict';
+    assignmentOperationalFailure.vehicleId = 'veh-direct-assignment-conflict';
+    assignmentOperationalFailure.customers = ['Direct Conflict One', 'Direct Conflict Two'];
+    assignmentOperationalFailure.claims = [{ source: 'recurring_payment', id: 'rec-direct-conflict-one', status: 'Active', customer: 'Direct Conflict One', secret: 'must-not-be-persisted' }];
+    await recordOperationalFailure('direct-assignment-monitor', assignmentOperationalFailure, { route: 'Direct assignment write' }, { alert: false });
+    const assignmentFailureHealth = await request(server, 'GET', '/api/system/health', { cookie: ownerCookie });
+    const assignmentFailureRow = ((assignmentFailureHealth.json.infrastructure || {}).openJobErrors || []).find(row => row.source === 'direct-assignment-monitor');
+    assert(assignmentFailureRow && assignmentFailureRow.context.code === 'woa_assignment_identity_conflict' && assignmentFailureRow.context.vehicleId === 'veh-direct-assignment-conflict' && assignmentFailureRow.context.customers.join('|') === 'Direct Conflict One|Direct Conflict Two', 'Assignment job failures must preserve the safe vehicle and customer references needed for direct owner review.');
+    assert(Array.isArray(assignmentFailureRow.context.claims) && assignmentFailureRow.context.claims[0].id === 'rec-direct-conflict-one' && !JSON.stringify(assignmentFailureRow.context).includes('must-not-be-persisted'), 'Assignment job failure evidence must retain only the allowlisted claim identity fields.');
+    const assignmentFailureResolved = await request(server, 'POST', '/api/system/job-errors/' + encodeURIComponent(assignmentFailureRow.id) + '/resolve', { cookie: ownerCookie, json: { note: 'Assignment review path verified' } });
+    assert(assignmentFailureResolved.status === 200, 'The structured assignment job failure must remain owner-reviewable.');
     const managerJobErrorList = await request(server, 'GET', '/api/system/job-errors', { cookie: managerCookie });
     assert(managerJobErrorList.status === 403, 'Manager must not read the owner operational-error ledger.');
     const managerJobErrorResolve = await request(server, 'POST', '/api/system/job-errors/' + encodeURIComponent(monitoredFailureRow.id) + '/resolve', { cookie: managerCookie, json: { note: 'Manager must not resolve this' } });

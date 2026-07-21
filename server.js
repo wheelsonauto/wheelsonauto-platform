@@ -256,7 +256,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-first-party-messaging-265';
+const ASSET_VERSION = 'platform-20260721-assignment-review-266';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -3913,6 +3913,25 @@ async function recordOperationalFailure(source, error, context = {}, options = {
     dateKey: String(context.dateKey || '').slice(0, 32),
     provider: String(context.provider || '').slice(0, 80)
   };
+  const errorCode = String(context.code || error && error.code || '').trim().slice(0, 120);
+  const assignmentVehicleId = String(context.vehicleId || error && error.vehicleId || '').trim().slice(0, 160);
+  const assignmentCustomers = (Array.isArray(context.customers) ? context.customers : (error && Array.isArray(error.customers) ? error.customers : []))
+    .map(value => String(value || '').trim().slice(0, 160))
+    .filter(Boolean)
+    .slice(0, 20);
+  const assignmentClaims = (Array.isArray(context.claims) ? context.claims : (error && Array.isArray(error.claims) ? error.claims : []))
+    .map(row => ({
+      source: String(row && row.source || '').trim().slice(0, 80),
+      id: String(row && row.id || '').trim().slice(0, 160),
+      status: String(row && row.status || '').trim().slice(0, 160),
+      customer: String(row && row.customer || '').trim().slice(0, 160)
+    }))
+    .filter(row => row.source || row.id || row.status || row.customer)
+    .slice(0, 20);
+  if (errorCode) safeContext.code = errorCode;
+  if (assignmentVehicleId) safeContext.vehicleId = assignmentVehicleId;
+  if (assignmentCustomers.length) safeContext.customers = assignmentCustomers;
+  if (assignmentClaims.length) safeContext.claims = assignmentClaims;
   const incidentKey = [safeSource, safeContext.route, safeContext.recurringPaymentId, safeContext.eventId, safeContext.dateKey, message.slice(0, 160)].join('|');
   const now = Date.now();
   let persisted = false;
