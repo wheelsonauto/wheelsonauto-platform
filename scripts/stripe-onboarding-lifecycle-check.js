@@ -422,14 +422,18 @@ async function main() {
     assert(!Object.prototype.hasOwnProperty.call(failedCustomerPortalRequest, 'stripeCardSetupError') && !/The test card was declined\./i.test(failedCustomerPortal.text), 'Customer-scoped state must never expose Stripe provider diagnostics.');
     const failedCustomerPortalPage = await request(server, 'GET', '/customer', { cookie: customerCookie });
     assert(failedCustomerPortalPage.status === 200 && /must retry/i.test(failedCustomerPortalPage.text) && !/The test card was declined\./i.test(failedCustomerPortalPage.text), 'The rendered customer portal must show the safe retry guidance without the private provider reason.');
+    const failedDirectCardSetupPage = await request(server, 'GET', '/setup-card/' + cardRequest.id);
+    assert(failedDirectCardSetupPage.status === 200 && /must retry/i.test(failedDirectCardSetupPage.text) && !/The test card was declined\./i.test(failedDirectCardSetupPage.text), 'The direct secure card link must show only the customer-safe retry instruction, never raw Stripe diagnostics.');
     const setupEvent = { id: 'evt_test_setup_intent_first', type: 'setup_intent.succeeded', livemode: false, data: { object: { id: 'seti_test_lifecycle', object: 'setup_intent', status: 'succeeded', livemode: false, customer: 'cus_test_lifecycle', payment_method: 'pm_test_lifecycle', metadata: setupMetadata } } };
     const setupRaw = JSON.stringify(setupEvent);
     const setupWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: setupRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, setupRaw) } });
     assert(setupWebhook.status === 200 && setupWebhook.json.cardSetupRequestId === cardRequest.id, 'A signed SetupIntent completion must link the reusable card to the exact onboarding file even when it arrives before Checkout completion.');
     saved = await readSaved(dataDir);
     const cardReadyRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
+    const cardReadyRequest = saved.cardSetupRequests.find(row => row.id === cardRequest.id);
     assert(cardReadyRecurring.paymentProvider === 'stripe' && cardReadyRecurring.stripeCustomerId === 'cus_test_lifecycle' && cardReadyRecurring.stripePaymentMethodId === 'pm_test_lifecycle' && cardReadyRecurring.stripeCardLast4 === '4242', 'WheelsonAuto must retain only Stripe customer/payment-method references and safe card display data.');
     assert(cardReadyRecurring.stripeCardSetupStatus === 'Saved' && !cardReadyRecurring.stripeCardSetupError && !cardReadyRecurring.stripeCardSetupCustomerMessage && !cardReadyRecurring.stripeCardSetupFailedAt, 'A successful retry must clear every prior Stripe setup failure marker and customer retry message.');
+    assert(!cardReadyRequest.cardSetupCustomerMessage && !cardReadyRequest.stripeCardSetupCustomerMessage && !cardReadyRequest.lastError, 'A successful card retry must also clear the public-link failure state and private setup error.');
     assert(!JSON.stringify(saved).includes('4242424242424242'), 'WheelsonAuto must never store a full card number.');
     assert(saved.integrations.stripe.lastLaunchWebhookType === 'setup_intent.succeeded' && saved.integrations.stripe.lastLaunchWebhookEventId === setupEvent.id, 'An exact signed SetupIntent must count as current launch webhook evidence.');
     const firstSetupCompletedAt = saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt;

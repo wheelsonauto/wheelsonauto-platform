@@ -205,6 +205,8 @@ async function run() {
     'setup_intent.succeeded',
     'setup_intent\\.(setup_failed|canceled|requires_action)',
     'card_setup_failed',
+    'recordPublicCardSetupFailure',
+    'No card was saved and no payment was charged',
     'stripeCardSetupCustomerMessage',
     "'stripeCardSetupError'",
     'stripeAutopayChargeSequence',

@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-setup-privacy-255';
+const ASSET_VERSION = 'platform-20260721-public-card-privacy-256';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -9798,7 +9798,8 @@ function customerPortalCardSetupRequestRow(row = {}) {
   const detail = [row.createdAt || row.date || '', cardSetupRequestAgeLabel(row), row.frequency || 'Card setup/change', row.vehicle || 'WheelsonAuto account'].filter(Boolean).join(' - ');
   const status = row.status || 'Open';
   const action = setupUrl ? '<a class="btn primary" href="' + escapeHtml(setupUrl) + '">Set up card</a>' : '<span>' + escapeHtml(status) + '</span>';
-  const customerMessage = row.stripeCardSetupCustomerMessage ? '<p>' + escapeHtml(row.stripeCardSetupCustomerMessage) + '</p>' : '';
+  const safeMessage = row.stripeCardSetupCustomerMessage || row.cardSetupCustomerMessage || '';
+  const customerMessage = safeMessage ? '<p>' + escapeHtml(safeMessage) + '</p>' : '';
   return '<div class="customer-row customer-card-setup-request"><div><strong>' + escapeHtml(status) + '</strong><small>' + escapeHtml(detail) + '</small>' + customerMessage + '</div><div class="customer-request-action"><b>' + moneyText(row.amount || 0) + '</b>' + action + '</div></div>';
 }
 function customerPortalPaymentRow(payment = {}, vehicleTitle = 'Vehicle', vehicle = {}, summary = {}) {
@@ -15548,11 +15549,23 @@ function setupCardHtml(request, message = '') {
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '<script src="' + sdkUrl + '"></script></head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save your card securely with Clover so WheelsonAuto can run authorized recurring and manual catch-up payments.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Card setup is not ready yet. WheelsonAuto needs the Clover Ecommerce public key and private key in Render.</div>' : '') + '<form id="cardSetupForm" class="form" style="margin-top:14px"><div class="field span2"><label>Name on card</label><input id="cardName" autocomplete="cc-name" value="' + escapeHtml(request.customer || '') + '"' + disabled + '></div><div class="field span2"><label>Card number</label><div id="cardNumber" class="clover-field"></div><div id="cardNumberErrors" class="small err"></div></div><div class="field"><label>Expiration</label><div id="cardDate" class="clover-field"></div><div id="cardDateErrors" class="small err"></div></div><div class="field"><label>CVV</label><div id="cardCvv" class="clover-field"></div><div id="cardCvvErrors" class="small err"></div></div><div class="field"><label>ZIP</label><div id="cardZip" class="clover-field"></div><div id="cardZipErrors" class="small err"></div></div><label class="check span2"><input id="consent" type="checkbox"' + disabled + '> I authorize WheelsonAuto to save this card with Clover and charge authorized recurring payments, retries, and manual catch-up payments for my account.</label><div class="notice span2">Your card is entered in Clover secure fields for tokenization. WheelsonAuto stores only the Clover saved-card/customer reference, not the card number or CVV.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Save card with Clover</button><a class="btn" href="https://www.wheelsonauto.com/">Cancel</a></div></form><div id="setupMessage" class="notice" style="display:none;margin-top:12px"></div></section></main></div><script>window.__CARD_SETUP__=' + JSON.stringify(config).replace(/</g, '\\u003c') + ';</script><script src="/card-setup.js?v=clover-iframe-1"></script></body></html>';
 }
+function recordPublicCardSetupFailure(request = {}, error, paymentProvider = 'stripe') {
+  const provider = normalizedPaymentProvider(paymentProvider);
+  const customerMessage = provider === 'stripe'
+    ? 'Stripe could not finish the secure card setup. No card was saved and no payment was charged. Please retry, or contact WheelsonAuto for a fresh link if it continues.'
+    : 'The secure card setup could not be completed. No payment was charged. Please retry, or contact WheelsonAuto for a fresh link if it continues.';
+  request.lastError = String(error && error.message || error || 'Card setup failed.').slice(0, 900);
+  request.lastFailedAt = new Date().toISOString();
+  request.cardSetupCustomerMessage = customerMessage;
+  if (provider === 'stripe') request.stripeCardSetupCustomerMessage = customerMessage;
+  return customerMessage;
+}
 function stripeSetupCardHtml(request, message = '') {
   const setupReady = stripeCardPreparationReady();
   const disabled = setupReady ? '' : ' disabled';
   const amount = '$' + Number(request.amount || 0).toLocaleString();
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div></body></html>';
+  const customerMessage = message || request.stripeCardSetupCustomerMessage || request.cardSetupCustomerMessage || '';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (customerMessage ? '<div class="notice" style="margin-top:12px">' + escapeHtml(customerMessage) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div></body></html>';
 }
 function stripeRecurringRowsForRequest(data, request) {
   const rows = allRecurringRows(data);
@@ -15700,6 +15713,7 @@ async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
     stripeCardSetupStatus: cancelled ? 'Cancelled' : actionRequired ? 'Action required' : 'Failed',
     stripeCardSetupError: recordedReason,
     stripeCardSetupCustomerMessage: publicReason,
+    cardSetupCustomerMessage: publicReason,
     stripeCardSetupFailedAt: failedAt,
     lastStripeSetupIntentId: stripeObjectId(setupIntent),
     lastFailedAt: failedAt,
@@ -15713,6 +15727,7 @@ async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
       stripeCardSetupStatus: request.stripeCardSetupStatus,
       stripeCardSetupError: recordedReason,
       stripeCardSetupCustomerMessage: publicReason,
+      cardSetupCustomerMessage: publicReason,
       stripeCardSetupFailedAt: failedAt,
       lastStripeSetupIntentId: stripeObjectId(setupIntent),
       pendingCardProvider: 'stripe',
@@ -15826,6 +15841,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
     stripeCardSetupStatus: 'Saved',
     stripeCardSetupError: '',
     stripeCardSetupCustomerMessage: '',
+    cardSetupCustomerMessage: '',
     stripeCardSetupFailedAt: '',
     lastFailedAt: '',
     lastError: '',
@@ -15863,6 +15879,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       stripeCardSetupStatus: 'Saved',
       stripeCardSetupError: '',
       stripeCardSetupCustomerMessage: '',
+      cardSetupCustomerMessage: '',
       stripeCardSetupFailedAt: '',
       cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
       cardChangePendingAt: '',
@@ -15936,6 +15953,8 @@ async function completeCardSetup(data, request, payload) {
   request.cloverPaymentSource = cardSource || token;
   request.cloverCardId = String(savedCard.id || savedCard || '');
   request.cloverSubscriptionId = subscription && subscription.id || request.cloverSubscriptionId || '';
+  request.cardSetupCustomerMessage = '';
+  request.lastError = '';
   const onboardingSession = (data.onboardingSessions || []).find(session => session.id === request.onboardingSessionId);
   if (onboardingSession) {
     onboardingSession.cardCompletedAt = request.completedAt;
@@ -19459,10 +19478,9 @@ const server = http.createServer(async (req, res) => {
           if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
           return send(res, 200, paymentResultHtml('Card saved securely', 'Stripe confirmed the card setup. If Clover was already active, WheelsonAuto will keep it active until the owner confirms the provider switch.', '/customer', 'Back to my account'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         } catch (err) {
-          request.lastError = String(err && err.message || err);
-          request.lastFailedAt = new Date().toISOString();
+          const customerMessage = recordPublicCardSetupFailure(request, err, 'stripe');
           await writeData(data);
-          return send(res, Number(err && err.statusCode || 400), stripeSetupCardHtml(request, request.lastError), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+          return send(res, Number(err && err.statusCode || 400), stripeSetupCardHtml(request, customerMessage), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         }
       }
       if (cardSetupRequestCompleted(request)) {
@@ -20106,10 +20124,9 @@ const server = http.createServer(async (req, res) => {
         return send(res, 303, '', 'text/plain', { Location: session.url, ...PUBLIC_LINK_RESPONSE_HEADERS });
       } catch (err) {
         request.status = 'Stripe setup needs attention';
-        request.lastError = String(err && err.message || err);
-        request.lastFailedAt = new Date().toISOString();
+        const customerMessage = recordPublicCardSetupFailure(request, err, 'stripe');
         await writeData(data);
-        return send(res, Number(err && err.statusCode || 502), stripeSetupCardHtml(request, request.lastError), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+        return send(res, Number(err && err.statusCode || 502), stripeSetupCardHtml(request, customerMessage), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
     }
     if (url.pathname.startsWith('/api/public/card-setup/') && url.pathname.endsWith('/complete') && req.method === 'POST') {
@@ -20129,10 +20146,9 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, recurring: result.recurring, cloverCustomerId: request.cloverCustomerId, cloverSubscriptionId: request.cloverSubscriptionId, redirectUrl: request.onboardingReturnUrl || '' });
       } catch (err) {
         request.status = 'Card setup failed';
-        request.lastError = String(err && err.message || err);
-        request.lastFailedAt = new Date().toISOString();
+        const customerMessage = recordPublicCardSetupFailure(request, err, request.paymentProvider || 'clover');
         await writeData(data);
-        return json(res, 400, { ok: false, error: request.lastError });
+        return json(res, 400, { ok: false, error: customerMessage });
       }
     }
     if (url.pathname === '/api/webhooks/messages' && req.method === 'POST') {
