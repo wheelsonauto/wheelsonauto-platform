@@ -808,6 +808,27 @@ key, publishable key, webhook secret, API base URL, public URL, identity mode,
 and onboarding payment provider using a server-only fingerprint. Changing any
 of those Render settings intentionally requires one fresh matched signed live
 event before the preflight is green again.
+
+### Owner-only Stripe activation handoff
+
+Stripe may require an email security challenge before it reveals or creates a
+live secret key. The WheelsonAuto account owner must complete that challenge in
+the same signed-in Stripe browser session. Never paste a live key into chat,
+source control, a customer record, or `data.json`; save it directly in Render.
+
+Stripe Identity activation also includes business-use answers and binding legal
+agreements. For WheelsonAuto's license-and-selfie flow, **Trust & Safety** and
+**Fraud Prevention** describe the intended use. Do not select regulatory/KYC or
+FCRA eligibility use unless the business purpose actually changes. The owner
+must personally confirm the restricted-business answer and accept the Stripe
+Services and Identity agreements. Automation may prepare the non-legal choices,
+but must never accept those agreements for the owner.
+
+After the owner completes both steps, deploy the matching live secret,
+publishable key, webhook signing secret, Stripe onboarding provider, and Stripe
+Identity provider together. Return to the existing **Live launch preflight**;
+do not create a second provider checklist or enable Stripe money actions yet.
+
 The production guard also requires `WOA_ONBOARDING_PAYMENT_PROVIDER=stripe`,
 `WOA_IDENTITY_PROVIDER=stripe`, and one signed
 `identity.verification_session.verified` event matched to a WheelsonAuto
