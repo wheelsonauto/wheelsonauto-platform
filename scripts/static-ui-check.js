@@ -236,6 +236,8 @@ assertIncludes('Owner live launch preflight surface', app, [
   'First live Stripe pilot',
   'APPROVE FIRST LIVE STRIPE PILOT',
   'Clover cutover review',
+  'Exact plan link review',
+  'cardSetupPlanReview',
   'liveLaunchCloverQuarantineReview',
   'missing_clover_subscription_id',
   'duplicate_clover_subscription_id',

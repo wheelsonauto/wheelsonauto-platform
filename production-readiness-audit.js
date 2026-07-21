@@ -122,6 +122,7 @@ function buildProductionReadinessAudit({ environment = {}, infrastructure = {}, 
       assignmentConflicts: Math.max(0, Number(infrastructure.assignmentConflictCount || 0)),
       blockingAssignmentConflicts: Math.max(0, Number(infrastructure.blockingAssignmentConflictCount || 0)),
       assignmentReviewWarnings: Math.max(0, Number(infrastructure.assignmentReviewWarningCount || 0)),
+      cardSetupPlanConflicts: Math.max(0, Number(infrastructure.cardSetupPlanConflictCount || 0)),
       vehicleIdentityWarnings: Array.isArray(infrastructure.identityWarnings) ? infrastructure.identityWarnings.length : 0
     },
     controlledPilot: {

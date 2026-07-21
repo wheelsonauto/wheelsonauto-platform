@@ -9,7 +9,7 @@ const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
 const encryptedStateBackup = require('../encrypted-state-backup');
 const stripeMigration = require('../stripe-migration');
-const { assignmentConflictPreflightClassification } = require('../server');
+const { assignmentConflictPreflightClassification, cardSetupPlanReview } = require('../server');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
 async function verifyGracefulShutdown(root, dataDir) {
@@ -388,6 +388,19 @@ async function main() {
     const duplicateSubscriptionEligibility = stripeMigration.cutoverEligibility(duplicatedSubscriptionState, duplicatedSubscriptionState.recurringPayments[0]);
     assert.strictEqual(duplicateSubscriptionEligibility.eligible, false, 'Two active local rows must never cut over against the same Clover subscription ID.');
     assert.strictEqual(duplicateSubscriptionEligibility.code, 'duplicate_clover_subscription_id', 'Duplicate-subscription quarantine must expose a stable reason code.');
+    const planLinkReview = cardSetupPlanReview({
+      ...multiPlanCustomer,
+      cardSetupRequests: [
+        { id: 'setup-legacy-ambiguous', customer: 'Same Customer', paymentProvider: 'stripe', amount: 229, frequency: 'Weekly', status: 'Open', createdAt: '2026-07-21T12:00:00.000Z', expiresAt: '2099-07-28T12:00:00.000Z', url: 'https://example.test/setup-card/private-token' },
+        { id: 'setup-exact-plan-a', recurringPaymentId: 'rec-plan-a', customer: 'Same Customer', paymentProvider: 'stripe', amount: 229, frequency: 'Weekly', status: 'Open', expiresAt: '2099-07-28T12:00:00.000Z' },
+        { id: 'setup-complete', customer: 'Same Customer', paymentProvider: 'stripe', amount: 229, frequency: 'Weekly', status: 'Card saved', completedAt: '2026-07-21T13:00:00.000Z', expiresAt: '2099-07-28T12:00:00.000Z' }
+      ]
+    });
+    assert.strictEqual(planLinkReview.length, 1, 'Only the active ambiguous legacy setup link should require exact-plan review.');
+    assert.strictEqual(planLinkReview[0].code, 'card_setup_plan_ambiguous', 'The exact-plan review must expose a stable ambiguity code.');
+    assert.strictEqual(planLinkReview[0].customer, 'Same Customer', 'The owner review must identify the affected customer without exposing a bearer link.');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(planLinkReview[0], 'id'), false, 'The review must not expose the card-setup bearer identifier.');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(planLinkReview[0], 'url'), false, 'The review must not expose the card-setup bearer URL.');
 
     const repository = stateRepository.createStateRepository({ backend: 'json', dataFile, seedFile });
     const jsonReadiness = await repository.readiness();

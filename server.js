@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-exact-plan-card-links-258';
+const ASSET_VERSION = 'platform-20260721-card-plan-review-259';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -11415,6 +11415,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   const starAi = starAiLiveLaunchEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const cloverRecurring = cloverRecurringMigrationReadiness(state);
+  const cardSetupPlanConflicts = cardSetupPlanReview(state);
   const controlledStripePilot = controlledStripePilotEvidence(state, { liveRequired: true });
   const identityConflicts = stateRepository.identityConflicts(state);
   const assignmentClassification = assignmentConflictPreflightClassification(state);
@@ -11532,6 +11533,8 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     starAi,
     ownerAuthentication,
     cloverRecurring,
+    cardSetupPlanConflictCount: cardSetupPlanConflicts.length,
+    cardSetupPlanReview: cardSetupPlanConflicts.slice(0, 50),
     controlledStripePilot,
     identityConflictCount: identityConflicts.length,
     assignmentConflictCount: assignmentConflicts.length,
@@ -15507,6 +15510,44 @@ function resolveCardSetupPlanRows(data, reference = {}, options = {}) {
   const nameGroups = recurringPlanGroups(allRows.filter(row => row && normKey(row.customer) === customerKey));
   if (nameGroups.length > 1) throw cardSetupPlanBindingError(reference.customer);
   return nameGroups[0] ? nameGroups[0].rows : [];
+}
+function cardSetupPlanReview(data = {}) {
+  return (data.cardSetupRequests || []).filter(request => {
+    return request
+      && normalizedPaymentProvider(request.paymentProvider || WOA_PAYMENT_PROVIDER) === 'stripe'
+      && !cardSetupRequestCompleted(request)
+      && !publicLinkRevoked(request)
+      && !publicLinkExpired(request);
+  }).flatMap(request => {
+    let code = '';
+    try {
+      const rows = resolveCardSetupPlanRows(data, {
+        recurringPaymentId: request.recurringPaymentId,
+        cloverSubscriptionId: request.cloverSubscriptionId,
+        cardSetupRequestId: request.id,
+        customer: request.customer
+      }, { allowNameFallback: true });
+      if (rows.length) return [];
+      code = 'card_setup_plan_not_found';
+    } catch (error) {
+      if (!error || error.code !== 'card_setup_plan_ambiguous') throw error;
+      code = error.code;
+    }
+    const ambiguous = code === 'card_setup_plan_ambiguous';
+    return [{
+      code,
+      customer: String(request.customer || 'Customer not identified').trim(),
+      vehicle: String(request.vehicle || '').trim(),
+      vin: String(request.vin || '').trim(),
+      licensePlate: String(request.licensePlate || request.plate || request.tempTag || '').trim(),
+      amount: Number(request.amount || 0),
+      frequency: String(request.frequency || 'Weekly').trim(),
+      createdAt: String(request.createdAt || '').trim(),
+      message: ambiguous
+        ? 'This open Stripe setup link can match more than one recurring plan. Replace it with a link created from the exact payment plan.'
+        : 'This open Stripe setup link no longer matches a recurring plan. Review the customer file before sending a replacement.'
+    }];
+  });
 }
 function createCardSetupRequest(data, payload) {
   const autopay = cleanAutopayPayload({
@@ -25271,6 +25312,7 @@ module.exports = {
   nextRecurringOccurrence,
   nextFutureRecurringDate,
   allRecurringRows,
+  cardSetupPlanReview,
   findRecurringRow,
   successfulRecurringPaymentEvidence,
   retryDelayPassed,

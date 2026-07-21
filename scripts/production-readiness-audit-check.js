@@ -45,6 +45,7 @@ function readyInfrastructure() {
     assignmentConflictCount: 2,
     blockingAssignmentConflictCount: 0,
     assignmentReviewWarningCount: 2,
+    cardSetupPlanConflictCount: 2,
     identityWarnings: [],
     providerProofCollection: { ready: true, missing: [], providerEvidenceMissing: [], stripeMoneyActionsLocked: false },
     controlledStripePilot: {
@@ -75,6 +76,7 @@ assert.strictEqual(ready.foundation.privateStorage.validationLive, true);
 assert.strictEqual(ready.foundation.ownerAccess.pinFallbackDisabled, true);
 assert.strictEqual(ready.providers.cloverRecurringRoster.quarantinedRows, 2, 'Ambiguous Clover plans must remain visible without falsely blocking individually eligible rows.');
 assert.strictEqual(ready.dataReview.blockingAssignmentConflicts, 0, 'Review-only renter history must remain distinct from an active assignment conflict.');
+assert.strictEqual(ready.dataReview.cardSetupPlanConflicts, 2, 'Old card setup links that cannot identify one exact recurring plan must remain visible without blocking valid plan-specific cutovers.');
 assert.strictEqual(ready.safety.stripeMoneyActionsLocked, false);
 assert.strictEqual(ready.safety.customerMigrationLocked, false);
 assert.strictEqual(ready.controlledPilot.approved, true);
