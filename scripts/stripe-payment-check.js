@@ -202,6 +202,7 @@ async function run() {
     'stripe_authentication_required',
     'stripeCardAuthenticationSetupNeeded',
     'payment_intent.requires_action',
+    'setup_intent.succeeded',
     'stripeAutopayChargeSequence',
     'saveStripeAuthenticationRequiredResult',
     'claimIdempotencyKey',

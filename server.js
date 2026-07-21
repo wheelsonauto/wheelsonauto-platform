@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-full-cutover-audit-252';
+const ASSET_VERSION = 'platform-20260721-stripe-setupintent-253';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -10992,7 +10992,7 @@ function stripeAccountLiveEvidence(data = {}) {
   };
 }
 function stripeLaunchWebhookEventType(type) {
-  return /^(checkout\.session\.completed|payment_intent\.(succeeded|payment_failed|requires_action)|charge\.dispute\.(created|updated|closed)|refund\.(created|updated|failed)|charge\.refunded)$/.test(String(type || ''));
+  return /^(checkout\.session\.completed|setup_intent\.succeeded|payment_intent\.(succeeded|payment_failed|requires_action)|charge\.dispute\.(created|updated|closed)|refund\.(created|updated|failed)|charge\.refunded)$/.test(String(type || ''));
 }
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
@@ -15672,23 +15672,56 @@ function stripeObjectId(value) {
 async function completeStripeCardSetup(data, request, sessionInput) {
   if (publicLinkExplicitlyRevoked(request)) throw stripeMigration.stripeLaunchSafetyError('This Stripe card setup request was cancelled or revoked. Send a fresh secure link before saving another card.', 'stripe_setup_link_revoked', ['Fresh owner-issued Stripe setup link'], 409);
   assertStripeCardPreparationReady();
+  const directSetupIntent = !!(sessionInput && typeof sessionInput === 'object' && sessionInput.object === 'setup_intent');
+  const inputMetadata = directSetupIntent ? sessionInput.metadata || {} : {};
+  if (directSetupIntent) {
+    if (String(inputMetadata.wheelsonauto || '').toLowerCase() !== 'true' || inputMetadata.flow !== 'card_setup' || inputMetadata.cardSetupRequestId !== request.id) {
+      throw new Error('Stripe SetupIntent did not contain the exact WheelsonAuto card-setup reference.');
+    }
+    if (request.stripeSetupIntentId && stripeObjectId(sessionInput) !== request.stripeSetupIntentId) throw new Error('Stripe SetupIntent did not match the saved WheelsonAuto setup.');
+    if (request.stripeCustomerId && stripeObjectId(sessionInput.customer) && stripeObjectId(sessionInput.customer) !== request.stripeCustomerId) throw new Error('Stripe SetupIntent customer did not match this WheelsonAuto request.');
+  }
   if (request.stripePaymentMethodId && /stripe card saved/i.test(String(request.status || ''))) {
     if (request.stripeLivemode === true || stripeMigration.isolatedProviderTestMode(process.env)) {
       return { recurring: stripeRecurringRowsForRequest(data, request)[0] || null, alreadyCompleted: true };
     }
     throw stripeMigration.stripeLaunchSafetyError('This saved Stripe card has no verified live-mode proof. Send a fresh live Stripe setup link before using it.', 'stripe_live_result_required', ['Verified live Stripe card setup'], 409);
   }
-  const sessionId = stripeObjectId(sessionInput) || request.stripeCheckoutSessionId;
-  if (!sessionId) throw new Error('Stripe checkout session was not provided.');
-  const session = typeof sessionInput === 'object' && sessionInput && sessionInput.mode ? sessionInput : await stripe.retrieveCheckoutSession(sessionId);
+  const sessionId = directSetupIntent ? request.stripeCheckoutSessionId : stripeObjectId(sessionInput) || request.stripeCheckoutSessionId;
+  if (!sessionId && !directSetupIntent) throw new Error('Stripe checkout session was not provided.');
+  let session = directSetupIntent
+    ? {
+        id: sessionId || '',
+        object: 'checkout.session',
+        mode: 'setup',
+        status: 'complete',
+        livemode: sessionInput.livemode === true,
+        customer: sessionInput.customer,
+        setup_intent: sessionInput,
+        metadata: inputMetadata
+      }
+    : (typeof sessionInput === 'object' && sessionInput && sessionInput.mode ? sessionInput : await stripe.retrieveCheckoutSession(sessionId));
   assertStripeLiveResult(session.livemode, 'Stripe card setup session');
   if (session.mode !== 'setup' || String(session.status || '').toLowerCase() !== 'complete') throw new Error('Stripe has not completed this card setup.');
   const metadata = session.metadata || {};
   if (metadata.cardSetupRequestId && metadata.cardSetupRequestId !== request.id) throw new Error('Stripe card setup did not match this WheelsonAuto request.');
   let setupIntent = session.setup_intent;
-  if (typeof setupIntent === 'string' || !setupIntent || typeof setupIntent.payment_method === 'string') setupIntent = await stripe.retrieveSetupIntent(stripeObjectId(setupIntent));
+  if (typeof setupIntent === 'string' || !setupIntent || typeof setupIntent.payment_method === 'string') {
+    const setupIntentReference = setupIntent;
+    setupIntent = await stripe.retrieveSetupIntent(stripeObjectId(setupIntentReference));
+    if (directSetupIntent) setupIntent = {
+      ...setupIntent,
+      livemode: typeof setupIntent.livemode === 'boolean' ? setupIntent.livemode : sessionInput.livemode === true,
+      metadata: Object.keys(setupIntent.metadata || {}).length ? setupIntent.metadata : inputMetadata
+    };
+  }
   assertStripeLiveResult(setupIntent && setupIntent.livemode, 'Stripe SetupIntent');
   if (!setupIntent || String(setupIntent.status || '').toLowerCase() !== 'succeeded') throw new Error('Stripe did not return a completed SetupIntent.');
+  if (directSetupIntent) {
+    if (stripeObjectId(setupIntent) !== stripeObjectId(sessionInput)) throw new Error('Stripe returned a different SetupIntent than the signed webhook.');
+    if (setupIntent.metadata && setupIntent.metadata.cardSetupRequestId !== request.id) throw new Error('Stripe SetupIntent did not match this WheelsonAuto request.');
+    if (request.stripeCustomerId && stripeObjectId(setupIntent.customer) && stripeObjectId(setupIntent.customer) !== request.stripeCustomerId) throw new Error('Stripe returned a SetupIntent for a different customer.');
+  }
   const paymentMethod = setupIntent.payment_method || {};
   const paymentMethodId = stripeObjectId(paymentMethod);
   if (!paymentMethodId) throw new Error('Stripe did not return a reusable payment method.');
@@ -18580,6 +18613,17 @@ async function recordStripeWebhookEvent(event = {}) {
         request.stripePaymentIntentId = intentId;
         paymentRequestId = request.id;
       }
+    }
+  }
+  if (type === 'setup_intent.succeeded') {
+    const metadata = object.metadata || {};
+    const exactRequestId = String(metadata.cardSetupRequestId || '').trim();
+    const request = String(metadata.wheelsonauto || '').toLowerCase() === 'true' && metadata.flow === 'card_setup' && exactRequestId
+      ? (data.cardSetupRequests || []).find(row => row.id === exactRequestId)
+      : null;
+    if (request) {
+      await completeStripeCardSetup(data, request, object);
+      cardSetupRequestId = request.id;
     }
   }
   if (type === 'payment_intent.succeeded' && isWheelsonAutoStripeSavedCardIntent(object)) stripePaymentIntentResult = applyStripePaymentIntentSucceeded(data, object);

@@ -386,14 +386,29 @@ async function main() {
     assert(cardCheckout.status === 303 && /^https:\/\/checkout\.stripe\.test\//.test(cardCheckout.location), 'Card entry must redirect into Stripe-hosted secure fields.');
     saved = await readSaved(dataDir);
     const openedCardRequest = saved.cardSetupRequests.find(row => row.id === cardRequest.id);
-    const setupEvent = { id: 'evt_test_setup_complete', type: 'checkout.session.completed', data: { object: { id: openedCardRequest.stripeCheckoutSessionId, object: 'checkout.session', mode: 'setup', status: 'complete', payment_status: 'no_payment_required', customer: 'cus_test_lifecycle', client_reference_id: cardRequest.id, setup_intent: 'seti_test_lifecycle', metadata: { flow: 'card_setup', cardSetupRequestId: cardRequest.id, recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, customerName: 'Stripe Lifecycle', vehicleId: 'veh-stripe-life-1', vin: '1HGCV1F30JA123456', licensePlate: 'WOA-918' } } } };
+    const setupMetadata = { wheelsonauto: 'true', flow: 'card_setup', cardSetupRequestId: cardRequest.id, recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, customerName: 'Stripe Lifecycle', vehicleId: 'veh-stripe-life-1', vin: '1HGCV1F30JA123456', licensePlate: 'WOA-918' };
+    const wrongCustomerSetupEvent = { id: 'evt_test_setup_wrong_customer', type: 'setup_intent.succeeded', livemode: false, data: { object: { id: 'seti_test_lifecycle', object: 'setup_intent', status: 'succeeded', livemode: false, customer: 'cus_wrong_customer', payment_method: 'pm_test_lifecycle', metadata: setupMetadata } } };
+    const wrongCustomerSetupRaw = JSON.stringify(wrongCustomerSetupEvent);
+    const wrongCustomerSetupWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: wrongCustomerSetupRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, wrongCustomerSetupRaw) } });
+    assert(wrongCustomerSetupWebhook.status === 500, 'A signed SetupIntent for a different Stripe customer must fail closed.');
+    saved = await readSaved(dataDir);
+    assert(!saved.cardSetupRequests.find(row => row.id === cardRequest.id).stripePaymentMethodId, 'A mismatched SetupIntent must never attach a payment method to the customer file.');
+    const setupEvent = { id: 'evt_test_setup_intent_first', type: 'setup_intent.succeeded', livemode: false, data: { object: { id: 'seti_test_lifecycle', object: 'setup_intent', status: 'succeeded', livemode: false, customer: 'cus_test_lifecycle', payment_method: 'pm_test_lifecycle', metadata: setupMetadata } } };
     const setupRaw = JSON.stringify(setupEvent);
     const setupWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: setupRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, setupRaw) } });
-    assert(setupWebhook.status === 200 && setupWebhook.json.cardSetupRequestId === cardRequest.id, 'Signed Stripe setup completion must link the reusable card to the exact onboarding file.');
+    assert(setupWebhook.status === 200 && setupWebhook.json.cardSetupRequestId === cardRequest.id, 'A signed SetupIntent completion must link the reusable card to the exact onboarding file even when it arrives before Checkout completion.');
     saved = await readSaved(dataDir);
     const cardReadyRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     assert(cardReadyRecurring.paymentProvider === 'stripe' && cardReadyRecurring.stripeCustomerId === 'cus_test_lifecycle' && cardReadyRecurring.stripePaymentMethodId === 'pm_test_lifecycle' && cardReadyRecurring.stripeCardLast4 === '4242', 'WheelsonAuto must retain only Stripe customer/payment-method references and safe card display data.');
     assert(!JSON.stringify(saved).includes('4242424242424242'), 'WheelsonAuto must never store a full card number.');
+    assert(saved.integrations.stripe.lastLaunchWebhookType === 'setup_intent.succeeded' && saved.integrations.stripe.lastLaunchWebhookEventId === setupEvent.id, 'An exact signed SetupIntent must count as current launch webhook evidence.');
+    const firstSetupCompletedAt = saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt;
+    const checkoutAfterSetupIntent = { id: 'evt_test_checkout_after_setup_intent', type: 'checkout.session.completed', livemode: false, data: { object: { id: openedCardRequest.stripeCheckoutSessionId, object: 'checkout.session', mode: 'setup', status: 'complete', payment_status: 'no_payment_required', livemode: false, customer: 'cus_test_lifecycle', client_reference_id: cardRequest.id, setup_intent: 'seti_test_lifecycle', metadata: setupMetadata } } };
+    const checkoutAfterSetupIntentRaw = JSON.stringify(checkoutAfterSetupIntent);
+    const checkoutAfterSetupIntentWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: checkoutAfterSetupIntentRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, checkoutAfterSetupIntentRaw) } });
+    assert(checkoutAfterSetupIntentWebhook.status === 200 && checkoutAfterSetupIntentWebhook.json.cardSetupRequestId === cardRequest.id, 'A later Checkout completion must reconcile idempotently after SetupIntent already saved the card.');
+    saved = await readSaved(dataDir);
+    assert(saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt === firstSetupCompletedAt, 'Out-of-order Stripe setup webhooks must not complete or mutate the saved-card request twice.');
 
     async function payOnboarding(kind, intentId, eventId) {
       const checkout = await request(server, 'POST', '/api/public/onboarding/' + token + '/payment', { json: { paymentType: kind } });
