@@ -757,7 +757,7 @@ The owner **Live launch preflight** reports this sequence explicitly. It first
 shows `foundation_blocked` until PostgreSQL, the cutover sentinel, recovery,
 offsite backup, encrypted private storage, HTTPS, and password-only owner access
 are ready. It then shows `provider_proof_collection` while signed Stripe,
-Identity, Telnyx, Resend, Star, alert, and Clover-roster proof is being collected;
+Identity, Resend, Star, alert, and Clover-roster proof is being collected;
 Stripe money actions remain locked in that stage. After proof and data review it
 shows `enable_final_hardening`. The final `live_stripe_ready` state is impossible
 while migration maintenance is active, so a read-only migration deployment can

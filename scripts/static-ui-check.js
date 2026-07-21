@@ -221,16 +221,17 @@ assertIncludes('Owner live launch preflight surface', app, [
   'open-live-launch-preflight',
   '/api/system/infrastructure/preflight',
   'Controlled Stripe launch preflight',
-  'Live provider evidence',
+  'Launch-critical provider evidence',
   'liveLaunchProviderConsole',
   'liveLaunchProviderCard',
   'Payments + Identity',
-  'SMS + 10DLC',
+  '3 launch-critical',
+  'Carrier SMS stays optional.',
   'Launch safeguards',
   'JSON retirement sentinel',
   'Document decryption coverage',
   'Receipt + dispute evidence',
-  'never sends a text or email, charges a card',
+  'never sends a message, charges a card',
   'Database credential isolation',
   'Clover cutover roster',
   'First live Stripe pilot',
@@ -263,6 +264,9 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Vehicle identity review',
   'VIN review'
 ]);
+if (functionSlice('liveLaunchProviderConsole').includes('Telnyx') || functionSlice('liveLaunchProviderConsole').includes('SMS + 10DLC')) {
+  fail('Optional Telnyx SMS must not appear in or distort the launch-critical provider console.');
+}
 assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "launchStage==='provider_proof_collection'?'Collect proof'", "launchStage==='enable_final_hardening'?'Arm launch'", 'proofCollection.message']);
 assertIncludes('Launch VIN review links to the source workflow', functionSlice('liveLaunchPreflightModal'), ['data-view="Fleet" data-tab="VIN review"', 'Review in Fleet']);
 assertIncludes('Launch modal long-blocker wrapping', stylesCss, ['.modal .compact-list li', 'overflow-wrap:anywhere', 'word-break:break-word']);

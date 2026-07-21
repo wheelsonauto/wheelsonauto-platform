@@ -20,13 +20,13 @@ Current live release status:
 - Legacy customer-name and payment-amount vehicle labels are now safely cleared during normal data repair, preserved as previous values for audit, and marked for real vehicle matching. Similar-looking legitimate vehicle names are not cleared.
 - API Roadmap statuses now merge safe live server evidence: Clover Core requires successful customer/payment sync, Ecommerce requires a successful saved-card charge, and Clover webhooks require a received signed event.
 - WheelsonAuto Autopay now has its own evidence-backed provider row. A completed monitor run with a managed saved-card schedule proves the engine is connected; customer declines remain visible follow-up outcomes, while only a true monitor failure blocks engine readiness.
-- Resend, Telnyx, and Star continue to use their real outbound/inbound, carrier, and OpenAI health evidence; keys alone never mark a provider connected.
-- Telnyx signed inbound messaging is connected. Outbound SMS still requires the Telnyx account upgrade, service address and payment verification, 10DLC approval, and a successful live send.
+- Resend and Star continue to use their real outbound/inbound and OpenAI health evidence; keys alone never mark a provider connected.
+- WheelsonAuto customer-app messaging is the primary live conversation channel. Telnyx remains an optional carrier adapter and does not count toward or block Stripe launch readiness.
 - Resend outbound and inbound email delivery are connected for platform notifications and replies.
-- Star is built into Messages with platform context and admin approval gates for sensitive money and account actions. Live model replies still require usable OpenAI API credit and a successful controlled Responses API test.
+- Star is built into Messages with platform context, current OpenAI Responses API proof, request limits, and admin approval gates for sensitive money and account actions.
 - `data.json` remains intentionally unstaged and uncommitted so live business records are not overwritten by a code release.
-- Release asset version is `platform-20260714-final-46`.
-- API Roadmap now gives each provider one exact next action and the proof required before it can be labeled connected. Telnyx names account upgrade/10DLC/live delivery, Star names usable OpenAI API credit and provider test, Clover Ecommerce names a controlled saved-card charge, and Clover webhooks name a signed live event.
+- Release asset version is `platform-20260721-launch-providers-262`.
+- API Roadmap gives each launch-critical provider one exact next action and the proof required before it can be labeled connected. Star names usable OpenAI API credit and provider test, Clover Ecommerce names a controlled saved-card charge, and Clover webhooks name a signed live event; optional carrier SMS remains separate.
 - PassTime GPS has a read-only provider adapter and owner/manager sync control. It requires PassTime-issued Web Services details (`PASSTIME_API_BASE`, `PASSTIME_DEVICES_PATH`, and token or Basic credentials) before the platform can run the first live device sync. Exact tracker/VIN/tag matches update fleet location; uncertain devices remain in Missing file and remote starter controls are intentionally unsupported.
 - Provider setup preserves detailed runtime statuses such as `Testing - live charge needed` and `Blocked - OpenAI credit needed`; opening the form can no longer visually default an unfinished provider to `Connected`.
 - Built-in Clover, WheelsonAuto Autopay, Telnyx, email, and Star statuses are evidence-controlled and read-only in setup. Custom provider records keep an editable status selector.
@@ -241,9 +241,9 @@ Settings controls Clover setup, website apply path, staff accounts, role access,
 - insurance verification
 - tracker/location provider
 - marketing/follow-up systems
-- Telnyx SMS from the WheelsonAuto number: signed inbound webhook is connected; outbound remains blocked until account upgrade and 10DLC approval.
+- WheelsonAuto customer-app messaging: live as the primary channel; optional Telnyx SMS remains outside the launch gate.
 - Resend email: outbound and inbound reply/webhook delivery are connected.
-- Star AI: OpenAI key/model are stored, but usable API credit and a successful controlled Responses API test are still required.
+- Star AI: current OpenAI Responses API proof and request limits are active; money and account actions still require admin approval.
 
 The API Roadmap must derive these three statuses from verified runtime evidence. A stale manually saved provider label cannot override carrier delivery, email direction, or OpenAI health results.
 
