@@ -517,6 +517,19 @@ async function main() {
     const duplicateHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510 } });
     assert(duplicateHandoff.status === 200 && duplicateHandoff.json.alreadyCompleted === true, 'Repeated pickup confirmation must be idempotent.');
 
+    const amountMatchedPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
+    const amountMatchedPilot = amountMatchedPreflight.json && amountMatchedPreflight.json.controlledStripePilot && amountMatchedPreflight.json.controlledStripePilot.candidate;
+    assert(amountMatchedPreflight.status === 200 && amountMatchedPilot && amountMatchedPilot.depositAmount === 485 && amountMatchedPilot.firstWeekAmount === 229 && amountMatchedPilot.totalCollected === 714, 'The owner pilot review must show the exact locked deposit, first-week charge, and collected total.');
+
+    const mismatchedPilotState = await readSaved(dataDir);
+    const mismatchedDepositPayment = mismatchedPilotState.payments.find(row => row.paymentRequestId === deposit.paymentRequest.id);
+    mismatchedDepositPayment.amount = 484;
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(mismatchedPilotState, null, 2));
+    const mismatchedPilotApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
+    assert(mismatchedPilotApproval.status === 409 && /locked vehicle price/i.test(mismatchedPilotApproval.json.error || ''), 'A Stripe payment whose amount differs from the locked vehicle price must never unlock the live pilot.');
+    mismatchedDepositPayment.amount = 485;
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(mismatchedPilotState, null, 2));
+
     const wrongPilotPhrase = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE PILOT', confirmed: true } });
     assert(wrongPilotPhrase.status === 409, 'The first Stripe pilot must require the exact owner approval phrase.');
     const approvedPilot = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });

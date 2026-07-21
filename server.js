@@ -256,7 +256,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-owner-handoff-268';
+const ASSET_VERSION = 'platform-20260721-stripe-pilot-amount-lock-269';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -10480,23 +10480,39 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     && String(row.kind || '').toLowerCase() === 'receipt'
   ) : [];
   const pricing = application && application.pricingSnapshot || {};
+  const expectedDepositCents = cents(pricing.downPayment);
+  const expectedFirstWeekCents = cents(pricing.weeklyPayment);
+  const depositRequired = expectedDepositCents > 0;
+  const depositAmountMatches = !depositRequired || !!(depositRequest && depositPayment
+    && cents(depositRequest.amount) === expectedDepositCents
+    && cents(depositPayment.amount) === expectedDepositCents);
+  const firstWeekAmountMatches = !!(firstWeekRequest && firstWeekPayment
+    && cents(firstWeekRequest.amount) === expectedFirstWeekCents
+    && cents(firstWeekPayment.amount) === expectedFirstWeekCents);
   const exactCustomer = String(application && application.name || '').trim();
   const exactVehicleId = String(vehicle && (vehicle.platformVehicleId || vehicle.id) || '').trim();
   const exactVin = String(vehicle && vehicle.vin || '').trim();
   const exactPlate = String(vehicle && vehicle.plate || '').trim();
   const completedPickup = !!(appointment && /picked up|completed/i.test(String(appointment.status || '')) && appointment.completedAt);
   const expectedNextRun = appointment && appointment.date ? addDaysToDateKey(appointment.date, 7) : '';
-  const requiredReceipts = [depositPayment, firstWeekPayment].map(payment => payment && receipts.find(row =>
-    row.paymentId === payment.id
-    || payment.paymentRequestId && row.paymentRequestId === payment.paymentRequestId
-    || payment.stripePaymentIntentId && row.stripePaymentIntentId === payment.stripePaymentIntentId
-  )).filter(Boolean);
-  const receiptMatches = requiredReceipts.filter(row =>
-    normKey(row.customer) === normKey(exactCustomer)
-    && (!exactVehicleId || String(row.vehicleId || '').trim() === exactVehicleId)
-    && (!exactVin || String(row.vin || '').trim() === exactVin)
-    && (!exactPlate || String(row.licensePlate || row.plate || '').trim() === exactPlate)
-  );
+  const requiredPilotPayments = [depositRequired ? depositPayment : null, firstWeekPayment].filter(Boolean);
+  const receiptProofs = requiredPilotPayments.map(payment => ({
+    payment,
+    receipt: payment && receipts.find(row =>
+      row.paymentId === payment.id
+      || payment.paymentRequestId && row.paymentRequestId === payment.paymentRequestId
+      || payment.stripePaymentIntentId && row.stripePaymentIntentId === payment.stripePaymentIntentId
+    ) || null
+  }));
+  const receiptMatches = receiptProofs.filter(({ payment, receipt }) => payment && receipt
+    && normKey(receipt.customer) === normKey(exactCustomer)
+    && (!exactVehicleId || String(receipt.vehicleId || '').trim() === exactVehicleId)
+    && (!exactVin || String(receipt.vin || '').trim() === exactVin)
+    && (!exactPlate || String(receipt.licensePlate || receipt.plate || '').trim() === exactPlate)
+    && cents(receipt.amount) === cents(payment.amount)
+    && normalizedPaymentProvider(receipt.paymentProvider || receipt.provider || receipt.method || 'stripe') === 'stripe'
+    && (!receipt.currency || String(receipt.currency).toLowerCase() === 'usd')
+  ).map(row => row.receipt);
   const receiptStorageReady = !liveRequired || receiptMatches.every(row =>
     String(row.storageSecurity || '').toLowerCase() === 'encrypted'
     || /stored encrypted/i.test(String(row.privateArtifactStatus || ''))
@@ -10522,10 +10538,12 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     ['insurance', 'Full-coverage insurance uploaded and staff approved', !!(session && session.documentReviewStatus === 'Approved' && insuranceDocuments.length)],
     ['signature', 'E-signature and staff signature match approval', !!(signature && signature.signedAt && session && session.signatureReviewStatus === 'Approved')],
     ['stripe_card', liveRequired ? 'Live Stripe reusable card and autopay authorization' : 'Stripe reusable card and autopay authorization', !!(recurring && normalizedPaymentProvider(recurring.paymentProvider || recurring.provider) === 'stripe' && recurring.stripeCustomerId && recurring.stripePaymentMethodId && (recurring.autopayConsentAt || recurring.stripeCardSavedAt || recurring.cardSavedAt) && session && session.autopayConsentAt && (!liveRequired || recurring.stripeLivemode === true))],
-    ['deposit', 'Separate nonrefundable deposit paid through Stripe', !!(Number(pricing.downPayment || 0) > 0 && depositRequest && depositPayment && (!liveRequired || depositPayment.stripeLivemode === true))],
+    ['deposit', depositRequired ? 'Separate nonrefundable deposit paid through Stripe' : 'No deposit required by the locked vehicle price', !depositRequired || !!(depositRequest && depositPayment && (!liveRequired || depositPayment.stripeLivemode === true))],
+    ['deposit_amount', depositRequired ? 'Deposit request and payment match the locked vehicle price' : 'Waived deposit matches the locked vehicle price', depositAmountMatches],
     ['first_week', 'Separate first weekly payment paid through Stripe', !!(firstWeekRequest && firstWeekPayment && (!liveRequired || firstWeekPayment.stripeLivemode === true))],
-    ['separate_payments', 'Deposit and first week are distinct transactions', !!(depositPayment && firstWeekPayment && depositPayment.id !== firstWeekPayment.id && depositPayment.stripePaymentIntentId && firstWeekPayment.stripePaymentIntentId && depositPayment.stripePaymentIntentId !== firstWeekPayment.stripePaymentIntentId)],
-    ['receipts', 'Two exact customer and vehicle receipts stored privately', new Set(receiptMatches.map(row => row.id)).size === 2 && receiptStorageReady],
+    ['first_week_amount', 'First weekly request and payment match the locked vehicle price', firstWeekAmountMatches],
+    ['separate_payments', depositRequired ? 'Deposit and first week are distinct transactions' : 'First weekly payment is a distinct Stripe transaction', depositRequired ? !!(depositPayment && firstWeekPayment && depositPayment.id !== firstWeekPayment.id && depositPayment.stripePaymentIntentId && firstWeekPayment.stripePaymentIntentId && depositPayment.stripePaymentIntentId !== firstWeekPayment.stripePaymentIntentId) : !!(firstWeekPayment && firstWeekPayment.stripePaymentIntentId)],
+    ['receipts', (depositRequired ? 'Two' : 'One') + ' exact customer and vehicle receipt' + (depositRequired ? 's' : '') + ' stored privately', new Set(receiptMatches.map(row => row.id)).size === requiredPilotPayments.length && receiptStorageReady],
     ['pickup', 'Physical pickup completed by staff', completedPickup],
     ['weekly_anchor', 'Weekly autopay anchored one week after pickup', !!(recurring && appointment && recurring.autopayAnchorDate === appointment.date && recurring.nextRun === expectedNextRun && recurring.paymentDay === appointment.weekday && recurring.autoChargeEnabled === true && /active/i.test(String(recurring.status || '')))],
     ['customer_contract', 'Customer file and signed contract linked to the same vehicle', !!(customer && contract && contract.signatureId && appointment && contract.onboardingSessionId === appointment.onboardingSessionId && String(customer.vehicleId || '') === String(exactVehicleId || '') && String(contract.vehicleId || '') === String(exactVehicleId || ''))]
@@ -10551,8 +10569,15 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     stripePaymentMethodId: recurring && recurring.stripePaymentMethodId || '',
     depositPaymentId: depositPayment && depositPayment.id || '',
     depositPaymentIntentId: depositPayment && depositPayment.stripePaymentIntentId || '',
+    expectedDepositCents,
+    depositRequired,
+    depositRequestCents: cents(depositRequest && depositRequest.amount),
+    depositPaymentCents: cents(depositPayment && depositPayment.amount),
     firstWeekPaymentId: firstWeekPayment && firstWeekPayment.id || '',
     firstWeekPaymentIntentId: firstWeekPayment && firstWeekPayment.stripePaymentIntentId || '',
+    expectedFirstWeekCents,
+    firstWeekRequestCents: cents(firstWeekRequest && firstWeekRequest.amount),
+    firstWeekPaymentCents: cents(firstWeekPayment && firstWeekPayment.amount),
     receiptIds: receiptMatches.map(row => row.id).sort(),
     pickupAppointmentId: appointment && appointment.id || '',
     pickupCompletedAt: appointment && appointment.completedAt || '',
@@ -10572,6 +10597,9 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     vehicle: vehicle ? nativeSite.vehicleTitle(vehicle) : '',
     vin: exactVin,
     plate: exactPlate,
+    depositAmount: Number((expectedDepositCents / 100).toFixed(2)),
+    firstWeekAmount: Number((expectedFirstWeekCents / 100).toFixed(2)),
+    totalCollected: Number(((expectedDepositCents + expectedFirstWeekCents) / 100).toFixed(2)),
     completedAt: appointment && appointment.completedAt || session && session.completedAt || '',
     checks,
     missing
@@ -10606,6 +10634,9 @@ function controlledStripePilotEvidence(data, options = {}) {
     vehicle: candidate.vehicle,
     vin: candidate.vin,
     plate: candidate.plate,
+    depositAmount: candidate.depositAmount,
+    firstWeekAmount: candidate.firstWeekAmount,
+    totalCollected: candidate.totalCollected,
     completedAt: candidate.completedAt,
     ready: candidate.ready,
     checks: candidate.checks,
