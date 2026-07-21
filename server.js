@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-public-onboarding-recovery-257';
+const ASSET_VERSION = 'platform-20260721-exact-plan-card-links-258';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -15443,6 +15443,71 @@ function createPaymentRequest(data, payload) {
   request.url = PUBLIC_BASE_URL + '/pay/' + request.id;
   return request;
 }
+function recurringPlanIdentifiers(row = {}) {
+  return [row.id, row.cloverSubscriptionId, row.subscriptionId, row.externalPlanId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+}
+function recurringPlanGroups(rows = []) {
+  const groups = [];
+  rows.filter(Boolean).forEach(row => {
+    const identifiers = new Set(recurringPlanIdentifiers(row));
+    const touching = groups.filter(group => group.rows.some(candidate => recurringPlanIdentifiers(candidate).some(identifier => identifiers.has(identifier))));
+    if (!touching.length) {
+      groups.push({ rows: [row] });
+      return;
+    }
+    const mergedRows = [row];
+    touching.forEach(group => mergedRows.push(...group.rows));
+    touching.forEach(group => groups.splice(groups.indexOf(group), 1));
+    groups.push({ rows: [...new Set(mergedRows)] });
+  });
+  return groups;
+}
+function cardSetupPlanBindingError(customer, code = 'card_setup_plan_ambiguous') {
+  const ambiguous = code === 'card_setup_plan_ambiguous';
+  return stripeMigration.stripeLaunchSafetyError(
+    ambiguous
+      ? 'This card setup link is connected to more than one payment schedule. WheelsonAuto must send a new link for the exact plan. No card was saved or charged.'
+      : 'The exact recurring payment schedule for this card setup could not be found. WheelsonAuto must review the customer file and send a new plan-specific link. No card was saved or charged.',
+    code,
+    [ambiguous ? 'Exact recurring plan selection for ' + (customer || 'this customer') : 'Existing recurring plan record'],
+    409
+  );
+}
+function resolveCardSetupPlanRows(data, reference = {}, options = {}) {
+  const allRows = allRecurringRows(data);
+  const recurringReference = String(reference.recurringPaymentId || '').trim();
+  const subscriptionReference = String(reference.cloverSubscriptionId || '').trim();
+  const setupReference = String(reference.cardSetupRequestId || '').trim();
+  const references = new Set([recurringReference, subscriptionReference].filter(Boolean));
+  let exact = allRows.filter(row => row && (
+    recurringPlanIdentifiers(row).some(identifier => references.has(identifier))
+    || setupReference && String(row.cardSetupRequestId || '') === setupReference
+  ));
+  if (exact.length) {
+    const exactIdentifiers = new Set(exact.flatMap(recurringPlanIdentifiers));
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      allRows.forEach(row => {
+        if (!row || exact.includes(row) || !recurringPlanIdentifiers(row).some(identifier => exactIdentifiers.has(identifier))) return;
+        exact.push(row);
+        recurringPlanIdentifiers(row).forEach(identifier => exactIdentifiers.add(identifier));
+        expanded = true;
+      });
+    }
+    const exactGroups = recurringPlanGroups(exact);
+    if (exactGroups.length > 1) throw cardSetupPlanBindingError(reference.customer);
+    return exactGroups[0] ? exactGroups[0].rows : [];
+  }
+  if (!options.allowNameFallback) return [];
+  const customerKey = normKey(reference.customer);
+  if (!customerKey) return [];
+  const nameGroups = recurringPlanGroups(allRows.filter(row => row && normKey(row.customer) === customerKey));
+  if (nameGroups.length > 1) throw cardSetupPlanBindingError(reference.customer);
+  return nameGroups[0] ? nameGroups[0].rows : [];
+}
 function createCardSetupRequest(data, payload) {
   const autopay = cleanAutopayPayload({
     ...payload,
@@ -15452,24 +15517,27 @@ function createCardSetupRequest(data, payload) {
     nextRun: payload.nextRun || payload.firstRun || 'After card setup'
   });
   data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
-  const customerKey = normKey(autopay.customer);
   const reactivateId = String(payload.recurringPaymentId || payload.id || '').trim();
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   const cloverMembers = data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
-  const existingAutopayById = payload.reactivateExisting && reactivateId ? data.recurringPayments.find(row => row.id === reactivateId || row.cardSetupRequestId === reactivateId || row.cloverSubscriptionId === reactivateId) : null;
-  const existingAutopayByName = payload.reactivateExisting && customerKey ? data.recurringPayments.find(row => normKey(row.customer) === customerKey) : null;
-  const existingMemberById = payload.reactivateExisting && reactivateId ? cloverMembers.find(row => row.id === reactivateId || row.cardSetupRequestId === reactivateId || row.cloverSubscriptionId === reactivateId) : null;
-  const existingMemberByName = payload.reactivateExisting && customerKey ? cloverMembers.find(row => normKey(row.customer) === customerKey) : null;
-  const existingAutopay = existingAutopayById || existingAutopayByName;
-  const existingMember = existingMemberById || existingMemberByName;
-  const cardTarget = existingAutopayById || existingMemberById || existingAutopayByName || existingMemberByName;
+  const cardTargetRows = payload.reactivateExisting
+    ? resolveCardSetupPlanRows(data, {
+        recurringPaymentId: reactivateId,
+        cloverSubscriptionId: payload.cloverSubscriptionId,
+        customer: autopay.customer
+      }, { allowNameFallback: !reactivateId })
+    : [];
+  if (payload.reactivateExisting && !cardTargetRows.length) throw cardSetupPlanBindingError(autopay.customer, 'card_setup_plan_not_found');
+  const existingAutopay = cardTargetRows.find(row => data.recurringPayments.includes(row)) || null;
+  const existingMember = cardTargetRows.find(row => cloverMembers.includes(row)) || null;
+  const cardTarget = existingAutopay || existingMember;
   const cardOnlyUpdate = !!(payload.cardOnlyUpdate && cardTarget);
   if (cardTarget) autopay.id = cardTarget.id || (existingAutopay && existingAutopay.id) || autopay.id;
   const request = {
     id: publicLinkId('setup'),
     organizationId: autopay.organizationId || MAIN_ORG_ID,
-    recurringPaymentId: autopay.id,
+    recurringPaymentId: cardTarget && cardTarget.id || autopay.id,
     applicationId: String(payload.applicationId || autopay.applicationId || '').trim(),
     onboardingSessionId: String(payload.onboardingSessionId || autopay.onboardingSessionId || '').trim(),
     onlineVehicleId: String(payload.onlineVehicleId || autopay.onlineVehicleId || '').trim(),
@@ -15511,15 +15579,16 @@ function createCardSetupRequest(data, payload) {
   data.cardSetupRequests = Array.isArray(data.cardSetupRequests) ? data.cardSetupRequests : [];
   if (!cardOnlyUpdate && !payload.deferVehicleAssignment) assignAutopayVehicle(data, autopay);
   if (cardOnlyUpdate) {
-    Object.assign(cardTarget, {
+    const cardChangePendingAt = new Date().toISOString();
+    cardTargetRows.forEach(row => Object.assign(row, {
       cardSetupRequestId: request.id,
       cardSetupUrl: request.url,
-      cardChangePendingAt: new Date().toISOString(),
+      cardChangePendingAt,
       paymentSetup: 'Card change link sent',
       pendingCardProvider: request.paymentProvider,
       lastCardSetupReason: String(payload.reason || 'Change card on file').trim(),
-      updatedAt: new Date().toISOString()
-    });
+      updatedAt: cardChangePendingAt
+    }));
   } else if (existingAutopay) {
     Object.assign(existingAutopay, autopay, {
       id: existingAutopay.id,
@@ -15553,7 +15622,10 @@ function setupCardHtml(request, message = '') {
 }
 function recordPublicCardSetupFailure(request = {}, error, paymentProvider = 'stripe') {
   const provider = normalizedPaymentProvider(paymentProvider);
-  const customerMessage = provider === 'stripe'
+  const safePlanBindingError = ['card_setup_plan_ambiguous', 'card_setup_plan_not_found'].includes(String(error && error.code || ''));
+  const customerMessage = safePlanBindingError
+    ? String(error.message || '').slice(0, 900)
+    : provider === 'stripe'
     ? 'Stripe could not finish the secure card setup. No card was saved and no payment was charged. Please retry, or contact WheelsonAuto for a fresh link if it continues.'
     : 'The secure card setup could not be completed. No payment was charged. Please retry, or contact WheelsonAuto for a fresh link if it continues.';
   request.lastError = String(error && error.message || error || 'Card setup failed.').slice(0, 900);
@@ -15585,9 +15657,20 @@ function stripeSetupCardHtml(request, message = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Card Setup</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure Stripe card setup</div></div></a></div><h1>Set up automatic payments</h1><p>Save a card securely with Stripe. WheelsonAuto receives a payment-method reference, never the full card number or CVV.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + escapeHtml(request.customer || 'Customer') + '</div><div class="muted">' + escapeHtml(request.vehicle || 'WheelsonAuto account') + '</div></div><div class="item"><strong>Recurring amount</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Weekly') + '</div></div></div>' + (customerMessage ? '<div class="notice" style="margin-top:12px">' + escapeHtml(customerMessage) + '</div>' : '') + (!setupReady ? '<div class="notice" style="margin-top:12px">Stripe enrollment is prepared but not live. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET in Render before using this link.</div>' : '') + '<form method="POST" action="/api/public/card-setup/' + encodeURIComponent(request.id) + '/stripe-checkout" class="form" style="margin-top:14px"><label class="check span2"><input name="consent" value="yes" type="checkbox" required' + disabled + '> I authorize WheelsonAuto to save this card with Stripe and charge the recurring schedule, one retry after a failed attempt, and separately approved catch-up payments on my account.</label><div class="notice span2">Saving this card does not switch an existing Clover schedule. WheelsonAuto will show the Stripe card as ready, and the owner must separately confirm the provider switch.</div><div class="span2 actions"><button class="btn primary" type="submit"' + disabled + '>Continue to secure Stripe</button><a class="btn" href="' + escapeHtml(request.onboardingReturnUrl || 'https://www.wheelsonauto.com/') + '">Cancel</a></div></form></section></main></div></body></html>';
 }
 function stripeRecurringRowsForRequest(data, request) {
-  const rows = allRecurringRows(data);
-  const exact = rows.filter(row => row && (row.id === request.recurringPaymentId || row.cardSetupRequestId === request.id));
-  return exact.length ? exact : rows.filter(row => row && request.customer && normKey(row.customer) === normKey(request.customer));
+  const rows = resolveCardSetupPlanRows(data, {
+    recurringPaymentId: request.recurringPaymentId,
+    cloverSubscriptionId: request.cloverSubscriptionId,
+    cardSetupRequestId: request.id,
+    customer: request.customer
+  }, { allowNameFallback: true });
+  if (rows.length && !request.recurringPaymentId) {
+    const primary = rows.find(row => (data.recurringPayments || []).includes(row)) || rows[0];
+    request.recurringPaymentId = primary.id || primary.cloverSubscriptionId || '';
+    rows.forEach(row => {
+      if (!row.cardSetupRequestId) row.cardSetupRequestId = request.id;
+    });
+  }
+  return rows;
 }
 function stripeMetadata(request = {}, extra = {}) {
   return {
@@ -15982,9 +16065,12 @@ async function completeCardSetup(data, request, payload) {
   data.integrations = data.integrations || {};
   data.integrations.clover = data.integrations.clover || {};
   const members = data.integrations.clover.recurringPlanMembers = Array.isArray(data.integrations.clover.recurringPlanMembers) ? data.integrations.clover.recurringPlanMembers : [];
-  const allRows = [...data.recurringPayments, ...members];
-  const exactRecurringRows = allRows.filter(row => row && (row.id === request.recurringPaymentId || row.cardSetupRequestId === request.id || (request.cloverSubscriptionId && row.cloverSubscriptionId === request.cloverSubscriptionId)));
-  const recurringRows = exactRecurringRows.length ? exactRecurringRows : allRows.filter(row => row && request.customer && normKey(row.customer) === normKey(request.customer));
+  const recurringRows = resolveCardSetupPlanRows(data, {
+    recurringPaymentId: request.recurringPaymentId,
+    cloverSubscriptionId: request.cloverSubscriptionId,
+    cardSetupRequestId: request.id,
+    customer: request.customer
+  }, { allowNameFallback: true });
   const seenRecurring = new Set();
   const recurringPatch = {
     status: 'Active',

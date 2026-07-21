@@ -220,7 +220,10 @@ async function run() {
     'completeStripeRecurringChargeClaim',
     'failStripeRecurringChargeClaim',
     'recordPublicIdentityFailure',
-    'No verification decision was recorded'
+    'No verification decision was recorded',
+    'resolveCardSetupPlanRows',
+    'card_setup_plan_ambiguous',
+    'more than one payment schedule'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   assert(server.includes("stableId('woa-stripe-customer'") && server.includes('stripeCustomerIdempotencyKey'), 'Stripe customer creation must derive and retain a deterministic company-and-customer-scoped idempotency key.');
   assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
