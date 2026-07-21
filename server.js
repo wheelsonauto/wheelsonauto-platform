@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-setup-recovery-254';
+const ASSET_VERSION = 'platform-20260721-stripe-setup-privacy-255';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -8020,7 +8020,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData', 'privateArtifactId'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData', 'privateArtifactId', 'stripeCardSetupError', 'lastError'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
@@ -9798,7 +9798,8 @@ function customerPortalCardSetupRequestRow(row = {}) {
   const detail = [row.createdAt || row.date || '', cardSetupRequestAgeLabel(row), row.frequency || 'Card setup/change', row.vehicle || 'WheelsonAuto account'].filter(Boolean).join(' - ');
   const status = row.status || 'Open';
   const action = setupUrl ? '<a class="btn primary" href="' + escapeHtml(setupUrl) + '">Set up card</a>' : '<span>' + escapeHtml(status) + '</span>';
-  return '<div class="customer-row customer-card-setup-request"><div><strong>' + escapeHtml(status) + '</strong><small>' + escapeHtml(detail) + '</small></div><div class="customer-request-action"><b>' + moneyText(row.amount || 0) + '</b>' + action + '</div></div>';
+  const customerMessage = row.stripeCardSetupCustomerMessage ? '<p>' + escapeHtml(row.stripeCardSetupCustomerMessage) + '</p>' : '';
+  return '<div class="customer-row customer-card-setup-request"><div><strong>' + escapeHtml(status) + '</strong><small>' + escapeHtml(detail) + '</small>' + customerMessage + '</div><div class="customer-request-action"><b>' + moneyText(row.amount || 0) + '</b>' + action + '</div></div>';
 }
 function customerPortalPaymentRow(payment = {}, vehicleTitle = 'Vehicle', vehicle = {}, summary = {}) {
   const vin = payment.vin || summary.vin || vehicle.vin || '';
@@ -15698,6 +15699,7 @@ async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
     status: cancelled ? 'Stripe setup cancelled - fresh link required' : actionRequired ? 'Stripe setup action required' : 'Stripe setup failed - customer retry needed',
     stripeCardSetupStatus: cancelled ? 'Cancelled' : actionRequired ? 'Action required' : 'Failed',
     stripeCardSetupError: recordedReason,
+    stripeCardSetupCustomerMessage: publicReason,
     stripeCardSetupFailedAt: failedAt,
     lastStripeSetupIntentId: stripeObjectId(setupIntent),
     lastFailedAt: failedAt,
@@ -15710,6 +15712,7 @@ async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
     Object.assign(row, {
       stripeCardSetupStatus: request.stripeCardSetupStatus,
       stripeCardSetupError: recordedReason,
+      stripeCardSetupCustomerMessage: publicReason,
       stripeCardSetupFailedAt: failedAt,
       lastStripeSetupIntentId: stripeObjectId(setupIntent),
       pendingCardProvider: 'stripe',
@@ -15729,7 +15732,8 @@ async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
   const onboardingSession = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
   if (onboardingSession && !onboardingSession.cardCompletedAt) Object.assign(onboardingSession, {
     status: cancelled ? 'Card setup cancelled' : actionRequired ? 'Card verification required' : 'Card setup needed',
-    cardSetupError: recordedReason,
+    cardSetupError: publicReason,
+    stripeCardSetupError: recordedReason,
     cardSetupFailedAt: failedAt
   });
   await queueOwnerEmailNotification(data, 'card_setup_failed', {
@@ -15821,6 +15825,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
     stripeMigrationStatus: 'Stripe card ready - Clover remains active until owner confirmation',
     stripeCardSetupStatus: 'Saved',
     stripeCardSetupError: '',
+    stripeCardSetupCustomerMessage: '',
     stripeCardSetupFailedAt: '',
     lastFailedAt: '',
     lastError: '',
@@ -15857,6 +15862,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
       pendingCardProvider: '',
       stripeCardSetupStatus: 'Saved',
       stripeCardSetupError: '',
+      stripeCardSetupCustomerMessage: '',
       stripeCardSetupFailedAt: '',
       cardChangeCompletedAt: request.cardOnlyUpdate ? completedAt : row.cardChangeCompletedAt || '',
       cardChangePendingAt: '',
@@ -15885,7 +15891,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
   const profile = (data.customers || []).find(row => request.customer && normKey(row.name || row.customer) === normKey(request.customer));
   if (profile) Object.assign(profile, { stripeCustomerId: customerId, stripePaymentMethodId: paymentMethodId, stripeCardBrand: card.brand || '', stripeCardLast4: card.last4 || '', stripeCardSavedAt: completedAt, stripeLivemode: session.livemode === true && setupIntent.livemode === true, updatedAt: completedAt });
   const onboardingSession = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
-  if (onboardingSession) Object.assign(onboardingSession, { cardCompletedAt: completedAt, autopayConsentAt: request.autopayConsentAt || completedAt, status: 'Card linked', cardSetupError: '', cardSetupFailedAt: '' });
+  if (onboardingSession) Object.assign(onboardingSession, { cardCompletedAt: completedAt, autopayConsentAt: request.autopayConsentAt || completedAt, status: 'Card linked', cardSetupError: '', stripeCardSetupError: '', cardSetupFailedAt: '' });
   await queueOwnerEmailNotification(data, 'card_setup_completed', {
     customer: request.customer || 'Customer',
     subject: 'Stripe card ready - ' + (request.customer || 'Customer'),
