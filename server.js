@@ -13821,7 +13821,9 @@ function apiProviderLaunchGuidance(provider = {}) {
       : ['Run the autopay monitor with one managed saved-card schedule and verify charge, retry, failure, and next-run tracking.', 'Completed monitor result tied to a named customer and saved-card schedule.'],
     'stripe-payments': connected
       ? ['Keep the account-readiness proof fresh and monitor matched signed Stripe events before each migration batch.', 'Live charges and payouts enabled plus a fresh signed payment-path webhook tied to a WheelsonAuto record.']
-      : ['Finish Stripe business activation, deploy the live keys in Render, run Check Stripe account, then complete one matched signed live card-setup or payment-path event.', 'Live account with charges and payouts enabled plus a fresh signed webhook tied to the correct WheelsonAuto record.'],
+      : status.includes('signed event')
+        ? ['Complete one matched signed live Stripe card-setup or payment-path event. The live account, charges, and payouts are already verified.', 'Fresh signed webhook tied to the correct WheelsonAuto customer, vehicle, and payment or card-setup record.']
+        : ['Finish Stripe business activation, deploy the live keys in Render, run Check Stripe account, then complete one matched signed live card-setup or payment-path event.', 'Live account with charges and payouts enabled plus a fresh signed webhook tied to the correct WheelsonAuto record.'],
     'sms-phone': connected
       ? ['Keep delivery monitoring active and review inbound/outbound failures in Messages.', 'Carrier-delivered outbound SMS and signed inbound reply in the same customer thread.']
       : ['Upgrade the Telnyx account, complete service address/payment verification, submit and receive 10DLC approval, attach the number to the messaging profile, then run one outbound and inbound customer-thread test.', 'Carrier-delivered outbound SMS plus a signed inbound reply on the same customer thread.'],
