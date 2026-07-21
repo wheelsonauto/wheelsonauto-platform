@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-public-card-privacy-256';
+const ASSET_VERSION = 'platform-20260721-public-onboarding-recovery-257';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -8020,7 +8020,7 @@ function filterRowsForUserOrganization(rows, user) {
   if (!Array.isArray(rows) || isOwnerUser(user)) return rows;
   return rows.filter(row => rowVisibleToUserOrganization(row, user));
 }
-const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData', 'privateArtifactId', 'stripeCardSetupError', 'lastError'];
+const PRIVATE_OPERATIONAL_FIELDS = ['passwordHash', 'passwordSalt', 'pendingPasswordHash', 'pendingPasswordSalt', 'cloverPaymentSource', 'paymentSource', 'paymentSourceId', 'paymentToken', 'sourceToken', 'cardToken', 'token', 'tokenHash', 'publicToken', 'onboardingReturnUrl', 'raw', 'response', 'internalNotes', 'privateNotes', 'secret', 'apiKey', 'aiPlan', 'aiSourceMessageId', 'aiDraftId', 'aiApprovedAt', 'approvalRequired', 'customerAccountId', 'staffAccountId', 'auditTrail', 'event', 'rawPayload', 'providerPayload', 'storagePath', 'storageKey', 'storageProvider', 'storageSecurity', 'encryption', 'signatureImagePath', 'signatureData', 'privateArtifactId', 'stripeCardSetupError', 'identityVerificationProviderError', 'lastError'];
 function preservePrivateOperationalFields(oldRow = {}, newRow = {}) {
   const safe = { ...(newRow || {}) };
   PRIVATE_OPERATIONAL_FIELDS.forEach(field => {
@@ -10189,6 +10189,8 @@ function applyStripeIdentitySession(data, session, application, object = {}, eve
   session.identityVerificationLivemode = !!object.livemode;
   session.identityVerificationLastErrorCode = status === 'requires_input' ? providerError.code : '';
   session.identityVerificationLastError = status === 'requires_input' ? providerError.message : '';
+  session.identityVerificationCustomerMessage = status === 'requires_input' ? providerError.message : '';
+  session.identityVerificationProviderError = '';
   if (incoming === 'verified' && !session.identityVerifiedAt) session.identityVerifiedAt = now;
   if (incoming === 'redacted') session.identityDataRedactedAt = now;
   data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
@@ -15560,6 +15562,21 @@ function recordPublicCardSetupFailure(request = {}, error, paymentProvider = 'st
   if (provider === 'stripe') request.stripeCardSetupCustomerMessage = customerMessage;
   return customerMessage;
 }
+function recordPublicCheckoutFailure(request = {}, error, paymentProvider = 'stripe') {
+  const providerName = paymentProviderLabel(paymentProvider);
+  const customerMessage = providerName + ' could not open the secure payment page. No payment was recorded. Please retry, or contact WheelsonAuto if it continues.';
+  request.lastError = String(error && error.message || error || 'Secure checkout failed.').slice(0, 900);
+  request.lastFailedAt = new Date().toISOString();
+  request.checkoutCustomerMessage = customerMessage;
+  return customerMessage;
+}
+function recordPublicIdentityFailure(session = {}, error) {
+  const customerMessage = 'Secure identity verification is temporarily unavailable. No verification decision was recorded. Please retry, or contact WheelsonAuto if it continues.';
+  session.identityVerificationProviderError = String(error && error.message || error || 'Stripe Identity request failed.').slice(0, 900);
+  session.identityVerificationCustomerMessage = customerMessage;
+  session.identityVerificationLastCheckedAt = new Date().toISOString();
+  return customerMessage;
+}
 function stripeSetupCardHtml(request, message = '') {
   const setupReady = stripeCardPreparationReady();
   const disabled = setupReady ? '' : ' disabled';
@@ -17457,6 +17474,9 @@ async function attachCloverCheckout(data, request) {
   request.providerCheckoutSessionId = request.checkoutSessionId;
   request.checkoutHref = checkout.href;
   request.checkoutCreatedAt = new Date().toISOString();
+  request.lastError = '';
+  request.lastFailedAt = '';
+  request.checkoutCustomerMessage = '';
   await writeData(data);
   return checkout;
 }
@@ -17497,6 +17517,9 @@ async function attachStripeCheckout(data, request) {
   request.checkoutHref = session.url || '';
   request.checkoutCreatedAt = new Date().toISOString();
   request.stripeCheckoutKeyMode = STRIPE_KEY_MODE;
+  request.lastError = '';
+  request.lastFailedAt = '';
+  request.checkoutCustomerMessage = '';
   await writeData(data);
   return { ...session, href: session.url || '' };
 }
@@ -19430,9 +19453,8 @@ const server = http.createServer(async (req, res) => {
           await syncStripeIdentitySession(data, context.session, context.application);
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
-        } catch {
-          context.session.identityVerificationLastCheckedAt = new Date().toISOString();
-          context.session.identityVerificationLastError = 'Stripe identity status is temporarily unavailable. Refresh this page or contact WheelsonAuto if it continues.';
+        } catch (error) {
+          recordPublicIdentityFailure(context.session, error);
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }
@@ -19785,6 +19807,8 @@ const server = http.createServer(async (req, res) => {
             session.identityVerificationStatus = 'not_started';
             session.identityVerificationLastErrorCode = '';
             session.identityVerificationLastError = '';
+            session.identityVerificationCustomerMessage = '';
+            session.identityVerificationProviderError = '';
             session.identityVerifiedAt = '';
           }
           session.documentReviewStatus = 'Waiting on staff';
@@ -19799,62 +19823,76 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'identity') {
         if (normalizedIdentityProvider(session.identityProvider) !== 'stripe') return json(res, 409, { ok: false, error: 'This onboarding file uses WheelsonAuto staff identity review.' });
-        try { assertStripeIdentityPreparationReady(); } catch (error) { return json(res, Number(error.statusCode || 503), { ok: false, code: error.code, error: error.message, missing: error.missing || [] }); }
+        try {
+          assertStripeIdentityPreparationReady();
+        } catch (error) {
+          const customerMessage = recordPublicIdentityFailure(session, error);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+          return json(res, Number(error.statusCode || 503), { ok: false, error: customerMessage });
+        }
         const identityRate = await publicActionLimit(req, 'stripe-identity', 12, 60 * 60 * 1000);
         if (!identityRate.allowed) return json(res, 429, { ok: false, error: 'Too many identity-verification attempts. Wait before trying again.' }, { 'Retry-After': String(identityRate.retryAfterSeconds) });
         const onboardingState = nativeSite.onboardingStatus(data, session, application);
         if (!onboardingState.documents) return json(res, 409, { ok: false, error: 'Upload the license, selfie, and insurance files before starting secure identity verification.' });
-        if (session.stripeIdentityVerificationId) {
-          const remote = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
-          assertStripeLiveResult(remote && remote.livemode, 'Stripe Identity status');
-          const applied = applyStripeIdentitySession(data, session, application, remote);
-          if (applied.status === 'verified') {
-            await protectConcurrentLocalWrites(data, { preferIncoming: true });
-            await writeData(data);
-            return json(res, 200, { ok: true, message: 'Stripe already verified the license and selfie. WheelsonAuto is reviewing the insurance proof.' });
-          }
-          if (applied.status === 'processing') {
-            await protectConcurrentLocalWrites(data, { preferIncoming: true });
-            await writeData(data);
-            return json(res, 200, { ok: true, message: 'Stripe is processing the identity check. Refresh this page shortly.' });
-          }
-          if (remote.url) {
-            await protectConcurrentLocalWrites(data, { preferIncoming: true });
-            await writeData(data);
-            return json(res, 200, { ok: true, redirectUrl: remote.url, message: 'Opening the existing secure Stripe identity check.' });
-          }
-        }
-        const attempt = Number(session.identityVerificationAttempt || 0) + 1;
-        const verification = await stripe.createIdentityVerificationSession({
-          type: 'document',
-          client_reference_id: session.id,
-          return_url: returnUrl + '?identity=returned',
-          metadata: {
-            flow: 'wheelsonauto_onboarding_identity',
-            onboardingSessionId: session.id,
-            applicationId: application.id,
-            organizationId: session.organizationId || MAIN_ORG_ID
-          },
-          options: {
-            document: {
-              allowed_types: ['driving_license'],
-              require_live_capture: true,
-              require_matching_selfie: true
+        try {
+          if (session.stripeIdentityVerificationId) {
+            const remote = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
+            assertStripeLiveResult(remote && remote.livemode, 'Stripe Identity status');
+            const applied = applyStripeIdentitySession(data, session, application, remote);
+            if (applied.status === 'verified') {
+              await protectConcurrentLocalWrites(data, { preferIncoming: true });
+              await writeData(data);
+              return json(res, 200, { ok: true, message: 'Stripe already verified the license and selfie. WheelsonAuto is reviewing the insurance proof.' });
+            }
+            if (applied.status === 'processing') {
+              await protectConcurrentLocalWrites(data, { preferIncoming: true });
+              await writeData(data);
+              return json(res, 200, { ok: true, message: 'Stripe is processing the identity check. Refresh this page shortly.' });
+            }
+            if (remote.url) {
+              await protectConcurrentLocalWrites(data, { preferIncoming: true });
+              await writeData(data);
+              return json(res, 200, { ok: true, redirectUrl: remote.url, message: 'Opening the existing secure Stripe identity check.' });
             }
           }
-        }, 'woa-identity-' + session.id + '-attempt-' + attempt);
-        assertStripeLiveResult(verification && verification.livemode, 'Stripe Identity session');
-        if (!verification || !verification.id || !verification.url) return json(res, 502, { ok: false, error: 'Stripe did not return a secure identity-verification page.' });
-        if (session.stripeIdentityVerificationId && session.stripeIdentityVerificationId !== verification.id) {
-          session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
-          session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
+          const attempt = Number(session.identityVerificationAttempt || 0) + 1;
+          const verification = await stripe.createIdentityVerificationSession({
+            type: 'document',
+            client_reference_id: session.id,
+            return_url: returnUrl + '?identity=returned',
+            metadata: {
+              flow: 'wheelsonauto_onboarding_identity',
+              onboardingSessionId: session.id,
+              applicationId: application.id,
+              organizationId: session.organizationId || MAIN_ORG_ID
+            },
+            options: {
+              document: {
+                allowed_types: ['driving_license'],
+                require_live_capture: true,
+                require_matching_selfie: true
+              }
+            }
+          }, 'woa-identity-' + session.id + '-attempt-' + attempt);
+          assertStripeLiveResult(verification && verification.livemode, 'Stripe Identity session');
+          if (!verification || !verification.id || !verification.url) throw new Error('Stripe did not return a secure identity-verification page.');
+          if (session.stripeIdentityVerificationId && session.stripeIdentityVerificationId !== verification.id) {
+            session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
+            session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
+          }
+          session.identityVerificationAttempt = attempt;
+          applyStripeIdentitySession(data, session, application, verification);
+          appendAuditLog(data, { name: application.name || 'Onboarding customer', role: 'Customer' }, 'Stripe Identity verification opened', [session.id, verification.id, STRIPE_KEY_MODE]);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+          return json(res, 201, { ok: true, redirectUrl: verification.url, message: 'Opening secure Stripe Identity verification.' });
+        } catch (error) {
+          const customerMessage = recordPublicIdentityFailure(session, error);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+          return json(res, 502, { ok: false, error: customerMessage });
         }
-        session.identityVerificationAttempt = attempt;
-        applyStripeIdentitySession(data, session, application, verification);
-        appendAuditLog(data, { name: application.name || 'Onboarding customer', role: 'Customer' }, 'Stripe Identity verification opened', [session.id, verification.id, STRIPE_KEY_MODE]);
-        await protectConcurrentLocalWrites(data, { preferIncoming: true });
-        await writeData(data);
-        return json(res, 201, { ok: true, redirectUrl: verification.url, message: 'Opening secure Stripe Identity verification.' });
       }
       if (action === 'signature') {
         if (session.documentReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the driver license and full-coverage insurance before the agreement can be signed.' });
@@ -20044,7 +20082,7 @@ const server = http.createServer(async (req, res) => {
         const label = kind === 'deposit' ? 'Nonrefundable down payment' : 'First weekly payment';
         const amount = Number(kind === 'deposit' ? pricing.downPayment : pricing.weeklyPayment);
         if (kind === 'deposit' && amount <= 0) return json(res, 200, { ok: true, message: 'No down payment is required. Continue to the first weekly payment.' });
-        const existing = requests.find(row => row.paymentType === label && !/failed|cancel|expired/i.test(String(row.status || '')));
+        const existing = requests.find(row => row.paymentType === label && !/cancel|expired/i.test(String(row.status || '')));
         if (nativePaymentPaid(existing)) return json(res, 200, { ok: true, message: label + ' is already paid.' });
         const existingCheckout = activeHostedCheckoutHref(existing);
         if (existingCheckout) return json(res, 200, { ok: true, redirectUrl: existingCheckout, paymentRequest: { id: existing.id, paymentType: existing.paymentType, amount: existing.amount } });
@@ -20054,10 +20092,10 @@ const server = http.createServer(async (req, res) => {
             return json(res, 200, { ok: true, redirectUrl: refreshedCheckout.href, paymentRequest: { id: existing.id, paymentType: existing.paymentType, amount: existing.amount } });
           } catch (err) {
             existing.status = 'Checkout setup failed';
-            existing.lastError = String(err && err.message || err);
+            const customerMessage = recordPublicCheckoutFailure(existing, err, paymentProvider);
             await protectConcurrentLocalWrites(data, { preferIncoming: true });
             await writeData(data);
-            return json(res, Number(err && err.statusCode || 502), { ok: false, error: existing.lastError });
+            return json(res, Number(err && err.statusCode || 502), { ok: false, error: customerMessage });
           }
         }
         const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || {};
@@ -20089,10 +20127,10 @@ const server = http.createServer(async (req, res) => {
           return json(res, 201, { ok: true, redirectUrl: checkout.href, paymentRequest: { id: request.id, paymentType: request.paymentType, amount: request.amount } });
         } catch (err) {
           request.status = 'Checkout setup failed';
-          request.lastError = String(err && err.message || err);
+          const customerMessage = recordPublicCheckoutFailure(request, err, paymentProvider);
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
-          return json(res, Number(err && err.statusCode || 502), { ok: false, error: request.lastError });
+          return json(res, Number(err && err.statusCode || 502), { ok: false, error: customerMessage });
         }
       }
       if (action === 'pickup') {

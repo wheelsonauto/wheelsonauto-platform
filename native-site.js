@@ -205,7 +205,7 @@ function onboardingStatus(data, session, application) {
     identityVerified,
     identityProcessing: identityStatus === 'processing',
     identityNeedsInput: ['not_started', 'requires_input', 'canceled'].includes(identityStatus),
-    identityLastError: String(session.identityVerificationLastError || ''),
+    identityLastError: String(session.identityVerificationCustomerMessage || session.identityVerificationLastError || ''),
     signature: !!signature,
     signatureApproved: session.signatureReviewStatus === 'Approved' && session.reviewStatus === 'Approved',
     card: cardReady,

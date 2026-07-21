@@ -125,6 +125,8 @@ function createFakeStripe() {
     requests: [],
     checkoutCounter: 0,
     checkouts: new Map(),
+    failNextIdentitySession: false,
+    failNextPaymentCheckout: false,
     disputeMetadata: {},
     disputes: new Map(),
     disputeTimeoutOnce: new Set(),
@@ -154,6 +156,10 @@ function createFakeStripe() {
         return response({ id: 'cus_test_lifecycle', object: 'customer', email: form.get('email') || '' });
       }
       if (method === 'POST' && pathname === '/v1/identity/verification_sessions') {
+        if (state.failNextIdentitySession) {
+          state.failNextIdentitySession = false;
+          return response({ error: { message: 'Provider secret diagnostic: identity transport failed.' } }, 500);
+        }
         return response({
           id: 'vs_test_lifecycle',
           object: 'identity.verification_session',
@@ -169,6 +175,10 @@ function createFakeStripe() {
       if (method === 'POST' && pathname === '/v1/checkout/sessions') {
         state.checkoutCounter += 1;
         const mode = form.get('mode') || '';
+        if (mode === 'payment' && state.failNextPaymentCheckout) {
+          state.failNextPaymentCheckout = false;
+          return response({ error: { message: 'Provider secret diagnostic: checkout transport failed.' } }, 500);
+        }
         const reference = form.get('client_reference_id') || String(state.checkoutCounter);
         const id = 'cs_test_' + mode + '_' + reference.replace(/[^a-z0-9_-]/gi, '').slice(-36);
         const checkout = {
@@ -373,8 +383,19 @@ async function main() {
     ] } });
     assert(documents.status === 201 && documents.json.documents.length === 4, 'License front/back, selfie, and insurance proof must persist in the private customer file.');
 
+    fakeStripe.state.failNextIdentitySession = true;
+    const failedIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
+    assert(failedIdentity.status === 502 && /No verification decision was recorded/i.test(failedIdentity.json.error || '') && !/Provider secret diagnostic/i.test(failedIdentity.text), 'A Stripe Identity transport failure must return a safe retry message without exposing provider diagnostics.');
+    let identityFailureState = await readSaved(dataDir);
+    const failedIdentitySession = identityFailureState.onboardingSessions.find(row => row.id === onboardingId);
+    assert(/Provider secret diagnostic: identity transport failed/i.test(failedIdentitySession.identityVerificationProviderError || '') && /No verification decision was recorded/i.test(failedIdentitySession.identityVerificationCustomerMessage || ''), 'The onboarding file must retain private identity diagnostics separately from the customer-safe message.');
+    const failedIdentityPage = await request(server, 'GET', '/onboard/' + token);
+    assert(failedIdentityPage.status === 200 && /No verification decision was recorded/i.test(failedIdentityPage.text) && !/Provider secret diagnostic/i.test(failedIdentityPage.text), 'The secure onboarding page must show only the safe identity retry message.');
     const identity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
     assert(identity.status === 201 && identity.json.redirectUrl === 'https://verify.stripe.test/vs_test_lifecycle', 'The customer must receive the provider-hosted Stripe Identity page.');
+    identityFailureState = await readSaved(dataDir);
+    const recoveredIdentitySession = identityFailureState.onboardingSessions.find(row => row.id === onboardingId);
+    assert(!recoveredIdentitySession.identityVerificationProviderError && !recoveredIdentitySession.identityVerificationCustomerMessage, 'A successful identity retry must clear the prior failure markers on the same onboarding file.');
     const identityEvent = { id: 'evt_test_identity_verified', type: 'identity.verification_session.verified', data: { object: { id: 'vs_test_lifecycle', object: 'identity.verification_session', status: 'verified', livemode: false, metadata: { onboardingSessionId: onboardingId, applicationId } } } };
     const identityRaw = JSON.stringify(identityEvent);
     const identityWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: identityRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, identityRaw) } });
@@ -455,8 +476,16 @@ async function main() {
       return { paymentRequest, event, raw };
     }
 
+    fakeStripe.state.failNextPaymentCheckout = true;
+    const failedDepositCheckout = await request(server, 'POST', '/api/public/onboarding/' + token + '/payment', { json: { paymentType: 'deposit' } });
+    assert(failedDepositCheckout.status === 500 && /No payment was recorded/i.test(failedDepositCheckout.json.error || '') && !/Provider secret diagnostic/i.test(failedDepositCheckout.text), 'A temporary Stripe checkout failure must return only a customer-safe no-charge message.');
+    saved = await readSaved(dataDir);
+    const failedDepositRequests = saved.paymentRequests.filter(row => row.onboardingSessionId === onboardingId && row.paymentType === 'Nonrefundable down payment');
+    assert(failedDepositRequests.length === 1 && /Provider secret diagnostic/i.test(failedDepositRequests[0].lastError || '') && /No payment was recorded/i.test(failedDepositRequests[0].checkoutCustomerMessage || ''), 'The exact failed checkout request must retain its private staff diagnostic and customer-safe message for retry.');
     const deposit = await payOnboarding('deposit', 'pi_test_deposit', 'evt_test_deposit_paid');
     saved = await readSaved(dataDir);
+    const recoveredDepositRequests = saved.paymentRequests.filter(row => row.onboardingSessionId === onboardingId && row.paymentType === 'Nonrefundable down payment');
+    assert(recoveredDepositRequests.length === 1 && !recoveredDepositRequests[0].lastError && !recoveredDepositRequests[0].checkoutCustomerMessage, 'Retrying checkout must reuse the exact payment request and clear its private/public failure markers after recovery.');
     assert(saved.payments.filter(row => row.onboardingSessionId === onboardingId).length === 1 && saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt').length === 1, 'The deposit must remain one distinct transaction and one distinct receipt.');
     assert(!saved.pickupAppointments.some(row => row.onboardingSessionId === onboardingId), 'Deposit alone must never confirm pickup.');
     const incompletePilot = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });

@@ -207,6 +207,8 @@ async function run() {
     'card_setup_failed',
     'recordPublicCardSetupFailure',
     'No card was saved and no payment was charged',
+    'recordPublicCheckoutFailure',
+    'No payment was recorded',
     'stripeCardSetupCustomerMessage',
     "'stripeCardSetupError'",
     'stripeAutopayChargeSequence',
@@ -216,7 +218,9 @@ async function run() {
     'stripeRecurringChargeClaimKey',
     'idempotencyClaimToken',
     'completeStripeRecurringChargeClaim',
-    'failStripeRecurringChargeClaim'
+    'failStripeRecurringChargeClaim',
+    'recordPublicIdentityFailure',
+    'No verification decision was recorded'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   assert(server.includes("stableId('woa-stripe-customer'") && server.includes('stripeCustomerIdempotencyKey'), 'Stripe customer creation must derive and retain a deterministic company-and-customer-scoped idempotency key.');
   assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
