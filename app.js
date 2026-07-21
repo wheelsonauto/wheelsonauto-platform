@@ -3054,6 +3054,21 @@ function MessagesFocused(){
 Messages=MessagesFocused;
 MessagesFast=MessagesFocused;
 
+function renderFocusedMessagesDirect(){
+  var started=renderClock(),previousMemo=__woaPerformanceRenderMemo;
+  __woaPerformanceRenderMemo={};
+  try{
+    MessagesFocused();
+    scrubRoleUi()
+  }finally{
+    __woaPerformanceRenderMemo=previousMemo;
+    var metric={view:view,tab:tab,ms:Math.round((renderClock()-started)*10)/10,at:new Date().toISOString()};
+    window.__woaLastRenderMetric=metric;
+    window.__woaRenderMetrics=(window.__woaRenderMetrics||[]).concat(metric).slice(-30);
+    if(document.documentElement&&document.documentElement.setAttribute)document.documentElement.setAttribute('data-woa-render-metric',JSON.stringify(metric))
+  }
+}
+
 document.addEventListener('click',function(event){
   var button=event.target.closest('button[data-action]');
   if(!button)return;
@@ -3067,14 +3082,14 @@ document.addEventListener('click',function(event){
     messageMobileConversationOpen=true;
     view='Messages';
     tab='Inbox';
-    MessagesFocused();
+    renderFocusedMessagesDirect();
     return
   }
   if(a==='message-mobile-back'){
     event.preventDefault();
     event.stopImmediatePropagation();
     messageMobileConversationOpen=false;
-    MessagesFocused()
+    renderFocusedMessagesDirect()
   }
 },true);
 

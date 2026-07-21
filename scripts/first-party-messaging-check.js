@@ -88,10 +88,13 @@ async function run() {
   assert(client.includes("navigator.serviceWorker.register('/service-worker.js'"), 'Customer portal must register the installable app shell.');
   assert(staff.includes("preferred=portalReady?'Customer portal'"), 'Staff replies must prefer the secure customer app when the customer login is ready.');
   assert(staff.includes("providerLabel='Customer app live'"), 'Staff inbox must present the first-party app as the primary channel.');
+  assert(staff.includes('function renderFocusedMessagesDirect(){'), 'Direct list-to-conversation navigation must use the focused message render guard.');
+  assert(staff.includes('__woaPerformanceRenderMemo={};\n  try{\n    MessagesFocused();'), 'Direct message renders must reuse the per-render customer, vehicle, payment, and thread memo.');
+  assert((staff.match(/renderFocusedMessagesDirect\(\)/g) || []).length >= 3, 'Opening and closing a mobile conversation must both use the guarded message renderer.');
   assert(styles.includes('.customer-chat-messages') && styles.includes('@media(max-width:760px)'), 'Conversation layout must include compact mobile styling.');
   assert(!source.includes("providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block provider proof collection.');
   assert(!source.includes("missing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block live Stripe readiness.');
-  console.log('First-party messaging check passed: customer-scoped conversations, Star delivery, email-ready notices, PWA install, private caching, mobile layout, and optional SMS launch rules are wired.');
+  console.log('First-party messaging check passed: customer-scoped conversations, Star delivery, guarded list-to-thread rendering, email-ready notices, PWA install, private caching, mobile layout, and optional SMS launch rules are wired.');
 }
 
 run().catch(error => {
