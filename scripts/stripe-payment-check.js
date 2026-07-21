@@ -213,6 +213,7 @@ async function run() {
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
   assert(server.includes("stableId('woa-stripe-customer'") && server.includes('stripeCustomerIdempotencyKey'), 'Stripe customer creation must derive and retain a deterministic company-and-customer-scoped idempotency key.');
   assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
+  assert(server.includes('assertControlledStripePilotApproved(data);') && server.includes('controlled_stripe_pilot_required'), 'Every live Clover-to-Stripe cutover must remain locked until one complete owner-approved Stripe onboarding pilot is still valid.');
   ['claim_token', 'idempotencyClaimToken', 'claimIdempotencyKey', 'completeIdempotencyKey', 'failIdempotencyKey'].forEach(value => {
     assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);
   });

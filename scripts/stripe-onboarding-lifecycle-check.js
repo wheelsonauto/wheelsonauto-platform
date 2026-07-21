@@ -410,6 +410,8 @@ async function main() {
     saved = await readSaved(dataDir);
     assert(saved.payments.filter(row => row.onboardingSessionId === onboardingId).length === 1 && saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt').length === 1, 'The deposit must remain one distinct transaction and one distinct receipt.');
     assert(!saved.pickupAppointments.some(row => row.onboardingSessionId === onboardingId), 'Deposit alone must never confirm pickup.');
+    const incompletePilot = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
+    assert(incompletePilot.status === 409 && /incomplete/i.test(incompletePilot.json.error || ''), 'A deposit-only onboarding file must never unlock Clover-to-Stripe migration.');
     const firstWeek = await payOnboarding('first_week', 'pi_test_first_week', 'evt_test_first_week_paid');
     saved = await readSaved(dataDir);
     const payments = saved.payments.filter(row => row.onboardingSessionId === onboardingId);
@@ -425,6 +427,22 @@ async function main() {
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Physical handoff must activate the vehicle, customer file, contract, and Stripe autopay together.');
     const duplicateHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510 } });
     assert(duplicateHandoff.status === 200 && duplicateHandoff.json.alreadyCompleted === true, 'Repeated pickup confirmation must be idempotent.');
+
+    const wrongPilotPhrase = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE PILOT', confirmed: true } });
+    assert(wrongPilotPhrase.status === 409, 'The first Stripe pilot must require the exact owner approval phrase.');
+    const approvedPilot = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
+    assert(approvedPilot.status === 200 && approvedPilot.json.controlledStripePilot.approved === true, 'The exact completed Stripe onboarding file must unlock the isolated pilot only after owner approval: ' + JSON.stringify(approvedPilot.json));
+    const duplicatePilotApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
+    assert(duplicatePilotApproval.status === 200 && duplicatePilotApproval.json.alreadyApproved === true, 'Repeated approval of the same unchanged pilot evidence must be idempotent.');
+    const browserState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    browserState.json.integrations = browserState.json.integrations || {};
+    browserState.json.integrations.stripe = browserState.json.integrations.stripe || {};
+    browserState.json.integrations.stripe.controlledPilotOnboardingSessionId = 'forged-browser-pilot';
+    browserState.json.integrations.stripe.controlledPilotEvidenceHash = 'forged-browser-hash';
+    const forgedPilotWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: browserState.json });
+    assert(forgedPilotWrite.status === 200, 'Normal owner state saves must continue after pilot approval.');
+    saved = await readSaved(dataDir);
+    assert(saved.integrations.stripe.controlledPilotOnboardingSessionId === onboardingId && saved.integrations.stripe.controlledPilotEvidenceHash !== 'forged-browser-hash', 'Browser state writes must not forge or replace server-controlled pilot approval evidence.');
 
     const portal = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(portal.status === 200 && portal.json.portal.payments.length === 2 && portal.json.portal.documents.filter(row => row.kind === 'Receipt').length === 2, 'The customer portal must immediately show both verified payments and both receipts.');

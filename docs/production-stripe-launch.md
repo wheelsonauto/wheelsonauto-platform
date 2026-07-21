@@ -808,6 +808,23 @@ Only use real customer funds after the test has a clear, written result.
 
 ## 5. Controlled Clover-to-Stripe Migration
 
+Before scheduling the first roster cutover, complete one real live Stripe
+onboarding pilot from an online vehicle through physical pickup. Open the owner
+**Live launch preflight**, review the `First live Stripe pilot` row, and approve
+the exact onboarding file with the displayed confirmation phrase. The server
+recomputes evidence from the application, VIN/tag, live Stripe Identity result,
+insurance approval, reusable card authorization, separate deposit and first
+weekly payment, signed agreement, private receipts, completed pickup, weekly
+anchor, customer/contract links, and dispute-evidence packet. Browser state
+cannot create or replace this proof.
+
+Pilot approval does not charge or migrate another customer. It only unlocks
+the existing owner-confirmed, customer-by-customer cutover route. If required
+pilot evidence is later removed or changed, its fingerprint no longer matches
+and every cutover is locked again until the exact file is reviewed and
+re-approved. Test-mode evidence can exercise the workflow but never satisfies
+the production live-mode gate.
+
 Move one recurring customer at a time through these persisted states:
 
 ```text
