@@ -50,6 +50,7 @@ function cleanRuntimeEnvironment(dataDir) {
     WOA_OBJECT_STORAGE_ACCESS_KEY_ID: '',
     WOA_OBJECT_STORAGE_SECRET_ACCESS_KEY: '',
     WOA_ERROR_ALERTS_ENABLED: '0',
+    WOA_MESSAGING_ENABLED: '0',
     RESEND_API_KEY: '',
     WOA_RESEND_API_KEY: '',
     SENDGRID_API_KEY: '',
@@ -86,6 +87,7 @@ async function main() {
     assert.match(output, /Stripe onboarding payment provider/i, 'The startup guard must reject a live Stripe launch that still creates new onboarding payments through Clover.');
     assert.match(output, /Stripe Identity provider/i, 'The startup guard must reject a live Stripe launch that falls back to manual identity verification.');
     assert.match(output, /verified operational error alert delivery/i, 'The startup guard must require a verified owner alert route for failed jobs, webhooks, and autopay runs.');
+    assert.match(output, /WheelsonAuto first-party messaging enabled on PostgreSQL/i, 'The startup guard must require the built-in customer inbox while keeping carrier SMS optional.');
     assert(!/Telnyx signed SMS delivery and inbound reply proof/i.test(output), 'Optional carrier SMS must not block the first-party customer-app launch.');
     assert.match(output, /Resend wheelsonauto\.com two-way email proof/i, 'The startup guard must require a verified WheelsonAuto sender and signed two-way Resend proof.');
     assert.match(output, /OpenAI Star Responses API health proof with active safety limits/i, 'The startup guard must require a fresh Star provider proof with configured request caps.');

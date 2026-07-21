@@ -64,7 +64,7 @@ assert(!/- key: (?:WOA_TEST_DATABASE_URL|WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL
   ['WOA_PAYMENT_PROVIDER', 'clover'],
   ['WOA_ONBOARDING_PAYMENT_PROVIDER', 'stripe'],
   ['WOA_IDENTITY_PROVIDER', 'stripe'],
-  ['WOA_MESSAGING_PROVIDER', 'telnyx'],
+  ['WOA_MESSAGING_PROVIDER', 'wheelsonauto'],
   ['WOA_MESSAGING_ENABLED', '1'],
   ['TELNYX_10DLC_USECASE', 'CUSTOMER_CARE'],
   ['WOA_EMAIL_PROVIDER', 'resend'],
@@ -118,4 +118,4 @@ assert(!/- key: (?:WOA_TEST_DATABASE_URL|WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL
   assert(!pattern.test(template), 'The production blueprint template must never contain real-looking credentials.');
 });
 
-console.log('Render production blueprint check passed: paid PostgreSQL remains review-only, the live blueprint cannot switch early, private networking is required, all provider secrets stay manual, and final cutover gates remain explicit.');
+console.log('Render production blueprint check passed: paid PostgreSQL remains review-only, the live blueprint cannot switch early, private networking is required, first-party messaging is primary, optional carrier secrets stay manual, and final cutover gates remain explicit.');

@@ -116,8 +116,34 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || process.env.WOA_STRIP
 const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || process.env.WOA_STRIPE_PUBLISHABLE_KEY || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || process.env.WOA_STRIPE_WEBHOOK_SECRET || '';
 const STRIPE_API_BASE = (process.env.STRIPE_API_BASE || 'https://api.stripe.com/v1').replace(/\/+$/, '');
+const STRIPE_PAYMENT_WEBHOOK_EVENTS = Object.freeze([
+  'checkout.session.completed',
+  'setup_intent.succeeded',
+  'setup_intent.setup_failed',
+  'setup_intent.canceled',
+  'setup_intent.requires_action',
+  'payment_intent.succeeded',
+  'payment_intent.payment_failed',
+  'payment_intent.requires_action',
+  'charge.dispute.created',
+  'charge.dispute.updated',
+  'charge.dispute.closed',
+  'refund.created',
+  'refund.updated',
+  'refund.failed',
+  'charge.refunded'
+]);
+const STRIPE_IDENTITY_WEBHOOK_EVENTS = Object.freeze([
+  'identity.verification_session.created',
+  'identity.verification_session.processing',
+  'identity.verification_session.verified',
+  'identity.verification_session.requires_input',
+  'identity.verification_session.canceled',
+  'identity.verification_session.redacted'
+]);
+const STRIPE_REQUIRED_WEBHOOK_EVENTS = Object.freeze([...STRIPE_PAYMENT_WEBHOOK_EVENTS, ...STRIPE_IDENTITY_WEBHOOK_EVENTS]);
 const stripe = stripeAdapter.stripeClient({ secretKey: STRIPE_SECRET_KEY, apiBase: STRIPE_API_BASE });
-const STRIPE_KEY_MODE = /^sk_live_/.test(STRIPE_SECRET_KEY) ? 'live' : /^sk_test_/.test(STRIPE_SECRET_KEY) ? 'test' : STRIPE_SECRET_KEY ? 'unknown' : 'missing';
+const STRIPE_KEY_MODE = /^(?:sk|rk)_live_/.test(STRIPE_SECRET_KEY) ? 'live' : /^(?:sk|rk)_test_/.test(STRIPE_SECRET_KEY) ? 'test' : STRIPE_SECRET_KEY ? 'unknown' : 'missing';
 const STRIPE_ISOLATED_PROVIDER_TEST_MODE = stripeMigration.isolatedProviderTestMode(process.env);
 const STRIPE_IDENTITY_RUNTIME_READY = IDENTITY_PROVIDER === 'stripe' && stripe.configured() && (STRIPE_KEY_MODE === 'live' || STRIPE_ISOLATED_PROVIDER_TEST_MODE);
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
@@ -226,7 +252,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-launch-providers-262';
+const ASSET_VERSION = 'platform-20260721-stripe-contract-263';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -11095,7 +11121,32 @@ function stripeAccountLiveEvidence(data = {}) {
   };
 }
 function stripeLaunchWebhookEventType(type) {
-  return /^(checkout\.session\.completed|setup_intent\.succeeded|payment_intent\.(succeeded|payment_failed|requires_action)|charge\.dispute\.(created|updated|closed)|refund\.(created|updated|failed)|charge\.refunded)$/.test(String(type || ''));
+  return [
+    'checkout.session.completed',
+    'setup_intent.succeeded',
+    'payment_intent.succeeded',
+    'payment_intent.payment_failed',
+    'payment_intent.requires_action',
+    'charge.dispute.created',
+    'charge.dispute.updated',
+    'charge.dispute.closed',
+    'refund.created',
+    'refund.updated',
+    'refund.failed',
+    'charge.refunded'
+  ].includes(String(type || ''));
+}
+function stripeWebhookContract() {
+  return {
+    endpoint: PUBLIC_BASE_URL + '/api/webhooks/stripe',
+    keyMode: STRIPE_KEY_MODE,
+    signingSecretConfigured: !!STRIPE_WEBHOOK_SECRET,
+    enabledEvents: STRIPE_REQUIRED_WEBHOOK_EVENTS.slice(),
+    paymentEvents: STRIPE_PAYMENT_WEBHOOK_EVENTS.slice(),
+    identityEvents: STRIPE_IDENTITY_WEBHOOK_EVENTS.slice(),
+    eventCount: STRIPE_REQUIRED_WEBHOOK_EVENTS.length,
+    message: 'Use one signed live Stripe webhook destination with only these WheelsonAuto payment, dispute, refund, card-setup, and Identity events.'
+  };
 }
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
@@ -11509,8 +11560,23 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   const documentEncryptionKeys = privateDocumentKeyCoverage(state);
   const privateArtifacts = privateArtifactCoverage(state);
   const operationalAlerts = operationalAlertEvidence(state);
+  const firstPartyMessageSettings = messageSettings(state);
+  const firstPartyMessaging = {
+    live: firstPartyMessageSettings.enabled === true && STATE_REPOSITORY.kind === 'postgres',
+    configured: firstPartyMessageSettings.enabled === true,
+    transactional: STATE_REPOSITORY.kind === 'postgres',
+    provider: 'WheelsonAuto customer app',
+    emailNotificationsLive: false,
+    launchBlocking: true,
+    message: firstPartyMessageSettings.enabled !== true
+      ? 'Enable WheelsonAuto messaging before launch. Carrier SMS remains optional.'
+      : STATE_REPOSITORY.kind !== 'postgres'
+        ? 'WheelsonAuto messaging requires transactional PostgreSQL before launch so conversations survive restarts safely.'
+        : 'Secure first-party customer conversations are live. Carrier SMS remains optional.'
+  };
   const telnyxMessaging = telnyxLiveLaunchEvidence(state);
   const resendEmail = resendLiveLaunchEvidence(state);
+  firstPartyMessaging.emailNotificationsLive = !!resendEmail.live;
   const starAi = starAiLiveLaunchEvidence(state);
   const ownerAuthentication = ownerAuthenticationReadiness(state);
   const cloverRecurring = cloverRecurringMigrationReadiness(state);
@@ -11541,6 +11607,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   if (!stripeWebhook.live) providerEvidenceMissing.push('Stripe signed live webhook event');
   if (!stripeIdentityWebhook.live) providerEvidenceMissing.push('signed live Stripe Identity verification');
   if (!operationalAlerts.live) providerEvidenceMissing.push('verified operational error alert delivery');
+  if (!firstPartyMessaging.live) providerEvidenceMissing.push('WheelsonAuto first-party messaging');
   if (!resendEmail.live) providerEvidenceMissing.push('Resend wheelsonauto.com two-way email proof');
   if (!starAi.live) providerEvidenceMissing.push('OpenAI Star Responses API health proof');
   if (!cloverRecurring.ready) providerEvidenceMissing.push('fresh Clover recurring roster');
@@ -11572,6 +11639,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     if (!stripeIdentityWebhook.live) missing.push('signed live Stripe Identity verification');
   }
   if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
+  if (!firstPartyMessaging.live) missing.push('WheelsonAuto first-party messaging enabled on PostgreSQL');
   if (!resendEmail.live) missing.push('Resend wheelsonauto.com two-way email proof');
   if (!starAi.live) missing.push('OpenAI Star Responses API health proof with active safety limits');
   if (!cloverRecurring.ready) missing.push('fresh Clover recurring roster for controlled cutover');
@@ -11625,13 +11693,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     stripeWebhook,
     stripeIdentityWebhook,
     operationalAlerts,
-    firstPartyMessaging: {
-      live: true,
-      provider: 'WheelsonAuto customer app',
-      emailNotificationsLive: !!resendEmail.live,
-      launchBlocking: false,
-      message: 'Secure first-party customer conversations are the primary channel. Carrier SMS is optional.'
-    },
+    firstPartyMessaging,
     telnyxMessaging: { ...telnyxMessaging, optional: true, launchBlocking: false },
     resendEmail,
     starAi,
@@ -23106,7 +23168,7 @@ const server = http.createServer(async (req, res) => {
         appendAuditLog(data, user, 'Stripe account readiness checked', [stripeAccount.accountId, stripeAccount.checkedKeyMode, stripeAccount.live ? 'Ready' : stripeAccount.error]);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return json(res, 200, { ok: true, stripeAccount, message: stripeAccount.summary });
+        return json(res, 200, { ok: true, stripeAccount, webhookContract: stripeWebhookContract(), message: stripeAccount.summary });
       } catch (err) {
         const error = String(err && err.message || err).slice(0, 500);
         Object.assign(data.integrations.stripe, {
@@ -23119,7 +23181,7 @@ const server = http.createServer(async (req, res) => {
         appendAuditLog(data, user, 'Stripe account readiness failed', [STRIPE_KEY_MODE, error]);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
-        return json(res, Number(err && err.statusCode || 502), { ok: false, error, stripeAccount: stripeAccountLiveEvidence(data) });
+        return json(res, Number(err && err.statusCode || 502), { ok: false, error, stripeAccount: stripeAccountLiveEvidence(data), webhookContract: stripeWebhookContract() });
       }
     }
     if (url.pathname === '/api/integrations/twilio/configure' && req.method === 'POST') {
@@ -25451,6 +25513,8 @@ module.exports = {
   runPrivateArtifactBackfill,
   stripeLiveWebhookEvidence,
   stripeIdentityLiveWebhookEvidence,
+  stripeWebhookContract,
+  STRIPE_REQUIRED_WEBHOOK_EVENTS,
   stripeWebhookConfigurationFingerprint,
   stripeAccountConfigurationFingerprint,
   stripeAccountLiveEvidence,

@@ -132,10 +132,10 @@ services:
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
 
-      # Telnyx readiness stays blocked until CUSTOMER_CARE is approved and a
-      # number is assigned. The application still requires signed webhooks.
+      # The WheelsonAuto customer app is the required conversation channel.
+      # Telnyx credentials remain optional for a future carrier-SMS adapter.
       - key: WOA_MESSAGING_PROVIDER
-        value: telnyx
+        value: wheelsonauto
       - key: WOA_MESSAGING_ENABLED
         value: "1"
       - key: TELNYX_API_KEY

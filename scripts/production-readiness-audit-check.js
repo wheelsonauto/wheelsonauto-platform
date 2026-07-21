@@ -33,6 +33,7 @@ function readyInfrastructure() {
     privateArtifacts: { ready: true },
     stateBackup: { enabled: true, productionReady: true, dedicatedKeyConfigured: true, verified: true, fresh: true },
     ownerAuthentication: { usernameConfigured: true, passwordLoginConfigured: true, passwordLoginStrong: true, passwordLoginVerified: true, pinFallbackAllowed: false },
+    firstPartyMessaging: { live: true, configured: true },
     stripeAccount: { live: true, fresh: true, configurationMatched: true },
     stripeWebhook: { live: true, fresh: true, configurationMatched: true },
     stripeIdentityWebhook: { live: true, fresh: true, configurationMatched: true },
@@ -75,6 +76,8 @@ assert.strictEqual(ready.foundation.postgres.missingSchemaIndexes, 0);
 assert.strictEqual(ready.foundation.privateStorage.validationLive, true);
 assert.strictEqual(ready.foundation.ownerAccess.pinFallbackDisabled, true);
 assert.strictEqual(ready.providers.cloverRecurringRoster.quarantinedRows, 2, 'Ambiguous Clover plans must remain visible without falsely blocking individually eligible rows.');
+assert.strictEqual(ready.providers.firstPartyMessaging.live, true, 'The primary first-party inbox must be part of the aggregate production audit.');
+assert.strictEqual(ready.providers.telnyxSms.optional, true, 'Carrier SMS must remain visible as optional evidence without blocking launch.');
 assert.strictEqual(ready.dataReview.blockingAssignmentConflicts, 0, 'Review-only renter history must remain distinct from an active assignment conflict.');
 assert.strictEqual(ready.dataReview.cardSetupPlanConflicts, 2, 'Old card setup links that cannot identify one exact recurring plan must remain visible without blocking valid plan-specific cutovers.');
 assert.strictEqual(ready.safety.stripeMoneyActionsLocked, false);

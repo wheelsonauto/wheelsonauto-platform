@@ -194,6 +194,8 @@ async function run() {
     'privateDocumentStorageReady: WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED',
     'stateBackupConfigured: WOA_STATE_BACKUP_ENABLED',
     'stripeLiveResultAccepted',
+    'STRIPE_REQUIRED_WEBHOOK_EVENTS',
+    'stripeWebhookContract',
     'stripeLivemode',
     'Owner must review reason-specific evidence',
     'Stripe card ready - Clover remains active until owner confirmation',
@@ -225,6 +227,22 @@ async function run() {
     'card_setup_plan_ambiguous',
     'more than one payment schedule'
   ].forEach(value => assert(server.includes(value), 'Missing Stripe safety/runtime marker: ' + value));
+  const webhookContract = require('../server').stripeWebhookContract();
+  [
+    'checkout.session.completed',
+    'setup_intent.succeeded',
+    'setup_intent.setup_failed',
+    'payment_intent.succeeded',
+    'payment_intent.payment_failed',
+    'charge.dispute.created',
+    'refund.updated',
+    'identity.verification_session.verified',
+    'identity.verification_session.requires_input',
+    'identity.verification_session.redacted'
+  ].forEach(eventType => assert(webhookContract.enabledEvents.includes(eventType), 'Stripe webhook contract is missing ' + eventType + '.'));
+  assert.strictEqual(new Set(webhookContract.enabledEvents).size, webhookContract.enabledEvents.length, 'Stripe webhook contract must not contain duplicate event types.');
+  assert(webhookContract.endpoint.endsWith('/api/webhooks/stripe') && typeof webhookContract.signingSecretConfigured === 'boolean', 'Stripe webhook contract must expose the exact public endpoint and configured-secret status.');
+  assert(!/whsec_/i.test(JSON.stringify(webhookContract)), 'Stripe webhook contract must never expose the signing secret.');
   assert(server.includes("stableId('woa-stripe-customer'") && server.includes('stripeCustomerIdempotencyKey'), 'Stripe customer creation must derive and retain a deterministic company-and-customer-scoped idempotency key.');
   assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
   assert(server.includes('assertControlledStripePilotApproved(data);') && server.includes('controlled_stripe_pilot_required'), 'Every live Clover-to-Stripe cutover must remain locked until one complete owner-approved Stripe onboarding pilot is still valid.');
@@ -239,6 +257,7 @@ async function run() {
   assert(nativeSite.includes('identity_selfie'), 'Public Stripe onboarding must include the required identity selfie step.');
   assert(nativeSite.includes('data-onboarding-form="identity"'), 'Public onboarding must expose Stripe Identity inside the existing verification step.');
   assert(!server.includes('STRIPE_SECRET_KEY || \'sk_'), 'No Stripe secret fallback may be committed.');
+  assert(server.includes("/^(?:sk|rk)_live_/"), 'The Stripe runtime must accept least-privilege restricted live keys as well as standard live secret keys.');
 
   console.log('Stripe payment adapter, migration, webhook, and dispute checks passed.');
 }

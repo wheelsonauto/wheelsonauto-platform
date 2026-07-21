@@ -101,10 +101,11 @@ function buildProductionReadinessAudit({ environment = {}, infrastructure = {}, 
       }
     },
     providers: {
+      firstPartyMessaging: compactRow(evidenceRow(infrastructure.firstPartyMessaging)),
       stripeAccount: compactRow(evidenceRow(infrastructure.stripeAccount)),
       stripePaymentsWebhook: compactRow(evidenceRow(infrastructure.stripeWebhook)),
       stripeIdentityWebhook: compactRow(evidenceRow(infrastructure.stripeIdentityWebhook)),
-      telnyxSms: compactRow(evidenceRow(infrastructure.telnyxMessaging)),
+      telnyxSms: { ...compactRow(evidenceRow(infrastructure.telnyxMessaging)), optional: true },
       resendEmail: compactRow(evidenceRow(infrastructure.resendEmail)),
       starAi: compactRow(evidenceRow(infrastructure.starAi)),
       operationalAlerts: compactRow(evidenceRow(infrastructure.operationalAlerts)),

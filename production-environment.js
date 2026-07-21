@@ -95,27 +95,26 @@ function productionEnvironmentReport(env = {}) {
   add('WOA_STATE_BACKUP_KEY_ISOLATION', !!(documentKey && backupKey && !documentKey.equals(backupKey)), 'The state-backup key must differ from the private-document key.');
   add('WOA_STATE_BACKUP_KEY_VERSION', /^[a-zA-Z0-9._-]{1,80}$/.test(value(env, 'WOA_STATE_BACKUP_KEY_VERSION')), 'Name the state-backup key version explicitly.');
 
-  add('STRIPE_SECRET_KEY', /^sk_live_[A-Za-z0-9_]+$/.test(stripeSecret), 'Use the activated Stripe live secret key, never a test key.');
+  add('STRIPE_SECRET_KEY', /^(?:sk|rk)_live_[A-Za-z0-9_]+$/.test(stripeSecret), 'Use an activated Stripe live key. Prefer a least-privilege restricted key; never use a test key.');
   add('STRIPE_PUBLISHABLE_KEY', /^pk_live_[A-Za-z0-9_]+$/.test(stripePublishable), 'Use the matching Stripe live publishable key.');
   add('STRIPE_WEBHOOK_SECRET', /^whsec_[A-Za-z0-9_]+$/.test(stripeWebhook), 'Configure the signed live Stripe webhook secret.');
   add('WOA_PAYMENT_PROVIDER', value(env, 'WOA_PAYMENT_PROVIDER') === 'clover', 'Keep Clover as the default during controlled customer-by-customer Stripe cutover.');
   add('WOA_ONBOARDING_PAYMENT_PROVIDER', value(env, 'WOA_ONBOARDING_PAYMENT_PROVIDER') === 'stripe', 'Route new onboarding through Stripe.');
   add('WOA_IDENTITY_PROVIDER', value(env, 'WOA_IDENTITY_PROVIDER') === 'stripe', 'Use Stripe Identity for hosted license and selfie verification.');
 
-  add('WOA_MESSAGING_PROVIDER', value(env, 'WOA_MESSAGING_PROVIDER', 'MESSAGING_PROVIDER') === 'telnyx', 'Use the approved Telnyx messaging profile.');
-  add('TELNYX_API_KEY', !!value(env, 'TELNYX_API_KEY'), 'Configure the Telnyx API key.');
-  add('TELNYX_PUBLIC_KEY', !!value(env, 'TELNYX_PUBLIC_KEY'), 'Configure the Telnyx webhook-signing public key.');
-  add('TELNYX_MESSAGING_PROFILE_ID', !!value(env, 'TELNYX_MESSAGING_PROFILE_ID'), 'Configure the approved Telnyx messaging profile.');
-  add('WOA_MESSAGING_FROM_NUMBER', /^\+1\d{10}$/.test(value(env, 'WOA_MESSAGING_FROM_NUMBER', 'MESSAGING_FROM_NUMBER')), 'Use the assigned E.164 Telnyx number.');
-  add('TELNYX_10DLC_USECASE', value(env, 'TELNYX_10DLC_USECASE') === 'CUSTOMER_CARE', 'Keep the registered CUSTOMER_CARE use case aligned with the campaign.');
+  add('WOA_MESSAGING_ENABLED', enabled(env, 'WOA_MESSAGING_ENABLED'), 'Enable the first-party WheelsonAuto customer-app inbox. Carrier SMS remains optional.');
 
   add('WOA_EMAIL_PROVIDER', value(env, 'WOA_EMAIL_PROVIDER', 'EMAIL_PROVIDER') === 'resend', 'Use Resend for production email.');
+  add('WOA_EMAIL_ENABLED', enabled(env, 'WOA_EMAIL_ENABLED'), 'Enable email notifications, replies, receipts, and owner alerts.');
   add('RESEND_API_KEY', !!value(env, 'RESEND_API_KEY', 'WOA_RESEND_API_KEY'), 'Configure the Resend API key.');
   add('RESEND_WEBHOOK_SECRET', !!value(env, 'RESEND_WEBHOOK_SECRET', 'WOA_RESEND_WEBHOOK_SECRET'), 'Configure signed inbound Resend webhooks.');
   add('WOA_EMAIL_FROM', validEmailSender(value(env, 'WOA_EMAIL_FROM', 'EMAIL_FROM')), 'Send from wheelsonauto.com or a verified subdomain.');
 
   add('OPENAI_API_KEY', !!value(env, 'OPENAI_API_KEY', 'WOA_OPENAI_API_KEY'), 'Configure the restricted OpenAI project key for Star.');
   add('WOA_AI_MODEL', !!value(env, 'WOA_AI_MODEL', 'OPENAI_MODEL'), 'Pin the Star model explicitly.');
+  add('WOA_STAR_AI_ENABLED', enabled(env, 'WOA_STAR_AI_ENABLED'), 'Enable Star only through the guarded server-side provider adapter.');
+  add('WOA_AI_REPLY_DRAFTS', enabled(env, 'WOA_AI_REPLY_DRAFTS'), 'Keep Star reply drafting enabled for the staff approval workflow.');
+  add('WOA_AI_AUTO_SEND', !enabled(env, 'WOA_AI_AUTO_SEND'), 'Keep automatic AI sending disabled for the controlled launch.');
   add('WOA_AI_MAX_REQUESTS_PER_DAY', Number.isInteger(dailyAiLimit) && dailyAiLimit > 0, 'Set an explicit daily Star request limit.');
   add('WOA_AI_MAX_REQUESTS_PER_MONTH', Number.isInteger(monthlyAiLimit) && monthlyAiLimit >= dailyAiLimit, 'Set an explicit monthly Star request limit at least as large as the daily limit.');
 

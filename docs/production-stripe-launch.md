@@ -712,7 +712,7 @@ twice; an expired processing lease can be reclaimed after a crash.
 Store live keys only in Render:
 
 ```text
-STRIPE_SECRET_KEY=sk_live_...
+STRIPE_SECRET_KEY=rk_live_... # preferred least-privilege key; sk_live_... is also supported
 STRIPE_PUBLISHABLE_KEY=pk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 WOA_PAYMENT_PROVIDER=clover
@@ -733,11 +733,46 @@ Payments -> Check Stripe account**. This read-only check calls Stripe's account
 endpoint, stores only the account ID, country, readiness booleans, requirement
 counts, and a server-only configuration proof, and never creates a customer or
 money movement. The proof expires after 24 hours by default and must be rerun
-after the live key or API configuration changes. Configure Stripe webhook events for successful/failed payment intents,
-refunds, disputes, setup intents, and Stripe Identity updates. The webhook
-must be signed and reach the live platform before it is treated as connected.
-Stripe customer card preparation is exposed only when the server has an
-`sk_live_...` key and a signed webhook secret. Charges, hosted payment
+after the live key or API configuration changes. Create one live Stripe webhook
+destination at `https://wheelsonauto-platform.onrender.com/api/webhooks/stripe`
+and select these exact events:
+
+```text
+checkout.session.completed
+setup_intent.succeeded
+setup_intent.setup_failed
+setup_intent.canceled
+setup_intent.requires_action
+payment_intent.succeeded
+payment_intent.payment_failed
+payment_intent.requires_action
+charge.dispute.created
+charge.dispute.updated
+charge.dispute.closed
+refund.created
+refund.updated
+refund.failed
+charge.refunded
+identity.verification_session.created
+identity.verification_session.processing
+identity.verification_session.verified
+identity.verification_session.requires_input
+identity.verification_session.canceled
+identity.verification_session.redacted
+```
+
+Stripe requires explicit subscription to the Identity redaction event, so do
+not rely on an all-events destination. Save the destination's `whsec_...`
+signing secret as `STRIPE_WEBHOOK_SECRET` in Render. The webhook must be signed
+and reach the live platform before it is treated as connected.
+Stripe customer card preparation is exposed only when the server has a live
+`rk_live_...` restricted key (preferred) or `sk_live_...` secret key and a
+signed webhook secret. The restricted key must grant only the account,
+customer, Checkout Session, SetupIntent, PaymentIntent, charge, refund,
+dispute, and Identity VerificationSession permissions used by WheelsonAuto.
+Do not grant access to sensitive Identity verification results; the platform
+uses the hosted verification status and stores its own encrypted customer
+documents. Charges, hosted payment
 checkouts, and refunds remain locked until
 `WOA_PRODUCTION_HARDENING_REQUIRED=1` and the server startup preflight is
 green. Stripe test keys and test-mode webhook events are ignored on Render and
@@ -907,7 +942,20 @@ Star settings and expires after 30 days by default. Changing any of those
 settings requires a fresh health test; a dashboard key alone does not clear the
 launch gate.
 
-### Telnyx
+### WheelsonAuto Messages and Optional Telnyx
+
+The required production conversation channel is the WheelsonAuto customer app:
+
+```text
+WOA_MESSAGING_PROVIDER=wheelsonauto
+WOA_MESSAGING_ENABLED=1
+```
+
+It keeps each customer thread inside the authenticated app and transactional
+PostgreSQL. Resend supplies email notifications and replies. Carrier SMS does
+not block the Stripe launch.
+
+Telnyx can be added later as an optional carrier adapter:
 
 ```text
 WOA_MESSAGING_PROVIDER=telnyx
@@ -925,7 +973,7 @@ The owner readiness check verifies that intended replacement use case through
 Telnyx before another paid campaign review. The rejected campaign remains
 history and cannot be mistaken for the new campaign.
 
-Do not turn on automatic customer messaging until 10DLC approval, number
+Do not turn on automatic carrier messaging until 10DLC approval, number
 assignment, inbound signing, and one carrier-delivered outbound test are all
 confirmed. For the hardened Stripe launch, send a fresh test text and reply to
 it from a phone after the current Render settings are deployed. The platform
@@ -1032,9 +1080,10 @@ WOA_PRODUCTION_HARDENING_REQUIRED=1
 
 On a future restart the service will refuse to start if transactional
 PostgreSQL, encrypted private storage, Stripe live/webhook settings, Stripe
-onboarding and Identity, verified Telnyx SMS delivery/reply, verified Resend
+onboarding and Identity, first-party WheelsonAuto messaging, verified Resend
 two-way email, a fresh OpenAI Star health proof, verified operational alerts,
-a stable session secret, or HTTPS public URL are missing. This is deliberate: it keeps a partial
+a stable session secret, or HTTPS public URL are missing. Optional carrier SMS
+does not participate in this gate. This is deliberate: it keeps a partial
 configuration from quietly processing live money or private documents.
 
 Before each deployment rehearsal, run the guard test as well:
