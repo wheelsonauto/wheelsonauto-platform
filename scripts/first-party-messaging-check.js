@@ -3,6 +3,8 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+process.env.WOA_MESSAGING_PROVIDER = 'telnyx';
+delete process.env.WOA_OPTIONAL_CARRIER_SMS_ENABLED;
 const server = require('../server');
 
 const root = path.resolve(__dirname, '..');
@@ -46,6 +48,15 @@ const data = {
   ],
   integrations: { clover: {}, messaging: {} }
 };
+
+const disabledCarrierStatus = server.publicMessagingStatus(data, { transactionalStateReady: true });
+assert.strictEqual(disabledCarrierStatus.provider, 'wheelsonauto', 'A legacy Telnyx environment value must fall back to first-party messaging unless carrier SMS is explicitly enabled.');
+assert.strictEqual(disabledCarrierStatus.configured, false, 'Disabled optional carrier SMS must not report itself as configured or live.');
+assert.deepStrictEqual(server.launchRelevantJobErrors([
+  { source: 'telnyx-10dlc-sync' },
+  { source: 'twilio-inbound-sync' },
+  { source: 'clover-auto-sync' }
+]).map(row => row.source), ['clover-auto-sync'], 'Disabled optional carrier errors must leave the launch queue without hiding operational payment failures.');
 
 const portal = server.customerPortalState(data, account);
 assert.strictEqual(portal.messages.length, 1, 'Customer portal state must exclude another customer\'s conversation.');
@@ -94,6 +105,9 @@ async function run() {
   assert(styles.includes('.customer-chat-messages') && styles.includes('@media(max-width:760px)'), 'Conversation layout must include compact mobile styling.');
   assert(!source.includes("providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block provider proof collection.');
   assert(!source.includes("missing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block live Stripe readiness.');
+  assert(source.includes('WOA_OPTIONAL_CARRIER_SMS_ENABLED') && source.includes("? 'wheelsonauto'"), 'Legacy Telnyx or Twilio environment values must not reactivate carrier SMS unless the owner explicitly enables it.');
+  assert(source.includes('launchRelevantJobErrors') && source.includes("/^(?:telnyx|twilio)-/i"), 'Disabled optional carrier failures must not clutter the Stripe launch queue.');
+  assert(source.includes('carrier SMS remains optional and requires WOA_OPTIONAL_CARRIER_SMS_ENABLED=1'), 'The owner launch checklist must describe carrier SMS as optional instead of a Stripe requirement.');
   console.log('First-party messaging check passed: customer-scoped conversations, Star delivery, guarded list-to-thread rendering, email-ready notices, PWA install, private caching, mobile layout, and optional SMS launch rules are wired.');
 }
 

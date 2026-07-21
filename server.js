@@ -147,7 +147,11 @@ const STRIPE_KEY_MODE = /^(?:sk|rk)_live_/.test(STRIPE_SECRET_KEY) ? 'live' : /^
 const STRIPE_ISOLATED_PROVIDER_TEST_MODE = stripeMigration.isolatedProviderTestMode(process.env);
 const STRIPE_IDENTITY_RUNTIME_READY = IDENTITY_PROVIDER === 'stripe' && stripe.configured() && (STRIPE_KEY_MODE === 'live' || STRIPE_ISOLATED_PROVIDER_TEST_MODE);
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://wheelsonauto-platform.onrender.com').replace(/\/+$/, '');
-const MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
+const CONFIGURED_MESSAGING_PROVIDER = String(process.env.WOA_MESSAGING_PROVIDER || process.env.MESSAGING_PROVIDER || 'not_configured').toLowerCase();
+const WOA_OPTIONAL_CARRIER_SMS_ENABLED = process.env.WOA_OPTIONAL_CARRIER_SMS_ENABLED === '1';
+const MESSAGING_PROVIDER = !WOA_OPTIONAL_CARRIER_SMS_ENABLED && ['telnyx', 'twilio'].includes(CONFIGURED_MESSAGING_PROVIDER)
+  ? 'wheelsonauto'
+  : CONFIGURED_MESSAGING_PROVIDER;
 const MESSAGING_FROM_NUMBER = process.env.WOA_MESSAGING_FROM_NUMBER || process.env.MESSAGING_FROM_NUMBER || '';
 const MESSAGING_OWNER_NOTIFY_NUMBER = process.env.WOA_MESSAGING_OWNER_NOTIFY_NUMBER || process.env.MESSAGING_OWNER_NOTIFY_NUMBER || '';
 const MESSAGING_WEBHOOK_SECRET = process.env.WOA_MESSAGING_WEBHOOK_SECRET || process.env.MESSAGING_WEBHOOK_SECRET || '';
@@ -252,7 +256,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-message-speed-264';
+const ASSET_VERSION = 'platform-20260721-first-party-messaging-265';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -331,6 +335,11 @@ const telnyxWebhookRecoveryStatus = {
   lastResult: null,
   lastLoggedAt: 0
 };
+
+function launchRelevantJobErrors(rows = []) {
+  if (WOA_OPTIONAL_CARRIER_SMS_ENABLED) return Array.isArray(rows) ? rows : [];
+  return (Array.isArray(rows) ? rows : []).filter(row => !/^(?:telnyx|twilio)-/i.test(String(row && row.source || '')));
+}
 const passTimePollStatus = {
   enabled: TRACKER_PROVIDER === 'passtime',
   intervalMs: PASSTIME_SYNC_MS,
@@ -23869,7 +23878,7 @@ const server = http.createServer(async (req, res) => {
           structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 20),
           assignmentReviewWarnings: assignmentClassification.review.slice(0, 20),
           identityWarnings: stateRepository.identityWarnings(data).slice(0, 20),
-          openJobErrors: await STATE_REPOSITORY.recentJobErrors(12)
+          openJobErrors: launchRelevantJobErrors(await STATE_REPOSITORY.recentJobErrors(12))
         };
       }
       return json(res, 200, health);
@@ -23903,7 +23912,7 @@ const server = http.createServer(async (req, res) => {
         structuralAssignmentConflicts: assignmentClassification.structural.slice(0, 50),
         assignmentReviewWarnings: assignmentClassification.review.slice(0, 50),
         identityWarnings: warnings.slice(0, 50),
-        openJobErrors,
+        openJobErrors: launchRelevantJobErrors(openJobErrors),
         requiredBeforeLiveStripe: [
           'WOA_DATA_BACKEND=postgres with a healthy DATABASE_URL and verified JSON-to-PostgreSQL import proof',
           'Current PostgreSQL snapshot checksum/version verification plus a fresh controlled test-database recovery drill record',
@@ -23911,7 +23920,7 @@ const server = http.createServer(async (req, res) => {
           'WOA_DOCUMENT_STORAGE_PROVIDER=s3 with WOA_DOCUMENT_ENCRYPTION_KEY and private bucket credentials',
           'Stripe business onboarding complete with live charges/payouts enabled, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and a signed live webhook test',
           'A fresh, non-degraded Clover recurring roster before any controlled customer cutover',
-          'Telnyx 10DLC approval plus fresh signed SMS delivery and inbound reply proof',
+          'WheelsonAuto first-party customer messaging on PostgreSQL; carrier SMS remains optional and requires WOA_OPTIONAL_CARRIER_SMS_ENABLED=1 when added later',
           'Resend with a verified wheelsonauto.com sender plus fresh outbound and signed inbound email proof',
           'OpenAI-backed Star with request caps and a fresh owner Responses API health proof',
           'WOA_ERROR_ALERTS_ENABLED=1 plus a verified owner error-alert email test',
@@ -25419,6 +25428,7 @@ module.exports = {
   enrichLinkedProfiles,
   nearEndpointNameMatch,
   publicMessagingStatus,
+  launchRelevantJobErrors,
   smsTransactionalDeliveryReady,
   emailTransactionalDeliveryReady,
   hydrateIncomingEmail,

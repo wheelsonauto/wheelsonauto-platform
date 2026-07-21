@@ -7,6 +7,7 @@ const publicDer = publicKey.export({ type: 'spki', format: 'der' });
 const publicKeyBase64 = publicDer.subarray(publicDer.length - 32).toString('base64');
 
 process.env.WOA_MESSAGING_PROVIDER = 'telnyx';
+process.env.WOA_OPTIONAL_CARRIER_SMS_ENABLED = '1';
 process.env.WOA_MESSAGING_ENABLED = '1';
 process.env.WOA_MESSAGING_FROM_NUMBER = '+16095550199';
 process.env.TELNYX_API_KEY = 'KEY-test';

@@ -136,6 +136,8 @@ services:
       # Telnyx credentials remain optional for a future carrier-SMS adapter.
       - key: WOA_MESSAGING_PROVIDER
         value: wheelsonauto
+      - key: WOA_OPTIONAL_CARRIER_SMS_ENABLED
+        value: "0"
       - key: WOA_MESSAGING_ENABLED
         value: "1"
       - key: TELNYX_API_KEY

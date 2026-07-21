@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 process.env.WOA_MESSAGING_PROVIDER = 'telnyx';
+process.env.WOA_OPTIONAL_CARRIER_SMS_ENABLED = '1';
 process.env.WOA_MESSAGING_FROM_NUMBER = '+16095550199';
 process.env.TELNYX_API_KEY = 'KEY-consent-test';
 process.env.WOA_MESSAGING_ENABLED = '1';

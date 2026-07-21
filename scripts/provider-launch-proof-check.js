@@ -9,6 +9,7 @@ process.env.WOA_AI_AUTO_SEND = '0';
 process.env.WOA_AI_REPLY_DRAFTS = '1';
 process.env.WOA_EMAIL_ENABLED = '1';
 process.env.WOA_MESSAGING_PROVIDER = 'telnyx';
+process.env.WOA_OPTIONAL_CARRIER_SMS_ENABLED = '1';
 process.env.WOA_MESSAGING_FROM_NUMBER = '+16095550199';
 process.env.WOA_MESSAGING_WEBHOOK_SECRET = 'provider-launch-proof-webhook-secret';
 process.env.TELNYX_API_KEY = 'KEY-provider-launch-proof';
