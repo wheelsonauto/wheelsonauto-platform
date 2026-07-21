@@ -356,6 +356,10 @@ assertIncludes('Stripe owner activation review', app + server, [
   'https://dashboard.stripe.com/settings/account',
   'Live launch preflight'
 ]);
+assertIncludes('Activated Stripe Identity advances to matched proof', server, [
+  'Stripe Identity is activated; complete one matched WheelsonAuto customer license and selfie verification so its signed live result is recorded.',
+  'Stripe Identity is activated. Complete one matched WheelsonAuto customer license and selfie verification so the signed live result can be recorded.'
+]);
 assertIncludes('Exact Clover subscription cutover confirmation', app + server, [
   'stripeCutoverPlanIdentity',
   'Exact recurring plan',

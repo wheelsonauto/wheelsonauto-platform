@@ -256,7 +256,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-proof-guidance-271';
+const ASSET_VERSION = 'platform-20260721-identity-proof-guidance-272';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -13775,7 +13775,11 @@ function apiProviderTruthOverrides(data = {}) {
       endpoint: '/api/public/onboarding/:token/identity, /api/webhooks/stripe',
       liveTest: 'Complete one hosted live-license and matching-selfie check, verify the signed Stripe result, then approve insurance before signing.',
       lastTestAt: verificationEvidenceAt(identityCases),
-      lastTestResult: identityCases.length + ' identity/license case(s) are tracked; customer-uploaded license copies remain private and Stripe verification URLs are never persisted.' + (identityProviderLive ? ' A signed Stripe Identity result has been verified.' : ' Live Stripe Identity activation is still required for automated real-world verification.')
+      lastTestResult: identityCases.length + ' identity/license case(s) are tracked; customer-uploaded license copies remain private and Stripe verification URLs are never persisted.' + (identityProviderLive
+        ? ' A signed Stripe Identity result has been verified.'
+        : (identityProviderReady
+          ? ' Stripe Identity is activated; complete one matched WheelsonAuto customer license and selfie verification so its signed live result is recorded.'
+          : ' Live Stripe Identity setup is still required for automated real-world verification.'))
     },
     'background-checks': {
       name: 'Driver Record / MVR + Background',
@@ -13872,7 +13876,9 @@ function apiProviderLaunchGuidance(provider = {}) {
       : ['Use manual review now; connect an authoritative insurance provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result tied to the correct customer and vehicle.'],
     'identity-verification': connected
       ? ['Monitor signed identity/license results and expiration warnings.', 'A signed provider result with only the last-four reference retained.']
-      : ['Use manual review now; connect an authoritative identity provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result, with no full license identifier stored.'],
+      : [status.includes('stripe verified result')
+        ? 'Stripe Identity is activated. Complete one matched WheelsonAuto customer license and selfie verification so the signed live result can be recorded.'
+        : 'Use manual review now; connect an authoritative identity provider and submit one signed result before calling external verification connected.', 'Manual proof review plus a signed provider result, with no full license identifier stored.'],
     'tracker-gps': connected
       ? ['Monitor PassTime freshness and clear the Missing file queue when devices, VINs, or tags change.', 'A successful read-only PassTime sync tied to the correct company, vehicle, device, VIN/tag, last ping, and manager-visible location.']
       : ['Activate each tracker in PassTime Mobile Installer, save its serial on the exact WheelsonAuto vehicle, and use the reusable OASIS companion tab for live location.', 'Exact device-to-VIN/tag pairing in WheelsonAuto, a working OASIS live map, and no precise location or control commands exposed to mechanic/customer roles.'],
