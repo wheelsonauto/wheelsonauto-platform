@@ -294,6 +294,7 @@ async function main() {
       && serverSource.includes("claimToken: claim.claimToken"), 'Live Stripe, Clover, SMS, email, and Telnyx recovery handlers must pass their current repository-issued webhook ownership token instead of inventing or reusing one.');
     assert(stateRepositorySource.includes('await this.syncCriticalResourceIndex(client, next)') && stateRepositorySource.includes('await this.syncActiveAssignmentIndex(client, next)'), 'Normal writes and controlled recovery must synchronize critical record and assignment indexes in the state transaction.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
+    assert(serverSource.includes('claimJobErrorAlert') && serverSource.includes('releaseJobErrorAlert') && serverSource.includes('operational-error-'), 'Owner error alerts must use a durable cross-restart claim plus provider idempotency instead of a process-memory throttle alone.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
     const operationalFailureEnd = serverSource.indexOf('function reportBackgroundTaskFailure', operationalFailureStart);
     const operationalFailureBody = serverSource.slice(operationalFailureStart, operationalFailureEnd);
@@ -589,6 +590,12 @@ async function main() {
     assert.strictEqual(jsonJobErrors[0].occurrenceCount, 2, 'Repeated JSON fallback failures must coalesce into one actionable incident with an occurrence count.');
     assert.strictEqual(jsonJobErrors[0].source, 'json-fallback-monitor', 'The JSON fallback error record must retain its source.');
     assert.strictEqual(jsonJobErrors[0].context.route, 'foundation check', 'The JSON fallback error record must retain safe context.');
+    const jsonAlertBase = Date.parse('2026-07-21T12:00:00.000Z');
+    const firstJsonAlertClaim = await repository.claimJobErrorAlert(jsonJobErrors[0].id, 6 * 60 * 60 * 1000, jsonAlertBase);
+    assert.strictEqual(firstJsonAlertClaim.claimed, true, 'The first JSON fallback owner alert must receive a durable incident claim.');
+    assert.strictEqual((await repository.claimJobErrorAlert(jsonJobErrors[0].id, 6 * 60 * 60 * 1000, jsonAlertBase + 60 * 60 * 1000)).claimed, false, 'A restart inside the alert window must not resend the same JSON fallback incident.');
+    assert.strictEqual(await repository.releaseJobErrorAlert(jsonJobErrors[0].id, firstJsonAlertClaim.claimedAt), true, 'A failed provider send must release the exact JSON fallback alert claim.');
+    assert.strictEqual((await repository.claimJobErrorAlert(jsonJobErrors[0].id, 6 * 60 * 60 * 1000, jsonAlertBase + 60 * 60 * 1000)).claimed, true, 'A released JSON fallback claim must be available for a safe provider retry.');
     assert.strictEqual(await fs.readFile(dataFile, 'utf8'), stateBeforeJsonJobError, 'Recording a JSON fallback operational error must not rewrite business data.json.');
     assert((await fs.stat(dataFile + '.job-errors.json')).size > 0, 'The JSON fallback error log must live beside, not inside, the protected business state file.');
     const resolvedJsonJobError = await repository.resolveJobError(jsonJobErrors[0].id, { resolvedBy: 'foundation owner', note: 'Controlled review completed' });

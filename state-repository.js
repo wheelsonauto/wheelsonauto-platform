@@ -1371,6 +1371,7 @@ class JsonStateRepository {
         createdAt: String(row.createdAt || row.created_at || ''),
         firstSeenAt: String(row.firstSeenAt || row.first_seen_at || row.createdAt || row.created_at || ''),
         lastSeenAt: String(row.lastSeenAt || row.last_seen_at || row.createdAt || row.created_at || ''),
+        lastAlertedAt: String(row.lastAlertedAt || row.last_alerted_at || ''),
         occurrenceCount: Math.max(1, Number(row.occurrenceCount || row.occurrence_count || 1)),
         resolvedAt: String(row.resolvedAt || row.resolved_at || ''),
         resolvedBy: String(row.resolvedBy || row.resolved_by || '').slice(0, 160),
@@ -1412,6 +1413,7 @@ class JsonStateRepository {
           fingerprint,
           firstSeenAt: existing.firstSeenAt || existing.createdAt || now,
           lastSeenAt: now,
+          lastAlertedAt: existing.lastAlertedAt || '',
           occurrenceCount: Math.max(1, Number(existing.occurrenceCount || 1)) + 1
         };
         await this.writeJobErrors([updated, ...rows]);
@@ -1427,10 +1429,51 @@ class JsonStateRepository {
         createdAt: now,
         firstSeenAt: now,
         lastSeenAt: now,
+        lastAlertedAt: '',
         occurrenceCount: 1
       };
       await this.writeJobErrors([entry, ...rows]);
       return clone(entry);
+    };
+    const pending = this.jobErrorWrite.then(run, run);
+    this.jobErrorWrite = pending.catch(() => {});
+    return pending;
+  }
+
+  async claimJobErrorAlert(id, windowMs, now = Date.now()) {
+    const targetId = String(id || '').trim();
+    if (!targetId) return { claimed: false, claimedAt: '' };
+    const claimTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const window = Math.max(0, Number(windowMs || 0));
+    const run = async () => {
+      const rows = await this.readJobErrors();
+      const index = rows.findIndex(row => row.id === targetId && !row.resolvedAt);
+      if (index < 0) return { claimed: false, claimedAt: '' };
+      const previous = Date.parse(String(rows[index].lastAlertedAt || ''));
+      if (Number.isFinite(previous) && claimTime - previous < window) {
+        return { claimed: false, claimedAt: String(rows[index].lastAlertedAt || '') };
+      }
+      const claimedAt = new Date(claimTime).toISOString();
+      rows[index] = { ...rows[index], lastAlertedAt: claimedAt };
+      await this.writeJobErrors(rows);
+      return { claimed: true, claimedAt };
+    };
+    const pending = this.jobErrorWrite.then(run, run);
+    this.jobErrorWrite = pending.catch(() => {});
+    return pending;
+  }
+
+  async releaseJobErrorAlert(id, claimedAt) {
+    const targetId = String(id || '').trim();
+    const expected = String(claimedAt || '').trim();
+    if (!targetId || !expected) return false;
+    const run = async () => {
+      const rows = await this.readJobErrors();
+      const index = rows.findIndex(row => row.id === targetId && !row.resolvedAt && String(row.lastAlertedAt || '') === expected);
+      if (index < 0) return false;
+      rows[index] = { ...rows[index], lastAlertedAt: '' };
+      await this.writeJobErrors(rows);
+      return true;
     };
     const pending = this.jobErrorWrite.then(run, run);
     this.jobErrorWrite = pending.catch(() => {});
@@ -1860,6 +1903,7 @@ class PostgresStateRepository {
         await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS fingerprint TEXT NOT NULL DEFAULT \'\'');
         await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ');
         await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ');
+        await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS last_alerted_at TIMESTAMPTZ');
         await client.query('ALTER TABLE woa_job_errors ADD COLUMN IF NOT EXISTS occurrence_count INTEGER NOT NULL DEFAULT 1');
         await client.query('UPDATE woa_job_errors SET first_seen_at = created_at WHERE first_seen_at IS NULL');
         await client.query('UPDATE woa_job_errors SET last_seen_at = created_at WHERE last_seen_at IS NULL');
@@ -2404,7 +2448,7 @@ class PostgresStateRepository {
         context = EXCLUDED.context,
         last_seen_at = now(),
         occurrence_count = woa_job_errors.occurrence_count + 1
-      RETURNING id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count`, [this.organizationId, safeSource, safeSeverity, safeMessage, JSON.stringify(safeContext), fingerprint]);
+      RETURNING id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, last_alerted_at, occurrence_count`, [this.organizationId, safeSource, safeSeverity, safeMessage, JSON.stringify(safeContext), fingerprint]);
     const row = result.rows[0];
     return {
       id: Number(row.id),
@@ -2416,13 +2460,42 @@ class PostgresStateRepository {
       createdAt: row.created_at,
       firstSeenAt: row.first_seen_at,
       lastSeenAt: row.last_seen_at,
+      lastAlertedAt: row.last_alerted_at,
       occurrenceCount: Math.max(1, Number(row.occurrence_count || 1))
     };
   }
 
+  async claimJobErrorAlert(id, windowMs, now = Date.now()) {
+    const targetId = Number(id);
+    if (!Number.isFinite(targetId) || targetId <= 0) return { claimed: false, claimedAt: '' };
+    const claimTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const claimedAt = new Date(claimTime).toISOString();
+    const window = Math.max(0, Math.floor(Number(windowMs || 0)));
+    await this.ensureSchema();
+    const result = await this.pool.query(`UPDATE woa_job_errors
+      SET last_alerted_at = $3::timestamptz
+      WHERE organization_id = $1 AND id = $2 AND resolved_at IS NULL
+        AND (last_alerted_at IS NULL OR last_alerted_at <= $3::timestamptz - ($4::bigint * interval '1 millisecond'))
+      RETURNING last_alerted_at`, [this.organizationId, targetId, claimedAt, window]);
+    return result.rowCount
+      ? { claimed: true, claimedAt: result.rows[0].last_alerted_at instanceof Date ? result.rows[0].last_alerted_at.toISOString() : String(result.rows[0].last_alerted_at || claimedAt) }
+      : { claimed: false, claimedAt: '' };
+  }
+
+  async releaseJobErrorAlert(id, claimedAt) {
+    const targetId = Number(id);
+    const expected = String(claimedAt || '').trim();
+    if (!Number.isFinite(targetId) || targetId <= 0 || !expected) return false;
+    await this.ensureSchema();
+    const result = await this.pool.query(`UPDATE woa_job_errors
+      SET last_alerted_at = NULL
+      WHERE organization_id = $1 AND id = $2 AND resolved_at IS NULL AND last_alerted_at = $3::timestamptz`, [this.organizationId, targetId, expected]);
+    return result.rowCount > 0;
+  }
+
   async recentJobErrors(limit = 20) {
     await this.ensureSchema();
-    const result = await this.pool.query(`SELECT id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, occurrence_count
+    const result = await this.pool.query(`SELECT id, source, severity, message, context, fingerprint, created_at, first_seen_at, last_seen_at, last_alerted_at, occurrence_count
       FROM woa_job_errors
       WHERE organization_id = $1 AND resolved_at IS NULL
       ORDER BY last_seen_at DESC
@@ -2437,6 +2510,7 @@ class PostgresStateRepository {
       createdAt: row.created_at,
       firstSeenAt: row.first_seen_at,
       lastSeenAt: row.last_seen_at,
+      lastAlertedAt: row.last_alerted_at,
       occurrenceCount: Math.max(1, Number(row.occurrence_count || 1))
     })), limit);
   }

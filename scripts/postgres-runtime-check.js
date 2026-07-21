@@ -505,6 +505,12 @@ async function main() {
     const runtimeJobError = openRuntimeErrors.find(row => row.source === 'postgres-runtime-monitor');
     assert(runtimeJobError && runtimeJobError.id, 'PostgreSQL must retain a durable open job failure for owner review.');
     assert.strictEqual(runtimeJobError.occurrenceCount, 2, 'Repeated PostgreSQL failures must coalesce into one actionable incident with an occurrence count.');
+    const postgresAlertBase = Date.parse('2026-07-21T12:00:00.000Z');
+    const firstPostgresAlertClaim = await repository.claimJobErrorAlert(runtimeJobError.id, 6 * 60 * 60 * 1000, postgresAlertBase);
+    assert.strictEqual(firstPostgresAlertClaim.claimed, true, 'PostgreSQL must atomically claim the first owner alert for an open incident.');
+    assert.strictEqual((await repository.claimJobErrorAlert(runtimeJobError.id, 6 * 60 * 60 * 1000, postgresAlertBase + 60 * 60 * 1000)).claimed, false, 'PostgreSQL must suppress the same owner alert across workers and restarts inside the reminder window.');
+    assert.strictEqual(await repository.releaseJobErrorAlert(runtimeJobError.id, firstPostgresAlertClaim.claimedAt), true, 'A failed provider send must atomically release the exact PostgreSQL alert claim.');
+    assert.strictEqual((await repository.claimJobErrorAlert(runtimeJobError.id, 6 * 60 * 60 * 1000, postgresAlertBase + 60 * 60 * 1000)).claimed, true, 'A released PostgreSQL alert claim must permit a safe provider retry.');
     const resolvedRuntimeError = await repository.resolveJobError(runtimeJobError.id, { resolvedBy: 'runtime owner', note: 'Controlled PostgreSQL review completed' });
     assert(resolvedRuntimeError && resolvedRuntimeError.resolvedAt && resolvedRuntimeError.resolvedBy === 'runtime owner', 'PostgreSQL must retain durable job-error review evidence.');
     assert.strictEqual(resolvedRuntimeError.occurrenceCount, 2, 'Resolving a grouped PostgreSQL incident must retain its total occurrence count.');

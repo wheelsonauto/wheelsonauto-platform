@@ -181,7 +181,7 @@ const WOA_PRIVATE_ARTIFACT_INTERVAL_MS = Math.max(60 * 1000, Number(process.env.
 const WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS = Math.max(10 * 1000, Number(process.env.WOA_PRIVATE_ARTIFACT_STARTUP_DELAY_MS || 45 * 1000));
 const WOA_PRIVATE_ARTIFACT_BATCH_LIMIT = Math.max(1, Math.min(100, Number(process.env.WOA_PRIVATE_ARTIFACT_BATCH_LIMIT || 25)));
 const WOA_ERROR_ALERTS_ENABLED = process.env.WOA_ERROR_ALERTS_ENABLED === '1';
-const WOA_ERROR_ALERT_WINDOW_MS = Math.max(60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 15 * 60 * 1000));
+const WOA_ERROR_ALERT_WINDOW_MS = Math.max(15 * 60 * 1000, Number(process.env.WOA_ERROR_ALERT_WINDOW_MS || 6 * 60 * 60 * 1000));
 const WOA_ERROR_RECORD_WINDOW_MS = Math.max(15 * 1000, Number(process.env.WOA_ERROR_RECORD_WINDOW_MS || 60 * 1000));
 const WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_OPERATIONAL_ERROR_CACHE_LIMIT = 1000;
@@ -226,7 +226,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-card-plan-review-259';
+const ASSET_VERSION = 'platform-20260721-durable-alerts-260';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
@@ -3876,13 +3876,14 @@ async function recordOperationalFailure(source, error, context = {}, options = {
   const incidentKey = [safeSource, safeContext.route, safeContext.recurringPaymentId, safeContext.eventId, safeContext.dateKey, message.slice(0, 160)].join('|');
   const now = Date.now();
   let persisted = false;
+  let incidentRecord = null;
   const lastRecordedAt = operationalErrorRecords.get(incidentKey) || 0;
   const deduplicated = now - lastRecordedAt < WOA_ERROR_RECORD_WINDOW_MS;
   if (!deduplicated) {
     try {
-      await STATE_REPOSITORY.recordJobError(safeSource, message, safeContext, options.severity || 'error');
+      incidentRecord = await STATE_REPOSITORY.recordJobError(safeSource, message, safeContext, options.severity || 'error');
       rememberOperationalErrorTimestamp(operationalErrorRecords, incidentKey, now, WOA_ERROR_RECORD_WINDOW_MS);
-      persisted = true;
+      persisted = !!incidentRecord;
     } catch (recordError) {
       console.error('WheelsonAuto error monitor could not persist:', recordError && recordError.message || recordError);
     }
@@ -3898,12 +3899,28 @@ async function recordOperationalFailure(source, error, context = {}, options = {
   if (!WOA_ERROR_ALERTS_ENABLED || options.alert === false) return { persisted, deduplicated, alerted: false };
   const previous = operationalErrorAlerts.get(incidentKey) || 0;
   if (now - previous < WOA_ERROR_ALERT_WINDOW_MS) return { persisted, deduplicated, alerted: false };
+  let durableAlertClaim = null;
+  if (incidentRecord && incidentRecord.id && typeof STATE_REPOSITORY.claimJobErrorAlert === 'function') {
+    try {
+      durableAlertClaim = await STATE_REPOSITORY.claimJobErrorAlert(incidentRecord.id, WOA_ERROR_ALERT_WINDOW_MS, now);
+    } catch (claimError) {
+      console.error('WheelsonAuto error monitor could not claim a durable owner alert:', claimError && claimError.message || claimError);
+      return { persisted, deduplicated, alerted: false };
+    }
+    if (!durableAlertClaim || durableAlertClaim.claimed !== true) {
+      rememberOperationalErrorTimestamp(operationalErrorAlerts, incidentKey, now, WOA_ERROR_ALERT_WINDOW_MS);
+      return { persisted, deduplicated, alerted: false };
+    }
+  }
   rememberOperationalErrorTimestamp(operationalErrorAlerts, incidentKey, now, WOA_ERROR_ALERT_WINDOW_MS);
   try {
     const data = await readData();
+    const alertBucket = Math.floor(now / WOA_ERROR_ALERT_WINDOW_MS);
+    const deliveryId = 'operational-error-' + crypto.createHash('sha256').update(incidentKey).digest('hex').slice(0, 24) + '-' + alertBucket;
     const notification = await queueEmailNotification(data, {
       to: emailNotificationSettings(data).emailRecipients[0],
       event: 'system_error',
+      deliveryId,
       customer: 'WheelsonAuto system',
       subject: 'WheelsonAuto needs review: ' + safeSource,
       body: [
@@ -3917,8 +3934,14 @@ async function recordOperationalFailure(source, error, context = {}, options = {
       ].filter(Boolean).join('\n')
     });
     if (notification) await writeData(data);
+    if ((!notification || notification.sent !== true) && durableAlertClaim && durableAlertClaim.claimedAt && typeof STATE_REPOSITORY.releaseJobErrorAlert === 'function') {
+      await STATE_REPOSITORY.releaseJobErrorAlert(incidentRecord.id, durableAlertClaim.claimedAt).catch(() => {});
+    }
     return { persisted, deduplicated, alerted: !!(notification && notification.sent) };
   } catch (alertError) {
+    if (durableAlertClaim && durableAlertClaim.claimedAt && typeof STATE_REPOSITORY.releaseJobErrorAlert === 'function') {
+      await STATE_REPOSITORY.releaseJobErrorAlert(incidentRecord.id, durableAlertClaim.claimedAt).catch(() => {});
+    }
     console.error('WheelsonAuto error alert could not be queued:', alertError && alertError.message || alertError);
     return { persisted, deduplicated, alerted: false };
   }
