@@ -236,6 +236,7 @@ assertIncludes('Owner live launch preflight surface', app, [
   'Clover cutover roster',
   'First live Stripe pilot',
   'APPROVE FIRST LIVE STRIPE PILOT',
+  'No deposit or weekly payment is charged by this action.',
   'data-deposit-amount',
   'data-first-week-amount',
   'Total collected',

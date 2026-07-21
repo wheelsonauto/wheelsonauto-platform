@@ -188,6 +188,12 @@ async function main() {
       && serverSource.includes('No failed payment was recorded')
       && serverSource.includes("publicActionLimit(req, 'payment-link-checkout'")
       && serverSource.includes("publicActionLimit(req, 'card-setup-complete'"), 'Public money links must use high-entropy expiring bearer IDs, private response headers, provider-authoritative failure status, and persistent mutation limits.');
+    const onboardingLinkRouteSource = serverSource.slice(
+      serverSource.indexOf("url.pathname === '/api/onboarding/links'"),
+      serverSource.indexOf("url.pathname === '/api/onboarding/review'")
+    );
+    assert(onboardingLinkRouteSource.includes('assertStripeCardPreparationReady()')
+      && !onboardingLinkRouteSource.includes('assertStripeMoneyActionsArmed()'), 'Creating a Stripe onboarding link must allow protected Identity and SetupIntent proof collection without arming any charge, refund, dispute, autopay, or cutover money action.');
     assert(postgresRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && postgresRuntimeCheckSource.includes("'postgres:18-alpine'")
       && postgresRuntimeCheckSource.includes("'pg_isready'")

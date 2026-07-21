@@ -65,6 +65,7 @@ async function run() {
     'Live Stripe Identity must fail closed before creating or retrieving a provider session when production state or private storage is unsafe.'
   );
   assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ ...liveStripeFoundation, productionHardeningRequired: false }), false, 'A live key and infrastructure alone must not arm Stripe money actions.');
+  assert.strictEqual(stripeMigration.stripeCardPreparationReady({ ...liveStripeFoundation, productionHardeningRequired: false }), true, 'A protected live foundation must allow card preparation before final money-action hardening so SetupIntent proof can be collected without charging a customer.');
   assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ ...liveStripeFoundation, keyMode: 'test', productionHardeningRequired: true }), false, 'Production hardening must never arm a Stripe test key.');
   assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ ...liveStripeFoundation, productionHardeningRequired: true }), true, 'Live Stripe money actions require hardening, live Stripe, PostgreSQL, private storage, and dedicated offsite backups.');
   assert.strictEqual(stripeMigration.stripeMoneyActionsArmed({ isolatedTestMode: true }), true, 'Explicit isolated tests may exercise Stripe money workflows without a live account.');
