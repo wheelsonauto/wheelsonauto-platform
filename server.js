@@ -9002,7 +9002,9 @@ function stateForUserRead(data, user) {
       signedWebhookReady: !!BILLING_WEBHOOK_SECRET,
       status: BILLING_PROVIDER !== 'manual' && BILLING_WEBHOOK_SECRET ? 'Testing - signed provider event needed' : 'Ready - manual subscription ledger'
     };
-    safe.integrations.apiProviderRuntime = apiProviderRows(safe);
+    // Build provider truth from the authoritative state before server-only
+    // configuration fingerprints are removed from the browser response.
+    safe.integrations.apiProviderRuntime = apiProviderRows(data);
   }
   if (owner) return safe;
   const role = String(user && user.role || '').toLowerCase();
