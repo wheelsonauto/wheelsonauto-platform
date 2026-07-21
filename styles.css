@@ -691,6 +691,34 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
 }
 
+/* First-party customer conversations replace carrier SMS as the launch path. */
+.customer-account-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+.customer-conversation-panel{padding:0!important;overflow:hidden;background:#101214!important;border-color:rgba(207,183,125,.3)!important}
+.customer-chat{height:min(680px,calc(100dvh - 190px));min-height:500px;display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;background:linear-gradient(180deg,#151719,#0d0f11)}
+.customer-chat-header{display:flex;align-items:center;gap:11px;min-width:0;padding:13px 15px;border-bottom:1px solid rgba(207,211,214,.12);background:rgba(255,255,255,.025)}
+.customer-chat-avatar{width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;border:1px solid rgba(213,177,95,.34);border-radius:50%;background:linear-gradient(145deg,rgba(224,228,231,.14),rgba(213,177,95,.1));color:#f1d995;font-size:10px;font-weight:950}
+.customer-chat-header>div{display:grid;gap:2px;min-width:0}.customer-chat-header strong{color:#f3f1eb;font-size:15px}.customer-chat-header small{color:#9ba1a5;font-size:10px}
+.customer-chat-header i{margin-left:auto;color:#80d6a1;font-size:10px;font-style:normal;font-weight:850}.customer-chat-header i.offline{color:#e8bf67}
+.customer-chat-context{display:flex;gap:6px;min-width:0;padding:8px 14px;border-bottom:1px solid rgba(207,211,214,.09);overflow-x:auto;scrollbar-width:none}
+.customer-chat-context::-webkit-scrollbar{display:none}.customer-chat-context span{flex:0 0 auto;padding:5px 8px;border:1px solid rgba(207,211,214,.12);border-radius:7px;background:rgba(229,232,234,.04);color:#b8bdc0;font-size:9px;font-weight:800}
+.customer-chat-messages{min-width:0;overflow-y:auto;overscroll-behavior:contain;padding:18px;display:flex;flex-direction:column;gap:9px;scrollbar-color:rgba(213,177,95,.34) transparent}
+.customer-chat-bubble{width:fit-content;max-width:min(78%,640px);display:grid;gap:4px;padding:10px 12px;border:1px solid rgba(207,211,214,.12);border-radius:10px;background:#1a1c1f;box-shadow:0 8px 20px rgba(0,0,0,.18)}
+.customer-chat-bubble.customer{align-self:flex-end;border-color:rgba(213,177,95,.27);background:linear-gradient(145deg,rgba(213,177,95,.17),rgba(213,177,95,.08)),#1a1916}
+.customer-chat-bubble.staff{align-self:flex-start;background:linear-gradient(145deg,rgba(227,230,232,.08),rgba(255,255,255,.025)),#17191b}
+.customer-chat-bubble>span{color:#d9c68d;font-size:9px;font-weight:900}.customer-chat-bubble p{margin:0;color:#f0ede6;font-size:14px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}.customer-chat-bubble small{color:#8e9498;font-size:9px;line-height:1.35}
+.customer-chat-empty{margin:auto;display:grid;gap:5px;text-align:center;color:#a7adb0}.customer-chat-empty strong{color:#e7e5df;font-size:16px}.customer-chat-empty span{font-size:11px}
+.customer-chat-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:11px 12px calc(11px + env(safe-area-inset-bottom));border-top:1px solid rgba(207,211,214,.12);background:#111315}
+.customer-chat-composer textarea{min-width:0;min-height:44px;max-height:130px;resize:vertical;border:1px solid rgba(207,211,214,.17);border-radius:8px;padding:11px 12px;background:#0c0e10;color:#f3f1eb;font:inherit;font-size:16px;line-height:1.35;outline:none}
+.customer-chat-composer textarea:focus{border-color:rgba(213,177,95,.54);box-shadow:0 0 0 3px rgba(213,177,95,.08)}
+.customer-chat-composer .btn{align-self:start;min-height:44px}.customer-chat-composer small{grid-column:1/-1;color:#8f9599;font-size:9px}.customer-chat-composer small.err{color:#ff9b8c}
+@media(max-width:760px){
+  .customer-account-actions{gap:5px}.customer-account-actions .btn{min-height:36px!important;padding:7px 9px!important;font-size:10px}
+  .customer-chat{height:calc(100dvh - 154px);min-height:430px}
+  .customer-chat-header{padding:10px 11px}.customer-chat-context{padding:7px 10px}.customer-chat-messages{padding:13px 10px}
+  .customer-chat-bubble{max-width:86%;padding:9px 10px}.customer-chat-bubble p{font-size:13px}
+  .customer-chat-composer{padding:8px 9px calc(8px + env(safe-area-inset-bottom))}.customer-chat-composer .btn{min-width:64px!important}
+}
+
 .message-setup{margin-bottom:14px}
 .message-setup-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .message-setup-grid .item strong{color:#f0d394}

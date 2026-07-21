@@ -986,11 +986,11 @@ commit. This is the required crash boundary for live payment cutover.
 2. In **API Roadmap -> Stripe Payments**, use **Check Stripe account**. It must
    report a live-mode account with business details submitted and both charges
    and payouts enabled. A test key or incomplete Stripe activation stays blocked.
-3. In **Messages -> Setup**, connect the Telnyx inbox. Then use **API Roadmap
-   -> SMS** to check 10DLC/number assignment. Send one harmless test text from
-   a WheelsonAuto message thread and reply to it from the controlled phone.
-   Confirm the carrier delivery status and signed reply both appear in the
-   same thread before enabling automatic SMS.
+3. In **Messages -> Setup**, verify the **WheelsonAuto customer app** is the
+   primary conversation channel and Resend email notifications are live. Send
+   one harmless in-app message to a controlled customer login and reply from
+   the customer portal. Confirm both sides appear in the same customer thread.
+   Carrier SMS is optional and must not block the Stripe launch.
 4. In **Messages**, send one harmless email to the controlled inbox and reply
    to it. The outbound record and signed inbound webhook must both appear in
    Messages before email is considered two-way.

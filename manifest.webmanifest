@@ -1,0 +1,43 @@
+{
+  "id": "/customer",
+  "name": "My WheelsonAuto",
+  "short_name": "WheelsonAuto",
+  "description": "Secure WheelsonAuto customer account, payments, service, documents, and messages.",
+  "start_url": "/customer#portal-overview",
+  "scope": "/customer",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "icons": [
+    {
+      "src": "https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=192",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=512",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Messages",
+      "short_name": "Messages",
+      "url": "/customer#portal-messages"
+    },
+    {
+      "name": "Payments",
+      "short_name": "Payments",
+      "url": "/customer#portal-payments"
+    },
+    {
+      "name": "Service",
+      "short_name": "Service",
+      "url": "/customer#portal-service"
+    }
+  ]
+}

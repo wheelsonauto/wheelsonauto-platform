@@ -432,7 +432,7 @@ async function ownerInteractionSmoke() {
   assertHealthy('Owner opened Payments from Business', html(context), ['Today action list']);
 
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
-  assertHealthy('Owner compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
+  assertHealthy('Owner compose click modal', modalHtml(context), ['New message', 'Optional SMS', 'Email']);
   context.closeModal();
 
   const defaultFetch = context.fetch;
@@ -456,7 +456,7 @@ async function managerInteractionSmoke() {
   assert(context.view === 'Messages', 'Manager should be able to open Messages.');
   assertHealthy('Manager clicked Messages', html(context), ['Messages', 'message-inbox-shell', 'message-empty-state']);
   await dispatchClick(context, { action: 'compose-message', id: 'new' });
-  assertHealthy('Manager compose click modal', modalHtml(context), ['New message', 'Text message', 'Email']);
+  assertHealthy('Manager compose click modal', modalHtml(context), ['New message', 'Optional SMS', 'Email']);
   context.closeModal();
   const recurring = context.recurringRoster().find(row => row.id);
   await dispatchClick(context, { action: 'record-charge', id: recurring && recurring.id || '' });
@@ -770,7 +770,7 @@ function ownerSmoke() {
   assertHealthy('Owner pickup schedule', ownerPickups, ['Applications', 'Pickup schedule', '5150 NJ-42', 'next-day minimum', 'integration-workspace']);
 
   context.openComposeMessage('new');
-  assertHealthy('Compose message modal', modalHtml(context), ['New message', 'Text message', 'Email', 'Send / save message']);
+  assertHealthy('Compose message modal', modalHtml(context), ['New message', 'Optional SMS', 'Email', 'Send message']);
 
   context.openGlobalSearch();
   assertHealthy('Global search modal', modalHtml(context), ['Search everything', 'Search customer, VIN, tag, tracker', 'Result']);

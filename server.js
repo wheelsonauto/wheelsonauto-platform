@@ -226,10 +226,10 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-durable-alerts-260';
+const ASSET_VERSION = 'platform-20260721-first-party-messages-261';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
-const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js']);
+const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
 const staticAssetCache = new Map();
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
@@ -3635,13 +3635,18 @@ function findRecordedProviderDelivery(data, idempotencyKey) {
     if (String(item && item.providerIdempotencyKey || '').trim() !== key) return false;
     const status = String(item.status || '').trim().toLowerCase();
     return !!item.externalId
+      || String(item.provider || '').toLowerCase() === 'wheelsonauto'
+      || status === 'delivered in app'
       || String(item.deliveryReviewOutcome || '').toLowerCase() === 'delivered'
       || ['send confirmation pending', 'postgresql required', 'mirror confirmation pending', 'notice confirmation pending'].includes(status);
   }) || null;
 }
 function recordedProviderDeliveryState(record) {
   const status = String(record && record.status || '').trim().toLowerCase();
-  const delivered = !!(record && (record.externalId || String(record.deliveryReviewOutcome || '').toLowerCase() === 'delivered'));
+  const delivered = !!(record && (record.externalId
+    || String(record.provider || '').toLowerCase() === 'wheelsonauto'
+    || status === 'delivered in app'
+    || String(record.deliveryReviewOutcome || '').toLowerCase() === 'delivered'));
   return {
     delivered,
     confirmationPending: !delivered && status.includes('confirmation pending'),
@@ -6087,7 +6092,7 @@ async function createAiMessageDraft(data, payload = {}, options = {}) {
     email: messageFields.email || context.email || payload.email || '',
     direction: plan.needsHuman ? 'AI action' : 'AI draft',
     channel: 'Star AI',
-    deliveryChannel: payload.channel || payload.deliveryChannel || (context.phone ? 'SMS' : (context.email ? 'Email' : 'SMS')),
+    deliveryChannel: payload.channel || payload.deliveryChannel || (customerPortalLoginReady(context.portalAccount) ? 'Customer portal' : context.email ? 'Email' : 'SMS'),
     template: plan.intent || 'AI reply',
     subject: plan.summary || 'AI reply manager',
     status: plan.needsHuman ? 'Human needed' : (plan.approvalRequired ? 'Needs approval' : (plan.canAutoSend ? 'Auto-ready' : 'Draft ready')),
@@ -6121,7 +6126,7 @@ async function starAiProviderHealthCheck(data, payload = {}) {
     customer: payload.customer || 'Star test customer',
     phone: payload.phone || '',
     email: payload.email || '',
-    channel: payload.channel || 'SMS',
+    channel: payload.channel || 'Customer portal',
     amount: payload.amount || 1,
     body: payload.body || payload.message || 'Customer asks for a secure payment link and wants to know if their account is okay.'
   };
@@ -6161,7 +6166,7 @@ async function approveAiMessage(data, payload = {}) {
   if (!draft) throw new Error('AI draft was not found.');
   const existingDelivery = data.messages.find(item => item.aiDraftId === id && (item.externalId || item.providerIdempotencyKey) && /outbound/i.test(String(item.direction || '')));
   if (existingDelivery) {
-    const delivered = !!existingDelivery.externalId;
+    const delivered = !!existingDelivery.externalId || existingDelivery.provider === 'wheelsonauto' || /delivered in app/i.test(String(existingDelivery.status || ''));
     draft.status = delivered ? 'Approved + sent' : 'Approved + saved';
     draft.tone = delivered ? 'good' : 'warn';
     draft.approvedAt = draft.approvedAt || existingDelivery.aiApprovedAt || existingDelivery.createdAt || '';
@@ -6185,8 +6190,13 @@ async function approveAiMessage(data, payload = {}) {
   if (plan.needsHuman) throw new Error('This AI item needs a human reply first.');
   if (plan.approvalRequired && payload.approveMoneyAction !== true) throw new Error('This AI item prepares a money or account change. Open the customer/payment action and approve it there.');
   const deliveryChannel = String(payload.channel || draft.deliveryChannel || (draft.email && !draft.phone ? 'Email' : 'SMS')).toLowerCase();
+  const portalDelivery = ['customer portal', 'portal', 'customer app', 'in-app', 'in app'].includes(deliveryChannel);
+  const portalAccount = portalDelivery ? customerPortalAccountForName(data, draft.customer) : null;
+  if (portalDelivery && !customerPortalLoginReady(portalAccount)) throw new Error('This customer needs an active portal login before Star can deliver an in-app reply.');
   const settings = messageSettings(data);
-  const result = deliveryChannel === 'email'
+  const result = portalDelivery
+    ? { sent: true, status: 'Delivered in app', provider: 'wheelsonauto', channel: 'Customer portal', externalId: '', idempotencyKey: 'star-draft:' + draft.id }
+    : deliveryChannel === 'email'
     ? await sendProviderEmail(draft.email, draft.subject || 'WheelsonAuto message', draft.body, {
       customer: draft.customer,
       ai: true,
@@ -6210,7 +6220,7 @@ async function approveAiMessage(data, payload = {}) {
     error.idempotencyKey = result.idempotencyKey || '';
     throw error;
   }
-  const channel = result.channel || (deliveryChannel === 'email' ? 'Email' : 'SMS');
+  const channel = result.channel || (portalDelivery ? 'Customer portal' : deliveryChannel === 'email' ? 'Email' : 'SMS');
   const sent = {
     id: 'msg-ai-sent-' + Date.now(),
     externalId: result.externalId || '',
@@ -6227,12 +6237,13 @@ async function approveAiMessage(data, payload = {}) {
     status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
     tone: result.sent ? 'good' : 'warn',
     body: draft.body,
-    provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+    provider: result.provider || (channel === 'Customer portal' ? 'wheelsonauto' : channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
     providerIdempotencyKey: result.idempotencyKey || '',
     providerConfigurationFingerprint: result.sent && channel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
-    source: result.sent ? ('Star AI + ' + channel + ' provider') : 'Star AI draft',
+    source: channel === 'Customer portal' ? 'Star AI + WheelsonAuto customer app' : result.sent ? ('Star AI + ' + channel + ' provider') : 'Star AI draft',
     aiApprovedAt: new Date().toISOString(),
     aiDraftId: draft.id,
+    customerAccountId: portalAccount && portalAccount.id || '',
     customerId: draft.customerId || '',
     contractId: draft.contractId || '',
     recurringPaymentId: draft.recurringPaymentId || '',
@@ -6250,6 +6261,28 @@ async function approveAiMessage(data, payload = {}) {
   draft.tone = sent.tone;
   draft.approvedAt = sent.aiApprovedAt;
   data.messages.unshift(sent);
+  if (channel === 'Customer portal' && (draft.email || portalAccount && portalAccount.email) && settings.emailEnabled) {
+    try {
+      const notification = await sendProviderEmail(draft.email || portalAccount.email, 'New WheelsonAuto message', [
+        'Hi ' + String(draft.customer || 'there').split(/\s+/)[0] + ',',
+        '',
+        'You have a new secure message from WheelsonAuto:',
+        draft.body,
+        '',
+        'Open your account: ' + PUBLIC_BASE_URL + '/customer#portal-messages'
+      ].join('\n'), {
+        customer: draft.customer,
+        ownerCopy: false,
+        deliveryId: 'portal-notice-star-draft:' + draft.id,
+        messagingSettings: settings
+      });
+      sent.notificationEmailStatus = notification.status || '';
+      sent.notificationEmailSent = !!notification.sent;
+    } catch (notificationError) {
+      sent.notificationEmailStatus = 'Email notification failed';
+      sent.notificationEmailError = String(notificationError && notificationError.message || notificationError);
+    }
+  }
   const ownerMirror = channel === 'SMS' ? await sendOwnerSmsMirror(data, {
     ...sent,
     direction: 'Outbound',
@@ -9733,7 +9766,10 @@ function customerPortalState(data, account) {
   const payments = (scopedData.payments || []).filter(row => customerPortalRecordMatches(row, identity, 'payment')).slice(0, 20);
   const maintenance = (scopedData.maintenance || []).filter(row => customerPortalRecordMatches(row, identity, 'maintenance')).slice(0, 20);
   const claims = (scopedData.claims || []).filter(row => customerPortalRecordMatches(row, identity, 'claim')).slice(0, 20);
-  const messages = (scopedData.messages || []).filter(row => customerPortalRecordMatches(row, identity, 'message') && customerPortalVisibleMessage(row)).slice(0, 20);
+  const messages = (scopedData.messages || [])
+    .filter(row => customerPortalRecordMatches(row, identity, 'message') && customerPortalVisibleMessage(row))
+    .sort((a, b) => Date.parse(b.createdAt || b.date || 0) - Date.parse(a.createdAt || a.date || 0))
+    .slice(0, 100);
   const paymentRequests = (scopedData.paymentRequests || []).filter(row => isOpenCustomerPaymentRequest(row) && customerPortalRecordMatches(row, identity, 'paymentRequest')).slice(0, 10);
   const cardSetupRequests = (scopedData.cardSetupRequests || []).filter(row => isOpenCardSetupRequest(row) && customerPortalRecordMatches(row, identity, 'cardSetup')).slice(0, 10);
   const documents = customerPortalDocuments(scopedData, identity, payments);
@@ -9888,6 +9924,39 @@ customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
   html = html.replace('<article class="customer-panel"><div class="section-head"><h2>Service</h2>', '<article id="portal-service" class="customer-panel"><div class="section-head"><h2>Service</h2>');
   html = html.replace('<article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2>', '<article id="portal-issues" class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2>');
   html = html.replace('<article class="customer-panel"><div class="section-head"><h2>Messages</h2>', '<article id="portal-messages" class="customer-panel"><div class="section-head"><h2>Messages</h2>');
+  return html;
+};
+function customerPortalConversationHtml(account = {}, state = {}) {
+  const summary = state.summary || {};
+  const vehicle = state.vehicle || {};
+  const messages = (state.messages || []).slice().sort((a, b) => Date.parse(a.createdAt || a.date || 0) - Date.parse(b.createdAt || b.date || 0));
+  const messageRows = messages.length
+    ? messages.map(message => {
+      const inbound = /inbound|customer action/i.test(String(message.direction || ''));
+      const className = inbound ? 'customer-chat-bubble customer' : 'customer-chat-bubble staff';
+      const sender = inbound ? 'You' : (/star/i.test(String([message.channel, message.source, message.template].filter(Boolean).join(' '))) ? 'Star / WheelsonAuto' : 'WheelsonAuto');
+      return '<div class="' + className + '" data-message-id="' + escapeHtml(message.id || '') + '"><span>' + escapeHtml(sender) + '</span><p>' + escapeHtml(message.body || message.subject || message.template || 'Message') + '</p><small>' + escapeHtml([message.createdAt || message.date || '', message.status || ''].filter(Boolean).join(' | ')) + '</small></div>';
+    }).join('')
+    : '<div class="customer-chat-empty" data-customer-chat-empty><strong>Start a conversation</strong><span>Messages stay connected to your WheelsonAuto account and vehicle.</span></div>';
+  const context = [
+    summary.vehicle || (vehicle.id ? vehicleNameFromParts(vehicle) : ''),
+    summary.vin || vehicle.vin ? 'VIN ' + (summary.vin || vehicle.vin) : '',
+    summary.tag || vehicle.plate || vehicle.stock ? 'Tag ' + (summary.tag || vehicle.plate || vehicle.stock) : ''
+  ].filter(Boolean);
+  return '<article id="portal-messages" class="customer-panel customer-conversation-panel"><div class="customer-chat"><header class="customer-chat-header"><span class="customer-chat-avatar">WOA</span><div><strong>WheelsonAuto</strong><small>Secure account conversation</small></div><i data-customer-connection-status>Online</i></header><div class="customer-chat-context">' + context.map(value => '<span>' + escapeHtml(value) + '</span>').join('') + '</div><div class="customer-chat-messages" data-customer-message-list>' + messageRows + '</div><form method="POST" action="/customer/message" class="customer-chat-composer" data-customer-message-form><textarea name="body" maxlength="1200" rows="1" aria-label="Message WheelsonAuto" placeholder="Write a message..."></textarea><button class="btn primary" type="submit">Send</button><small data-customer-message-status>Private to your WheelsonAuto account.</small></form></div></article>';
+}
+const __woaCustomerPortalConversationBase = customerPortalHtml;
+customerPortalHtml = function customerPortalHtmlWithConversation(account, state) {
+  let html = __woaCustomerPortalConversationBase(account, state);
+  const marker = '<article id="portal-messages" class="customer-panel">';
+  const start = html.indexOf(marker);
+  if (start >= 0) {
+    const end = html.indexOf('</article></section>', start);
+    if (end >= 0) html = html.slice(0, start) + customerPortalConversationHtml(account, state) + html.slice(end + '</article>'.length);
+  }
+  html = html.replace('<meta name="viewport" content="width=device-width,initial-scale=1">', '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="manifest" href="/manifest.webmanifest">');
+  html = html.replace('<a class="btn danger" href="/customer/logout">Log out</a>', '<div class="customer-account-actions"><button class="btn" type="button" data-install-customer-app hidden>Install app</button><a class="btn danger" href="/customer/logout">Log out</a></div>');
+  html = html.replace('/customer-portal.js?v=focused-workspaces-3', '/customer-portal.js?v=' + ASSET_VERSION);
   return html;
 };
 function requestBaseUrl(req) {
@@ -10833,7 +10902,13 @@ async function cachedStaticAsset(clean) {
 async function staticFile(req, res, pathname, searchParams) {
   const clean = pathname.replace(/^\//, '');
   if (!STATIC_ASSET_NAMES.has(clean)) return false;
-  const type = clean.endsWith('.css') ? 'text/css; charset=utf-8' : (clean.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8');
+  const type = clean.endsWith('.css')
+    ? 'text/css; charset=utf-8'
+    : clean.endsWith('.html')
+      ? 'text/html; charset=utf-8'
+      : clean.endsWith('.webmanifest')
+        ? 'application/manifest+json; charset=utf-8'
+        : 'application/javascript; charset=utf-8';
   const version = searchParams && String(searchParams.get('v') || '').trim();
   const cacheControl = version && /^[a-z0-9][a-z0-9._-]{2,100}$/i.test(version)
     ? 'public, max-age=31536000, immutable'
@@ -10846,6 +10921,7 @@ async function staticFile(req, res, pathname, searchParams) {
     'Content-Length': String(body.length),
     Vary: 'Accept-Encoding'
   };
+  if (clean === 'service-worker.js') headers['Service-Worker-Allowed'] = '/customer';
   if (encoding && assets[encoding]) headers['Content-Encoding'] = encoding;
   send(res, 200, body, type, headers);
   return true;
@@ -11465,7 +11541,6 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   if (!stripeWebhook.live) providerEvidenceMissing.push('Stripe signed live webhook event');
   if (!stripeIdentityWebhook.live) providerEvidenceMissing.push('signed live Stripe Identity verification');
   if (!operationalAlerts.live) providerEvidenceMissing.push('verified operational error alert delivery');
-  if (!telnyxMessaging.live) providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof');
   if (!resendEmail.live) providerEvidenceMissing.push('Resend wheelsonauto.com two-way email proof');
   if (!starAi.live) providerEvidenceMissing.push('OpenAI Star Responses API health proof');
   if (!cloverRecurring.ready) providerEvidenceMissing.push('fresh Clover recurring roster');
@@ -11497,7 +11572,6 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     if (!stripeIdentityWebhook.live) missing.push('signed live Stripe Identity verification');
   }
   if (!operationalAlerts.live) missing.push('verified operational error alert delivery');
-  if (!telnyxMessaging.live) missing.push('Telnyx signed SMS delivery and inbound reply proof');
   if (!resendEmail.live) missing.push('Resend wheelsonauto.com two-way email proof');
   if (!starAi.live) missing.push('OpenAI Star Responses API health proof with active safety limits');
   if (!cloverRecurring.ready) missing.push('fresh Clover recurring roster for controlled cutover');
@@ -11551,7 +11625,14 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     stripeWebhook,
     stripeIdentityWebhook,
     operationalAlerts,
-    telnyxMessaging,
+    firstPartyMessaging: {
+      live: true,
+      provider: 'WheelsonAuto customer app',
+      emailNotificationsLive: !!resendEmail.live,
+      launchBlocking: false,
+      message: 'Secure first-party customer conversations are the primary channel. Carrier SMS is optional.'
+    },
+    telnyxMessaging: { ...telnyxMessaging, optional: true, launchBlocking: false },
     resendEmail,
     starAi,
     ownerAuthentication,
@@ -11751,7 +11832,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
     route('POST', '/api/messages/delivery-sync', 'Refresh final SMS carrier delivery results'),
-    route('POST', '/api/messages/send', 'Send or save customer SMS/email messages'),
+    route('POST', '/api/messages/send', 'Deliver secure customer-app messages or send optional email/SMS'),
     route('POST', '/api/messages/delivery-review', 'Owner review for confirmation-pending SMS delivery'),
     route('POST', '/api/messages/ai-reply', 'Star AI reply/action planner'),
     route('POST', '/api/messages/ai-action', 'Approve or send Star AI drafts'),
@@ -20831,14 +20912,21 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/customer/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
     if (url.pathname === '/customer/message' && req.method === 'POST') {
+      const wantsJson = /application\/json/i.test(String(req.headers['content-type'] || '')) || /application\/json/i.test(String(req.headers.accept || ''));
       const customerUser = customerSessionUser(req);
-      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
-      const form = new URLSearchParams(await readBody(req, 64 * 1024));
-      const body = String(form.get('body') || '').trim().slice(0, 1200);
-      if (!body) return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
+      if (!customerUser) return wantsJson ? json(res, 401, { ok: false, error: 'Customer login required.' }) : send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const messageRate = await publicActionLimit(req, 'customer-portal-message', 20, 10 * 60 * 1000);
+      if (!messageRate.allowed) return wantsJson
+        ? json(res, 429, { ok: false, error: 'Too many messages were submitted. Wait a moment and try again.' })
+        : send(res, 303, '', 'text/plain', { Location: '/customer#portal-messages', 'Retry-After': String(messageRate.retryAfterSeconds) });
+      const payload = wantsJson ? await readJsonBody(req) : Object.fromEntries(new URLSearchParams(await readBody(req, 64 * 1024)));
+      const body = String(payload.body || '').trim().slice(0, 1200);
+      if (!body) return wantsJson ? json(res, 400, { ok: false, error: 'Type a message first.' }) : send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
-      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      if (!account) return wantsJson
+        ? json(res, 401, { ok: false, error: 'Customer account is not active.' })
+        : send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const portal = customerPortalState(data, account);
       const summary = portal.summary || {};
       const recurring = portal.recurring || {};
@@ -20908,6 +20996,7 @@ const server = http.createServer(async (req, res) => {
       });
 	      appendCustomerPortalAudit(data, account, 'Customer portal message received', [message.customer, triage.intent, triage.status, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '']);
 	      await writeData(data);
+	      if (wantsJson) return json(res, 201, { ok: true, message: stripCustomerPortalMessage(message), portal: customerPortalState(data, account) });
 	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
 	    }
 	    if (url.pathname === '/customer/receipt-request' && req.method === 'POST') {
@@ -23373,18 +23462,40 @@ const server = http.createServer(async (req, res) => {
       data.integrations = data.integrations || {};
       const context = aiFindCustomerContext(data, payload, user);
       const contact = context.contact || findMessageContact(data, payload);
-      const channel = String(payload.channel || payload.deliveryChannel || 'SMS').toLowerCase() === 'email' ? 'Email' : 'SMS';
+      const requestedChannel = String(payload.channel || payload.deliveryChannel || 'SMS').trim().toLowerCase();
+      const channel = requestedChannel === 'email'
+        ? 'Email'
+        : ['customer portal', 'portal', 'customer app', 'in-app', 'in app'].includes(requestedChannel)
+          ? 'Customer portal'
+          : 'SMS';
       const messageFields = messageContextFields(context, payload);
-      const phone = payload.phone || messageFields.phone || contact.phone || '';
-      const email = payload.email || messageFields.email || contact.email || '';
-      const to = channel === 'Email' ? email : phone;
       const body = String(payload.body || payload.message || '').trim();
       const customer = payload.customer || messageFields.customer || contact.name || 'Customer';
+      const portalAccount = channel === 'Customer portal'
+        ? (data.customerAccounts || []).find(account => account.id === payload.customerAccountId && staffStatusActive(account))
+          || context.portalAccount
+          || customerPortalAccountForName(data, customer)
+        : null;
+      const phone = payload.phone || messageFields.phone || contact.phone || portalAccount && portalAccount.phone || '';
+      const email = payload.email || messageFields.email || contact.email || portalAccount && portalAccount.email || '';
+      const to = channel === 'Email' ? email : channel === 'Customer portal' ? portalAccount && portalAccount.id || '' : phone;
       if (!body) return json(res, 400, { ok: false, error: 'Message body is required.' });
+      if (channel === 'Customer portal' && !customerPortalLoginReady(portalAccount)) {
+        return json(res, 409, { ok: false, error: 'This customer needs an active portal login before an in-app message can be delivered.' });
+      }
       let result;
       try {
         const settings = messageSettings(data);
-        result = channel === 'Email'
+        result = channel === 'Customer portal'
+          ? {
+            sent: true,
+            status: 'Delivered in app',
+            provider: 'wheelsonauto',
+            channel,
+            externalId: '',
+            idempotencyKey: String(payload.deliveryId || payload.idempotencyKey || ('portal-' + crypto.randomUUID()))
+          }
+          : channel === 'Email'
           ? await sendProviderEmail(to, payload.subject || payload.template || 'WheelsonAuto message', body, {
             customer,
             deliveryId: payload.deliveryId || payload.idempotencyKey || '',
@@ -23426,11 +23537,12 @@ const server = http.createServer(async (req, res) => {
           status: result.sent ? (result.status || 'Sent') : (result.status || 'Ready to send'),
           tone: result.sent ? 'good' : 'warn',
           body,
-          provider: result.provider || (channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
+          provider: result.provider || (channel === 'Customer portal' ? 'wheelsonauto' : channel === 'Email' ? WOA_EMAIL_PROVIDER : MESSAGING_PROVIDER) || 'not_configured',
           providerIdempotencyKey: result.idempotencyKey || '',
           providerConfigurationFingerprint: result.sent && channel === 'Email' && result.provider === 'resend' ? emailLaunchConfigurationFingerprint(data) : '',
-          source: result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
+          source: channel === 'Customer portal' ? 'WheelsonAuto customer app' : result.sent ? (channel + ' provider') : 'WheelsonAuto draft',
           ownerMirror: channel === 'SMS' && !!MESSAGING_OWNER_NOTIFY_NUMBER,
+          customerAccountId: portalAccount && portalAccount.id || payload.customerAccountId || '',
           customerId: messageFields.customerId,
           contractId: messageFields.contractId,
           paymentId: payload.paymentId || '',
@@ -23447,10 +23559,33 @@ const server = http.createServer(async (req, res) => {
         };
         data.messages.unshift(record);
         const ownerMirror = channel === 'SMS' && result.sent && !result.duplicate ? await sendOwnerSmsMirror(data, { ...record, direction: 'Outbound', phone, body }, settings) : null;
-        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: ownerMirror && ownerMirror.error || '' };
+        let customerEmailNotification = null;
+        if (channel === 'Customer portal' && email && settings.emailEnabled) {
+          try {
+            customerEmailNotification = await sendProviderEmail(email, 'New WheelsonAuto message', [
+              'Hi ' + String(customer || 'there').split(/\s+/)[0] + ',',
+              '',
+              'You have a new secure message from WheelsonAuto:',
+              body,
+              '',
+              'Open your account: ' + PUBLIC_BASE_URL + '/customer#portal-messages'
+            ].join('\n'), {
+              customer,
+              ownerCopy: false,
+              deliveryId: 'portal-notice-' + record.providerIdempotencyKey,
+              messagingSettings: settings
+            });
+          } catch (notificationError) {
+            customerEmailNotification = { sent: false, status: 'Email notification failed', message: String(notificationError && notificationError.message || notificationError) };
+          }
+          record.notificationEmailStatus = customerEmailNotification.status || '';
+          record.notificationEmailSent = !!customerEmailNotification.sent;
+          record.notificationEmailError = customerEmailNotification.sent ? '' : String(customerEmailNotification.message || '');
+        }
+        data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Customer portal' ? 'Customer app' : channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: ownerMirror && ownerMirror.error || '' };
         appendAuditLog(data, user, result.sent ? 'Customer message sent' : (result.inProgress ? 'Customer message confirmation pending' : 'Customer message drafted'), [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
         await writeData(data);
-        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, confirmationPending: !!result.inProgress, message: record, provider: result.provider, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
+        return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, confirmationPending: !!result.inProgress, message: record, provider: result.provider, customerEmailNotification: customerEmailNotification ? { sent: !!customerEmailNotification.sent, status: customerEmailNotification.status || '', warning: customerEmailNotification.message || '' } : null, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
       } catch (err) {
         const confirmationPending = err && err.code === 'sms_confirmation_pending';
         const record = {
@@ -23468,7 +23603,7 @@ const server = http.createServer(async (req, res) => {
           status: confirmationPending ? 'Send confirmation pending' : 'Failed',
           tone: confirmationPending ? 'warn' : 'bad',
           body,
-          provider: channel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
+          provider: channel === 'Customer portal' ? 'wheelsonauto' : channel === 'Email' ? (WOA_EMAIL_PROVIDER || 'not_configured') : (MESSAGING_PROVIDER || 'not_configured'),
           providerIdempotencyKey: String(err && err.idempotencyKey || ''),
           source: confirmationPending ? channel + ' provider confirmation' : channel + ' provider',
           customerId: messageFields.customerId,
@@ -23509,7 +23644,7 @@ const server = http.createServer(async (req, res) => {
         customer: payload.customer || (sourceMessage && sourceMessage.customer) || '',
         phone: payload.phone || (sourceMessage && (sourceMessage.phone || sourceMessage.from || sourceMessage.to)) || '',
         email: payload.email || (sourceMessage && sourceMessage.email) || '',
-        channel: payload.channel || (sourceMessage && sourceMessage.channel === 'Email' ? 'Email' : ''),
+        channel: payload.channel || (sourceMessage && ['Email', 'Customer portal'].includes(sourceMessage.channel) ? sourceMessage.channel : ''),
         body: payload.body || payload.message || (sourceMessage && sourceMessage.body) || ''
       };
       const aiResult = await createAiMessageDraft(data, request, { sourceMessageId: payload.messageId || payload.externalId || '', forceNew: payload.forceNew === true, user });
@@ -25280,6 +25415,12 @@ module.exports = {
   twilioSignatureForPayload,
   openAiReplyPlan,
   starAiProviderHealthCheck,
+  createAiMessageDraft,
+  approveAiMessage,
+  customerPortalState,
+  customerPortalHtml,
+  customerPortalAccountForName,
+  customerPortalLoginReady,
   parseTollImportRows,
   tollImportMatch,
   tollImportFingerprint,
