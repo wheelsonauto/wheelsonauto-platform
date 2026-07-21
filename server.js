@@ -256,7 +256,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-pilot-amount-lock-269';
+const ASSET_VERSION = 'platform-20260721-billing-period-lock-270';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -18370,6 +18370,8 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     notes: appendUniqueNote(appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'), duplicateNote),
     scheduledDueDate: scheduledDueKey,
     billingPeriodKey,
+    billingPeriodEndDate: stripeMigration.billingPeriodEndDate({ scheduledDueDate: scheduledDueKey, frequency: recurring.frequency, monthlyDay: recurring.monthlyDay }, recurring),
+    frequency: recurring.frequency || 'Weekly',
     recurringPaymentId: recurring.id || '',
     stripeCustomerId: stripeObjectId(intent.customer) || recurring.stripeCustomerId || '',
     stripePaymentMethodId: stripeObjectId(intent.payment_method) || recurring.stripePaymentMethodId || '',
@@ -24841,6 +24843,17 @@ const server = http.createServer(async (req, res) => {
           confirmationPending: true,
           error: 'A provider charge is still being confirmed for this customer. Wait for reconciliation before changing the amount or schedule so the payment cannot be orphaned or duplicated.'
         });
+      }
+      if (scheduleChanged) {
+        const occupiedTargetPeriod = stripeMigration.existingBillingPeriodPayment(data, recurring, nextRun);
+        if (occupiedTargetPeriod) {
+          return json(res, 409, {
+            ok: false,
+            code: 'schedule_billing_period_occupied',
+            error: 'The requested schedule date falls inside a billing period already occupied by a ' + (occupiedTargetPeriod.status || 'protected') + ' payment. Choose the next unpaid occurrence so this customer is not charged twice for the same period.',
+            payment: occupiedTargetPeriod
+          });
+        }
       }
       const billingAnchorChanged = String(recurring.nextRun || '') !== nextRun
         || String(recurring.frequency || 'Weekly') !== frequency;

@@ -3351,6 +3351,8 @@ async function main() {
     const overdueChargeDueDate = autopayDateOffset(-7);
     const amountEditNextRun = autopayDateOffset(14);
     const lateEditOriginalRun = autopayDateOffset(7);
+    const protectedSchedulePaidDate = autopayDateOffset(21);
+    const protectedScheduleShiftDate = autopayDateOffset(22);
     const autopayState = JSON.parse(JSON.stringify(notificationState.json));
     autopayState.recurringPayments = autopayState.recurringPayments || [];
     autopayState.recurringPayments.unshift({
@@ -3487,6 +3489,38 @@ async function main() {
       cloverCustomerId: 'custeditlate001',
       paymentSetup: 'Card saved through WheelsonAuto',
       cardSavedAt: new Date().toISOString()
+    }, {
+      id: 'direct-autopay-paid-window-edit',
+      customer: 'Direct Paid Window Edit',
+      phone: '3135550997',
+      email: 'paid-window-edit@example.com',
+      vehicle: '2023 Toyota Corolla',
+      vin: 'DIRECTPAIDWINDOWVIN',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: protectedSchedulePaidDate,
+      paymentDay: calendarDayName(protectedSchedulePaidDate),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      autopayManagedBy: 'WheelsonAuto',
+      cloverCustomerId: 'custpaidwindow001',
+      paymentSetup: 'Card saved through WheelsonAuto',
+      cardSavedAt: new Date().toISOString()
+    });
+    autopayState.payments = autopayState.payments || [];
+    autopayState.payments.unshift({
+      id: 'direct-paid-window-payment',
+      recurringPaymentId: 'direct-autopay-paid-window-edit',
+      customer: 'Direct Paid Window Edit',
+      amount: 229,
+      status: 'Paid',
+      paymentProvider: 'clover',
+      scheduledDueDate: protectedSchedulePaidDate,
+      billingPeriodKey: 'due:' + protectedSchedulePaidDate,
+      frequency: 'Weekly',
+      createdAt: protectedSchedulePaidDate + 'T22:00:00.000Z'
     });
     const autopayWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: autopayState });
     assert(autopayWrite.status === 200 && autopayWrite.json.ok, 'Autopay smoke setup failed.');
@@ -3524,6 +3558,21 @@ async function main() {
     });
     assert(lateScheduleEdit.status === 200 && lateScheduleEdit.json.ok && lateScheduleEdit.json.scheduleChanged, 'Editing an autopay to today after its selected charge time should save as a real schedule change.');
     assert(lateScheduleEdit.json.paymentDay === calendarDayName(autopayTodayKey), 'A same-day schedule edit must derive its weekday from the selected calendar date.');
+    const paidWindowScheduleEdit = await request(server, 'POST', '/api/recurring-payments/update', {
+      cookie: ownerCookie,
+      json: {
+        recurringPaymentId: 'direct-autopay-paid-window-edit',
+        amount: 229,
+        frequency: 'Weekly',
+        nextRun: protectedScheduleShiftDate,
+        chargeTime: '18:00',
+        status: 'Active'
+      }
+    });
+    assert(paidWindowScheduleEdit.status === 409 && paidWindowScheduleEdit.json.code === 'schedule_billing_period_occupied', 'A paid weekly due date must not be moved one day forward inside the same protected billing period.');
+    const paidWindowScheduleRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const paidWindowScheduleRow = paidWindowScheduleRead.json.recurringPayments.find(row => row.id === 'direct-autopay-paid-window-edit');
+    assert(paidWindowScheduleRow && paidWindowScheduleRow.nextRun === protectedSchedulePaidDate, 'A rejected same-period schedule edit must leave the saved due date unchanged.');
     const enrichedPaymentLink = await request(server, 'POST', '/api/payment-links', {
       cookie: ownerCookie,
       json: { recurringPaymentId: 'direct-autopay-fail-once' }

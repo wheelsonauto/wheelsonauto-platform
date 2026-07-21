@@ -230,6 +230,68 @@ function paymentPeriodKey(payment = {}) {
   return billingPeriodKey(payment.scheduledDueDate || payment.dueDate || payment.nextRun);
 }
 
+function dateFromKey(value) {
+  const key = validDateKey(value);
+  if (!key) return null;
+  const parsed = new Date(key + 'T12:00:00.000Z');
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function dateKeyFromDate(value) {
+  return value instanceof Date && !Number.isNaN(value.getTime())
+    ? value.toISOString().slice(0, 10)
+    : '';
+}
+
+function addDaysToDateKey(value, days) {
+  const parsed = dateFromKey(value);
+  if (!parsed) return '';
+  parsed.setUTCDate(parsed.getUTCDate() + Number(days || 0));
+  return dateKeyFromDate(parsed);
+}
+
+function addMonthsToDateKey(value, months, preferredDay) {
+  const parsed = dateFromKey(value);
+  if (!parsed) return '';
+  const day = Math.max(1, Math.min(31, Number(preferredDay || parsed.getUTCDate())));
+  const target = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth() + Number(months || 0), 1, 12));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0, 12)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return dateKeyFromDate(target);
+}
+
+function paymentDueDateKey(payment = {}) {
+  const direct = validDateKey(payment.scheduledDueDate || payment.dueDate || payment.nextRun);
+  if (direct) return direct;
+  const period = paymentPeriodKey(payment);
+  const match = period.match(/^due:(\d{4}-\d{2}-\d{2})$/);
+  return match ? validDateKey(match[1]) : '';
+}
+
+function billingPeriodEndDate(payment = {}, recurring = {}) {
+  const storedEnd = validDateKey(payment.billingPeriodEndDate);
+  if (storedEnd) return storedEnd;
+  const start = paymentDueDateKey(payment);
+  if (!start) return '';
+  const frequency = text(payment.frequency || payment.billingFrequency || recurring.frequency || 'Weekly').toLowerCase();
+  if (/one[ -]?time|deposit|first week|first weekly/.test(frequency)) return addDaysToDateKey(start, 1);
+  if (/daily|every day/.test(frequency)) return addDaysToDateKey(start, 1);
+  if (/bi[ -]?week|every 2 week/.test(frequency)) return addDaysToDateKey(start, 14);
+  if (/semi[ -]?month|twice.*month/.test(frequency)) return addDaysToDateKey(start, 15);
+  if (/month/.test(frequency)) {
+    return addMonthsToDateKey(start, 1, Number(payment.monthlyDay || payment.dayOfMonth || recurring.monthlyDay || recurring.dayOfMonth) || Number(start.slice(8, 10)));
+  }
+  return addDaysToDateKey(start, 7);
+}
+
+function paymentCoversBillingDate(payment = {}, recurring = {}, dueDate) {
+  const target = validDateKey(dueDate);
+  const start = paymentDueDateKey(payment);
+  if (!target || !start) return paymentPeriodKey(payment) === billingPeriodKey(target);
+  const end = billingPeriodEndDate(payment, recurring);
+  return target >= start && (!end ? target === start : target < end);
+}
+
 function paymentLinkedToRecurring(payment = {}, recurring = {}) {
   const recurringId = text(recurring.id || recurring.recurringPaymentId);
   const paymentRecurringId = text(payment.recurringPaymentId);
@@ -255,17 +317,15 @@ function paymentLinkedToRecurring(payment = {}, recurring = {}) {
 }
 
 function existingPaidPayment(data = {}, recurring = {}, dueDate) {
-  const period = billingPeriodKey(dueDate);
-  if (!period) return null;
+  if (!billingPeriodKey(dueDate)) return null;
   const payments = Array.isArray(data.payments) ? data.payments : [];
-  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentIsPaid(payment.status) && paymentPeriodKey(payment) === period) || null;
+  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentIsPaid(payment.status) && paymentCoversBillingDate(payment, recurring, dueDate)) || null;
 }
 
 function existingBillingPeriodPayment(data = {}, recurring = {}, dueDate) {
-  const period = billingPeriodKey(dueDate);
-  if (!period) return null;
+  if (!billingPeriodKey(dueDate)) return null;
   const payments = Array.isArray(data.payments) ? data.payments : [];
-  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentConsumesBillingPeriod(payment.status) && paymentPeriodKey(payment) === period) || null;
+  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentConsumesBillingPeriod(payment.status) && paymentCoversBillingDate(payment, recurring, dueDate)) || null;
 }
 
 function isolatedProviderTestMode(environment = process.env) {
@@ -547,6 +607,9 @@ module.exports = {
   stateLabel,
   billingPeriodKey,
   paymentPeriodKey,
+  paymentDueDateKey,
+  billingPeriodEndDate,
+  paymentCoversBillingDate,
   paymentLinkedToRecurring,
   existingPaidPayment,
   existingBillingPeriodPayment,
