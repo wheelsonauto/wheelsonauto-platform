@@ -64,9 +64,12 @@ assert(!/\b(?:deploy|render deploy|stripe trigger)\b/i.test(workflow), 'The veri
 
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8'));
 const checkScript = String(packageJson.scripts && packageJson.scripts.check || '');
+const launchHardTestScript = String(packageJson.scripts && packageJson.scripts['launch-hard-test-check'] || '');
 assert(checkScript.includes('scripts/protect-live-data-check.js'), 'Production CI must retain the live data staging guard.');
 assert(checkScript.includes('scripts/postgres-runtime-check.js'), 'Production CI must execute the PostgreSQL transaction and recovery drill.');
 assert(checkScript.includes('scripts/object-storage-runtime-check.js'), 'Production CI must execute encrypted object-storage behavior checks.');
 assert(checkScript.includes('scripts/server-direct-smoke-test.js'), 'Production CI must execute direct authenticated workflow tests.');
+assert(checkScript.includes('scripts/launch-hard-test-matrix-check.js'), 'Production CI must execute the no-skips launch hard-test matrix.');
+assert(launchHardTestScript.includes('scripts/launch-hard-test-matrix-check.js'), 'Production CI must retain the no-skips launch hard-test matrix.');
 
-console.log('GitHub production workflow check passed: pull requests and main pushes run the locked full suite, dependency audit, PostgreSQL 18 runtime drill, storage checks, and live-data guard without production secrets or deploy actions.');
+console.log('GitHub production workflow check passed: pull requests and main pushes run the locked full suite plus the no-skips launch matrix, dependency audit, PostgreSQL 18 runtime drill, storage checks, and live-data guard without production secrets or deploy actions.');
