@@ -3,6 +3,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+const nativeCss = fs.readFileSync(path.join(root, 'native-site.css'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -10,6 +11,10 @@ function fail(message) {
 
 function requireText(label, text) {
   if (!css.includes(text)) fail(label + ' is missing.');
+}
+
+function requireNativeText(label, text) {
+  if (!nativeCss.includes(text)) fail(label + ' is missing from the native customer experience.');
 }
 
 function requireBlock(label, selector, required) {
@@ -104,6 +109,13 @@ requireAnyBlock('Customer portal compact action hub', '.customer-action-hub{', [
 requireText('Customer portal focused workspaces', '.customer-portal-focused .customer-grid{display:none}');
 requireText('Customer portal visible workspace', '.customer-portal-focused .customer-panel.portal-visible{display:block}');
 requireText('Customer portal duplicate action helper removal', '.customer-next-actions{display:none}');
+requireNativeText('Native onboarding constrained desktop width', '.onboarding-grid{width:min(1000px,calc(100% - 40px))');
+requireNativeText('Native onboarding tablet breakpoint', '@media(max-width:980px)');
+requireNativeText('Native onboarding compact progress grid', '.onboarding-progress{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:visible');
+requireNativeText('Native onboarding phone breakpoint', '@media(max-width:680px)');
+requireNativeText('Native onboarding phone zoom guard', 'input,select,textarea{font-size:16px!important}');
+requireNativeText('Native onboarding one-column phone form', '.native-form{grid-template-columns:1fr');
+requireNativeText('Native onboarding wrapped phone milestones', 'white-space:normal;overflow-wrap:anywhere');
 
 const finalGuard = css.slice(css.indexOf('Final no-blur pass: every staff information surface stays sharp on hover.'));
 if (finalGuard.split('\n').some(line => /^\s*filter\s*:\s*blur/i.test(line))) {
