@@ -874,6 +874,27 @@ async function main() {
       assignmentCustomerAliases: [{ id: 'alias-1', vehicleId: 'vehicle-alias', canonicalCustomer: 'Khaled Jazzar', aliasCustomer: 'KJ Holdings', active: true }]
     });
     assert.strictEqual(approvedAliasAssignment.length, 1, 'An explicitly approved customer alias must reconcile to one active vehicle assignment.');
+    const cloverMirrorNameVariant = {
+      vehicles: [{ id: 'vehicle-provider-mirror', status: 'Rented', currentCustomer: 'Alyssa leithead' }],
+      customers: [{ id: 'customer-provider-mirror', name: 'Alyssa leithead', vehicleId: 'vehicle-provider-mirror', status: 'Active' }],
+      contracts: [{ id: 'file-provider-mirror', customer: 'Alyssa leithead', vehicleId: 'vehicle-provider-mirror', status: 'Active' }],
+      integrations: {
+        clover: {
+          recurringPlanMembers: [{
+            id: 'clover-provider-mirror',
+            customer: 'Alyssa Leitheas',
+            vehicleId: 'vehicle-provider-mirror',
+            status: 'Active',
+            cloverSubscriptionId: 'clover-sub-provider-mirror'
+          }]
+        }
+      }
+    };
+    assert.strictEqual(stateRepository.activeAssignmentIdentityConflicts(cloverMirrorNameVariant).length, 0, 'A Clover payment-plan mirror with an enriched vehicle and spelling variation must not become a second rental assignment.');
+    const cloverMirrorAssignments = stateRepository.activeAssignmentIndexRows(cloverMirrorNameVariant);
+    assert.strictEqual(cloverMirrorAssignments.length, 1, 'WheelsonAuto rental records must remain the sole assignment truth when a Clover provider mirror carries the same vehicle link.');
+    assert.strictEqual(cloverMirrorAssignments[0].customerName, 'Alyssa leithead', 'The authoritative WheelsonAuto customer name must win over a Clover provider spelling variation.');
+    assert(!cloverMirrorAssignments[0].sourceRefs.some(row => row.source === 'clover_recurring'), 'The transactional assignment index must not persist Clover payment-plan mirrors as fleet claims.');
     assert.throws(
       () => stateRepository.activeAssignmentIndexRows({
         vehicles: [{ id: 'vehicle-conflict', status: 'Rented' }],

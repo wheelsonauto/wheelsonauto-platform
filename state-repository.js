@@ -860,6 +860,9 @@ function activeAssignmentCandidate(row = {}, source = '') {
   const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' '));
   if (INACTIVE_ASSIGNMENT_PATTERN.test(status)) return null;
   const sourceKey = String(source || '').trim().toLowerCase();
+  // Clover recurring rows mirror payment plans. Profile enrichment may attach a
+  // likely vehicle, but that provider mirror is never rental-assignment authority.
+  if (/^clover[_\s-]*recurring$/.test(sourceKey)) return null;
   const profileOnlySource = sourceKey === 'customer' || sourceKey === 'customer_file';
   if (profileOnlySource) {
     const explicitLifecycle = String([row.status, row.stage, row.state, row.contractStatus].filter(Boolean).join(' '));
