@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const LOGO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=240';
 const HERO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/clean-luxury-car-hero-banner.png?v=1772796803&width=3840';
 const CONTRACT_MONTHS = 19;
+const NATIVE_SITE_ASSET_VERSION = 'native-8-inline-profile';
 
 function esc(value) {
   return String(value === undefined || value === null ? '' : value).replace(/[&<>\"]/g, character => ({
@@ -94,7 +95,7 @@ function baseHead({ title, description, canonical, image, jsonLd, noIndex = fals
     '<meta property="og:description" content="' + safeDescription + '"><meta property="og:url" content="' + esc(canonical) + '">' +
     '<meta property="og:image" content="' + esc(image || HERO_URL) + '">' +
     '<link rel="icon" href="' + LOGO_URL + '"><link rel="apple-touch-icon" href="' + LOGO_URL + '">' +
-    '<link rel="stylesheet" href="/native-site.css?v=native-8-inline-profile">' +
+    '<link rel="stylesheet" href="/native-site.css?v=' + NATIVE_SITE_ASSET_VERSION + '">' +
     (jsonLd ? '<script type="application/ld+json">' + JSON.stringify(jsonLd).replace(/</g, '\\u003c') + '</script>' : '');
 }
 
@@ -115,7 +116,7 @@ function footer(settings, homePath = '/') {
 
 function layout({ title, description, canonical, active, body, settings, image, jsonLd, pageClass = '', homePath = '/', noIndex = false }) {
   return '<!doctype html><html lang="en"><head>' + baseHead({ title, description, canonical, image, jsonLd, noIndex }) + '</head><body class="native-site ' + esc(pageClass) + '">' +
-    header(active, homePath) + '<main>' + body + '</main>' + footer(settings, homePath) + '<script src="/native-site-client.js?v=native-8-inline-profile" defer></script></body></html>';
+    header(active, homePath) + '<main>' + body + '</main>' + footer(settings, homePath) + '<script src="/native-site-client.js?v=' + NATIVE_SITE_ASSET_VERSION + '" defer></script></body></html>';
 }
 
 function vehicleCard(vehicle, compact = false) {
@@ -312,6 +313,7 @@ module.exports = {
   contractTemplateHash,
   renderContract,
   CONTRACT_MONTHS,
+  NATIVE_SITE_ASSET_VERSION,
   LOGO_URL,
   HERO_URL
 };

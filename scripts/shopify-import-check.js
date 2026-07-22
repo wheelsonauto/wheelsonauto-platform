@@ -62,7 +62,7 @@ const galleryHtml = nativeSite.vehicleHtml({ publicSite: {} }, report.rows.find(
 assert.strictEqual((galleryHtml.match(/data-gallery-slide=/g) || []).length, 3, 'The public vehicle page should render every imported photo as a swipeable slide.');
 assert.strictEqual((galleryHtml.match(/data-gallery-thumb=/g) || []).length, 3, 'The public vehicle page should render a thumbnail for every imported photo.');
 assert(galleryHtml.includes('1</b> / 3 photos'), 'The public vehicle page should show a clear gallery photo count.');
-assert(galleryHtml.includes('native-6-stripe-onboarding'), 'Gallery CSS and JavaScript should use the current native-site cache version.');
+assert(galleryHtml.includes(nativeSite.NATIVE_SITE_ASSET_VERSION), 'Gallery CSS and JavaScript should use the current native-site cache version.');
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'a').weeklyPayment, 250, 'Existing per-car pricing should be preserved.');
 assert.strictEqual(report.rows.find(row => row.sourceProductId === 'a').downPayment, 0, 'A deliberately waived down payment should stay zero.');
 assert(report.onlineVehicles.some(row => row.id === 'native-manual'), 'Native/manual inventory must never be removed by Shopify import.');
