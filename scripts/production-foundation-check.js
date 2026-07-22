@@ -88,6 +88,8 @@ async function main() {
   assert.strictEqual(pilotSelection.eligibleCount, 1, 'The owner pilot chooser must expose only applications with exact customer, fleet identity, and locked pricing.');
   assert.strictEqual(pilotSelection.candidates[0].applicationId, 'app-pilot-ready', 'Eligible pilot files must sort ahead of review-only files.');
   assert.deepStrictEqual(pilotSelection.candidates[0].blockers, [], 'An exact available applicant and vehicle must open without a false blocker.');
+  assert.strictEqual(pilotSelection.candidates[0].paymentProvider, 'clover', 'The pilot chooser must expose the actual configured onboarding payment provider instead of guessing in the browser.');
+  assert.strictEqual(pilotSelection.candidates[0].identityProvider, 'manual', 'The pilot chooser must expose the actual configured identity provider instead of guessing in the browser.');
   assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
   const schemaContractRows = [
     ...stateRepository.REQUIRED_SCHEMA_CONTRACT.constraints.map(([tableName, type, definition]) => ({

@@ -669,7 +669,7 @@ function ownerSmoke() {
       blockedCount: 1,
       message: '1 exact applicant and vehicle file is ready to open for controlled pilot review.',
       candidates: [
-        { applicationId: 'app-pilot-ready', customer: 'Pilot Customer', vehicle: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, onboardingStatus: 'Not started', eligible: true, action: 'prepare', blockers: [] },
+        { applicationId: 'app-pilot-ready', customer: 'Pilot Customer', vehicle: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, onboardingStatus: 'Not started', paymentProvider: 'stripe', identityProvider: 'stripe', eligible: true, action: 'prepare', blockers: [] },
         { applicationId: 'app-pilot-blocked', customer: 'Blocked Customer', vehicle: '2021 Pilot Blocked', weeklyPayment: 0, downPayment: 0, onboardingStatus: 'Not started', eligible: false, action: 'prepare', blockers: ['Vehicle VIN is missing.', 'Locked weekly payment is missing.'] }
       ]
     },
@@ -690,11 +690,19 @@ function ownerSmoke() {
     eligibleCount: 1,
     message: '1 exact applicant and vehicle file is ready to open for controlled pilot review.',
     candidates: [
-      { applicationId: 'app-pilot-ready', customer: 'Pilot Customer', vehicle: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, onboardingStatus: 'Not started', eligible: true, action: 'prepare', blockers: [] },
+      { applicationId: 'app-pilot-ready', customer: 'Pilot Customer', vehicle: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, onboardingStatus: 'Not started', paymentProvider: 'stripe', identityProvider: 'stripe', eligible: true, action: 'prepare', blockers: [] },
       { applicationId: 'app-pilot-blocked', customer: 'Blocked Customer', vehicle: '2021 Pilot Blocked', weeklyPayment: 0, downPayment: 0, onboardingStatus: 'Not started', eligible: false, action: 'prepare', blockers: ['Vehicle VIN is missing.', 'Locked weekly payment is missing.'] }
     ]
   });
   assert(pilotChooser.includes('Opening a file is read-only preparation.') && pilotChooser.includes('does not create onboarding, send a link, hold a vehicle, save a card, or charge money') && pilotChooser.includes('PILOTREADYVIN0001') && pilotChooser.includes('data-action="open-stripe-pilot-file"') && pilotChooser.includes('1 file needs review') && pilotChooser.includes('Vehicle VIN is missing.') && !pilotChooser.includes('data-application-id="app-pilot-blocked"'), 'The pilot chooser must show exact identity and prices, keep blocked files read-only, and explain that opening a file has no external side effect.');
+  const pilotFileContext = makeContext({ name: 'Pilot Owner', username: 'owner', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  pilotFileContext.db.applications.unshift({ id: 'app-pilot-file', name: 'Pilot File Customer', email: 'pilot-file@example.com', onlineVehicleId: 'online-pilot-file', vehicle: '2020 Pilot File', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'New', submittedAt: '2026-07-21T12:00:00.000Z' });
+  pilotFileContext.db.onlineVehicles.unshift({ id: 'online-pilot-file', platformVehicleId: 'veh-pilot-file', title: '2020 Pilot File', vin: 'PILOTFILEVIN00001', plate: 'PIL-002', weeklyPayment: 229, downPayment: 485, published: true, availability: 'Available' });
+  pilotFileContext.db.vehicles.unshift({ id: 'veh-pilot-file', year: 2020, make: 'Pilot', model: 'File', vin: 'PILOTFILEVIN00001', plate: 'PIL-002', status: 'Ready' });
+  pilotFileContext.window.__woaSelectedPilotCandidate = { applicationId: 'app-pilot-file', paymentProvider: 'stripe', identityProvider: 'stripe' };
+  pilotFileContext.openNativeApplication('app-pilot-file');
+  const pilotFile = modalHtml(pilotFileContext);
+  assert(pilotFile.includes('Application file') && pilotFile.includes('VIN PILOTFILEVIN00001 | Tag PIL-002 | Online online-pilot-file') && pilotFile.includes('$229/week') && pilotFile.includes('$485 nonrefundable down | Stripe card setup + Stripe Identity') && pilotFile.includes('Preparation only.') && pilotFile.includes('holds this exact vehicle for up to seven days') && pilotFile.includes('saves an unsent customer-message draft') && pilotFile.includes('does not send the message or charge the deposit or weekly payment'), 'The selected pilot file must retain exact VIN/tag, locked terms, configured providers, and every preparation side effect without adding another page or implying that money moves.');
   const detachedConflictButton = { dataset: { id: 'veh-detached-review', vehicleName: '2023 Detached Review', vin: 'DETACHEDVIN', plate: 'DET-123', tracker: 'Tracker 9', claimedBy: 'One Name / Two Name', jobErrorId: 'job-error-42' } };
   const detachedConflictVehicle = context.assignmentConflictVehicleFromButton(detachedConflictButton);
   assert(detachedConflictVehicle && detachedConflictVehicle.id === 'veh-detached-review' && detachedConflictVehicle.vin === 'DETACHEDVIN' && detachedConflictVehicle.assignmentConflict === 'One Name / Two Name' && detachedConflictVehicle.jobErrorId === 'job-error-42', 'A preflight review must retain enough safe vehicle and job-error identity to open the exact server resolver even when that vehicle is absent from the current client list.');
