@@ -451,10 +451,10 @@ async function main() {
     saved = await readSaved(dataDir);
     assert(saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt === firstSetupCompletedAt, 'Out-of-order Stripe setup webhooks must not complete or mutate the saved-card request twice.');
 
-    const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, controlledStripePilotCandidate: true, notes: 'Application, preliminary files, agreement, signature, VIN, and saved card reviewed together.' } });
+    const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Application, preliminary files, agreement, signature, VIN, and saved card reviewed together.' } });
     assert(finalReview.status === 200 && finalReview.json.finalReviewStatus === 'Approved', 'Staff must give one combined approval only after the preliminary file and saved card are complete.');
     saved = await readSaved(dataDir);
-    assert(saved.integrations.stripe.controlledPilotCandidateApplicationId === applicationId && saved.integrations.stripe.controlledPilotCandidateOnboardingSessionId === onboardingId, 'Owner final review must durably lock one exact application and onboarding file as the only pre-approval Stripe money scope.');
+    assert(saved.integrations.stripe.controlledPilotCandidateApplicationId === applicationId && saved.integrations.stripe.controlledPilotCandidateOnboardingSessionId === onboardingId, 'Owner final review must durably lock the sole exact eligible application and onboarding file even after the browser loses its temporary pilot selection.');
     fakeStripe.state.failNextIdentitySession = true;
     const failedIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
     assert(failedIdentity.status === 502 && /No verification decision was recorded/i.test(failedIdentity.json.error || '') && !/Provider secret diagnostic/i.test(failedIdentity.text), 'A Stripe Identity transport failure must return a safe retry message without exposing provider diagnostics.');

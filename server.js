@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-pilot-money-scope-296';
+const ASSET_VERSION = 'platform-20260722-refresh-safe-pilot-297';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -23393,6 +23393,7 @@ const server = http.createServer(async (req, res) => {
       if (!decision) return json(res, 400, { ok: false, error: 'Choose approve or request correction.' });
       const reviewedAt = new Date().toISOString();
       const reviewer = user.name || user.username || user.role || 'Staff';
+      let controlledPilotLocked = false;
       if (payload.stage === 'final') {
         const documents = (data.documents || []).filter(row => row.onboardingSessionId === session.id);
         const screeningKinds = ['driver_license_front', 'driver_license_back', 'identity_selfie'];
@@ -23412,13 +23413,30 @@ const server = http.createServer(async (req, res) => {
           if (payload.signatureMatchConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the drawn signature matches the license signature.' });
           if (payload.vehicleConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the exact vehicle and VIN in the application and signed agreement.' });
           if (payload.cardConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the saved card token is linked without taking payment.' });
-          if (payload.controlledStripePilotCandidate === true) {
+          const currentPilotLock = controlledStripePilotCandidateLock(data);
+          const pilotAlreadyApproved = !!String(data.integrations && data.integrations.stripe && data.integrations.stripe.controlledPilotOnboardingSessionId || '').trim();
+          const pilotSelection = !pilotAlreadyApproved && isOwnerUser(user)
+            && normalizedPaymentProvider(session.paymentProvider) === 'stripe'
+            && normalizedIdentityProvider(session.identityProvider) === 'stripe'
+            ? controlledStripePilotSelection(data)
+            : null;
+          const soleEligiblePilot = pilotSelection && pilotSelection.candidates.filter(row => row.eligible === true);
+          const autoLockExactPilot = !controlledStripePilotCandidateIsActive(data, currentPilotLock)
+            && soleEligiblePilot && soleEligiblePilot.length === 1
+            && soleEligiblePilot[0].applicationId === application.id
+            && soleEligiblePilot[0].onboardingSessionId === session.id;
+          if (payload.controlledStripePilotCandidate === true || autoLockExactPilot) {
             if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can lock the first live Stripe pilot.' });
             try {
               lockControlledStripePilotCandidate(data, application, session, user);
+              controlledPilotLocked = true;
             } catch (error) {
               return json(res, Number(error.statusCode || 409), { ok: false, code: error.code, error: error.message, blockers: error.blockers || [] });
             }
+          } else if (controlledStripePilotCandidateIsActive(data, currentPilotLock)
+            && currentPilotLock.applicationId === application.id
+            && currentPilotLock.onboardingSessionId === session.id) {
+            controlledPilotLocked = true;
           }
           Object.assign(session, {
             finalReviewStatus: 'Approved',
@@ -23508,7 +23526,7 @@ const server = http.createServer(async (req, res) => {
           application.updatedAt = reviewedAt;
         }
       } else return json(res, 400, { ok: false, error: 'Review stage must be final, documents, or signature.' });
-      appendAuditLog(data, user, 'Onboarding ' + payload.stage + ' review', [application && application.name || session.applicationId, decision === 'approve' ? 'Approved' : 'Correction requested', session.id, payload.controlledStripePilotCandidate === true ? 'Locked as first live Stripe pilot' : '']);
+      appendAuditLog(data, user, 'Onboarding ' + payload.stage + ' review', [application && application.name || session.applicationId, decision === 'approve' ? 'Approved' : 'Correction requested', session.id, controlledPilotLocked ? 'Locked as first live Stripe pilot' : '']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, status: session.status, finalReviewStatus: session.finalReviewStatus, documentReviewStatus: session.documentReviewStatus, signatureReviewStatus: session.signatureReviewStatus });
