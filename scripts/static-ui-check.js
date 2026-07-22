@@ -433,6 +433,19 @@ if (unhandled.length) {
 
 assertIncludes('Open modal active definition', functionSlice('openModal'), ['aria-hidden', "style.display='grid'", "querySelector('.modal')", 'modal.scrollTop=0', "typeof requestAnimationFrame==='function'"]);
 assertIncludes('Close modal active definition', functionSlice('closeModal'), ['aria-hidden', "textContent=''", "innerHTML=''"]);
+assertIncludes('Native application in-app confirmation', functionSlice('openNativeApplicationActionConfirmation'), [
+  'Review the exact file before confirming.',
+  'native-confirm-create-onboarding',
+  'native-confirm-restore-application',
+  'native-confirm-deny-application',
+  'native-cancel-application-action',
+  'It will not send the draft or charge the deposit or weekly payment.',
+  'It will not hold or unpublish the vehicle',
+  'It will not refund, charge, or alter another customer file.'
+]);
+if (/native-(?:restore|deny)-application[^\n]{0,500}window\.confirm/.test(app)) {
+  fail('Native application actions must use the in-app exact-file confirmation instead of a blocking browser dialog.');
+}
 assertIncludes('Auto refresh modal guard', app, ["if(modal&&modal.style.display==='grid')return"]);
 assertIncludes('Post-save refresh wrapper', app, ['var __wheelsonBaseSave=save', 'reconcileFleetCustomerLinks()', 'if(ok)await refreshData(true)']);
 assertIncludes('Provider-specific API handoff guidance', app, ['apiProviderGuidancePanel', 'Proof before connected', '10DLC approval', 'OpenAI API key and usable API credit', 'signed payment event', 'apiProviderStatusControl(p)', 'Calculated from live credentials']);
