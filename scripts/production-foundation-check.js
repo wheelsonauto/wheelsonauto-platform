@@ -134,6 +134,10 @@ async function main() {
   pilotMoneyState.onboardingSessions[0].status = 'Cancelled';
   const cancelledPilotReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'app-pilot-money', onboardingSessionId: 'onboard-pilot-money', paymentType: 'Nonrefundable down payment' }, { isolatedTestMode: false, pilotApproved: false });
   assert.strictEqual(cancelledPilotReview.allowed, false, 'Cancelling the selected pilot must immediately revoke its pre-approval money scope.');
+  const cancelledPilotRefundReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'app-pilot-money', onboardingSessionId: 'onboard-pilot-money', paymentType: 'Nonrefundable down payment' }, { isolatedTestMode: false, pilotApproved: false, allowPilotEvidenceAction: true });
+  assert.strictEqual(cancelledPilotRefundReview.allowed, true, 'Cancelling the selected pilot must never trap its already-paid deposit or block an exact refund/dispute unwind.');
+  const unrelatedCancelledRefundReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'another-application', onboardingSessionId: 'another-session', paymentType: 'Nonrefundable down payment' }, { isolatedTestMode: false, pilotApproved: false, allowPilotEvidenceAction: true });
+  assert.strictEqual(unrelatedCancelledRefundReview.allowed, false, 'A cancelled pilot refund exception must remain bound to the exact locked application and onboarding file.');
   const duplicateHoldState = {
     onboardingSessions: [
       { id: 'onboarding-one', applicationId: 'application-one', onlineVehicleId: 'online-shared', status: 'Identity pending' },

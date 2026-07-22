@@ -259,6 +259,7 @@ async function run() {
   assert(server.includes('assertControlledStripePilotApproved(data);') && server.includes('controlled_stripe_pilot_required'), 'Every live Clover-to-Stripe cutover must remain locked until one complete owner-approved Stripe onboarding pilot is still valid.');
   assert(server.includes('lockControlledStripePilotCandidate(data, application, session, user);') && app.includes('payload.controlledStripePilotCandidate=true'), 'The owner final review must lock one exact pilot before its deposit or first-week Stripe actions can run.');
   assert(server.includes('soleEligiblePilot.length === 1') && server.includes('autoLockExactPilot'), 'A refresh must not lose the sole exact pilot selection, while multiple eligible files must remain unchosen.');
+  assert(server.includes('pilotEvidenceAction: true') && server.includes('stripe_pilot_evidence_source_required'), 'Cancelling a pilot must block new charges without trapping its exact paid deposit/first-week refund or dispute path.');
   ['claim_token', 'idempotencyClaimToken', 'claimIdempotencyKey', 'completeIdempotencyKey', 'failIdempotencyKey'].forEach(value => {
     assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);
   });

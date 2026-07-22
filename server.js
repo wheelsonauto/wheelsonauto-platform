@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-refresh-safe-pilot-297';
+const ASSET_VERSION = 'platform-20260722-pilot-unwind-298';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10899,19 +10899,27 @@ function controlledStripePilotMoneyActionReview(data, reference = {}, options = 
     : options.pilotApproved === true;
   if (pilotApproved) return { allowed: true, pilotApproved: true, reason: 'Owner-approved live Stripe pilot' };
   const lock = controlledStripePilotCandidateLock(data);
-  if (!controlledStripePilotCandidateIsActive(data, lock)) return { allowed: false, code: 'stripe_pilot_candidate_required', reason: 'No active owner-selected Stripe pilot is locked.' };
   const onboardingSessionId = String(reference.onboardingSessionId || '').trim();
   const applicationId = String(reference.applicationId || '').trim();
   if (onboardingSessionId !== lock.onboardingSessionId || applicationId && applicationId !== lock.applicationId) {
     return { allowed: false, code: 'stripe_pilot_money_scope_required', reason: 'This money action does not belong to the locked first Stripe pilot.' };
   }
+  const paymentType = String(reference.paymentType || reference.reason || '').trim();
+  const allowedPaymentType = ['Nonrefundable down payment', 'First weekly payment'].includes(paymentType);
+  if (options.allowPilotEvidenceAction === true) {
+    const session = (data.onboardingSessions || []).find(row => String(row.id || '') === lock.onboardingSessionId);
+    const application = (data.applications || []).find(row => String(row.id || '') === lock.applicationId);
+    if (!session || !application || String(session.applicationId || '') !== lock.applicationId || !allowedPaymentType) {
+      return { allowed: false, code: 'stripe_pilot_evidence_source_required', reason: 'This refund or dispute is not tied to the locked pilot deposit or first weekly payment.' };
+    }
+    return { allowed: true, pilotApproved: false, pilotEvidenceAction: true, lock, reason: 'Locked first Stripe pilot payment unwind or dispute evidence' };
+  }
+  if (!controlledStripePilotCandidateIsActive(data, lock)) return { allowed: false, code: 'stripe_pilot_candidate_required', reason: 'No active owner-selected Stripe pilot is locked.' };
   const candidate = controlledStripePilotSelection(data).candidates.find(row => row.applicationId === lock.applicationId);
   if (!candidate || candidate.eligible !== true || candidate.onboardingSessionId !== lock.onboardingSessionId) {
     return { allowed: false, code: 'stripe_pilot_candidate_not_eligible', reason: 'The locked pilot no longer has exact customer, vehicle, VIN, tag, pricing, and onboarding evidence.' };
   }
-  const paymentType = String(reference.paymentType || reference.reason || '').trim();
-  const allowedPaymentType = ['Nonrefundable down payment', 'First weekly payment'].includes(paymentType);
-  if (options.allowPilotEvidenceAction !== true && !allowedPaymentType) {
+  if (!allowedPaymentType) {
     return { allowed: false, code: 'stripe_pilot_payment_type_required', reason: 'Before pilot approval, only the locked deposit and first weekly payment may use Stripe.' };
   }
   return { allowed: true, pilotApproved: false, pilotCandidate: true, lock, candidate, reason: 'Locked first Stripe pilot' };
