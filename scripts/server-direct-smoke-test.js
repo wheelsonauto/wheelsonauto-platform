@@ -4145,7 +4145,8 @@ async function main() {
       stripeCardSavedAt: new Date().toISOString(),
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Stripe card saved and chargeable',
-      autopayManagedBy: 'WheelsonAuto / Stripe'
+      autopayManagedBy: 'WheelsonAuto / Stripe',
+      stripeMigration: { state: 'stripe_active', history: [] }
     });
     const stripeConcurrentSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeConcurrentState.json });
     assert(stripeConcurrentSeed.status === 200 && stripeConcurrentSeed.json.ok, 'Stripe concurrent-charge smoke setup failed.');
@@ -4220,12 +4221,22 @@ async function main() {
       autoChargeEnabled: true,
       paymentProvider: 'stripe',
       provider: 'Stripe',
+      cloverCustomerId: 'cus_direct_timeout_clover',
+      cloverSubscriptionId: 'sub_direct_timeout_clover',
+      cloverPaymentSource: 'card_direct_timeout_clover',
       stripeCustomerId: 'cus_direct_timeout',
       stripePaymentMethodId: 'pm_direct_timeout',
       stripeCardSavedAt: new Date().toISOString(),
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Stripe card saved and chargeable',
-      autopayManagedBy: 'WheelsonAuto / Stripe'
+      autopayManagedBy: 'WheelsonAuto / Stripe',
+      stripeMigration: {
+        state: 'first_stripe_charge_pending',
+        cutoverDate: autopayTodayKey,
+        scheduledCloverSubscriptionId: 'sub_direct_timeout_clover',
+        cloverStoppedConfirmedAt: new Date().toISOString(),
+        cloverStoppedConfirmedBy: 'Direct Owner'
+      }
     });
     const stripeTimeoutSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeTimeoutState.json });
     assert(stripeTimeoutSeed.status === 200 && stripeTimeoutSeed.json.ok, 'Stripe timeout reconciliation smoke setup failed.');
@@ -4255,6 +4266,14 @@ async function main() {
     const stripeTimeoutPendingRow = stripeTimeoutPendingState.json.recurringPayments.find(row => row.id === stripeTimeoutRecurringId);
     assert(stripeTimeoutPendingRow && stripeTimeoutPendingRow.status === 'Stripe confirmation pending' && stripeTimeoutPendingRow.retryCount === 0 && stripeTimeoutPendingRow.stripeChargeAttempt && stripeTimeoutPendingRow.stripeChargeAttempt.idempotencyKey, 'A timed-out Stripe charge must persist one protected idempotency attempt without consuming a failed-payment retry.');
     assert(!(stripeTimeoutPendingState.json.payments || []).some(payment => payment.recurringPaymentId === stripeTimeoutRecurringId && /failed/i.test(String(payment.status || ''))), 'A Stripe confirmation timeout must not create a false failed-payment transaction.');
+    const stripeTimeoutRollback = await request(server, 'POST', '/api/payment-provider/switch', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeTimeoutRecurringId, paymentProvider: 'clover', stripeStoppedConfirmed: true, confirmed: true }
+    });
+    assert(stripeTimeoutRollback.status === 409 && stripeTimeoutRollback.json.confirmationPending === true, 'A plan must not return to Clover while a Stripe provider result is unresolved.');
+    const stripeTimeoutRollbackRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const stripeTimeoutRollbackRow = stripeTimeoutRollbackRead.json.recurringPayments.find(row => row.id === stripeTimeoutRecurringId);
+    assert(stripeTimeoutRollbackRow && stripeTimeoutRollbackRow.paymentProvider === 'stripe' && stripeTimeoutRollbackRow.stripeMigration.state === 'first_stripe_charge_pending', 'A blocked rollback must preserve the exact Stripe cutover state until reconciliation.');
     const stripeTimeoutWebhookObject = {
       object: 'payment_intent',
       id: 'pi_direct_timeout_001',
@@ -4283,6 +4302,7 @@ async function main() {
     const stripeTimeoutResolvedRow = stripeTimeoutResolvedState.json.recurringPayments.find(row => row.id === stripeTimeoutRecurringId);
     const stripeTimeoutPayment = (stripeTimeoutResolvedState.json.payments || []).find(payment => payment.stripePaymentIntentId === 'pi_direct_timeout_001');
     assert(stripeTimeoutResolvedRow && stripeTimeoutResolvedRow.status === 'Active' && stripeTimeoutResolvedRow.nextRun > autopayTodayKey && stripeTimeoutResolvedRow.stripeChargeAttempt.status === 'succeeded', 'Stripe webhook reconciliation must clear the pending state and advance the original weekly schedule exactly once.');
+    assert(stripeTimeoutResolvedRow.stripeMigration && stripeTimeoutResolvedRow.stripeMigration.state === 'clover_disabled', 'The verified first Stripe success must complete the protected Clover-disabled migration proof.');
     assert(stripeTimeoutPayment && stripeTimeoutPayment.customer === 'Direct Stripe Timeout Customer' && stripeTimeoutPayment.vin === 'DIRECTSTRIPETIMEOUTVIN' && stripeTimeoutPayment.amount === 229 && stripeTimeoutPayment.status === 'Paid', 'Stripe webhook reconciliation must save the paid transaction with customer and vehicle evidence.');
     assert((stripeTimeoutResolvedState.json.documents || []).some(document => document.stripePaymentIntentId === 'pi_direct_timeout_001' && document.kind === 'Receipt'), 'A reconciled Stripe payment must create one customer-visible receipt evidence record.');
     const stripeFailureAfterSuccessObject = { ...stripeTimeoutWebhookObject, status: 'requires_payment_method', last_payment_error: { message: 'Out-of-order failure event' } };
@@ -4295,6 +4315,105 @@ async function main() {
       json: { recurringPaymentId: stripeTimeoutRecurringId, amount: 229, scheduledDueDate: autopayTodayKey, automatic: true }
     });
     assert(stripeDuplicateAfterWebhook.status === 409 && stripeDuplicateAfterWebhook.json.duplicateBlocked, 'A reconciled timed-out Stripe payment must block a second charge for the same billing period.');
+
+    const staleStripeResultRecurringId = 'direct-stripe-stale-after-rollback';
+    const staleStripeResultState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    staleStripeResultState.json.recurringPayments.unshift({
+      id: staleStripeResultRecurringId,
+      customer: 'Direct Stripe Rolled Back Customer',
+      phone: '3135550791',
+      email: 'stripe-rolled-back@example.com',
+      vehicle: '2022 Rolled Back Car',
+      vehicleId: 'veh-direct-stripe-rolled-back',
+      vin: 'DIRECTSTRIPEROLLBACKVIN',
+      plate: 'DIR-STRIPE-RB',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: autopayTodayKey,
+      paymentDay: calendarDayName(autopayTodayKey),
+      chargeTime: '18:00',
+      status: 'Active',
+      tone: 'good',
+      autoChargeEnabled: true,
+      paymentProvider: 'clover',
+      provider: 'Clover',
+      cloverCustomerId: 'cus_direct_rolled_back_clover',
+      cloverSubscriptionId: 'sub_direct_rolled_back_clover',
+      cloverPaymentSource: 'card_direct_rolled_back_clover',
+      stripeCustomerId: 'cus_direct_rolled_back_stripe',
+      stripePaymentMethodId: 'pm_direct_rolled_back_stripe',
+      stripeCardSavedAt: new Date().toISOString(),
+      paymentSetup: 'Clover card saved and chargeable',
+      autopayManagedBy: 'WheelsonAuto / Clover',
+      stripeChargeAttempt: {
+        status: 'failed',
+        idempotencyKey: 'woa-stale-after-rollback',
+        amountCents: 22900,
+        scheduledDueDate: autopayTodayKey,
+        billingPeriodKey: 'due:' + autopayTodayKey
+      },
+      stripeMigration: {
+        state: 'stripe_card_saved',
+        cardSavedAt: new Date().toISOString(),
+        history: [{ state: 'first_stripe_charge_pending' }, { state: 'stripe_card_saved', note: 'Owner returned plan to Clover after stopping Stripe.' }]
+      }
+    });
+    const staleStripeResultSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: staleStripeResultState.json });
+    assert(staleStripeResultSeed.status === 200 && staleStripeResultSeed.json.ok, 'Stale Stripe result quarantine setup failed.');
+    const staleStripeResultCreated = Math.floor(Date.now() / 1000);
+    const staleStripeSuccessObject = {
+      object: 'payment_intent',
+      id: 'pi_direct_stale_after_rollback_001',
+      status: 'succeeded',
+      amount: 22900,
+      amount_received: 22900,
+      currency: 'usd',
+      customer: 'cus_direct_rolled_back_stripe',
+      payment_method: 'pm_direct_rolled_back_stripe',
+      latest_charge: 'ch_direct_stale_after_rollback_001',
+      created: staleStripeResultCreated,
+      metadata: {
+        recurringPaymentId: staleStripeResultRecurringId,
+        flow: 'autopay',
+        scheduledDueDate: autopayTodayKey,
+        billingPeriodKey: 'due:' + autopayTodayKey,
+        amount: '22900',
+        chargeIdempotencyKey: 'woa-stale-after-rollback'
+      }
+    };
+    const staleStripeSuccessBody = JSON.stringify({ id: 'evt_direct_stale_after_rollback_succeeded', type: 'payment_intent.succeeded', livemode: true, created: staleStripeResultCreated, data: { object: staleStripeSuccessObject } });
+    const staleStripeSuccessTimestamp = String(staleStripeResultCreated);
+    const staleStripeSuccessSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(staleStripeSuccessTimestamp + '.' + staleStripeSuccessBody).digest('hex');
+    const staleStripeSuccess = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + staleStripeSuccessTimestamp + ',v1=' + staleStripeSuccessSignature }, raw: staleStripeSuccessBody });
+    assert(staleStripeSuccess.status === 200 && staleStripeSuccess.json.stripePaymentIntentResult && staleStripeSuccess.json.stripePaymentIntentResult.providerMigrationReview === true, 'A late Stripe success after rollback must be quarantined for provider review.');
+    const staleStripeSuccessRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const staleStripeSuccessRow = staleStripeSuccessRead.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId);
+    const staleStripeSuccessPayment = (staleStripeSuccessRead.json.payments || []).find(payment => payment.stripePaymentIntentId === staleStripeSuccessObject.id);
+    assert(staleStripeSuccessRow && staleStripeSuccessRow.paymentProvider === 'clover' && staleStripeSuccessRow.stripeMigration.state === 'stripe_card_saved' && staleStripeSuccessRow.autoChargeEnabled === false && staleStripeSuccessRow.nextRun === autopayTodayKey, 'A quarantined late success must preserve Clover ownership, preserve the migration stage, pause autopay, and leave the schedule unchanged.');
+    assert(staleStripeSuccessPayment && staleStripeSuccessPayment.status === 'Paid - provider migration review' && staleStripeSuccessPayment.providerAtWebhook === 'clover', 'A real late Stripe payment must remain visible with exact provider-migration evidence.');
+    assert((staleStripeSuccessRead.json.auditLogs || []).some(row => row.action === 'Unexpected Stripe payment needs review' && /Direct Stripe Rolled Back Customer/.test(String(row.details || ''))), 'A quarantined late Stripe payment must create an owner-visible audit record.');
+    const staleStripeFailureObject = {
+      ...staleStripeSuccessObject,
+      id: 'pi_direct_stale_after_rollback_failed_002',
+      status: 'requires_payment_method',
+      amount_received: 0,
+      latest_charge: '',
+      last_payment_error: { message: 'Stale provider failure after rollback' },
+      metadata: {
+        ...staleStripeSuccessObject.metadata,
+        scheduledDueDate: futureDateKey(7),
+        billingPeriodKey: 'due:' + futureDateKey(7),
+        chargeIdempotencyKey: 'woa-stale-after-rollback-failure'
+      }
+    };
+    const staleStripeFailureBody = JSON.stringify({ id: 'evt_direct_stale_after_rollback_failed', type: 'payment_intent.payment_failed', livemode: true, created: staleStripeResultCreated + 1, data: { object: staleStripeFailureObject } });
+    const staleStripeFailureSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(staleStripeSuccessTimestamp + '.' + staleStripeFailureBody).digest('hex');
+    const staleStripeFailure = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + staleStripeSuccessTimestamp + ',v1=' + staleStripeFailureSignature }, raw: staleStripeFailureBody });
+    assert(staleStripeFailure.status === 200 && staleStripeFailure.json.stripePaymentIntentResult && staleStripeFailure.json.stripePaymentIntentResult.ignored === true && staleStripeFailure.json.stripePaymentIntentResult.providerMigrationReview === true, 'A stale Stripe failure after rollback must be logged without downgrading the active Clover plan.');
+    const staleStripeFailureRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const staleStripeFailureRow = staleStripeFailureRead.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId);
+    assert(staleStripeFailureRow && staleStripeFailureRow.paymentProvider === 'clover' && staleStripeFailureRow.status === 'Payment review - unexpected Stripe result' && Number(staleStripeFailureRow.retryCount || 0) === 0, 'A stale Stripe failure must preserve the current provider, review state, and retry count.');
+    assert(!(staleStripeFailureRead.json.payments || []).some(payment => payment.stripePaymentIntentId === staleStripeFailureObject.id), 'A stale Stripe failure must not create a misleading current failed-payment transaction.');
 
     const stripeFailureRecoveryRecurringId = 'direct-stripe-failure-recovery';
     const stripeFailureRecoveryState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -4615,7 +4734,8 @@ async function main() {
       stripeCardSavedAt: new Date().toISOString(),
       cardSavedAt: new Date().toISOString(),
       paymentSetup: 'Stripe card saved and chargeable',
-      autopayManagedBy: 'WheelsonAuto / Stripe'
+      autopayManagedBy: 'WheelsonAuto / Stripe',
+      stripeMigration: { state: 'stripe_active', history: [] }
     });
     const stripeWebhookAuthenticationSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: stripeWebhookAuthenticationState.json });
     assert(stripeWebhookAuthenticationSeed.status === 200 && stripeWebhookAuthenticationSeed.json.ok, 'Stripe webhook authentication-required smoke setup failed.');
@@ -4640,7 +4760,7 @@ async function main() {
     const stripeWebhookAuthenticationTimestamp = String(Math.floor(Date.now() / 1000));
     const stripeWebhookAuthenticationSignature = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(stripeWebhookAuthenticationTimestamp + '.' + stripeWebhookAuthenticationBody).digest('hex');
     const stripeWebhookAuthentication = await request(server, 'POST', '/api/webhooks/stripe', { headers: { 'stripe-signature': 't=' + stripeWebhookAuthenticationTimestamp + ',v1=' + stripeWebhookAuthenticationSignature }, raw: stripeWebhookAuthenticationBody });
-    assert(stripeWebhookAuthentication.status === 200 && stripeWebhookAuthentication.json.stripePaymentIntentResult && stripeWebhookAuthentication.json.stripePaymentIntentResult.authenticationRequired, 'A signed Stripe requires-action webhook must pause the correct saved card.');
+    assert(stripeWebhookAuthentication.status === 200 && stripeWebhookAuthentication.json.stripePaymentIntentResult && stripeWebhookAuthentication.json.stripePaymentIntentResult.authenticationRequired, 'A signed Stripe requires-action webhook must pause the correct saved card. Result: ' + JSON.stringify(stripeWebhookAuthentication.json.stripePaymentIntentResult || stripeWebhookAuthentication.json));
     const stripeWebhookAuthenticationRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const stripeWebhookAuthenticationRow = stripeWebhookAuthenticationRead.json.recurringPayments.find(row => row.id === stripeWebhookAuthenticationRecurringId);
     assert(stripeWebhookAuthenticationRow && stripeWebhookAuthenticationRow.status === 'Setup needed - Stripe card authentication' && stripeWebhookAuthenticationRow.autoChargeEnabled === false && Number(stripeWebhookAuthenticationRow.failedAttempts || 0) === 0 && stripeWebhookAuthenticationRow.stripeChargeAttempt.status === 'authentication_required', 'Signed Stripe authentication-required webhooks must preserve the card-update workflow and never create a failed-twice state.');

@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-pilot-profile-299';
+const ASSET_VERSION = 'platform-20260722-stripe-stale-result-300';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -18706,6 +18706,11 @@ function duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, i
   const existing = stripeMigration.existingPaidPayment(data, recurring, scheduledDueKey);
   return existing && !stripePaymentIntentMatchesRecord(existing, intentId) ? existing : null;
 }
+function stripeWebhookChargeAllowed(recurring, scheduledDueKey) {
+  const currentProvider = normalizedPaymentProvider(recurring && (recurring.paymentProvider || recurring.provider) || 'clover');
+  return currentProvider === 'stripe'
+    && stripeMigration.automaticChargeAllowed(recurring, 'stripe', scheduledDueKey);
+}
 function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const intentId = stripeObjectId(intent);
   if (!intentId) return { matched: false, reason: 'Stripe payment intent ID is missing.' };
@@ -18728,11 +18733,20 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
   const alreadyPaid = !!(existing && stripeMigration.paymentIsPaid(existing.status));
   const duplicateBillingPeriodPayment = alreadyPaid ? null : duplicateStripeBillingPeriodPayment(data, recurring, scheduledDueKey, intentId);
   const duplicateBillingPeriod = !!duplicateBillingPeriodPayment;
+  const providerMigrationReview = !stripeWebhookChargeAllowed(recurring, scheduledDueKey);
   const duplicatePaymentReference = duplicateBillingPeriodPayment && (duplicateBillingPeriodPayment.stripePaymentIntentId || duplicateBillingPeriodPayment.providerPaymentId || duplicateBillingPeriodPayment.id) || '';
   const duplicatePaymentProvider = duplicateBillingPeriodPayment && (duplicateBillingPeriodPayment.paymentProvider || duplicateBillingPeriodPayment.provider || 'another provider payment') || '';
   const duplicateNote = duplicateBillingPeriod
     ? 'Stripe succeeded after ' + duplicatePaymentProvider + ' payment ' + duplicatePaymentReference + ' was already recorded for billing date ' + scheduledDueKey + '. Autopay is paused for owner review; do not charge again or mark cutover complete until the duplicate is resolved.'
     : '';
+  const providerReviewNote = providerMigrationReview
+    ? 'Stripe reported a real payment after this recurring plan no longer allowed Stripe charging for billing date ' + (scheduledDueKey || 'not provided') + '. The selected payment provider was preserved and autopay was paused for owner review.'
+    : '';
+  const paymentReviewStatus = duplicateBillingPeriod
+    ? 'Paid - duplicate billing period review'
+    : providerMigrationReview
+      ? 'Paid - provider migration review'
+      : 'Paid';
   const payment = {
     ...(existing || { id: 'stripe-charge-' + intentId }),
     paymentProvider: 'stripe',
@@ -18753,10 +18767,10 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     tracker: identity.tracker || recurring.tracker || '',
     method: 'Stripe saved card',
     amount,
-    status: duplicateBillingPeriod ? 'Paid - duplicate billing period review' : 'Paid',
-    tone: duplicateBillingPeriod ? 'bad' : 'good',
+    status: paymentReviewStatus,
+    tone: duplicateBillingPeriod || providerMigrationReview ? 'bad' : 'good',
     source: 'Stripe signed payment webhook',
-    notes: appendUniqueNote(appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'), duplicateNote),
+    notes: appendUniqueNote(appendUniqueNote(appendUniqueNote(existing && existing.notes || '', 'Verified by signed Stripe payment webhook.'), duplicateNote), providerReviewNote),
     scheduledDueDate: scheduledDueKey,
     billingPeriodKey,
     billingPeriodEndDate: stripeMigration.billingPeriodEndDate({ scheduledDueDate: scheduledDueKey, frequency: recurring.frequency, monthlyDay: recurring.monthlyDay }, recurring),
@@ -18769,7 +18783,10 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     duplicateBillingPeriod,
     duplicatePaymentId: duplicateBillingPeriod ? String(duplicateBillingPeriodPayment.id || '') : '',
     duplicatePaymentReference: duplicateBillingPeriod ? String(duplicatePaymentReference) : '',
-    duplicatePaymentProvider: duplicateBillingPeriod ? String(duplicatePaymentProvider) : ''
+    duplicatePaymentProvider: duplicateBillingPeriod ? String(duplicatePaymentProvider) : '',
+    providerMigrationReview,
+    providerAtWebhook: normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover'),
+    stripeMigrationStateAtWebhook: stripeMigration.migrationRecord(recurring).state
   };
   if (existing) Object.assign(existing, payment);
   else data.payments.unshift(payment);
@@ -18792,7 +18809,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     recurringPaymentId: payment.recurringPaymentId
   });
   const priorNextRun = String(recurring.nextRun || '').trim();
-  const resolvedNextRun = alreadyPaid || duplicateBillingPeriod
+  const resolvedNextRun = alreadyPaid || duplicateBillingPeriod || providerMigrationReview
     ? priorNextRun
     : String(scheduledDueKey && scheduledDueKey <= paymentDateKey
       ? (nextFutureRecurringDate(recurring, paymentDateKey, scheduledDueKey) || priorNextRun)
@@ -18814,12 +18831,12 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     });
   }
   const patch = {
-    paymentProvider: 'stripe',
-    provider: 'Stripe',
-    status: duplicateBillingPeriod ? 'Payment review - duplicate billing period' : 'Active',
-    tone: duplicateBillingPeriod ? 'bad' : 'good',
-    retryCount: 0,
-    failedAttempts: 0,
+    status: duplicateBillingPeriod
+      ? 'Payment review - duplicate billing period'
+      : providerMigrationReview
+        ? 'Payment review - unexpected Stripe result'
+        : 'Active',
+    tone: duplicateBillingPeriod || providerMigrationReview ? 'bad' : 'good',
     nextRun: resolvedNextRun,
     lastPaymentAt: paymentAtIso,
     lastStripePaymentIntentId: intentId,
@@ -18828,10 +18845,14 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     lastPaymentResult: payment.status,
     lastPaymentNote: payment.notes,
     paymentAttempts: attempts,
-    autopayManagedBy: duplicateBillingPeriod ? 'WheelsonAuto / Stripe (paused for duplicate review)' : 'WheelsonAuto / Stripe',
+    autopayManagedBy: duplicateBillingPeriod
+      ? 'WheelsonAuto / Stripe (paused for duplicate review)'
+      : providerMigrationReview
+        ? String(recurring.autopayManagedBy || paymentProviderLabel(recurring.paymentProvider || recurring.provider || 'clover')) + ' (paused for Stripe result review)'
+        : 'WheelsonAuto / Stripe',
     stripeChargeAttempt: settledAttempt,
     lastStripeChargeIdempotencyKey: settledAttempt.idempotencyKey || currentAttempt.idempotencyKey || '',
-    autoChargeEnabled: !duplicateBillingPeriod,
+    autoChargeEnabled: !duplicateBillingPeriod && !providerMigrationReview,
     duplicateBillingPeriodReview: duplicateBillingPeriod ? {
       detectedAt: paymentAtIso,
       scheduledDueDate: scheduledDueKey,
@@ -18840,14 +18861,28 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
       existingPaymentProvider: String(duplicatePaymentProvider),
       stripePaymentIntentId: intentId,
       status: 'Owner review required'
+    } : null,
+    providerMigrationReview: providerMigrationReview ? {
+      detectedAt: paymentAtIso,
+      scheduledDueDate: scheduledDueKey,
+      paymentProvider: normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover'),
+      stripeMigrationState: stripeMigration.migrationRecord(recurring).state,
+      stripePaymentIntentId: intentId,
+      status: 'Owner review required'
     } : null
   };
+  if (!providerMigrationReview) Object.assign(patch, {
+    paymentProvider: 'stripe',
+    provider: 'Stripe',
+    retryCount: 0,
+    failedAttempts: 0
+  });
   if (String(metadata.flow || '').toLowerCase() === 'autopay') Object.assign(patch, {
     lastAutoChargeDate: paymentDateKey,
     lastAutoChargeAt: paymentAtIso,
     lastAutoChargeResult: 'Paid'
   });
-  if (!alreadyPaid && !duplicateBillingPeriod) Object.assign(patch, finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso));
+  if (!alreadyPaid && !duplicateBillingPeriod && !providerMigrationReview) Object.assign(patch, finalizeStripeMigrationAfterPaid(recurring, payment, paymentAtIso));
   if (resolvedNextRun && resolvedNextRun !== priorNextRun) Object.assign(patch, {
     paymentDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.paymentDay,
     chargeDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(resolvedNextRun) : recurring.chargeDay,
@@ -18871,6 +18906,21 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
       'Autopay paused'
     ]);
   }
+  if (providerMigrationReview) {
+    appendAuditLog(data, {
+      name: 'Stripe webhook',
+      role: 'System',
+      organizationId: recurring.organizationId || MAIN_ORG_ID,
+      companyName: companyNameById(data, recurring.organizationId || MAIN_ORG_ID)
+    }, 'Unexpected Stripe payment needs review', [
+      recurring.customer || 'Unknown customer',
+      scheduledDueKey || 'No billing date',
+      'Selected provider remains ' + paymentProviderLabel(recurring.paymentProvider || recurring.provider || 'clover'),
+      'Migration ' + stripeMigration.stateLabel(stripeMigration.migrationRecord(recurring).state),
+      'Stripe ' + intentId,
+      'Autopay paused'
+    ]);
+  }
   return {
     matched: true,
     recurringPaymentId: recurring.id || '',
@@ -18878,6 +18928,7 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     paymentId: payment.id,
     alreadyPaid,
     duplicateBillingPeriod,
+    providerMigrationReview,
     duplicatePayment: duplicateBillingPeriodPayment || null,
     advanced: resolvedNextRun !== priorNextRun,
     idempotencyClaimScope: claim.scope,
@@ -18908,6 +18959,34 @@ function applyStripePaymentIntentFailed(data, intent = {}) {
     idempotencyClaimKey: claim.key,
     stripeIdempotencyKey: claim.idempotencyKey
   };
+  if (!stripeWebhookChargeAllowed(recurring, scheduledDueKey)) {
+    appendAuditLog(data, {
+      name: 'Stripe webhook',
+      role: 'System',
+      organizationId: recurring.organizationId || MAIN_ORG_ID,
+      companyName: companyNameById(data, recurring.organizationId || MAIN_ORG_ID)
+    }, 'Stale Stripe failure ignored after provider change', [
+      recurring.customer || 'Unknown customer',
+      scheduledDueKey || 'No billing date',
+      'Selected provider ' + paymentProviderLabel(recurring.paymentProvider || recurring.provider || 'clover'),
+      'Migration ' + stripeMigration.stateLabel(stripeMigration.migrationRecord(recurring).state),
+      'Stripe ' + intentId
+    ]);
+    return {
+      matched: true,
+      ignored: true,
+      settleClaim: true,
+      providerMigrationReview: true,
+      reason: 'This Stripe failure belongs to a plan that no longer allows Stripe charging. The current provider and customer status were preserved.',
+      currentPaymentProvider: normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover'),
+      currentStripeMigrationState: stripeMigration.migrationRecord(recurring).state,
+      recurringPaymentId: recurring.id || '',
+      paymentIntentId: intentId,
+      idempotencyClaimScope: claim.scope,
+      idempotencyClaimKey: claim.key,
+      stripeIdempotencyKey: claim.idempotencyKey
+    };
+  }
   const providerError = String(intent.last_payment_error && (intent.last_payment_error.message || intent.last_payment_error.code) || 'Stripe reported a failed saved-card payment.');
   if (isStripeAuthenticationRequired(intent)) {
     const payment = saveStripeAuthenticationRequiredResult(data, recurring, {
@@ -19592,7 +19671,7 @@ async function recordStripeWebhookEvent(event = {}) {
     webhookCompletions: [{ provider: 'stripe', eventId: event.id || '', claimToken: durableClaim.claimToken }],
     idempotencySettlements: []
   };
-  if (stripePaymentIntentResult && stripePaymentIntentResult.matched === true && stripePaymentIntentResult.ignored !== true && stripePaymentIntentResult.alreadyPaid !== true) {
+  if (stripePaymentIntentResult && stripePaymentIntentResult.matched === true && (stripePaymentIntentResult.ignored !== true || stripePaymentIntentResult.settleClaim === true) && stripePaymentIntentResult.alreadyPaid !== true) {
     const scope = String(stripePaymentIntentResult.idempotencyClaimScope || '').trim();
     const key = String(stripePaymentIntentResult.idempotencyClaimKey || '').trim();
     if (scope && key && type === 'payment_intent.succeeded') {
@@ -25700,6 +25779,8 @@ const server = http.createServer(async (req, res) => {
       const actor = user.name || user.username || 'Owner';
       const now = new Date().toISOString();
       const migration = stripeMigration.migrationRecord(recurring);
+      const providerConfirmationPending = stripeChargeAttemptIsPending(recurring.stripeChargeAttempt)
+        || /confirmation pending/i.test(String(recurring.status || ''));
       if (!['clover', 'stripe'].includes(target)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe.' });
       if (target === current && target === 'clover' && action === 'cancel-cutover') {
         if (migration.state !== stripeMigration.STATES.CUTOVER_SCHEDULED) return json(res, 409, { ok: false, error: 'There is no scheduled Stripe cutover to cancel.' });
@@ -25726,6 +25807,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, cancelled: true, paymentProvider: 'clover', recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId) });
       }
       if (target === current) return json(res, 200, { ok: true, unchanged: true, paymentProvider: target, recurring });
+      if (target === 'clover' && current === 'stripe' && providerConfirmationPending) {
+        return json(res, 409, {
+          ok: false,
+          confirmationPending: true,
+          error: 'Stripe is still confirming a charge for this customer. Wait for the signed provider result before returning the plan to Clover so a late payment cannot create a duplicate charge.'
+        });
+      }
       if (target === 'stripe') {
         await assertStripeCutoverLaunchReady(data);
         assertControlledStripePilotApproved(data);
