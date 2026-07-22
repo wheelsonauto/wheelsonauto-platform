@@ -115,7 +115,7 @@ function footer(settings, homePath = '/') {
 
 function layout({ title, description, canonical, active, body, settings, image, jsonLd, pageClass = '', homePath = '/', noIndex = false }) {
   return '<!doctype html><html lang="en"><head>' + baseHead({ title, description, canonical, image, jsonLd, noIndex }) + '</head><body class="native-site ' + esc(pageClass) + '">' +
-    header(active, homePath) + '<main>' + body + '</main>' + footer(settings, homePath) + '<script src="/native-site-client.js?v=native-7-inline-profile" defer></script></body></html>';
+    header(active, homePath) + '<main>' + body + '</main>' + footer(settings, homePath) + '<script src="/native-site-client.js?v=native-8-inline-profile" defer></script></body></html>';
 }
 
 function vehicleCard(vehicle, compact = false) {

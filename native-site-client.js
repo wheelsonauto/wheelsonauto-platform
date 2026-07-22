@@ -94,6 +94,7 @@
         timeSelect.disabled = false;
         var availableCount = (result.slots || []).filter(function(slot){ return slot.available; }).length;
         setStatus(availableCount ? availableCount + ' pickup time' + (availableCount === 1 ? '' : 's') + ' available.' : 'No online pickup times remain for this date. Call the office for help.', !availableCount);
+        validateProfile(form, false);
       }catch(error){
         if(currentSequence !== sequence) return;
         timeSelect.value = '';
