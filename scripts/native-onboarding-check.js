@@ -184,6 +184,9 @@ async function main() {
     let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedApplication = saved.applications.find(row => row.id === applicationId);
     const pendingCustomerAccount = saved.customerAccounts.find(row => row.applicationId === applicationId);
+    savedApplication.requestedPickupDate = nextPickupDate();
+    savedApplication.requestedPickupTime = '1:00 PM';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
     assert(savedApplication && pendingCustomerAccount && /^pbkdf2\$/.test(pendingCustomerAccount.passwordHash || '') && !savedApplication.pendingPasswordHash, 'A successful application should immediately create a PBKDF2-backed customer portal login without duplicating password secrets.');
     assert(!JSON.stringify(saved).includes('NativeTest123'), 'Plaintext customer password must never be persisted.');
     const customerEmailLogin = await request(server, 'POST', '/customer/login', { form: { username: applicationPayload.email, password: applicationPayload.password } });
@@ -213,6 +216,7 @@ async function main() {
     const token = linkResponse.json.onboarding.url.split('/onboard/')[1];
     const onboardingPage = await request(server, 'GET', '/onboard/' + token);
     assert(onboardingPage.status === 200 && /<option value="11:30 AM">11:30 AM<\/option>/.test(onboardingPage.text) && /<option value="4:30 PM">4:30 PM<\/option>/.test(onboardingPage.text), 'Thirty-minute pickup settings should render every valid appointment start through 4:30 PM.');
+    assert(new RegExp('name="requestedPickupDate"[^>]+value="' + savedApplication.requestedPickupDate + '"').test(onboardingPage.text) && /<option value="1:00 PM" selected>1:00 PM<\/option>/.test(onboardingPage.text), 'Onboarding should prefill the original pickup request without marking the customer profile complete.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedSession = saved.onboardingSessions.find(row => row.id === onboardingId);
     assert(savedSession && savedSession.tokenHash && !savedSession.publicToken, 'Onboarding session should persist only a token hash.');
