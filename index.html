@@ -2,17 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WOA Staff">
   <title>WheelsonAuto Platform</title>
   <link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64">
   <link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">
-  <link rel="stylesheet" href="/styles.css?v=platform-20260721-card-only-visible-281">
-  <link rel="preload" href="/app.js?v=platform-20260721-card-only-visible-281" as="script">
+  <link rel="manifest" href="/staff-manifest.webmanifest">
+  <link rel="stylesheet" href="/styles.css?v=platform-20260721-staff-standalone-282">
+  <link rel="preload" href="/app.js?v=platform-20260721-staff-standalone-282" as="script">
 </head>
 <body>
   <div id="root"><main class="app-boot-shell" aria-live="polite"><img src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto"><div><strong>Opening WheelsonAuto</strong><span>Loading your workspace...</span></div><i></i></main></div>
   <div class="modal-backdrop" id="modalBackdrop"><div class="modal"><div class="modal-head"><strong id="modalTitle"></strong><button class="btn modal-close" onclick="closeModal()" aria-label="Back or close"><span class="modal-close-desktop">Close</span><span class="modal-close-mobile">Back</span></button></div><div class="modal-body" id="modalBody"></div></div></div>
   <div class="toast" id="toast"></div>
-  <script src="/app.js?v=platform-20260721-card-only-visible-281"></script>
+  <script src="/staff-pwa.js?v=platform-20260721-staff-standalone-282" defer></script>
+  <script src="/app.js?v=platform-20260721-staff-standalone-282"></script>
 </body>
 </html>

@@ -14,6 +14,9 @@ const staff = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 const worker = fs.readFileSync(path.join(root, 'service-worker.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.webmanifest'), 'utf8'));
+const staffWorker = fs.readFileSync(path.join(root, 'staff-service-worker.js'), 'utf8');
+const staffPwa = fs.readFileSync(path.join(root, 'staff-pwa.js'), 'utf8');
+const staffManifest = JSON.parse(fs.readFileSync(path.join(root, 'staff-manifest.webmanifest'), 'utf8'));
 
 const account = {
   id: 'customer-account-1',
@@ -67,6 +70,12 @@ assert(html.includes('data-customer-message-form'), 'Customer portal must render
 assert(html.includes('data-customer-message-list'), 'Customer portal must render the live message list.');
 assert(html.includes('data-install-customer-app'), 'Customer portal must expose an install action when supported.');
 assert(!html.includes('Private other message'), 'Rendered customer HTML must not leak another customer message.');
+assert.strictEqual(staffManifest.scope, '/', 'Staff install must keep login, recovery, and every staff workspace route inside standalone mode.');
+assert(staffManifest.start_url.startsWith('/login'), 'The staff app must start at secure staff login instead of the customer portal.');
+assert.strictEqual(staffManifest.display, 'standalone', 'The installed staff app must not show browser address-bar chrome.');
+assert(staffPwa.includes("register('/staff-service-worker.js', { scope: '/' })"), 'Staff pages must register the root-scoped standalone app shell.');
+assert(staffWorker.includes("'/staff-manifest.webmanifest'") && !staffWorker.includes("url.pathname.startsWith('/api/')"), 'The staff worker must cache only public shell assets and never cache private APIs.');
+assert(worker.includes("key.startsWith('wheelsonauto-customer-shell-')") && staffWorker.includes("key.startsWith('wheelsonauto-staff-shell-')"), 'Customer and staff workers must clean only their own cache families.');
 
 async function run() {
   data.messages.unshift({

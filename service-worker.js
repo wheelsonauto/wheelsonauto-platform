@@ -1,6 +1,6 @@
 'use strict';
 
-const SHELL_CACHE = 'wheelsonauto-customer-shell-v1';
+const SHELL_CACHE = 'wheelsonauto-customer-shell-v2';
 const SHELL_ASSETS = [
   '/styles.css',
   '/customer-portal.js',
@@ -14,7 +14,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key !== SHELL_CACHE).map(key => caches.delete(key))))
+      .then(keys => Promise.all(keys.filter(key => key.startsWith('wheelsonauto-customer-shell-') && key !== SHELL_CACHE).map(key => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });

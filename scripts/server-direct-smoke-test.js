@@ -809,6 +809,11 @@ async function main() {
     assert(loginPage.status === 200, 'Login page did not load.');
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
     assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
+    assert(loginPage.text.includes('rel="manifest" href="/staff-manifest.webmanifest"') && loginPage.text.includes('/staff-pwa.js') && loginPage.text.includes('apple-mobile-web-app-capable'), 'Staff login must remain inside the separately installed standalone staff app.');
+    const staffManifest = await request(server, 'GET', '/staff-manifest.webmanifest');
+    assert(staffManifest.status === 200 && staffManifest.json.scope === '/' && staffManifest.json.display === 'standalone' && String(staffManifest.json.start_url || '').startsWith('/login'), 'Staff manifest must launch the secure staff workspace as a standalone app.');
+    const staffServiceWorker = await request(server, 'GET', '/staff-service-worker.js');
+    assert(staffServiceWorker.status === 200 && staffServiceWorker.headers['Service-Worker-Allowed'] === '/' && staffServiceWorker.text.includes('STAFF_SHELL_ASSETS'), 'Staff service worker must be served with root scope while caching only the public app shell.');
     assert(loginPage.headers['X-Frame-Options'] === 'DENY' && loginPage.headers['X-Content-Type-Options'] === 'nosniff', 'Login responses must carry anti-framing and content-sniffing security headers.');
     assert(String(loginPage.headers['Content-Security-Policy'] || '').includes("frame-ancestors 'none'"), 'Login responses must prevent embedding by another site.');
     const compressedLoginPage = await request(server, 'GET', '/login', { headers: { 'accept-encoding': 'br, gzip;q=0.8' } });

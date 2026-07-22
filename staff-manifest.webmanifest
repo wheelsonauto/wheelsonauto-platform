@@ -1,0 +1,27 @@
+{
+  "id": "/staff-app",
+  "name": "WheelsonAuto Staff",
+  "short_name": "WOA Staff",
+  "description": "Secure WheelsonAuto staff operations, payments, fleet, service, messages, and reporting.",
+  "start_url": "/login?source=staff-app",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "any",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "icons": [
+    {
+      "src": "https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=192",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=512",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
