@@ -1112,6 +1112,41 @@ async function main() {
       error => error && error.code === 'invalid_stripe_migration_transition',
       'The shared migration engine must not mark Clover disabled before the verified first Stripe charge passes.'
     );
+    assert.throws(
+      () => stripeMigration.transition({
+        ...recurring,
+        paymentProvider: 'stripe',
+        stripeMigration: {
+          ...migration,
+          cloverStoppedConfirmedAt: '',
+          state: stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING
+        }
+      }, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED, {
+        at: '2026-07-24T18:00:00.000Z',
+        firstStripeChargeAt: '2026-07-24T18:00:00.000Z',
+        firstStripePaymentIntentId: 'pi-corrupt-missing-stop-proof'
+      }),
+      error => error && error.code === 'invalid_stripe_migration_transition' && /owner Clover-stop confirmation/i.test(error.message || ''),
+      'A repaired or corrupted pending row must not inherit missing Clover-stop proof and advance from a Stripe webhook.'
+    );
+    assert.throws(
+      () => stripeMigration.transition({
+        ...recurring,
+        paymentProvider: 'stripe',
+        stripeMigration: {
+          ...migration,
+          scheduledCloverSubscriptionId: '',
+          state: stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED,
+          firstStripeChargeAt: '2026-07-24T18:00:00.000Z',
+          firstStripePaymentIntentId: 'pi-corrupt-missing-plan-binding'
+        }
+      }, stripeMigration.STATES.CLOVER_DISABLED, {
+        at: '2026-07-24T18:00:01.000Z',
+        cloverDisabledAt: '2026-07-24T18:00:01.000Z'
+      }),
+      error => error && error.code === 'invalid_stripe_migration_transition' && /exact Clover subscription binding/i.test(error.message || ''),
+      'A repaired or corrupted paid row must not disable Clover without the exact scheduled subscription binding.'
+    );
     migration = stripeMigration.transition({ ...recurring, paymentProvider: 'stripe', stripeMigration: migration }, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PASSED, {
       at: '2026-07-24T18:00:00.000Z',
       firstStripeChargeAt: '2026-07-24T18:00:00.000Z',

@@ -490,18 +490,24 @@ function assertTransitionEvidence(row, currentState, nextState, migration) {
   if (nextState === STATES.CUTOVER_SCHEDULED && hasCloverSource(row) && !text(migration.scheduledCloverSubscriptionId)) {
     throw migrationTransitionError(currentState, nextState, 'The exact Clover subscription ID must be bound to the protected cutover before Stripe can be scheduled.');
   }
-  if (nextState === STATES.FIRST_STRIPE_CHARGE_PENDING && hasCloverSource(row)) {
-    if (!validDateKey(migration.cutoverDate) || !text(migration.cloverStoppedConfirmedAt)) {
-      throw migrationTransitionError(currentState, nextState, 'Confirm the exact cutover date and that Clover was stopped before the first Stripe charge can become pending.');
+  const protectedStripeStates = [
+    STATES.FIRST_STRIPE_CHARGE_PENDING,
+    STATES.FIRST_STRIPE_CHARGE_PASSED,
+    STATES.CLOVER_DISABLED,
+    STATES.STRIPE_ACTIVE
+  ];
+  if (hasCloverSource(row) && protectedStripeStates.includes(nextState)) {
+    if (!validDateKey(migration.cutoverDate) || !text(migration.scheduledCloverSubscriptionId) || !text(migration.cloverStoppedConfirmedAt)) {
+      throw migrationTransitionError(currentState, nextState, 'The protected cutover date, exact Clover subscription binding, and owner Clover-stop confirmation are all required before Stripe can own a billing period.');
     }
   }
-  if (nextState === STATES.FIRST_STRIPE_CHARGE_PASSED && hasCloverSource(row)) {
+  if (hasCloverSource(row) && [STATES.FIRST_STRIPE_CHARGE_PASSED, STATES.CLOVER_DISABLED, STATES.STRIPE_ACTIVE].includes(nextState)) {
     if (!text(migration.firstStripeChargeAt) || !text(migration.firstStripePaymentIntentId)) {
       throw migrationTransitionError(currentState, nextState, 'A verified first Stripe payment and PaymentIntent are required before the migration can advance.');
     }
   }
-  if (nextState === STATES.CLOVER_DISABLED && hasCloverSource(row)) {
-    if (!text(migration.firstStripeChargeAt) || !text(migration.firstStripePaymentIntentId) || !text(migration.cloverDisabledAt)) {
+  if (hasCloverSource(row) && [STATES.CLOVER_DISABLED, STATES.STRIPE_ACTIVE].includes(nextState)) {
+    if (!text(migration.cloverDisabledAt)) {
       throw migrationTransitionError(currentState, nextState, 'Clover can be marked disabled only after the verified first Stripe charge is recorded.');
     }
   }
