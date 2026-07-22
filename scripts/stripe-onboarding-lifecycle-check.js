@@ -524,6 +524,16 @@ async function main() {
     const amountMatchedPilot = amountMatchedPreflight.json && amountMatchedPreflight.json.controlledStripePilot && amountMatchedPreflight.json.controlledStripePilot.candidate;
     assert(amountMatchedPreflight.status === 200 && amountMatchedPilot && amountMatchedPilot.depositAmount === 485 && amountMatchedPilot.firstWeekAmount === 229 && amountMatchedPilot.totalCollected === 714, 'The owner pilot review must show the exact locked deposit, first-week charge, and collected total.');
 
+    const placeholderVehiclePilotState = await readSaved(dataDir);
+    const placeholderVehiclePilot = placeholderVehiclePilotState.onlineVehicles.find(row => row.id === 'online-stripe-life-1');
+    const verifiedPilotVin = placeholderVehiclePilot.vin;
+    placeholderVehiclePilot.vin = 'test';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(placeholderVehiclePilotState, null, 2));
+    const placeholderVehiclePilotApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
+    assert(placeholderVehiclePilotApproval.status === 409 && /17-character VIN/i.test(placeholderVehiclePilotApproval.json.error || ''), 'Final live-pilot approval must reject a placeholder VIN even after Identity, payment, receipt, insurance, and pickup evidence are complete.');
+    placeholderVehiclePilot.vin = verifiedPilotVin;
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(placeholderVehiclePilotState, null, 2));
+
     const mismatchedPilotState = await readSaved(dataDir);
     const mismatchedDepositPayment = mismatchedPilotState.payments.find(row => row.paymentRequestId === deposit.paymentRequest.id);
     mismatchedDepositPayment.amount = 484;
@@ -537,6 +547,8 @@ async function main() {
     assert(wrongPilotPhrase.status === 409, 'The first Stripe pilot must require the exact owner approval phrase.');
     const approvedPilot = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
     assert(approvedPilot.status === 200 && approvedPilot.json.controlledStripePilot.approved === true, 'The exact completed Stripe onboarding file must unlock the isolated pilot only after owner approval: ' + JSON.stringify(approvedPilot.json));
+    saved = await readSaved(dataDir);
+    assert(saved.integrations.stripe.controlledPilotEvidenceVersion === 2, 'Pilot approval must record the real-vehicle identity evidence contract version so older weaker approvals cannot remain valid.');
     const duplicatePilotApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
     assert(duplicatePilotApproval.status === 200 && duplicatePilotApproval.json.alreadyApproved === true, 'Repeated approval of the same unchanged pilot evidence must be idempotent.');
     const browserState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

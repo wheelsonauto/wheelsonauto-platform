@@ -73,14 +73,17 @@ async function main() {
   const pilotSelection = controlledStripePilotSelection({
     applications: [
       { id: 'app-pilot-ready', name: 'Pilot Customer', email: 'pilot@example.com', onlineVehicleId: 'online-pilot-ready', vehicle: '2020 Pilot Ready', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'New', submittedAt: '2026-07-21T12:00:00.000Z' },
+      { id: 'app-pilot-placeholder', name: 'Placeholder Customer', email: 'placeholder@example.com', onlineVehicleId: 'online-pilot-placeholder', vehicle: 'Online vehicle', pricingSnapshot: { weeklyPayment: 1, downPayment: 1 }, status: 'New', submittedAt: '2026-07-21T11:30:00.000Z' },
       { id: 'app-pilot-blocked', name: 'Blocked Customer', email: 'blocked@example.com', onlineVehicleId: 'online-pilot-blocked', vehicle: '2021 Pilot Blocked', pricingSnapshot: {}, status: 'New', submittedAt: '2026-07-21T11:00:00.000Z' }
     ],
     onlineVehicles: [
-      { id: 'online-pilot-ready', platformVehicleId: 'veh-pilot-ready', title: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, published: true, availability: 'Available' },
+      { id: 'online-pilot-ready', platformVehicleId: 'veh-pilot-ready', title: '2020 Pilot Ready', vin: '1HGCM82633A123456', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, published: true, availability: 'Available' },
+      { id: 'online-pilot-placeholder', platformVehicleId: 'veh-pilot-placeholder', title: 'Online vehicle', vin: 'test', plate: 'test', weeklyPayment: 1, downPayment: 1, published: true, availability: 'Available' },
       { id: 'online-pilot-blocked', platformVehicleId: 'veh-pilot-blocked', title: '2021 Pilot Blocked', published: true, availability: 'Available' }
     ],
     vehicles: [
-      { id: 'veh-pilot-ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', status: 'Ready' },
+      { id: 'veh-pilot-ready', vin: '1HGCM82633A123456', plate: 'PIL-001', status: 'Ready' },
+      { id: 'veh-pilot-placeholder', vin: 'test', plate: 'test', status: 'Ready' },
       { id: 'veh-pilot-blocked', status: 'Ready' }
     ],
     onboardingSessions: []
@@ -92,11 +95,14 @@ async function main() {
   assert.strictEqual(pilotSelection.candidates[0].identityProvider, 'manual', 'The pilot chooser must expose the actual configured identity provider instead of guessing in the browser.');
   assert.strictEqual(pilotSelection.candidates[0].nextActions[0].owner, 'System', 'A legacy pilot candidate without its automatic setup must explain the responsible repair path without mutating the file.');
   assert.match(pilotSelection.candidates[0].nextActions[0].text, /without sending a charge/i, 'Automatic setup repair must state that it does not send a charge.');
+  const placeholderPilot = pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-placeholder');
+  assert(placeholderPilot && placeholderPilot.eligible === false, 'A placeholder car must never qualify as the first live Stripe pilot.');
+  assert(placeholderPilot.blockers.some(reason => /17-character VIN/i.test(reason)) && placeholderPilot.blockers.some(reason => /test or placeholder/i.test(reason)) && placeholderPilot.blockers.some(reason => /year, make, and model/i.test(reason)), 'The owner must see every exact placeholder identity field that blocks the live pilot.');
   assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
   const inProgressPilotSelection = controlledStripePilotSelection({
     applications: [{ id: 'app-pilot-progress', name: 'Progress Customer', email: 'progress@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: '66', driverLicenseExpires: '2035-01-01', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: '2020-01-01', requestedPickupTime: '11:00 AM', onlineVehicleId: 'online-pilot-progress', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T13:00:00.000Z' }],
-    onlineVehicles: [{ id: 'online-pilot-progress', platformVehicleId: 'veh-pilot-progress', title: '2019 Pilot Progress', vin: 'PILOTPROGRESS001', plate: 'PIL-002', weeklyPayment: 229, downPayment: 485, published: false, availability: 'Held', heldApplicationId: 'app-pilot-progress' }],
-    vehicles: [{ id: 'veh-pilot-progress', vin: 'PILOTPROGRESS001', plate: 'PIL-002', status: 'Held for onboarding' }],
+    onlineVehicles: [{ id: 'online-pilot-progress', platformVehicleId: 'veh-pilot-progress', title: '2019 Pilot Progress', vin: '2C3CDXBG5KH123456', plate: 'PIL-002', weeklyPayment: 229, downPayment: 485, published: false, availability: 'Held', heldApplicationId: 'app-pilot-progress' }],
+    vehicles: [{ id: 'veh-pilot-progress', vin: '2C3CDXBG5KH123456', plate: 'PIL-002', status: 'Held for onboarding' }],
     onboardingSessions: [{ id: 'onboard-pilot-progress', applicationId: 'app-pilot-progress', onlineVehicleId: 'online-pilot-progress', status: 'Open', paymentProvider: 'stripe', identityProvider: 'stripe' }]
   });
   const inProgressActions = inProgressPilotSelection.candidates[0].nextActions.map(action => action.text).join(' ');

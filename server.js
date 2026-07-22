@@ -193,7 +193,7 @@ const WOA_DEPLOY_COMMIT = String(process.env.RENDER_GIT_COMMIT || process.env.WO
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
 const WOA_MIGRATION_MAINTENANCE_MODE = process.env.WOA_MIGRATION_MAINTENANCE_MODE === '1';
-const CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION = 1;
+const CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION = 2;
 const CONTROLLED_STRIPE_PILOT_APPROVAL_PHRASE = 'APPROVE FIRST LIVE STRIPE PILOT';
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-application-timestamps-294';
+const ASSET_VERSION = 'platform-20260722-real-pilot-identity-295';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10497,6 +10497,22 @@ function nativeOnboardingReadyForPickup(data, session, application, options = {}
     firstWeek
   };
 }
+function controlledStripePilotVinReady(value) {
+  const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(normalized)) return false;
+  if (/^(?:0{17}|1{17})$/.test(normalized)) return false;
+  return !/(?:TEST|SAMPLE|UNKNOWN|PENDING|PLACEHOLDER)/.test(normalized);
+}
+function controlledStripePilotPlateReady(value) {
+  const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (normalized.length < 2 || normalized.length > 20) return false;
+  return !/^(?:0+|TEST|TAG|PLATE|TEMP|TEMPORARY|UNKNOWN|NONE|NA|TBD|PENDING|SAMPLE|PLACEHOLDER)$/.test(normalized);
+}
+function controlledStripePilotVehicleTitleReady(value) {
+  const title = String(value || '').trim();
+  if (!title || /\b(?:test|testing|sample|placeholder)\b/i.test(title)) return false;
+  return !/^(?:online\s+vehicle|wheelsonauto\s+vehicle|vehicle)$/i.test(title);
+}
 function controlledStripePilotSessionEvidence(data, session, options = {}) {
   const liveRequired = options.liveRequired !== false;
   const application = session && (data.applications || []).find(row => row.id === session.applicationId) || null;
@@ -10533,6 +10549,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     && cents(firstWeekPayment.amount) === expectedFirstWeekCents);
   const exactCustomer = String(application && application.name || '').trim();
   const exactVehicleId = String(vehicle && (vehicle.platformVehicleId || vehicle.id) || '').trim();
+  const exactVehicleTitle = vehicle ? nativeSite.vehicleTitle(vehicle) : '';
   const exactVin = String(vehicle && vehicle.vin || '').trim();
   const exactPlate = String(vehicle && vehicle.plate || '').trim();
   const completedPickup = !!(appointment && /picked up|completed/i.test(String(appointment.status || '')) && appointment.completedAt);
@@ -10582,7 +10599,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     && (String(session.insuranceOption || '').toLowerCase() === 'help_at_pickup' || insuranceDocuments.length));
   const checks = [
     ['application', 'Approved application for one online vehicle', !!(application && vehicle && application.onlineVehicleId && exactCustomer)],
-    ['vehicle_identity', 'Vehicle VIN and tag/plate', !!(exactVehicleId && exactVin && exactPlate)],
+    ['vehicle_identity', 'Real vehicle title, complete 17-character VIN, and tag/plate', !!(exactVehicleId && controlledStripePilotVehicleTitleReady(exactVehicleTitle) && controlledStripePilotVinReady(exactVin) && controlledStripePilotPlateReady(exactPlate))],
     ['profile_pickup_consent', 'Profile, pickup date, and autopay consent', !!(session && session.profileCompletedAt && session.requestedPickupDate && session.pickupAutopayConsentAt)],
     ['final_review', 'One final WheelsonAuto screening approval before paid identity verification', !!(session && session.finalReviewStatus === 'Approved' && session.finalReviewedAt)],
     ['stripe_identity', liveRequired ? 'Live Stripe Identity license and selfie verification with legal-name match' : 'Stripe Identity license and selfie verification with legal-name match', !!(session && session.identityProvider === 'stripe' && session.identityVerificationStatus === 'verified' && session.identityLegalNameMatch === true && (!liveRequired || session.identityVerificationLivemode === true))],
@@ -10608,6 +10625,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     applicationId: application && application.id || '',
     onlineVehicleId: vehicle && vehicle.id || '',
     vehicleId: exactVehicleId,
+    vehicleTitle: exactVehicleTitle,
     vin: exactVin,
     plate: exactPlate,
     identityVerificationId: session && session.stripeIdentityVerificationId || '',
@@ -10645,7 +10663,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     applicationId: application && application.id || '',
     recurringPaymentId: recurring && recurring.id || '',
     customer: exactCustomer,
-    vehicle: vehicle ? nativeSite.vehicleTitle(vehicle) : '',
+    vehicle: exactVehicleTitle,
     vin: exactVin,
     plate: exactPlate,
     depositAmount: Number((expectedDepositCents / 100).toFixed(2)),
@@ -10734,6 +10752,7 @@ function controlledStripePilotSelection(data) {
     const downPayment = Number(pricing.downPayment !== undefined ? pricing.downPayment : application.down);
     const vin = String(publicVehicle && publicVehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
     const plate = String(publicVehicle && publicVehicle.plate || linkedVehicle && (linkedVehicle.plate || linkedVehicle.stock) || '').trim();
+    const vehicleTitle = publicVehicle ? nativeSite.vehicleTitle(publicVehicle) : String(application.vehicle || '').trim();
     const blockers = [];
     if (/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || ''))) blockers.push('Application is denied, removed, cancelled, or archived.');
     if (!String(application.name || '').trim()) blockers.push('Applicant name is missing.');
@@ -10742,7 +10761,10 @@ function controlledStripePilotSelection(data) {
     if (publicVehicle && !platformVehicleId) blockers.push('Online vehicle is not linked to an internal fleet record.');
     if (publicVehicle && platformVehicleId && !linkedVehicle) blockers.push('Linked fleet vehicle record was not found.');
     if (!vin) blockers.push('Vehicle VIN is missing.');
+    else if (!controlledStripePilotVinReady(vin)) blockers.push('Vehicle VIN must be the complete real 17-character VIN before a live Stripe pilot.');
     if (!plate) blockers.push('Vehicle tag/plate is missing.');
+    else if (!controlledStripePilotPlateReady(plate)) blockers.push('Vehicle tag/plate must be a real assigned identifier, not a test or placeholder value.');
+    if (publicVehicle && !controlledStripePilotVehicleTitleReady(vehicleTitle)) blockers.push('Vehicle year, make, and model must identify a real online vehicle before a live Stripe pilot.');
     if (!Number.isFinite(weeklyPayment) || weeklyPayment <= 0) blockers.push('Locked weekly payment is missing.');
     if (!Number.isFinite(downPayment) || downPayment < 0) blockers.push('Locked nonrefundable deposit is missing.');
     if (applicationSessions.length > 1) blockers.push('More than one active onboarding session exists for this application.');
@@ -10756,7 +10778,7 @@ function controlledStripePilotSelection(data) {
       onboardingSessionId: session && String(session.id || '') || '',
       customer: String(application.name || '').trim(),
       contact: String(application.email || application.phone || '').trim(),
-      vehicle: publicVehicle ? nativeSite.vehicleTitle(publicVehicle) : String(application.vehicle || '').trim(),
+      vehicle: vehicleTitle,
       onlineVehicleId,
       vehicleId: platformVehicleId,
       vin,
