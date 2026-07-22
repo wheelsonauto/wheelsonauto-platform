@@ -170,7 +170,7 @@ function createFakeStripe() {
         });
       }
       if (method === 'GET' && pathname === '/v1/identity/verification_sessions/vs_test_lifecycle') {
-        return response({ id: 'vs_test_lifecycle', object: 'identity.verification_session', status: 'verified', livemode: false, metadata: {} });
+        return response({ id: 'vs_test_lifecycle', object: 'identity.verification_session', status: 'verified', livemode: false, metadata: {}, verified_outputs: { first_name: 'Stripe', last_name: 'Lifecycle' } });
       }
       if (method === 'POST' && pathname === '/v1/checkout/sessions') {
         state.checkoutCounter += 1;
@@ -328,11 +328,13 @@ async function main() {
       employer: 'Lifecycle Test Employer',
       income: 5200,
       password: 'StripeLife123',
-      applicationConsent: true
+      applicationConsent: true,
+      insurancePickupConsent: true
     };
     const applied = await request(server, 'POST', '/api/public/applications', { json: applicant });
-    assert(applied.status === 201 && applied.json.application.id, 'A customer must be able to apply for the selected online vehicle.');
+    assert(applied.status === 201 && applied.json.application.id && /\/onboard\//.test(applied.json.onboardingUrl || ''), 'A customer must be able to apply for the selected online vehicle and continue directly into secure setup.');
     const applicationId = applied.json.application.id;
+    const onboardingUrl = applied.json.onboardingUrl;
     const customerLogin = await request(server, 'POST', '/customer/login', { form: { username: applicant.email, password: applicant.password } });
     const customerCookie = String(customerLogin.cookie).split(';')[0];
     assert(customerLogin.status === 302 && customerCookie.includes('woa_customer_session='), 'The application must immediately create a secure customer login.');
@@ -365,10 +367,11 @@ async function main() {
     const cloverReplacementRecurring = cloverReplacementSaved.recurringPayments.find(row => row.id === 'rec-clover-kept-active');
     assert(cloverReplacementRecurring.paymentProvider === 'clover' && cloverReplacementRecurring.status === 'Active' && cloverReplacementRecurring.autoChargeEnabled === true && cloverReplacementRecurring.cloverSubscriptionId === 'sub_clover_kept_active', 'A failed Stripe card-preparation attempt must never pause, replace, or disable the active Clover schedule.');
     assert(cloverReplacementRecurring.stripeCardSetupStatus === 'Failed' && /Clover remains active/i.test(cloverReplacementRecurring.stripeMigrationStatus || ''), 'The Clover row must separately show that Stripe setup needs attention while Clover remains authoritative.');
-    const link = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId, paymentProvider: 'stripe' } });
-    assert(link.status === 201 && link.json.onboarding.paymentProvider === 'stripe' && link.json.onboarding.identityProvider === 'stripe', 'Admin approval must lock both Stripe payments and Stripe Identity for the file.');
-    const onboardingId = link.json.onboarding.id;
-    const token = link.json.onboarding.url.split('/onboard/')[1];
+    const automaticallyStarted = await readSaved(dataDir);
+    const automaticSession = automaticallyStarted.onboardingSessions.find(row => row.applicationId === applicationId);
+    assert(automaticSession && automaticSession.paymentProvider === 'stripe' && automaticSession.identityProvider === 'stripe', 'Application submission must automatically lock both Stripe payments and Stripe Identity without preliminary staff approval.');
+    const onboardingId = automaticSession.id;
+    const token = onboardingUrl.split('/onboard/')[1];
     const pickupDate = nextPickupDate();
 
     const profile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: {
@@ -378,49 +381,21 @@ async function main() {
       postalCode: applicant.postalCode,
       driverLicenseId: applicant.driverLicenseId,
       driverLicenseExpires: applicant.driverLicenseExpires,
-      insuranceProvider: 'Lifecycle Full Coverage Insurance',
-      insurancePolicyNumber: 'FULL-COVERAGE-918',
       requestedPickupDate: pickupDate,
       requestedPickupTime: '1:00 PM',
       pickupAutopayConsent: true
     } });
-    assert(profile.status === 200, 'Profile, insurance details, pickup date, and pickup-anchored autopay consent must save together.');
+    assert(profile.status === 200, 'Profile, pickup date, and pickup-anchored autopay consent must save without forcing insurance before approval.');
     const image = pngDataUrl();
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
       { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
       { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
-      { kind: 'identity_selfie', name: 'identity-selfie.png', type: 'image/png', dataUrl: image },
-      { kind: 'insurance', name: 'insurance-full-coverage.png', type: 'image/png', dataUrl: image }
+      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image }
     ] } });
-    assert(documents.status === 201 && documents.json.documents.length === 4, 'License front/back, selfie, and insurance proof must persist in the private customer file.');
-
-    fakeStripe.state.failNextIdentitySession = true;
-    const failedIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
-    assert(failedIdentity.status === 502 && /No verification decision was recorded/i.test(failedIdentity.json.error || '') && !/Provider secret diagnostic/i.test(failedIdentity.text), 'A Stripe Identity transport failure must return a safe retry message without exposing provider diagnostics.');
-    let identityFailureState = await readSaved(dataDir);
-    const failedIdentitySession = identityFailureState.onboardingSessions.find(row => row.id === onboardingId);
-    assert(/Provider secret diagnostic: identity transport failed/i.test(failedIdentitySession.identityVerificationProviderError || '') && /No verification decision was recorded/i.test(failedIdentitySession.identityVerificationCustomerMessage || ''), 'The onboarding file must retain private identity diagnostics separately from the customer-safe message.');
-    const failedIdentityPage = await request(server, 'GET', '/onboard/' + token);
-    assert(failedIdentityPage.status === 200 && /No verification decision was recorded/i.test(failedIdentityPage.text) && !/Provider secret diagnostic/i.test(failedIdentityPage.text), 'The secure onboarding page must show only the safe identity retry message.');
-    const identity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
-    assert(identity.status === 201 && identity.json.redirectUrl === 'https://verify.stripe.test/vs_test_lifecycle', 'The customer must receive the provider-hosted Stripe Identity page.');
-    identityFailureState = await readSaved(dataDir);
-    const recoveredIdentitySession = identityFailureState.onboardingSessions.find(row => row.id === onboardingId);
-    assert(!recoveredIdentitySession.identityVerificationProviderError && !recoveredIdentitySession.identityVerificationCustomerMessage, 'A successful identity retry must clear the prior failure markers on the same onboarding file.');
-    const identityEvent = { id: 'evt_test_identity_verified', type: 'identity.verification_session.verified', data: { object: { id: 'vs_test_lifecycle', object: 'identity.verification_session', status: 'verified', livemode: false, metadata: { onboardingSessionId: onboardingId, applicationId } } } };
-    const identityRaw = JSON.stringify(identityEvent);
-    const identityWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: identityRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, identityRaw) } });
-    assert(identityWebhook.status === 200 && identityWebhook.json.identitySessionId === onboardingId, 'Only the signed Stripe Identity result may unlock staff review.');
-    const identityEvidenceState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
-    const identityEvidence = identityEvidenceState.integrations && identityEvidenceState.integrations.stripe || {};
-    assert(identityEvidence.lastIdentityWebhookEventId === identityEvent.id && identityEvidence.lastIdentityWebhookLivemode === false, 'A signed Stripe Identity result must retain server-only identity-proof evidence while test-mode events remain distinctly non-live.');
-    const documentsApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'documents', decision: 'approve', identityConfirmed: true, notes: 'Stripe verified live license/selfie; full coverage insurance manually reviewed.' } });
-    assert(documentsApproved.status === 200, 'Admin must be able to approve verified identity and manually reviewed insurance.');
+    assert(documents.status === 201 && documents.json.documents.length === 3, 'Stripe onboarding must keep the preliminary license and live-selfie screening private before any paid Identity session is created.');
 
     const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Stripe Lifecycle', electronicConsent: true, signatureMatchConsent: true, signatureData: pngDataUrl(4) } });
     assert(signature.status === 201, 'The customer must sign the immutable agreement before nonrefundable money is collected.');
-    const signatureApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'signature', decision: 'approve', signatureMatchConfirmed: true, notes: 'Signature manually matched to the driver license.' } });
-    assert(signatureApproved.status === 200, 'Admin must explicitly approve the license/signature comparison.');
 
     const card = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
     assert(card.status === 201 && /\/setup-card\//.test(card.json.redirectUrl || ''), 'The signed file must open a Stripe card-on-file authorization.');
@@ -476,6 +451,30 @@ async function main() {
     saved = await readSaved(dataDir);
     assert(saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt === firstSetupCompletedAt, 'Out-of-order Stripe setup webhooks must not complete or mutate the saved-card request twice.');
 
+    const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Application, preliminary files, agreement, signature, VIN, and saved card reviewed together.' } });
+    assert(finalReview.status === 200 && finalReview.json.finalReviewStatus === 'Approved', 'Staff must give one combined approval only after the preliminary file and saved card are complete.');
+    fakeStripe.state.failNextIdentitySession = true;
+    const failedIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
+    assert(failedIdentity.status === 502 && /No verification decision was recorded/i.test(failedIdentity.json.error || '') && !/Provider secret diagnostic/i.test(failedIdentity.text), 'A Stripe Identity transport failure must return a safe retry message without exposing provider diagnostics.');
+    let identityFailureState = await readSaved(dataDir);
+    const failedIdentitySession = identityFailureState.onboardingSessions.find(row => row.id === onboardingId);
+    assert(/Provider secret diagnostic: identity transport failed/i.test(failedIdentitySession.identityVerificationProviderError || '') && /No verification decision was recorded/i.test(failedIdentitySession.identityVerificationCustomerMessage || ''), 'The onboarding file must retain private identity diagnostics separately from the customer-safe message.');
+    const failedIdentityPage = await request(server, 'GET', '/onboard/' + token);
+    assert(failedIdentityPage.status === 200 && !/Provider secret diagnostic/i.test(failedIdentityPage.text), 'The secure onboarding page must never expose the private Stripe Identity diagnostic.');
+    const identity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
+    assert(identity.status === 201 && identity.json.redirectUrl === 'https://verify.stripe.test/vs_test_lifecycle', 'The approved customer must receive the provider-hosted Stripe Identity page.');
+    identityFailureState = await readSaved(dataDir);
+    const recoveredIdentitySession = identityFailureState.onboardingSessions.find(row => row.id === onboardingId);
+    assert(!recoveredIdentitySession.identityVerificationProviderError && !recoveredIdentitySession.identityVerificationCustomerMessage, 'A successful identity retry must clear prior failure markers on the same onboarding file.');
+    const identityEvent = { id: 'evt_test_identity_verified', type: 'identity.verification_session.verified', data: { object: { id: 'vs_test_lifecycle', object: 'identity.verification_session', status: 'verified', livemode: false, verified_outputs: { first_name: 'Stripe', last_name: 'Lifecycle' }, metadata: { onboardingSessionId: onboardingId, applicationId } } } };
+    const identityRaw = JSON.stringify(identityEvent);
+    const identityWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: identityRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, identityRaw) } });
+    assert(identityWebhook.status === 200 && identityWebhook.json.identitySessionId === onboardingId, 'Only the signed Stripe Identity result may unlock payment.');
+    const identityEvidenceState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    const identityEvidence = identityEvidenceState.integrations && identityEvidenceState.integrations.stripe || {};
+    const verifiedIdentitySession = identityEvidenceState.onboardingSessions.find(row => row.id === onboardingId);
+    assert(identityEvidence.lastIdentityWebhookEventId === identityEvent.id && identityEvidence.lastIdentityWebhookLivemode === false && verifiedIdentitySession.identityLegalNameMatch === true, 'The signed Stripe result must retain server-only proof and confirm the exact application legal name.');
+
     async function payOnboarding(kind, intentId, eventId) {
       const checkout = await request(server, 'POST', '/api/public/onboarding/' + token + '/payment', { json: { paymentType: kind } });
       assert([200, 201].includes(checkout.status) && checkout.json.paymentRequest && checkout.json.redirectUrl, kind + ' must create a separate Stripe Checkout session.');
@@ -505,14 +504,18 @@ async function main() {
     saved = await readSaved(dataDir);
     const payments = saved.payments.filter(row => row.onboardingSessionId === onboardingId);
     const receipts = saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt');
-    const appointment = saved.pickupAppointments.find(row => row.onboardingSessionId === onboardingId);
-    const scheduledRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     assert(payments.length === 2 && new Set(payments.map(row => row.paymentType)).size === 2, 'Deposit and first week must be separate named Stripe transactions.');
     assert(receipts.length === 2 && receipts.every(row => row.customer === 'Stripe Lifecycle' && row.vin === '1HGCV1F30JA123456' && row.licensePlate === 'WOA-918'), 'Both receipts must carry the exact customer, vehicle, VIN, and tag.');
-    assert(appointment && appointment.date === pickupDate && appointment.autopayAnchorDate === pickupDate, 'Both verified payments must confirm the requested pickup exactly once.');
-    assert(scheduledRecurring.nextRun === plusDays(pickupDate, 7) && scheduledRecurring.autopayAnchorDate === pickupDate && scheduledRecurring.paymentDay === appointment.weekday, 'Weekly autopay must begin one week after pickup and stay on the pickup weekday.');
+    assert(!saved.pickupAppointments.some(row => row.onboardingSessionId === onboardingId), 'Both verified payments must still leave pickup locked until the customer chooses a VIN-specific insurance path.');
+    const insurance = await request(server, 'POST', '/api/public/onboarding/' + token + '/insurance', { json: { insuranceOption: 'upload', insuranceProvider: 'Lifecycle Full Coverage Insurance', insurancePolicyNumber: 'FULL-COVERAGE-918', insuranceVinConfirmed: true, documents: [{ kind: 'insurance', name: 'insurance-full-coverage.png', type: 'image/png', dataUrl: image }] } });
+    assert(insurance.status === 201, 'After payment, the customer must upload full-coverage proof for the exact VIN or choose staff help at pickup.');
+    saved = await readSaved(dataDir);
+    const appointment = saved.pickupAppointments.find(row => row.onboardingSessionId === onboardingId);
+    const scheduledRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
+    assert(appointment && appointment.date === pickupDate && appointment.autopayAnchorDate === pickupDate, 'Insurance selection must reserve the requested pickup exactly once.');
+    assert(scheduledRecurring.nextRun === plusDays(pickupDate, 7) && scheduledRecurring.autopayAnchorDate === pickupDate && scheduledRecurring.paymentDay === appointment.weekday && scheduledRecurring.autoChargeEnabled === false, 'Weekly autopay must be prepared for the pickup weekday but remain disabled before handoff.');
 
-    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510, notes: 'Keys and vehicle delivered after identity check.' } });
+    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510, notes: 'Keys and vehicle delivered after identity and insurance checks.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Lifecycle Full Coverage Insurance', insurancePolicyNumber: 'FULL-COVERAGE-918' } });
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Physical handoff must activate the vehicle, customer file, contract, and Stripe autopay together.');
     const duplicateHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510 } });
     assert(duplicateHandoff.status === 200 && duplicateHandoff.json.alreadyCompleted === true, 'Repeated pickup confirmation must be idempotent.');

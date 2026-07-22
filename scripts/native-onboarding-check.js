@@ -124,6 +124,9 @@ function cloverSignature(secret, rawBody) {
 
 async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-native-onboarding-'));
+  const nativeCss = await fs.readFile(path.join(__dirname, '..', 'native-site.css'), 'utf8');
+  assert(nativeCss.includes('[hidden]{display:none!important}'), 'Hidden selfie preview and camera controls must stay invisible until the live-camera flow reveals them.');
+  assert(/@media\(max-width:980px\)[^{]*\{[^}]*[\s\S]*?\.onboarding-progress\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/.test(nativeCss), 'Tablet and phone onboarding milestones must use a compact grid instead of a horizontal scroller.');
   const webhookSecret = 'native-onboarding-hco-secret';
   process.env.TZ = 'America/New_York';
   process.env.DATA_DIR = dataDir;
@@ -178,16 +181,21 @@ async function main() {
     assert(preview.status === 200 && /2016 Ford Focus/.test(preview.text), 'Public preview should render only the native published vehicle.');
     assert(/<b>19 months<\/b>/.test(preview.text) && !/<b>18 months<\/b>/.test(preview.text), 'Public purchase-eligibility copy should use the canonical 19-month term even when an older vehicle record still says 18.');
     assert(/name="robots" content="noindex,nofollow"/.test(preview.text) && /class="site-brand" href="\/site-preview"/.test(preview.text), 'Render preview should stay out of search results and keep preview navigation inside the public preview.');
+    const applicationPage = await request(server, 'GET', '/apply/2016-ford-focus');
+    assert(applicationPage.status === 200 && /Insurance required before vehicle release/.test(applicationPage.text) && /name="insurancePickupConsent"/.test(applicationPage.text) && /active full-coverage insurance for the assigned vehicle and VIN/.test(applicationPage.text), 'Customers must see and acknowledge the full-coverage requirement before submitting an application.');
 
     const applicationPayload = {
-      onlineVehicleId: 'online-native-1', firstName: 'Native', lastName: 'Applicant', phone: '8565550107', email: 'native.applicant@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', dateOfBirth: '1990-04-20', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', employer: 'WheelsonAuto Test', income: 5000, password: 'NativeTest123', applicationConsent: true
+      onlineVehicleId: 'online-native-1', firstName: 'Native', lastName: 'Applicant', phone: '8565550107', email: 'native.applicant@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', dateOfBirth: '1990-04-20', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', employer: 'WheelsonAuto Test', income: 5000, password: 'NativeTest123', applicationConsent: true, insurancePickupConsent: true
     };
     const applicationResponse = await request(server, 'POST', '/api/public/applications', { json: applicationPayload });
-    assert(applicationResponse.status === 201 && applicationResponse.json && applicationResponse.json.application.id, 'Published vehicle application should be accepted.');
+    assert(applicationResponse.status === 201 && applicationResponse.json && applicationResponse.json.application.id && /\/onboard\//.test(applicationResponse.json.onboardingUrl || ''), 'Published vehicle application should be accepted and immediately create its secure setup.');
     const applicationId = applicationResponse.json.application.id;
     let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedApplication = saved.applications.find(row => row.id === applicationId);
     const pendingCustomerAccount = saved.customerAccounts.find(row => row.applicationId === applicationId);
+    const savedSession = saved.onboardingSessions.find(row => row.applicationId === applicationId);
+    const onboardingId = savedSession.id;
+    const token = applicationResponse.json.onboardingUrl.split('/onboard/')[1];
     savedApplication.requestedPickupDate = nextPickupDate();
     savedApplication.requestedPickupTime = '1:00 PM';
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
@@ -198,7 +206,7 @@ async function main() {
     const customerPhoneLogin = await request(server, 'POST', '/customer/login', { form: { username: '(856) 555-0107', password: applicationPayload.password } });
     assert(customerPhoneLogin.status === 302 && String(customerPhoneLogin.cookie).includes('woa_customer_session='), 'New applicant should be able to log in with a formatted application phone number.');
     const customerPortal = await request(server, 'GET', '/customer', { cookie: String(customerEmailLogin.cookie).split(';')[0] });
-    assert(customerPortal.status === 200 && /New - staff review/.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text), 'Pending applicant portal should show the application status and selected vehicle.');
+    assert(customerPortal.status === 200 && /setup|onboarding/i.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text), 'Pending applicant portal should show the active setup status and selected vehicle.');
 
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     saved.applications.unshift({
@@ -213,20 +221,14 @@ async function main() {
     const login = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'NativeOnboardingOwner123!' } });
     assert(login.status === 302 && String(login.cookie).includes('woa_session='), 'Owner login should provide a signed staff session.');
     const ownerCookie = String(login.cookie).split(';')[0];
-    const linkResponse = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId } });
-    assert(linkResponse.status === 201 && linkResponse.json.onboarding.url, 'Owner should be able to approve the application and create one secure onboarding link.');
-    assert(linkResponse.json.onboarding.paymentProvider === 'clover', 'The onboarding session should lock its configured payment provider instead of changing mid-flow.');
-    const onboardingId = linkResponse.json.onboarding.id;
-    const token = linkResponse.json.onboarding.url.split('/onboard/')[1];
     const onboardingPage = await request(server, 'GET', '/onboard/' + token);
     assert(onboardingPage.status === 200 && /<option value="11:30 AM">11:30 AM<\/option>/.test(onboardingPage.text) && /<option value="4:30 PM">4:30 PM<\/option>/.test(onboardingPage.text), 'Thirty-minute pickup settings should render every valid appointment start through 4:30 PM.');
     assert(new RegExp('name="requestedPickupDate"[^>]+value="' + savedApplication.requestedPickupDate + '"').test(onboardingPage.text) && /<option value="1:00 PM" selected>1:00 PM<\/option>/.test(onboardingPage.text), 'Onboarding should prefill the original pickup request without marking the customer profile complete.');
     assert(/data-profile-validation/.test(onboardingPage.text) && /data-field-error="driverLicenseId"/.test(onboardingPage.text) && /autocomplete="street-address"/.test(onboardingPage.text) && onboardingPage.text.includes('/native-site-client.js?v=' + nativeSite.NATIVE_SITE_ASSET_VERSION) && onboardingPage.text.includes('/native-site.css?v=' + nativeSite.NATIVE_SITE_ASSET_VERSION), 'Profile onboarding should expose and freshly load inline customer-side validation before a server rejection.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
-    const savedSession = saved.onboardingSessions.find(row => row.id === onboardingId);
     assert(savedSession && savedSession.tokenHash && !savedSession.publicToken, 'Onboarding session should persist only a token hash.');
-    assert(saved.onlineVehicles[0].published === false && saved.onlineVehicles[0].heldApplicationId === applicationId, 'Approved onboarding should unpublish and hold the selected car.');
-    assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Pending application' && saved.vehicles.find(row => row.id === 'veh-native-1').heldApplicationId === applicationId, 'Approved onboarding should immediately remove the selected internal car from ready fleet inventory.');
+    assert(saved.onlineVehicles[0].published === false && saved.onlineVehicles[0].heldApplicationId === applicationId, 'Application submission should immediately unpublish and hold the selected car.');
+    assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Pending customer setup' && saved.vehicles.find(row => row.id === 'veh-native-1').heldApplicationId === applicationId, 'Application submission should immediately remove the selected internal car from ready fleet inventory.');
 
     saved.applications.unshift({ id: 'app-competing', organizationId: 'org-wheelsonauto', name: 'Second Applicant', onlineVehicleId: 'online-native-1', vehicle: '2016 Ford Focus', status: 'New' });
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
@@ -268,17 +270,11 @@ async function main() {
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
       { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
       { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
-      { kind: 'identity_selfie', name: 'identity-selfie.png', type: 'image/png', dataUrl: image },
-      { kind: 'insurance', name: 'insurance.png', type: 'image/png', dataUrl: image }
+      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image }
     ] } });
-    assert(documents.status === 201 && documents.json.documents.length === 4, 'License front/back, identity selfie, and insurance should all save as private documents.');
-    const earlySignature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Native Applicant', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
-    assert(earlySignature.status === 409, 'Contract signing must remain locked until staff approves documents.');
-
-    const documentsApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'documents', decision: 'approve', identityConfirmed: true, notes: 'License valid and full coverage confirmed.' } });
-    assert(documentsApproved.status === 200, 'Owner should be able to approve complete identity and insurance documents.');
+    assert(documents.status === 201 && documents.json.documents.length === 3, 'License front/back and the live selfie with license should save as the preliminary private screening files.');
     const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Native Applicant', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
-    assert(signature.status === 201, 'Customer should be able to sign the exact versioned agreement after document approval.');
+    assert(signature.status === 201, 'Customer should be able to sign the exact versioned agreement immediately after the screening files are complete.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const signedAgreement = saved.eSignatures.find(row => row.onboardingSessionId === onboardingId);
     const signedContractDocument = saved.documents.find(row => row.onboardingSessionId === onboardingId && row.documentKind === 'signed_contract');
@@ -289,12 +285,8 @@ async function main() {
     assert(customerContractDownload.status === 200 && /WHEELSONAUTO SIGNED AGREEMENT/.test(customerContractDownload.text) && /nineteen \(19\) consecutive months/i.test(customerContractDownload.text) && /END OF SIGNED AGREEMENT/.test(customerContractDownload.text), 'The signed-in customer must be able to open only their own complete signed-agreement artifact.');
     const foreignContractDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(signedContractDocument.id), { cookie: String(legacyCustomerLogin.cookie).split(';')[0] });
     assert(foreignContractDownload.status === 404, 'A different signed-in customer must not be able to open another customer\'s signed contract artifact.');
-    const earlyCard = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
-    assert(earlyCard.status === 409, 'Clover card setup must remain locked until staff compares the signature with the license.');
-    const signatureApproved = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'signature', decision: 'approve', signatureMatchConfirmed: true, notes: 'Signature manually matched to license.' } });
-    assert(signatureApproved.status === 200, 'Owner should be able to accept the signature after manual comparison.');
     const card = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
-    assert(card.status === 201 && /\/setup-card\//.test(card.json.redirectUrl || ''), 'Approved customer should receive a Clover card-on-file setup step with explicit autopay consent.');
+    assert(card.status === 201 && /\/setup-card\//.test(card.json.redirectUrl || ''), 'Signed customer should receive a no-charge Clover card-on-file setup step with explicit autopay consent.');
 
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const session = saved.onboardingSessions.find(row => row.id === onboardingId);
@@ -305,6 +297,12 @@ async function main() {
     recurring.status = 'Active';
     session.cardCompletedAt = new Date().toISOString();
     session.status = 'Card linked';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'One combined screening review passed before payment.' } });
+    assert(finalReview.status === 200 && finalReview.json.finalReviewStatus === 'Approved', 'Owner should give one final decision only after the screening files, agreement, exact vehicle/VIN, and saved card are ready.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    const approvedSession = saved.onboardingSessions.find(row => row.id === onboardingId);
+    const approvedRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     const paymentBase = { recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, onlineVehicleId: 'online-native-1', organizationId: 'org-wheelsonauto', customer: 'Native Applicant', phone: '8565550107', email: 'native.applicant@example.com', vehicleId: 'veh-native-1', vehicle: '2016 Ford Focus', vin: '1FADP3K24GL123456', licensePlate: 'A19-WWM', method: 'Clover Hosted Checkout', source: 'WheelsonAuto native onboarding', checkoutCreatedAt: new Date().toISOString(), onboardingReturnUrl: 'http://127.0.0.1:4181/onboard/' + token };
     saved.paymentRequests.unshift(
       { ...paymentBase, id: 'plink-native-first', amount: 229, frequency: 'First week', paymentType: 'First weekly payment', reason: 'First weekly payment', status: 'Unpaid - Clover checkout ready', checkoutSessionId: 'checkout-native-first', checkoutHref: 'https://checkout.clover.test/first', createdAt: new Date().toISOString() },
@@ -344,17 +342,27 @@ async function main() {
     const firstWeekWebhook = await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });
     assert(firstWeekWebhook.status === 200 && firstWeekWebhook.json.hostedCheckout.approved, 'Signed first-week webhook should verify the second transaction.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
-    const finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
+    assert(!saved.pickupAppointments.some(row => row.onboardingSessionId === onboardingId), 'Both payments must still leave pickup locked until the customer chooses a VIN-specific insurance path.');
+    const insurance = await request(server, 'POST', '/api/public/onboarding/' + token + '/insurance', { json: { insuranceOption: 'upload', insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100', insuranceVinConfirmed: true, documents: [{ kind: 'insurance', name: 'insurance.png', type: 'image/png', dataUrl: image }] } });
+    assert(insurance.status === 201, 'After both payments, the customer should be able to upload insurance for the exact VIN and reserve pickup.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    let finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     const appointment = saved.pickupAppointments.find(row => row.onboardingSessionId === onboardingId);
-    assert(appointment && appointment.date === pickupDate && appointment.autopayAnchorDate === pickupDate, 'Both verified payments should automatically confirm the requested pickup.');
-    assert(finalRecurring.nextRun === plusDays(pickupDate, 7) && finalRecurring.autopayAnchorDate === pickupDate, 'Autopay should anchor to pickup and first run one week later to avoid double charging pickup week.');
+    assert(appointment && appointment.date === pickupDate && appointment.autopayAnchorDate === pickupDate, 'The insurance choice should reserve the exact requested pickup once.');
+    assert(finalRecurring.nextRun === plusDays(pickupDate, 7) && finalRecurring.autopayAnchorDate === pickupDate && finalRecurring.autoChargeEnabled === false, 'The weekly schedule should be prepared but must remain disabled before physical handoff.');
     assert(finalRecurring.paymentDay === appointment.weekday && finalRecurring.autopayWeekday === appointment.weekday, 'Pickup weekday and recurring weekday must stay synchronized.');
     assert(saved.payments.filter(row => row.onboardingSessionId === onboardingId).length === 2, 'Deposit and first week must remain two separate payment records.');
     assert(saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt').length === 2, 'Deposit and first week must produce separate receipts.');
-    assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Pending pickup', 'Internal fleet car should move to pending pickup after onboarding completes.');
+    assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Pending pickup', 'Internal fleet car should move to pending pickup after onboarding payments and insurance selection.');
     const customerAccount = saved.customerAccounts.find(row => row.applicationId === applicationId);
     assert(customerAccount && /^pbkdf2\$/.test(customerAccount.passwordHash || '') && !customerAccount.password, 'Finalized customer account should inherit only the secure password hash.');
     assert(!JSON.stringify(saved).includes('NativeTest123'), 'Final customer data must still contain no plaintext password.');
+
+    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000, notes: 'License, keys, and active insurance checked in person.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100' } });
+    assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Only the staff insurance check and physical handoff should activate the rental and recurring card schedule.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
+    assert(finalRecurring.autoChargeEnabled === true && finalRecurring.nextRun === plusDays(pickupDate, 7), 'Handoff must activate weekly autopay without changing its pickup-day anchor.');
 
     await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });
     await signedWebhook({ Type: 'PAYMENT', Status: 'DECLINED', Data: 'checkout-native-first', Id: 'clover-payment-first-late-decline' });
@@ -364,7 +372,7 @@ async function main() {
     assert(idempotent.documents.filter(row => row.paymentRequestId === 'plink-native-first' && row.kind === 'Receipt').length === 1, 'Repeated Clover webhook must not duplicate receipts.');
     assert(/paid/i.test(idempotent.paymentRequests.find(row => row.id === 'plink-native-first').status), 'A late duplicate decline must never downgrade an already-verified paid request.');
 
-    console.log('Native onboarding check passed: published inventory, application security, selfie/document/signature gates, provider-locked card consent, signed Clover reconciliation, separate receipts, pickup, and pickup-anchored weekly autopay are connected.');
+    console.log('Native onboarding check passed: automatic setup, live selfie screening, one final review, no-charge card setup, delayed VIN-specific insurance, signed Clover reconciliation, separate receipts, handoff, and pickup-anchored weekly autopay are connected.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

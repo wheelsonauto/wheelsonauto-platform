@@ -112,7 +112,7 @@ function stripeClient(options = {}) {
     createRefund: (payload, idempotencyKey) => request('POST', '/refunds', payload, { idempotencyKey }),
     retrieveRefund: id => request('GET', '/refunds/' + encodeURIComponent(id)),
     createIdentityVerificationSession: (payload, idempotencyKey) => request('POST', '/identity/verification_sessions', payload, { idempotencyKey }),
-    retrieveIdentityVerificationSession: id => request('GET', '/identity/verification_sessions/' + encodeURIComponent(id)),
+    retrieveIdentityVerificationSession: id => request('GET', '/identity/verification_sessions/' + encodeURIComponent(id), { expand: ['verified_outputs'] }),
     retrieveDispute: id => request('GET', '/disputes/' + encodeURIComponent(id)),
     submitDisputeEvidence: (id, payload, idempotencyKey) => request('POST', '/disputes/' + encodeURIComponent(id), payload, { idempotencyKey })
   };

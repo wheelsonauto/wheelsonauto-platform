@@ -90,8 +90,8 @@ async function main() {
   assert.deepStrictEqual(pilotSelection.candidates[0].blockers, [], 'An exact available applicant and vehicle must open without a false blocker.');
   assert.strictEqual(pilotSelection.candidates[0].paymentProvider, 'clover', 'The pilot chooser must expose the actual configured onboarding payment provider instead of guessing in the browser.');
   assert.strictEqual(pilotSelection.candidates[0].identityProvider, 'manual', 'The pilot chooser must expose the actual configured identity provider instead of guessing in the browser.');
-  assert.strictEqual(pilotSelection.candidates[0].nextActions[0].owner, 'Staff', 'A prepared pilot candidate must explain the next responsible party without mutating the file.');
-  assert.match(pilotSelection.candidates[0].nextActions[0].text, /Nothing is sent or charged automatically/i, 'Pilot preparation must state that opening or preparing the file does not send or charge anything.');
+  assert.strictEqual(pilotSelection.candidates[0].nextActions[0].owner, 'System', 'A legacy pilot candidate without its automatic setup must explain the responsible repair path without mutating the file.');
+  assert.match(pilotSelection.candidates[0].nextActions[0].text, /without sending a charge/i, 'Automatic setup repair must state that it does not send a charge.');
   assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
   const inProgressPilotSelection = controlledStripePilotSelection({
     applications: [{ id: 'app-pilot-progress', name: 'Progress Customer', email: 'progress@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: '66', driverLicenseExpires: '2035-01-01', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: '2020-01-01', requestedPickupTime: '11:00 AM', onlineVehicleId: 'online-pilot-progress', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T13:00:00.000Z' }],

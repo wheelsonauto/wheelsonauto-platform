@@ -14,6 +14,7 @@ function validDateKey(value) {
 }
 
 function validateCustomerProfile(payload = {}, options = {}) {
+  const requireInsurance = options.requireInsurance !== false;
   const values = {
     address: text(payload.address, 220),
     city: text(payload.city, 100),
@@ -34,10 +35,12 @@ function validateCustomerProfile(payload = {}, options = {}) {
   if (!values.driverLicenseExpires) errors.push('Enter a valid driver license expiration date.');
   const minimumExpirationDate = validDateKey(options.minimumExpirationDate) || businessDateKey(options.nowValue || new Date());
   if (values.driverLicenseExpires && values.driverLicenseExpires < minimumExpirationDate) errors.push('The driver license must remain valid through the requested pickup date.');
-  const providerLetters = values.insuranceProvider.replace(/[^A-Z]/gi, '');
-  if (providerLetters.length < 2) errors.push('Enter the insurance company name.');
-  const policyKey = values.insurancePolicyNumber.replace(/[^A-Z0-9]/gi, '');
-  if (policyKey.length < 4 || policyKey.length > 60) errors.push('Enter the complete insurance policy number.');
+  if (requireInsurance) {
+    const providerLetters = values.insuranceProvider.replace(/[^A-Z]/gi, '');
+    if (providerLetters.length < 2) errors.push('Enter the insurance company name.');
+    const policyKey = values.insurancePolicyNumber.replace(/[^A-Z0-9]/gi, '');
+    if (policyKey.length < 4 || policyKey.length > 60) errors.push('Enter the complete insurance policy number.');
+  }
   if (errors.length) return { ok: false, error: errors[0], errors };
   return { ok: true, values, errors: [] };
 }
@@ -124,6 +127,9 @@ function createSession(data, application, actor, baseUrl, options = {}) {
     status: 'Open',
     documentReviewStatus: 'Waiting on customer',
     signatureReviewStatus: 'Waiting on customer',
+    finalReviewStatus: 'Waiting on customer',
+    insuranceOption: '',
+    insuranceReleaseStatus: 'Waiting on customer',
     reviewStatus: 'Waiting on customer',
     createdAt: now.toISOString(),
     createdBy: actor && (actor.name || actor.username || actor.role) || 'WheelsonAuto',
@@ -188,7 +194,7 @@ function releaseExpiredHolds(data, nowValue = Date.now()) {
     vehicle.holdPreviousAvailability = '';
     vehicle.updatedAt = new Date(now).toISOString();
     const linked = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
-    if (linked && (!linked.heldApplicationId || linked.heldApplicationId === session.applicationId) && /pending application|held for onboarding/i.test(String(linked.status || ''))) {
+    if (linked && (!linked.heldApplicationId || linked.heldApplicationId === session.applicationId) && /pending application|pending customer setup|held for onboarding/i.test(String(linked.status || ''))) {
       linked.status = linked.holdPreviousStatus || 'Ready';
       linked.heldFor = '';
       linked.heldApplicationId = '';
@@ -328,11 +334,18 @@ async function discardPrivateDocuments(records, dataDir, documentStore = null) {
   return results.filter(result => result.status === 'fulfilled' && result.value).length;
 }
 
-async function saveDocuments(data, session, application, files, dataDir, documentStore = null) {
+async function saveDocuments(data, session, application, files, dataDir, documentStore = null, options = {}) {
   ensureCollections(data);
-  const required = ['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'];
+  const allowed = ['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'];
+  const requested = Array.isArray(options.requiredKinds) ? options.requiredKinds : allowed;
+  const required = [...new Set(requested.map(kind => String(kind || '').trim()).filter(kind => allowed.includes(kind)))];
+  if (!required.length) throw new Error('Choose at least one private document to upload.');
   const byKind = new Map((files || []).map(file => [String(file.kind || ''), file]));
-  if (!required.every(kind => byKind.has(kind))) throw new Error('License front, license back, identity selfie, and insurance proof are all required.');
+  if (!required.every(kind => byKind.has(kind))) {
+    if (required.length === 1 && required[0] === 'insurance') throw new Error('Insurance proof is required.');
+    if (required.length === 3 && !required.includes('insurance')) throw new Error('License front, license back, and a current selfie are all required.');
+    throw new Error('Every requested private document is required.');
+  }
   const saved = [];
   try {
     for (const kind of required) {

@@ -799,6 +799,13 @@ function ownerSmoke() {
   assertNo('Owner Claims duplicate boards', ownerClaimsOpen, ['Dispute identity resolver', 'Dispute evidence package', 'Dispute / recovery bridge']);
   const ownerPickups = renderView(context, 'Applications', 'Pickups');
   assertHealthy('Owner pickup schedule', ownerPickups, ['Applications', 'Pickup schedule', '5150 NJ-42', 'next-day minimum', 'integration-workspace']);
+  context.db.applications.unshift(
+    { id: 'app-sort-older', name: 'Older Application', status: 'New', stage: 'New', submittedAt: '2026-07-21T09:15:00.000Z' },
+    { id: 'app-sort-newest', name: 'Newest Application', status: 'New', stage: 'New', submittedAt: '2026-07-22T16:45:00.000Z' }
+  );
+  const sortedApplications = renderView(context, 'Applications', 'Onboarding');
+  assert(sortedApplications.indexOf('Newest Application') < sortedApplications.indexOf('Older Application'), 'Applications must render newest submission first.');
+  assert(sortedApplications.includes('class="native-application-submitted"') && sortedApplications.includes('Submitted') && sortedApplications.includes('datetime="2026-07-22T16:45:00.000Z"'), 'Application cards must show the saved submission date and time without opening the file.');
 
   context.openComposeMessage('new');
   assertHealthy('Compose message modal', modalHtml(context), ['New message', 'Optional SMS', 'Email', 'Send message']);
@@ -821,7 +828,7 @@ function managerSmoke() {
     ['Manager messages', 'Messages', 'Inbox', ['Messages', 'message-inbox-shell', 'message-conversation-panel', 'message-empty-state'], false],
     ['Manager reports', 'Reports', 'Summary', ['Reports', 'Operations snapshot'], false],
     ['Manager accounting', 'Reports', 'Accounting', ['Reports', 'Accounting ledger', 'QuickBooks'], false],
-    ['Manager applications', 'Applications', 'Pipeline', ['Applications', 'New applications', 'native-applications-board'], false],
+    ['Manager applications', 'Applications', 'Onboarding', ['Applications', 'Onboarding', 'native-applications-board'], false],
     ['Manager pickups', 'Applications', 'Pickups', ['Applications', 'Pickup schedule', '5150 NJ-42'], false]
   ].forEach(([label, view, tab, required, compact = true]) => {
     const output = renderView(context, view, tab);

@@ -51,6 +51,7 @@ function nativePublicApplicationPayload(overrides = {}) {
     employer: 'Direct Smoke Employer',
     income: 4500,
     applicationConsent: true,
+    insurancePickupConsent: true,
     ...overrides
   };
 }
@@ -1350,6 +1351,7 @@ async function main() {
       json: nativePublicApplicationPayload()
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
+    assert(/\/onboard\//.test(String(publicApplication.json.onboardingUrl || '')), 'A saved public application must immediately return its secure onboarding path.');
     const repeatedPublicApplication = await request(server, 'POST', '/api/public/applications', {
       json: nativePublicApplicationPayload()
     });
@@ -2393,7 +2395,7 @@ async function main() {
     assert(mechanicPickupCompletion.status === 403, 'Mechanic must not complete the customer/account pickup handoff.');
     const unconfirmedPickupCompletion = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { mileage: 41234 } });
     assert(unconfirmedPickupCompletion.status === 400, 'Pickup completion must require explicit physical-handoff confirmation.');
-    const completedPickup = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, mileage: 41234, notes: 'Keys and vehicle handed to customer.' } });
+    const completedPickup = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Direct Test Insurance', insurancePolicyNumber: 'DIRECT-POLICY-100', mileage: 41234, notes: 'Active coverage and exact VIN confirmed; keys and vehicle handed to customer.' } });
     assert(completedPickup.status === 200 && completedPickup.json.appointment.status === 'Picked up' && completedPickup.json.vehicle.status === 'Rented' && completedPickup.json.recurring.status === 'Active', 'Manager should atomically complete the physical pickup, fleet status, and autopay activation.');
     const completedPickupState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const pickupCompletionSnapshot = {
@@ -3150,6 +3152,8 @@ async function main() {
     assert(filteredApplication.status === 201 && filteredApplication.json.ok, 'Filtered public application path did not save.');
     const filteredNotificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(!filteredNotificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Filtered Applicant'), 'Disabled notification event should not create an application email alert.');
+    const archivedFilteredApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: filteredApplication.json.application.id, decision: 'deny', notes: 'Notification filter test cleanup.' } });
+    assert(archivedFilteredApplication.status === 200 && archivedFilteredApplication.json.ok, 'The filtered notification test application must release its automatic vehicle hold before the next applicant.');
     const restoredNotificationSettings = await request(server, 'POST', '/api/notifications/email/settings', {
       cookie: ownerCookie,
       json: { emailRecipients: ['notify@example.com'], emailEnabled: true, events: defaultNotificationEvents }
@@ -3406,7 +3410,7 @@ async function main() {
     assert(Array.isArray(closeoutNotification.json.summary.auditRows) && closeoutNotification.json.summary.auditRows.some(row => /password help|Customer portal|Star AI|message/i.test(String(row.action || ''))), 'Daily closeout summary should return structured sensitive-change audit rows.');
     assert(closeoutNotification.json.summary.ownerNote === 'Owner smoke note: count cash drawer and call failed-twice customers.', 'Daily closeout summary should return the owner note.');
     const notificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    assert(notificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Notified Applicant'), 'Application notification should be saved in Messages.');
+    assert(notificationState.json.messages.some(message => message.event === 'application_submitted' && message.customer === 'Direct Notified Applicant'), 'Application notification should be saved in Messages. Recent application records: ' + JSON.stringify(notificationState.json.messages.filter(message => /application|onboarding/i.test(String(message.event || message.template || message.subject || ''))).slice(0, 8)));
     assert(notificationState.json.messages.some(message => message.event === 'daily_closeout'), 'Daily closeout notification should be saved in Messages.');
     assert((notificationState.json.dailyCloseouts || []).some(row => row.note === 'Owner smoke note: count cash drawer and call failed-twice customers.'), 'Daily closeout owner note should be saved to state.');
 

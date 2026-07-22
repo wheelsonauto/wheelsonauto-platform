@@ -6591,6 +6591,7 @@ body.fast-tab-switch .admin-shell .section{
 .native-online-copy,.native-application-card{gap:8px;padding:12px}
 .native-online-copy strong,.native-application-card strong{color:#fff4d6;overflow-wrap:anywhere}
 .native-online-copy small,.native-application-card small{color:#aeb9c2;font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+.native-application-submitted{display:block;color:#d6dde2;font-size:10px;font-weight:800;line-height:1.35}
 .native-online-copy .actions,.native-application-card .actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-top:2px}
 .native-application-card .actions{grid-template-columns:repeat(2,minmax(0,1fr))}
 .native-online-copy .btn,.native-application-card .btn{width:100%;min-width:0;min-height:34px;justify-content:center;padding:6px 7px;font-size:10px}

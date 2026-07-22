@@ -246,8 +246,8 @@ async function main() {
     assert.strictEqual(server.privateArtifactCoverage(persistedWorkerState).ready, true, 'The durable worker must persist a complete private-artifact state that survives a fresh file read.');
 
     const serverSource = await fs.readFile(path.resolve(__dirname, '..', 'server.js'), 'utf8');
-    const commitRollbackTargets = [...serverSource.matchAll(/attachPrivateDocumentRollback\(error,\s*(privateArtifacts|saved|storedFile|storedEvidenceArtifact|storedArtifacts)\)/g)].map(match => match[1]).sort();
-    assert.deepStrictEqual(commitRollbackTargets, ['privateArtifacts', 'saved', 'storedArtifacts', 'storedEvidenceArtifact', 'storedFile'], 'Onboarding documents, contract/signature pairs, receipts, dispute evidence, and customer portal uploads must clean up private objects when the matching state commit fails.');
+    const commitRollbackTargets = [...serverSource.matchAll(/attachPrivateDocumentRollback\(error,\s*(privateArtifacts|saved|savedInsuranceDocuments|storedFile|storedEvidenceArtifact|storedArtifacts)\)/g)].map(match => match[1]).sort();
+    assert.deepStrictEqual(commitRollbackTargets, ['privateArtifacts', 'saved', 'savedInsuranceDocuments', 'storedArtifacts', 'storedEvidenceArtifact', 'storedFile'], 'Onboarding screening, insurance, contract/signature pairs, receipts, dispute evidence, and customer portal uploads must clean up private objects when the matching state commit fails.');
 
     console.log('Private document atomicity check passed: partial batches roll back files and metadata, successful encrypted batches commit together, and cleanup cannot escape the private upload directory.');
   } finally {

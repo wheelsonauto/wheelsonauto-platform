@@ -120,6 +120,7 @@ function createFakeStripe() {
         livemode: false,
         url: state.status === 'requires_input' ? 'https://verify.stripe.test/vs_test_wheelsonauto_identity' : null,
         metadata: { flow: 'wheelsonauto_onboarding_identity' },
+        verified_outputs: state.status === 'verified' ? { first_name: 'Identity', last_name: 'Customer' } : null,
         last_error: state.status === 'requires_input' ? null : undefined
       };
       return { ok: true, status: 200, text: async () => JSON.stringify(response) };
@@ -177,56 +178,79 @@ async function main() {
     const profile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'D12345678901234', driverLicenseExpires: '2032-01-01', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-ID-1', requestedPickupDate: pickupDate, requestedPickupTime: '1:00 PM', pickupAutopayConsent: true } });
     assert(profile.status === 200, 'Profile and pickup must save before identity files.');
     const image = pngDataUrl();
+    const screeningPage = await request(server, 'GET', '/onboard/' + token);
+    assert(/data-selfie-capture/.test(screeningPage.text) && /Hold your physical driver license just below your chin/.test(screeningPage.text), 'The preliminary selfie step must use the guided live-camera capture and clear license-below-chin instructions.');
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
       { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
       { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
-      { kind: 'identity_selfie', name: 'identity-selfie.png', type: 'image/png', dataUrl: image },
-      { kind: 'insurance', name: 'insurance.png', type: 'image/png', dataUrl: image }
+      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image }
     ] } });
-    assert(documents.status === 201, 'Private ID, selfie, and insurance files must save before Stripe verification.');
+    assert(documents.status === 201 && documents.json.documents.length === 3, 'The low-cost WheelsonAuto screening must store the two license sides and live selfie before Stripe Identity starts.');
     const pageBefore = await request(server, 'GET', '/onboard/' + token);
-    assert(/Verify license and selfie/.test(pageBefore.text), 'Customer page should show the Stripe Identity action in the existing verification step.');
+    assert(/Final Stripe Identity check/.test(pageBefore.text) && /WheelsonAuto final approval and a saved card are required first/.test(pageBefore.text), 'Customer page should explain that paid Stripe Identity stays locked until the completed file is approved.');
     assert(!/onboarding-uploads|data:image\//.test(pageBefore.text), 'Private ID file paths and contents must never render into the public onboarding page.');
 
-    const earlyApproval = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'documents', decision: 'approve', identityConfirmed: true } });
-    assert(earlyApproval.status === 409 && /Stripe Identity must verify/i.test(earlyApproval.json.error), 'Staff must not bypass Stripe Identity before the signed verified result.');
+    const identityCreatesBeforeApproval = fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions').length;
+    const earlyIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
+    assert(earlyIdentity.status === 409 && fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions').length === identityCreatesBeforeApproval, 'Stripe Identity must not start or create a billable session before final WheelsonAuto approval.');
+    const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Identity Test Customer', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
+    assert(signature.status === 201, 'The customer should sign before the combined review.');
+    const card = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
+    assert(card.status === 201 && /\/setup-card\//.test(card.json.redirectUrl || ''), 'The customer should save a card without a charge before final review.');
+    let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    let session = saved.onboardingSessions.find(row => row.id === onboardingId);
+    const recurring = saved.recurringPayments.find(row => row.onboardingSessionId === onboardingId);
+    recurring.stripeCustomerId = 'cus_test_identity';
+    recurring.stripePaymentMethodId = 'pm_test_identity';
+    recurring.stripeLivemode = true;
+    recurring.stripeCardSavedAt = new Date().toISOString();
+    recurring.status = 'Setup complete';
+    session.cardCompletedAt = new Date().toISOString();
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const correction = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'request_correction', correctionKinds: ['identity_selfie'], notes: 'Retake the live selfie with the physical license below the chin.' } });
+    assert(correction.status === 200, 'The combined review must be able to request only the specific screening file that needs correction.');
+    const correctionPage = await request(server, 'GET', '/onboard/' + token);
+    assert(/Correction requested for Identity selfie/i.test(correctionPage.text) && /data-selfie-capture/.test(correctionPage.text) && !/name="driver_license_front"/.test(correctionPage.text), 'A selfie correction must reopen only the guided live-camera capture.');
+    const correctedSelfie = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
+      { kind: 'identity_selfie', name: 'live-selfie-with-license-corrected.png', type: 'image/png', dataUrl: image }
+    ] } });
+    assert(correctedSelfie.status === 201 && correctedSelfie.json.documents.length === 1, 'A requested selfie correction must replace only that private file.');
+    const finalApproval = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Preliminary file, signature, VIN, and saved card all reviewed.' } });
+    assert(finalApproval.status === 200 && finalApproval.json.finalReviewStatus === 'Approved', 'One combined staff approval must unlock the paid Stripe Identity step.');
     const identity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
-    assert(identity.status === 201 && identity.json.redirectUrl === 'https://verify.stripe.test/vs_test_wheelsonauto_identity', 'Customer should receive the short-lived Stripe-hosted verification URL.');
+    assert(identity.status === 201 && identity.json.redirectUrl === 'https://verify.stripe.test/vs_test_wheelsonauto_identity', 'Approved customer should receive the short-lived Stripe-hosted verification URL.');
     const createRequest = fakeStripe.state.requests.find(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions');
     const identityForm = new URLSearchParams(createRequest && createRequest.body || '');
     assert(createRequest && /options%5Bdocument%5D%5Ballowed_types%5D%5B0%5D=driving_license/.test(createRequest.body), 'Stripe session must accept only driver licenses.');
     assert(identityForm.get('options[document][require_live_capture]') === 'true' && identityForm.get('options[document][require_matching_selfie]') === 'true', 'Stripe session must require live capture and a matching selfie.');
     assert(!/Identity.Test.Customer|identity%40example|D12345678901234|POLICY-ID-1/i.test(createRequest.body), 'Stripe metadata must not contain customer PII, license numbers, or insurance numbers.');
-    let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
-    let session = saved.onboardingSessions.find(row => row.id === onboardingId);
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    session = saved.onboardingSessions.find(row => row.id === onboardingId);
     assert(session.stripeIdentityVerificationId === 'vs_test_wheelsonauto_identity' && session.identityVerificationStatus === 'requires_input', 'WheelsonAuto should persist only the provider session reference and safe status.');
     assert(!JSON.stringify(saved).includes('verify.stripe.test'), 'Short-lived Stripe verification URLs must never be persisted.');
-    assert(saved.documents.filter(row => row.onboardingSessionId === onboardingId && /^Driver license/.test(row.type || '')).length === 2, 'License front and back must remain in the private customer file.');
+    assert(saved.documents.filter(row => row.onboardingSessionId === onboardingId && /driver_license|identity_selfie/.test(row.documentKind || '')).length === 3, 'WheelsonAuto must retain one current preliminary license/selfie set while Stripe keeps the authoritative paid verification capture.');
 
     fakeStripe.state.status = 'verified';
     const returned = await request(server, 'GET', '/onboard/' + token + '?identity=returned');
-    assert(returned.status === 200 && /Stripe verified the live license and selfie/.test(returned.text), 'Stripe return should reconcile the authoritative status before rendering.');
+    assert(returned.status === 200 && /Stripe verified the live driver license and matching selfie/.test(returned.text), 'Stripe return should reconcile the authoritative status before rendering.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     session = saved.onboardingSessions.find(row => row.id === onboardingId);
     const verificationCase = saved.verificationCases.find(row => row.onboardingSessionId === onboardingId && row.provider === 'Stripe Identity');
     assert(session.identityVerificationStatus === 'verified' && verificationCase && verificationCase.status === 'Verified', 'Verified Stripe Identity status must connect to the onboarding and verification inbox.');
-    const approval = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'documents', decision: 'approve', identityConfirmed: true, notes: 'Stripe verified identity; full coverage confirmed.' } });
-    assert(approval.status === 200, 'Staff should approve identity and insurance only after Stripe verifies the identity.');
-
     const lateEvent = { id: 'evt_identity_late_requires_input', type: 'identity.verification_session.requires_input', data: { object: { id: 'vs_test_wheelsonauto_identity', object: 'identity.verification_session', status: 'requires_input', livemode: false, last_error: { code: 'selfie_document_mismatch' } } } };
     const raw = JSON.stringify(lateEvent);
     const lateWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, raw) } });
     assert(lateWebhook.status === 200 && lateWebhook.json.identitySessionId === onboardingId, 'Signed Stripe Identity webhooks must reconcile to the exact onboarding file.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     session = saved.onboardingSessions.find(row => row.id === onboardingId);
-    assert(session.identityVerificationStatus === 'verified' && session.documentReviewStatus === 'Approved', 'A late requires-input event must never downgrade an already verified and approved customer.');
+    assert(session.identityVerificationStatus === 'verified' && session.finalReviewStatus === 'Approved', 'A late requires-input event must never downgrade an already verified and approved customer.');
     assert(saved.verificationCases.filter(row => row.onboardingSessionId === onboardingId && row.provider === 'Stripe Identity').length === 1, 'Webhook reconciliation must not duplicate the identity case.');
 
-    const privateLicense = await request(server, 'GET', '/api/onboarding/documents/' + saved.documents.find(row => row.onboardingSessionId === onboardingId && row.documentKind === 'driver_license_front').id, { cookie: ownerCookie });
-    assert(privateLicense.status === 200 && privateLicense.headers['X-Robots-Tag'] === 'noindex, nofollow', 'Authorized staff must be able to retrieve the private ID file with no-index protections.');
+    const privateSelfie = await request(server, 'GET', '/api/onboarding/documents/' + saved.documents.find(row => row.onboardingSessionId === onboardingId && row.documentKind === 'identity_selfie').id, { cookie: ownerCookie });
+    assert(privateSelfie.status === 200 && privateSelfie.headers['X-Robots-Tag'] === 'noindex, nofollow', 'Authorized staff must be able to retrieve the private screening selfie with no-index protections.');
     const providerStatus = await request(server, 'GET', '/api/verification/status', { cookie: ownerCookie });
     assert(providerStatus.status === 200 && providerStatus.json.providers.identityRuntimeReady === true && providerStatus.json.providers.identityMode === 'test', 'Provider status must distinguish the prepared test runtime from live mode.');
-    console.log('Stripe Identity check passed: private ID file, hosted live capture, signed status, staff gate, no PII metadata, no URL persistence, and late-event protection are connected.');
+    console.log('Stripe Identity check passed: preliminary live-camera screening, one combined approval, one paid hosted ID/selfie capture, legal-name status, selective correction, no PII metadata, no URL persistence, and late-event protection are connected.');
   } finally {
     global.fetch = previousFetch;
     await fs.rm(dataDir, { recursive: true, force: true });

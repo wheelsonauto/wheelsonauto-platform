@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-stripe-destination-proof-291';
+const ASSET_VERSION = 'platform-20260722-application-timestamps-294';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -3865,7 +3865,7 @@ async function queueEmailNotification(data, payload = {}) {
     return { sent: deliveryState.delivered, duplicate: true, confirmationPending: deliveryState.confirmationPending, deliveryBlocked: deliveryState.deliveryBlocked, result: { ...result, duplicate: true }, message: existingDelivery };
   }
   const record = {
-    id: 'msg-notify-' + Date.now(),
+    id: 'msg-notify-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
     externalId: result.externalId || '',
     date: new Date().toLocaleString('en-US'),
     createdAt: new Date().toISOString(),
@@ -10325,6 +10325,18 @@ function stripeIdentityCaseStatus(status) {
   if (status === 'redacted') return 'Verified - provider data redacted';
   return 'Not started';
 }
+function stripeIdentityLegalNameMatch(application = {}, object = {}) {
+  const outputs = object && object.verified_outputs || {};
+  const verifiedFirst = normKey(outputs.first_name || '');
+  const verifiedLast = normKey(outputs.last_name || '');
+  if (!verifiedFirst || !verifiedLast) return null;
+  const applicationName = String(application.name || [application.firstName, application.lastName].filter(Boolean).join(' ') || '').trim();
+  const nameParts = applicationName.split(/\s+/).filter(Boolean);
+  const applicationFirst = normKey(application.firstName || nameParts[0] || '');
+  const applicationLast = normKey(application.lastName || nameParts[nameParts.length - 1] || '');
+  if (!applicationFirst || !applicationLast) return false;
+  return applicationFirst === verifiedFirst && applicationLast === verifiedLast;
+}
 function applyStripeIdentitySession(data, session, application, object = {}, eventId = '') {
   if (!session || !object || !object.id) return { changed: false, status: '' };
   const incoming = ['requires_input', 'processing', 'verified', 'canceled', 'redacted'].includes(String(object.status || '').toLowerCase()) ? String(object.status).toLowerCase() : 'requires_input';
@@ -10338,7 +10350,9 @@ function applyStripeIdentitySession(data, session, application, object = {}, eve
     session.identityVerificationLastErrorCode,
     session.identityVerificationLastError,
     session.identityVerifiedAt,
-    session.identityDataRedactedAt
+    session.identityDataRedactedAt,
+    session.identityLegalNameMatch,
+    session.identityLegalNameCheckedAt
   ]);
   session.stripeIdentityVerificationId = String(object.id);
   session.identityProvider = 'stripe';
@@ -10349,6 +10363,12 @@ function applyStripeIdentitySession(data, session, application, object = {}, eve
   session.identityVerificationLastError = status === 'requires_input' ? providerError.message : '';
   session.identityVerificationCustomerMessage = status === 'requires_input' ? providerError.message : '';
   session.identityVerificationProviderError = '';
+  const legalNameMatch = stripeIdentityLegalNameMatch(application, object);
+  if (legalNameMatch !== null) {
+    session.identityLegalNameMatch = legalNameMatch;
+    session.identityLegalNameCheckedAt = now;
+    session.identityLegalNameSource = 'Stripe verified outputs';
+  }
   if (incoming === 'verified' && !session.identityVerifiedAt) session.identityVerifiedAt = now;
   if (incoming === 'redacted') session.identityDataRedactedAt = now;
   data.verificationCases = Array.isArray(data.verificationCases) ? data.verificationCases : [];
@@ -10372,7 +10392,8 @@ function applyStripeIdentitySession(data, session, application, object = {}, eve
     status: stripeIdentityCaseStatus(incoming),
     updatedAt: now,
     providerVerifiedAt: incoming === 'verified' ? (record && record.providerVerifiedAt || now) : (record && record.providerVerifiedAt || ''),
-    notes: providerError.message || (incoming === 'verified' ? 'Stripe verified the live driver license and matching selfie. Insurance still requires WheelsonAuto staff approval.' : 'Secure Stripe Identity onboarding result.'),
+    identityLegalNameMatch: legalNameMatch === null ? record && record.identityLegalNameMatch : legalNameMatch,
+    notes: providerError.message || (incoming === 'verified' ? (legalNameMatch === false ? 'Stripe verified the license and selfie, but the verified legal name does not match the WheelsonAuto application.' : 'Stripe verified the live driver license and matching selfie. Insurance still requires WheelsonAuto staff approval.') : 'Secure Stripe Identity onboarding result.'),
     source: 'Native customer onboarding'
   };
   if (!record) {
@@ -10388,7 +10409,9 @@ function applyStripeIdentitySession(data, session, application, object = {}, eve
     session.identityVerificationLastErrorCode,
     session.identityVerificationLastError,
     session.identityVerifiedAt,
-    session.identityDataRedactedAt
+    session.identityDataRedactedAt,
+    session.identityLegalNameMatch,
+    session.identityLegalNameCheckedAt
   ]);
   return { changed: before !== after, status, verificationCaseId: record.id };
 }
@@ -10449,7 +10472,7 @@ function nativeOnboardingPaymentRequests(data, session, application, provider = 
     return normalizedPaymentProvider(row.paymentProvider || 'clover') === wantedProvider;
   });
 }
-function nativeOnboardingReadyForPickup(data, session, application) {
+function nativeOnboardingReadyForPickup(data, session, application, options = {}) {
   const pricing = application.pricingSnapshot || {};
   const recurring = nativeOnboardingRecurring(data, session, application);
   const provider = nativeOnboardingProvider(session, recurring);
@@ -10457,8 +10480,17 @@ function nativeOnboardingReadyForPickup(data, session, application) {
   const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
   const firstWeek = requests.find(row => row.paymentType === 'First weekly payment');
   const cardReady = recurringCardReadyForProvider(recurring, provider);
+  const staffApproved = session.finalReviewStatus === 'Approved';
+  const identityProvider = normalizedIdentityProvider(session.identityProvider);
+  const identityReady = identityProvider !== 'stripe' || session.identityVerificationStatus === 'verified' && session.identityLegalNameMatch === true;
+  const paymentsReady = cardReady && (Number(pricing.downPayment || 0) <= 0 || nativePaymentPaid(deposit)) && nativePaymentPaid(firstWeek);
+  const insuranceReady = ['upload', 'help_at_pickup'].includes(String(session.insuranceOption || '').trim().toLowerCase());
   return {
-    ready: session.documentReviewStatus === 'Approved' && session.signatureReviewStatus === 'Approved' && cardReady && (Number(pricing.downPayment || 0) <= 0 || nativePaymentPaid(deposit)) && nativePaymentPaid(firstWeek),
+    ready: staffApproved && identityReady && paymentsReady && (insuranceReady || options.allowInsurancePending === true),
+    staffApproved,
+    identityReady,
+    paymentsReady,
+    insuranceReady,
     paymentProvider: provider,
     recurring,
     deposit,
@@ -10471,7 +10503,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
   const vehicle = application && onboarding.findPublicVehicle(data, session.onlineVehicleId || application.onlineVehicleId) || null;
   const recurring = session && application ? nativeOnboardingRecurring(data, session, application) : null;
   const documents = session ? (data.documents || []).filter(row => row.onboardingSessionId === session.id || application && row.applicationId === application.id) : [];
-  const insuranceDocuments = documents.filter(row => /insurance/i.test(String([row.kind, row.type, row.title].filter(Boolean).join(' '))));
+  const insuranceDocuments = documents.filter(row => /insurance/i.test(String([row.documentKind, row.kind, row.type, row.title].filter(Boolean).join(' '))));
   const signature = session ? (data.eSignatures || []).find(row => row.onboardingSessionId === session.id && !/void|rejected/i.test(String(row.status || ''))) : null;
   const contract = session ? (data.contracts || []).find(row => row.onboardingSessionId === session.id) : null;
   const appointment = session ? (data.pickupAppointments || []).find(row => row.onboardingSessionId === session.id && !/cancel/i.test(String(row.status || ''))) : null;
@@ -10540,13 +10572,22 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     ? stripeDisputeEvidencePacket(data, virtualClaim, firstWeekPayment, recurring)
     : { missing: ['Exact Stripe payment'], proof: [], contractId: '', signatureId: '', pickupAppointmentId: '', priorPaymentIds: [] };
   const customer = application && (data.customers || []).find(row => row.applicationId === application.id || normKey(row.name || row.customer) === normKey(exactCustomer));
+  const insuranceVerified = !!(session
+    && session.insuranceReleaseStatus === 'Approved'
+    && appointment
+    && appointment.insuranceVerifiedAt
+    && appointment.insuranceVinConfirmed === true
+    && String(application && application.insuranceProvider || appointment.insuranceProvider || '').trim()
+    && String(application && application.insurancePolicyNumber || appointment.insurancePolicyNumber || '').trim()
+    && (String(session.insuranceOption || '').toLowerCase() === 'help_at_pickup' || insuranceDocuments.length));
   const checks = [
     ['application', 'Approved application for one online vehicle', !!(application && vehicle && application.onlineVehicleId && exactCustomer)],
     ['vehicle_identity', 'Vehicle VIN and tag/plate', !!(exactVehicleId && exactVin && exactPlate)],
     ['profile_pickup_consent', 'Profile, pickup date, and autopay consent', !!(session && session.profileCompletedAt && session.requestedPickupDate && session.pickupAutopayConsentAt)],
-    ['stripe_identity', liveRequired ? 'Live Stripe Identity license and selfie verification' : 'Stripe Identity license and selfie verification', !!(session && session.identityProvider === 'stripe' && session.identityVerificationStatus === 'verified' && (!liveRequired || session.identityVerificationLivemode === true))],
-    ['insurance', 'Full-coverage insurance uploaded and staff approved', !!(session && session.documentReviewStatus === 'Approved' && insuranceDocuments.length)],
-    ['signature', 'E-signature and staff signature match approval', !!(signature && signature.signedAt && session && session.signatureReviewStatus === 'Approved')],
+    ['final_review', 'One final WheelsonAuto screening approval before paid identity verification', !!(session && session.finalReviewStatus === 'Approved' && session.finalReviewedAt)],
+    ['stripe_identity', liveRequired ? 'Live Stripe Identity license and selfie verification with legal-name match' : 'Stripe Identity license and selfie verification with legal-name match', !!(session && session.identityProvider === 'stripe' && session.identityVerificationStatus === 'verified' && session.identityLegalNameMatch === true && (!liveRequired || session.identityVerificationLivemode === true))],
+    ['insurance', 'Active full-coverage insurance verified for the exact VIN before release', insuranceVerified],
+    ['signature', 'E-signature included in the combined staff approval', !!(signature && signature.signedAt && session && session.signatureReviewStatus === 'Approved' && session.finalReviewStatus === 'Approved')],
     ['stripe_card', liveRequired ? 'Live Stripe reusable card and autopay authorization' : 'Stripe reusable card and autopay authorization', !!(recurring && normalizedPaymentProvider(recurring.paymentProvider || recurring.provider) === 'stripe' && recurring.stripeCustomerId && recurring.stripePaymentMethodId && (recurring.autopayConsentAt || recurring.stripeCardSavedAt || recurring.cardSavedAt) && session && session.autopayConsentAt && (!liveRequired || recurring.stripeLivemode === true))],
     ['deposit', depositRequired ? 'Separate nonrefundable deposit paid through Stripe' : 'No deposit required by the locked vehicle price', !depositRequired || !!(depositRequest && depositPayment && (!liveRequired || depositPayment.stripeLivemode === true))],
     ['deposit_amount', depositRequired ? 'Deposit request and payment match the locked vehicle price' : 'Waived deposit matches the locked vehicle price', depositAmountMatches],
@@ -10744,32 +10785,33 @@ function controlledStripePilotSelection(data) {
   };
 }
 function controlledStripePilotNextActions(data, application, session) {
-  if (!session) return [{ owner: 'Staff', text: 'Approve this exact application to create the private Stripe Identity and card-setup path. Nothing is sent or charged automatically.' }];
+  if (!session) return [{ owner: 'System', text: 'Generate the missing automatic secure setup for this legacy application without sending a charge.' }];
   const state = nativeSite.onboardingStatus(data, session, application);
   if (!state.profile) {
     const settings = nativeSite.publicSettings(data);
     const requestedDate = String(session.requestedPickupDate || application.requestedPickupDate || '').slice(0, 10);
     const requestedTime = String(session.requestedPickupTime || application.requestedPickupTime || '').trim();
     const pickup = onboarding.pickupWindow(settings, requestedDate);
-    const profile = onboarding.validateCustomerProfile(application, { minimumExpirationDate: pickup.ok ? pickup.raw : undefined });
+    const profile = onboarding.validateCustomerProfile(application, { minimumExpirationDate: pickup.ok ? pickup.raw : undefined, requireInsurance: false });
     const actions = (profile.errors || (profile.error ? [profile.error] : [])).map(text => ({ owner: 'Customer', text }));
     if (!pickup.ok) actions.push({ owner: 'Customer', text: pickup.error });
     else if (!onboarding.validatePickupTime(requestedTime, settings)) actions.push({ owner: 'Customer', text: 'Choose an available pickup time during business hours.' });
     actions.push({ owner: 'Customer', text: 'Review the profile, choose the current pickup date and time, and explicitly confirm that pickup day becomes the weekly autopay weekday.' });
     return actions.slice(0, 8);
   }
-  if (!state.documents) return [{ owner: 'Customer', text: 'Upload the license front and back, a current selfie, and full-coverage insurance proof.' }];
-  if (state.identityProvider === 'stripe' && !state.identityVerified) {
-    if (state.identityProcessing) return [{ owner: 'Stripe', text: 'The signed live Identity verification is processing. No staff approval is available until Stripe returns the result.' }];
-    return [{ owner: 'Customer', text: state.identityLastError || 'Complete the hosted Stripe license and selfie verification.' }];
-  }
-  if (!state.documentsApproved) return [{ owner: 'Staff', text: 'Review the private insurance proof and approve full coverage for this exact customer and vehicle.' }];
+  if (!state.documents) return [{ owner: 'Customer', text: 'Upload the license front, license back, and a live selfie while holding the physical license below the chin.' }];
   if (!state.signature) return [{ owner: 'Customer', text: 'Read and electronically sign the locked agreement.' }];
-  if (!state.signatureApproved) return [{ owner: 'Staff', text: 'Compare the drawn signature with the driver-license signature, then accept or request a correction.' }];
-  if (!state.card) return [{ owner: 'Customer', text: 'Save and authorize a reusable card through the live Stripe setup form.' }];
+  if (!state.card) return [{ owner: 'Customer', text: 'Save and authorize a reusable card through Stripe. This step must not charge the card.' }];
+  if (!state.finalApproved) return [{ owner: 'Staff', text: 'Give one final decision after reviewing the application, screening files, signature, exact vehicle/VIN, and saved-card link.' }];
+  if (state.identityProvider === 'stripe' && !state.identityVerified) {
+    if (state.identityProcessing) return [{ owner: 'Stripe', text: 'The signed live Identity verification is processing. Payments remain locked until Stripe returns the result.' }];
+    return [{ owner: 'Customer', text: state.identityLastError || 'Complete the one-time hosted Stripe license and selfie verification.' }];
+  }
   if (!state.deposit) return [{ owner: 'Customer', text: 'Pay the locked nonrefundable deposit as its own Stripe transaction.' }];
   if (!state.firstWeek) return [{ owner: 'Customer', text: 'Pay the locked first weekly payment as a separate Stripe transaction.' }];
-  if (!state.pickup) return [{ owner: 'System', text: 'Finalize the pickup appointment and verify the weekly autopay anchor before handoff.' }];
+  if (!state.insuranceSelected) return [{ owner: 'Customer', text: 'Upload active full-coverage proof for the exact VIN or request staff help at pickup.' }];
+  if (!state.pickup) return [{ owner: 'System', text: 'Reserve the pickup appointment while keeping autopay and vehicle release locked.' }];
+  if (session.insuranceReleaseStatus !== 'Approved' || !session.pickupConfirmedAt) return [{ owner: 'Staff', text: 'Verify active insurance for the exact VIN and record the physical handoff. Autopay stays off until both are complete.' }];
   return [{ owner: 'Owner', text: 'Review the completed pilot evidence and approve this exact file before any Clover cutover.' }];
 }
 function assertControlledStripePilotApproved(data, options = {}) {
@@ -10813,6 +10855,7 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
   const vehicleName = nativeSite.vehicleTitle(vehicle);
   const weekday = dateCheck.weekday || onboarding.pickupWeekday(dateCheck.raw);
   const nextRecurringDate = addDaysToDateKey(dateCheck.raw, 7);
+  const insuranceOption = String(session.insuranceOption || '').trim().toLowerCase();
   const appointment = {
     id: 'pickup-' + crypto.randomBytes(8).toString('hex'),
     applicationId: application.id,
@@ -10831,7 +10874,11 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
     weekday,
     durationMinutes: Number(settings.pickupSlotMinutes || 60),
     address: settings.pickupAddress,
-    status: 'Confirmed - onboarding complete',
+    status: insuranceOption === 'upload' ? 'Confirmed - insurance review required' : 'Confirmed - insurance help requested',
+    insuranceOption,
+    insuranceReleaseStatus: session.insuranceReleaseStatus || 'Required before release',
+    insuranceDocumentId: session.insuranceDocumentId || '',
+    insuranceVin: session.insuranceVin || vehicle.vin || linkedVehicle.vin || '',
     autopayAnchorDate: dateCheck.raw,
     nextRecurringCharge: nextRecurringDate,
     createdAt: new Date().toISOString(),
@@ -10857,11 +10904,11 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
     autopayAnchorDate: dateCheck.raw,
     nextRun: nextRecurringDate,
     chargeTime: gate.recurring.chargeTime || '18:00',
-    status: 'Scheduled',
-    tone: 'good',
+    status: 'Pending pickup',
+    tone: 'warn',
     paymentSetup: 'Card linked - first week paid',
-    autoChargeEnabled: true,
-    autopayManagedBy: 'WheelsonAuto',
+    autoChargeEnabled: false,
+    autopayManagedBy: 'Held until physical pickup and insurance verification',
     firstWeekCoverageStarts: dateCheck.raw,
     firstWeekPaymentRequestId: gate.firstWeek && gate.firstWeek.id || '',
     pickupAppointmentId: appointment.id,
@@ -10869,17 +10916,16 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
   });
   assignAutopayVehicle(data, gate.recurring);
   Object.assign(session, {
-    status: 'Pickup confirmed',
-    pickupStatus: 'Confirmed',
+    status: 'Pickup reserved - insurance verification required',
+    pickupStatus: 'Reserved',
     pickupAppointmentId: appointment.id,
     pickupConfirmedAt: new Date().toISOString(),
     autopayWeekday: weekday,
     autopayAnchorDate: dateCheck.raw,
-    nextRecurringCharge: nextRecurringDate,
-    completedAt: new Date().toISOString()
+    nextRecurringCharge: nextRecurringDate
   });
   Object.assign(application, {
-    status: 'Approved - pickup confirmed',
+    status: 'Approved - pickup reserved',
     stage: 'Ready for pickup',
     requestedPickupDate: dateCheck.raw,
     requestedPickupTime: session.requestedPickupTime,
@@ -10969,6 +11015,16 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (!appointment) throw new Error('Pickup appointment was not found.');
   if (/cancel/i.test(String(appointment.status || ''))) throw new Error('A cancelled pickup cannot be completed.');
   if (/picked up|completed/i.test(String(appointment.status || ''))) return { appointment, alreadyCompleted: true };
+  const pickupSession = (data.onboardingSessions || []).find(row => row.id === appointment.onboardingSessionId) || null;
+  const pickupApplication = (data.applications || []).find(row => row.id === appointment.applicationId) || null;
+  const insuranceDocument = (data.documents || []).find(row => row.onboardingSessionId === appointment.onboardingSessionId && row.documentKind === 'insurance' && !/correction/i.test(String(row.status || '')));
+  const insuranceProvider = onboarding.text(payload.insuranceProvider || pickupApplication && pickupApplication.insuranceProvider, 160);
+  const insurancePolicyNumber = onboarding.text(payload.insurancePolicyNumber || pickupApplication && pickupApplication.insurancePolicyNumber, 120);
+  if (payload.insuranceConfirmed !== true || payload.insuranceVinConfirmed !== true) throw new Error('Confirm active full coverage for this exact customer, vehicle, and VIN before releasing the car.');
+  if (insuranceProvider.replace(/[^A-Z]/gi, '').length < 2) throw new Error('Enter the insurance company verified at pickup.');
+  const insurancePolicyKey = insurancePolicyNumber.replace(/[^A-Z0-9]/gi, '');
+  if (insurancePolicyKey.length < 4 || insurancePolicyKey.length > 60) throw new Error('Enter the complete insurance policy number verified at pickup.');
+  if (pickupSession && pickupSession.insuranceOption === 'upload' && !insuranceDocument) throw new Error('The uploaded insurance proof is missing or still needs correction.');
   const mileage = Number(payload.mileage);
   if (!Number.isFinite(mileage) || mileage < 0) throw new Error('Enter the vehicle mileage shown at physical pickup.');
   const now = new Date().toISOString();
@@ -10976,8 +11032,8 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId) || null;
   const recurring = (data.recurringPayments || []).find(row => row.pickupAppointmentId === appointment.id || appointment.onboardingSessionId && row.onboardingSessionId === appointment.onboardingSessionId || appointment.applicationId && row.applicationId === appointment.applicationId)
     || (data.recurringPayments || []).find(row => normKey(row.customer) === customerKey && (!appointment.vehicleId || row.vehicleId === appointment.vehicleId)) || null;
-  const application = (data.applications || []).find(row => row.id === appointment.applicationId) || null;
-  const session = (data.onboardingSessions || []).find(row => row.id === appointment.onboardingSessionId) || null;
+  const application = pickupApplication;
+  const session = pickupSession;
   const customer = (data.customers || []).find(row => row.applicationId === appointment.applicationId || recurring && row.recurringPaymentId === recurring.id)
     || (data.customers || []).find(row => normKey(row.name || row.customer) === customerKey) || null;
   const contract = (data.contracts || []).find(row => row.applicationId === appointment.applicationId || row.onboardingSessionId === appointment.onboardingSessionId)
@@ -10987,6 +11043,14 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
   Object.assign(appointment, {
     status: 'Picked up',
+    insuranceReleaseStatus: 'Approved',
+    insuranceConfirmed: true,
+    insuranceVinConfirmed: true,
+    insuranceVerifiedAt: now,
+    insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff',
+    insuranceProvider,
+    insurancePolicyNumber,
+    insuranceVin: appointment.vin || appointment.insuranceVin || '',
     pickupMileage: mileage,
     completedAt: now,
     completedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff',
@@ -10996,8 +11060,9 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (recurring) Object.assign(recurring, { status: 'Active', tone: 'good', autoChargeEnabled: true, autopayManagedBy: 'WheelsonAuto', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
   if (customer) Object.assign(customer, { status: 'Active', stage: 'Active', vehicleId: appointment.vehicleId || customer.vehicleId || '', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
   if (contract) Object.assign(contract, { status: 'Active', rentalStartDate: contract.rentalStartDate || appointment.date || '', pickupCompletedAt: now, startingMileage: mileage, updatedAt: now });
-  if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
-  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
+  if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', insuranceProvider, insurancePolicyNumber, insuranceVerifiedAt: now, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', insuranceReleaseStatus: 'Approved', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceVerifiedAt: now, insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
+  if (insuranceDocument) Object.assign(insuranceDocument, { status: 'Verified - active at pickup', verifiedAt: now, verifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff' });
   if (account) Object.assign(account, { portalStage: 'Active customer', recurringPaymentId: recurring && recurring.id || account.recurringPaymentId || '', vehicleId: appointment.vehicleId || account.vehicleId || '', updatedAt: now });
   if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });
   return { appointment, vehicle, recurring, customer, contract, application, session, account, onlineVehicle, alreadyCompleted: false };
@@ -20008,7 +20073,8 @@ const server = http.createServer(async (req, res) => {
       const identityReturned = url.searchParams.get('identity') === 'returned';
       const identityLastChecked = Date.parse(context.session.identityVerificationLastCheckedAt || '') || 0;
       const identityPollDue = context.session.identityVerificationStatus === 'processing' && Date.now() - identityLastChecked >= 30000;
-      if (stripeIdentityPreparationReady() && context.session.stripeIdentityVerificationId && (identityReturned || identityPollDue)) {
+      const identityNameCheckDue = context.session.identityVerificationStatus === 'verified' && typeof context.session.identityLegalNameMatch !== 'boolean';
+      if (stripeIdentityPreparationReady() && context.session.stripeIdentityVerificationId && (identityReturned || identityPollDue || identityNameCheckDue)) {
         try {
           await syncStripeIdentitySession(data, context.session, context.application);
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
@@ -20146,7 +20212,7 @@ const server = http.createServer(async (req, res) => {
       enrichLinkedProfiles(data);
       onboarding.ensureCollections(data);
       const selectedVehicle = onboarding.findPublicVehicle(data, onboarding.text(payload.onlineVehicleId, 120));
-      if (!selectedVehicle || !nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
+      if (!selectedVehicle) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
       const firstName = onboarding.text(payload.firstName, 80);
       const lastName = onboarding.text(payload.lastName, 80);
       const name = [firstName, lastName].filter(Boolean).join(' ').trim();
@@ -20163,6 +20229,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 409, { ok: false, error: 'A customer portal account already uses this email or phone. Sign in with the existing password or use password help before applying again.' });
       }
       if (payload.applicationConsent !== true) return json(res, 400, { ok: false, error: 'Application authorization is required.' });
+      if (payload.insurancePickupConsent !== true) return json(res, 400, { ok: false, error: 'Confirm that active full-coverage insurance is required before vehicle release.' });
       const smsConsentGranted = payload.smsConsent === true;
       const required = ['address', 'city', 'state', 'postalCode', 'dateOfBirth', 'driverLicenseId', 'driverLicenseExpires', 'employer'];
       if (required.some(field => !onboarding.text(payload[field], 300))) return json(res, 400, { ok: false, error: 'Complete every required application field.' });
@@ -20204,6 +20271,7 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), loginUrl: '/customer/login' });
       }
+      if (!nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
       const pricing = onboarding.pricingSnapshot(selectedVehicle);
       const password = createPasswordRecord(payload.password);
       const submittedAt = new Date().toISOString();
@@ -20238,6 +20306,9 @@ const server = http.createServer(async (req, res) => {
         applicationConsentAt: submittedAt,
         applicationConsentIp: requestIp(req),
         applicationConsentUserAgent: onboarding.text(req.headers['user-agent'], 400),
+        insurancePickupConsentAt: submittedAt,
+        insurancePickupConsentIp: requestIp(req),
+        insurancePickupConsentVersion: 'Full coverage required before VIN-specific vehicle release v1',
         smsConsentStatus: smsConsentGranted ? messagingConsent.STATUS.OPTED_IN : messagingConsent.STATUS.UNKNOWN,
         smsConsentAt: smsConsentGranted ? submittedAt : '',
         smsConsentSource: smsConsentGranted ? 'website_application_checkbox' : '',
@@ -20252,8 +20323,31 @@ const server = http.createServer(async (req, res) => {
       const customerAccount = onboarding.createPendingCustomerAccount(data, app, {
         vehicleId: selectedVehicle.platformVehicleId || '',
         onlineVehicleId: selectedVehicle.id,
-        portalStage: 'Application under review',
+        portalStage: 'Secure setup in progress',
         status: 'Active'
+      });
+      const onboardingProvider = normalizedPaymentProvider(WOA_ONBOARDING_PAYMENT_PROVIDER) === 'stripe' ? 'stripe' : 'clover';
+      const onboardingIdentityProvider = IDENTITY_PROVIDER === 'stripe' ? 'stripe' : 'manual';
+      const session = onboarding.createSession(data, app, { name: app.name || 'Website applicant', role: 'Customer' }, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
+      const linkedVehicle = (data.vehicles || []).find(row => row.id === selectedVehicle.platformVehicleId);
+      Object.assign(app, { stage: 'Onboarding', status: 'Customer setup in progress', onboardingStatus: 'Secure setup ready', pricingSnapshot: app.pricingSnapshot || pricing, updatedAt: submittedAt });
+      Object.assign(selectedVehicle, {
+        holdPreviousPublished: typeof selectedVehicle.holdPreviousPublished === 'boolean' ? selectedVehicle.holdPreviousPublished : !!selectedVehicle.published,
+        holdPreviousAvailability: selectedVehicle.holdPreviousAvailability || selectedVehicle.availability || 'Available',
+        published: false,
+        availability: 'Held for customer setup',
+        heldFor: app.name || '',
+        heldApplicationId: app.id,
+        heldUntil: session.expiresAt,
+        updatedAt: submittedAt
+      });
+      if (linkedVehicle) Object.assign(linkedVehicle, {
+        holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready',
+        status: 'Pending customer setup',
+        heldFor: app.name || '',
+        heldApplicationId: app.id,
+        heldUntil: session.expiresAt,
+        updatedAt: submittedAt
       });
       if (smsConsentGranted) {
         messagingConsent.recordConsent(data, {
@@ -20270,7 +20364,27 @@ const server = http.createServer(async (req, res) => {
           userAgent: onboarding.text(req.headers['user-agent'], 400)
         });
       }
-      data.websiteLeads.unshift({ id: 'lead-native-' + crypto.randomBytes(7).toString('hex'), applicationId: app.id, organizationId: app.organizationId, source: 'wheelsonauto.com native application', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, onlineVehicleId: app.onlineVehicleId, created: 'Just now', createdAt: submittedAt, status: 'Submitted' });
+      data.websiteLeads.unshift({ id: 'lead-native-' + crypto.randomBytes(7).toString('hex'), applicationId: app.id, organizationId: app.organizationId, source: 'wheelsonauto.com native application', name: app.name, phone: app.phone, email: app.email, vehicle: app.vehicle, vehicleId: app.vehicleId, onlineVehicleId: app.onlineVehicleId, created: 'Just now', createdAt: submittedAt, status: 'Secure setup started' });
+      await queueEmailNotification(data, {
+        event: 'customer_onboarding_started',
+        deliveryId: 'onboarding-start-' + session.id,
+        customer: app.name || 'Applicant',
+        to: app.email,
+        subject: 'Continue your WheelsonAuto setup - ' + app.vehicle,
+        template: 'Secure onboarding started',
+        body: [
+          'Hi ' + (app.firstName || 'there') + ',',
+          '',
+          'Your WheelsonAuto application was received. Continue the secure setup for the ' + app.vehicle + ':',
+          session.publicUrl,
+          '',
+          'You can complete the pickup request, private license/selfie screening, exact agreement, and no-charge card setup before WheelsonAuto makes one final decision.',
+          '',
+          'Important: active full-coverage insurance for this exact vehicle and VIN must be verified before the vehicle can be released. You can upload proof near the end or request help at pickup.',
+          '',
+          'No payment has been charged.'
+        ].join('\n')
+      });
       await queueOwnerEmailNotification(data, 'application_submitted', {
         customer: app.name || 'New applicant',
         subject: 'New WheelsonAuto application - ' + (app.name || 'Applicant'),
@@ -20287,7 +20401,7 @@ const server = http.createServer(async (req, res) => {
       });
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), loginUrl: '/customer/login' });
+      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: session.publicUrl, loginUrl: '/customer/login' });
     }
     if (/^\/api\/public\/onboarding\/[^/]+\/pickup-availability$/.test(url.pathname) && req.method === 'GET') {
       const availabilityRate = await publicActionLimit(req, 'onboarding-availability', PUBLIC_SECURE_LINK_LIMIT * 2, PUBLIC_SECURE_LINK_WINDOW_MS);
@@ -20309,7 +20423,7 @@ const server = http.createServer(async (req, res) => {
       const action = String(parts[4] || '');
       const actionRate = await publicActionLimit(req, 'onboarding-' + (action || 'unknown'), PUBLIC_SECURE_LINK_LIMIT, PUBLIC_SECURE_LINK_WINDOW_MS);
       if (!actionRate.allowed) return json(res, 429, { ok: false, error: 'Too many secure onboarding attempts. Wait before trying again.' }, { 'Retry-After': String(actionRate.retryAfterSeconds) });
-      const maxBytes = action === 'documents' ? 20 * 1024 * 1024 : action === 'signature' ? 2 * 1024 * 1024 : 512 * 1024;
+      const maxBytes = action === 'documents' || action === 'insurance' ? 20 * 1024 * 1024 : action === 'signature' ? 2 * 1024 * 1024 : 512 * 1024;
       const payload = await readJsonBody(req, maxBytes);
       const data = await readData();
       const context = await nativeOnboardingContext(data, publicToken);
@@ -20325,7 +20439,7 @@ const server = http.createServer(async (req, res) => {
         const selectedAvailability = onboarding.pickupAvailability(data, settings, pickup.raw, { excludeSessionId: session.id }).find(slot => slot.time === payload.requestedPickupTime);
         if (!selectedAvailability || !selectedAvailability.available) return json(res, 409, { ok: false, error: 'That pickup time is full. Choose another available time.' });
         if (payload.pickupAutopayConsent !== true) return json(res, 400, { ok: false, error: 'Confirm that the pickup date becomes the weekly autopay weekday.' });
-        const profile = onboarding.validateCustomerProfile(payload, { minimumExpirationDate: pickup.raw });
+        const profile = onboarding.validateCustomerProfile(payload, { minimumExpirationDate: pickup.raw, requireInsurance: false });
         if (!profile.ok) return json(res, 400, { ok: false, error: profile.error });
         Object.assign(application, {
           ...profile.values,
@@ -20351,9 +20465,20 @@ const server = http.createServer(async (req, res) => {
       if (action === 'documents') {
         if (!session.profileCompletedAt) return json(res, 409, { ok: false, error: 'Complete the profile and pickup request first.' });
         if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
-        const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR, PRIVATE_DOCUMENT_STORE);
+        const stripeIdentity = normalizedIdentityProvider(session.identityProvider) === 'stripe';
+        const screeningKinds = ['driver_license_front', 'driver_license_back', 'identity_selfie'];
+        const allManualKinds = [...screeningKinds, 'insurance'];
+        const savedCorrectionKinds = Array.isArray(session.documentCorrectionKinds)
+          ? session.documentCorrectionKinds.filter(kind => allManualKinds.includes(kind))
+          : [];
+        const screeningCorrectionKinds = savedCorrectionKinds.filter(kind => screeningKinds.includes(kind));
+        const requiredKinds = session.documentReviewStatus === 'Correction requested' && screeningCorrectionKinds.length
+          ? screeningCorrectionKinds
+          : screeningKinds;
+        const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR, PRIVATE_DOCUMENT_STORE, { requiredKinds });
         try {
-          if (normalizedIdentityProvider(session.identityProvider) === 'stripe') {
+          const identityFilesReplaced = saved.some(document => ['driver_license_front', 'driver_license_back', 'identity_selfie'].includes(document.documentKind));
+          if (stripeIdentity && identityFilesReplaced) {
             session.stripeIdentityVerificationHistory = Array.isArray(session.stripeIdentityVerificationHistory) ? session.stripeIdentityVerificationHistory : [];
             if (session.stripeIdentityVerificationId) session.stripeIdentityVerificationHistory = [session.stripeIdentityVerificationId, ...session.stripeIdentityVerificationHistory].slice(0, 20);
             session.stripeIdentityVerificationId = '';
@@ -20363,19 +20488,27 @@ const server = http.createServer(async (req, res) => {
             session.identityVerificationCustomerMessage = '';
             session.identityVerificationProviderError = '';
             session.identityVerifiedAt = '';
+            delete session.identityLegalNameMatch;
+            session.identityLegalNameCheckedAt = '';
+            session.identityLegalNameSource = '';
           }
-          session.documentReviewStatus = 'Waiting on staff';
+          session.documentCorrectionKinds = [];
+          session.documentReviewStatus = 'Waiting on final review';
           session.signatureReviewStatus = 'Waiting on customer';
-          session.reviewStatus = 'Documents waiting';
+          session.finalReviewStatus = 'Waiting on customer';
+          session.reviewStatus = 'Customer setup in progress';
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         } catch (error) {
           throw await attachPrivateDocumentRollback(error, saved);
         }
-        return json(res, 201, { ok: true, message: 'License, identity selfie, and insurance received for private staff review.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
+        return json(res, 201, { ok: true, message: 'License front, license back, and current selfie received securely. Continue to the agreement.', documents: saved.map(row => ({ id: row.id, type: row.type, status: row.status })) });
       }
       if (action === 'identity') {
         if (normalizedIdentityProvider(session.identityProvider) !== 'stripe') return json(res, 409, { ok: false, error: 'This onboarding file uses WheelsonAuto staff identity review.' });
+        if (session.finalReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must complete the combined final review before the paid Stripe Identity check starts.' });
+        const identityRecurring = nativeOnboardingRecurring(data, session, application);
+        if (!recurringCardReadyForProvider(identityRecurring, nativeOnboardingProvider(session, identityRecurring))) return json(res, 409, { ok: false, error: 'Save the authorized card before starting Stripe Identity.' });
         try {
           assertStripeIdentityPreparationReady();
         } catch (error) {
@@ -20386,8 +20519,6 @@ const server = http.createServer(async (req, res) => {
         }
         const identityRate = await publicActionLimit(req, 'stripe-identity', 12, 60 * 60 * 1000);
         if (!identityRate.allowed) return json(res, 429, { ok: false, error: 'Too many identity-verification attempts. Wait before trying again.' }, { 'Retry-After': String(identityRate.retryAfterSeconds) });
-        const onboardingState = nativeSite.onboardingStatus(data, session, application);
-        if (!onboardingState.documents) return json(res, 409, { ok: false, error: 'Upload the license, selfie, and insurance files before starting secure identity verification.' });
         try {
           if (session.stripeIdentityVerificationId) {
             const remote = await stripe.retrieveIdentityVerificationSession(session.stripeIdentityVerificationId);
@@ -20396,7 +20527,7 @@ const server = http.createServer(async (req, res) => {
             if (applied.status === 'verified') {
               await protectConcurrentLocalWrites(data, { preferIncoming: true });
               await writeData(data);
-              return json(res, 200, { ok: true, message: 'Stripe already verified the license and selfie. WheelsonAuto is reviewing the insurance proof.' });
+              return json(res, 200, { ok: true, message: 'Stripe already verified the live driver license and matching selfie. Continue to the required payments.' });
             }
             if (applied.status === 'processing') {
               await protectConcurrentLocalWrites(data, { preferIncoming: true });
@@ -20448,7 +20579,8 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (action === 'signature') {
-        if (session.documentReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the driver license and full-coverage insurance before the agreement can be signed.' });
+        const signatureState = nativeSite.onboardingStatus(data, session, application);
+        if (!signatureState.documents) return json(res, 409, { ok: false, error: 'Upload the license front, license back, and current selfie before signing the agreement.' });
         if ((data.eSignatures || []).some(row => row.onboardingSessionId === session.id && !/rejected|void/i.test(String(row.status || '')))) return json(res, 409, { ok: false, error: 'This agreement has already been signed.' });
         if (normKey(payload.typedName) !== normKey(application.name)) return json(res, 400, { ok: false, error: 'Type the same full legal name used on the application.' });
         if (payload.electronicConsent !== true || payload.signatureMatchConsent !== true) return json(res, 400, { ok: false, error: 'Electronic-signature and signature-match confirmations are both required.' });
@@ -20569,7 +20701,8 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, message: 'Agreement signed and locked. WheelsonAuto will compare the signature with the driver license.' });
       }
       if (action === 'card') {
-        if (session.signatureReviewStatus !== 'Approved' || session.reviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the license-signature comparison before card setup.' });
+        const savedSignature = (data.eSignatures || []).find(row => row.onboardingSessionId === session.id && !/rejected|void/i.test(String(row.status || '')));
+        if (!savedSignature) return json(res, 409, { ok: false, error: 'Sign the exact vehicle agreement before saving a card.' });
         if (payload.autopayConsent !== true) return json(res, 400, { ok: false, error: 'Card-on-file and weekly autopay authorization is required.' });
         const existingRecurring = nativeOnboardingRecurring(data, session, application);
         const paymentProvider = nativeOnboardingProvider(session, existingRecurring);
@@ -20621,6 +20754,9 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, redirectUrl: setup.request.url, message: 'Opening ' + providerName + ' secure card setup.' });
       }
       if (action === 'payment') {
+        if (session.finalReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto final approval is required before payment.' });
+        if (normalizedIdentityProvider(session.identityProvider) === 'stripe' && session.identityVerificationStatus !== 'verified') return json(res, 409, { ok: false, error: 'Complete the final Stripe Identity check before payment.' });
+        if (normalizedIdentityProvider(session.identityProvider) === 'stripe' && session.identityLegalNameMatch !== true) return json(res, 409, { ok: false, error: 'The Stripe-verified legal name must match this application before payment.' });
         const recurring = nativeOnboardingRecurring(data, session, application);
         const paymentProvider = nativeOnboardingProvider(session, recurring);
         const providerName = paymentProviderLabel(paymentProvider);
@@ -20684,6 +20820,54 @@ const server = http.createServer(async (req, res) => {
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
           return json(res, Number(err && err.statusCode || 502), { ok: false, error: customerMessage });
+        }
+      }
+      if (action === 'insurance') {
+        const readiness = nativeOnboardingReadyForPickup(data, session, application, { allowInsurancePending: true });
+        if (!readiness.identityReady || !readiness.paymentsReady) return json(res, 409, { ok: false, error: 'Complete final approval, Stripe Identity, and both required payments before confirming insurance.' });
+        const option = String(payload.insuranceOption || '').trim().toLowerCase();
+        if (!['upload', 'help_at_pickup'].includes(option)) return json(res, 400, { ok: false, error: 'Choose insurance upload or help at pickup.' });
+        const now = new Date().toISOString();
+        let savedInsuranceDocuments = [];
+        try {
+          if (option === 'upload') {
+            if (payload.insuranceVinConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the policy covers the assigned vehicle and VIN.' });
+            const provider = onboarding.text(payload.insuranceProvider, 160);
+            const policyNumber = onboarding.text(payload.insurancePolicyNumber, 120);
+            if (provider.replace(/[^A-Z]/gi, '').length < 2) return json(res, 400, { ok: false, error: 'Enter the insurance company name.' });
+            const policyKey = policyNumber.replace(/[^A-Z0-9]/gi, '');
+            if (policyKey.length < 4 || policyKey.length > 60) return json(res, 400, { ok: false, error: 'Enter the complete insurance policy number.' });
+            if (WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED && !PRIVATE_DOCUMENT_STORE.isConfigured()) return json(res, 503, { ok: false, error: PRIVATE_DOCUMENT_STORE.status().message });
+            savedInsuranceDocuments = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR, PRIVATE_DOCUMENT_STORE, { requiredKinds: ['insurance'] });
+            Object.assign(application, { insuranceProvider: provider, insurancePolicyNumber: policyNumber, updatedAt: now });
+            Object.assign(session, {
+              insuranceOption: 'upload',
+              insuranceDocumentId: savedInsuranceDocuments[0] && savedInsuranceDocuments[0].id || '',
+              insuranceSubmittedAt: now,
+              insuranceVinConfirmedAt: now,
+              insuranceVin: String(vehicle.vin || '').trim(),
+              insuranceReleaseStatus: 'Waiting on staff at pickup',
+              insuranceHelpRequestedAt: '',
+              status: 'Insurance received - pickup ready'
+            });
+          } else {
+            if (payload.insuranceHelpConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that insurance must be verified before the vehicle can be released.' });
+            Object.assign(session, {
+              insuranceOption: 'help_at_pickup',
+              insuranceSubmittedAt: now,
+              insuranceHelpRequestedAt: now,
+              insuranceReleaseStatus: 'Required at pickup',
+              status: 'Insurance help requested - pickup ready'
+            });
+          }
+          const appointment = finalizeNativePickup(data, session, application, vehicle);
+          appendAuditLog(data, { name: application.name || 'Onboarding customer', role: 'Customer' }, option === 'upload' ? 'Customer uploaded pickup insurance' : 'Customer requested insurance help at pickup', [session.id, nativeSite.vehicleTitle(vehicle), String(vehicle.vin || 'VIN missing')]);
+          await protectConcurrentLocalWrites(data, { preferIncoming: true });
+          await writeData(data);
+          return json(res, 201, { ok: true, message: option === 'upload' ? 'Insurance proof received. Your pickup is reserved, and staff will verify coverage before releasing the vehicle.' : 'Insurance help is noted for pickup. Your appointment is reserved, but the vehicle cannot be released until active coverage is verified.', pickupScheduled: !!appointment });
+        } catch (error) {
+          if (savedInsuranceDocuments.length) throw await attachPrivateDocumentRollback(error, savedInsuranceDocuments);
+          throw error;
         }
       }
       if (action === 'pickup') {
@@ -23031,10 +23215,10 @@ const server = http.createServer(async (req, res) => {
       if (applicationOwnsVehicleHold) {
         const previousPublished = typeof publicVehicle.holdPreviousPublished === 'boolean'
           ? publicVehicle.holdPreviousPublished
-          : publicVehicle.published !== false;
+          : true;
         Object.assign(publicVehicle, { published: previousPublished, availability: publicVehicle.holdPreviousAvailability || 'Available', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousPublished: '', holdPreviousAvailability: '', updatedAt: reviewedAt });
         const linkedVehicle = (data.vehicles || []).find(row => row.id === publicVehicle.platformVehicleId);
-        if (linkedVehicle && (!linkedVehicle.heldApplicationId || linkedVehicle.heldApplicationId === application.id) && /pending application|held for onboarding/i.test(String(linkedVehicle.status || ''))) {
+        if (linkedVehicle && (!linkedVehicle.heldApplicationId || linkedVehicle.heldApplicationId === application.id) && /pending application|pending customer setup|held for onboarding/i.test(String(linkedVehicle.status || ''))) {
           Object.assign(linkedVehicle, { status: linkedVehicle.holdPreviousStatus || 'Ready', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousStatus: '', updatedAt: reviewedAt });
         }
       }
@@ -23072,7 +23256,7 @@ const server = http.createServer(async (req, res) => {
       const session = onboarding.createSession(data, application, user, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
       const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
       Object.assign(application, { stage: 'Approved', status: 'Approved - onboarding sent', approvedAt: new Date().toISOString(), approvedBy: user.name || user.username || user.role, pricingSnapshot: application.pricingSnapshot || onboarding.pricingSnapshot(vehicle) });
-      Object.assign(vehicle, { holdPreviousPublished: vehicle.holdPreviousPublished === undefined ? !!vehicle.published : vehicle.holdPreviousPublished, holdPreviousAvailability: vehicle.holdPreviousAvailability || vehicle.availability || 'Available', published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
+      Object.assign(vehicle, { holdPreviousPublished: typeof vehicle.holdPreviousPublished === 'boolean' ? vehicle.holdPreviousPublished : !!vehicle.published, holdPreviousAvailability: vehicle.holdPreviousAvailability || vehicle.availability || 'Available', published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
       if (linkedVehicle) Object.assign(linkedVehicle, { holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready', status: 'Pending application', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({ id: 'msg-onboarding-' + crypto.randomBytes(7).toString('hex'), applicationId: application.id, customer: application.name || '', phone: application.phone || '', email: application.email || '', direction: 'Draft', channel: 'SMS', template: 'Application approved', subject: 'Application approved', status: 'Ready to send', tone: 'blue', body: 'Hi ' + (application.firstName || application.name || 'there') + ', your WheelsonAuto application for the ' + nativeSite.vehicleTitle(vehicle) + ' was approved. Complete your secure onboarding within seven days: ' + session.publicUrl, createdAt: new Date().toISOString(), source: 'Native onboarding' });
@@ -23093,20 +23277,92 @@ const server = http.createServer(async (req, res) => {
       if (!decision) return json(res, 400, { ok: false, error: 'Choose approve or request correction.' });
       const reviewedAt = new Date().toISOString();
       const reviewer = user.name || user.username || user.role || 'Staff';
-      if (payload.stage === 'documents') {
+      if (payload.stage === 'final') {
+        const documents = (data.documents || []).filter(row => row.onboardingSessionId === session.id);
+        const screeningKinds = ['driver_license_front', 'driver_license_back', 'identity_selfie'];
+        const documentKinds = new Set(documents.filter(row => !/correction/i.test(String(row.status || ''))).map(row => row.documentKind));
+        if (!screeningKinds.every(kind => documentKinds.has(kind))) return json(res, 409, { ok: false, error: 'License front, license back, and the live selfie with license must all be present.' });
+        const signature = (data.eSignatures || []).find(row => row.onboardingSessionId === session.id && !/void|rejected/i.test(String(row.status || '')));
+        if (!signature) return json(res, 409, { ok: false, error: 'The exact vehicle agreement has not been signed.' });
+        const recurring = application && nativeOnboardingRecurring(data, session, application);
+        const provider = nativeOnboardingProvider(session, recurring);
+        if (!recurringCardReadyForProvider(recurring, provider)) return json(res, 409, { ok: false, error: 'The saved card has not been verified by ' + paymentProviderLabel(provider) + '.' });
+        const vehicle = application && onboarding.findPublicVehicle(data, session.onlineVehicleId || application.onlineVehicleId);
+        const linkedVehicle = vehicle && (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
+        const vin = String(vehicle && vehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
+        if (!vehicle || !vin) return json(res, 409, { ok: false, error: 'The application must remain linked to one exact vehicle and VIN.' });
+        if (decision === 'approve') {
+          if (payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the preliminary selfie and physical license belong to the applicant.' });
+          if (payload.signatureMatchConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the drawn signature matches the license signature.' });
+          if (payload.vehicleConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the exact vehicle and VIN in the application and signed agreement.' });
+          if (payload.cardConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the saved card token is linked without taking payment.' });
+          Object.assign(session, {
+            finalReviewStatus: 'Approved',
+            finalReviewedAt: reviewedAt,
+            finalReviewedBy: reviewer,
+            finalReviewNotes: onboarding.text(payload.notes, 1600),
+            documentReviewStatus: 'Approved - preliminary screening',
+            documentsReviewedAt: reviewedAt,
+            documentsReviewedBy: reviewer,
+            signatureReviewStatus: 'Approved',
+            signatureReviewedAt: reviewedAt,
+            signatureReviewedBy: reviewer,
+            reviewStatus: 'Approved for Stripe Identity',
+            status: 'Approved - Stripe Identity ready'
+          });
+          documents.filter(row => screeningKinds.includes(row.documentKind)).forEach(document => Object.assign(document, { status: 'Verified - preliminary staff screening', verifiedAt: reviewedAt, verifiedBy: reviewer, reviewNotes: onboarding.text(payload.notes, 1600) }));
+          Object.assign(signature, { verificationStatus: 'Accepted - preliminary license comparison complete', verifiedAt: reviewedAt, verifiedBy: reviewer, signatureMatchConfirmed: true, verifiedDocumentHash: signature.documentHash, reviewNotes: onboarding.text(payload.notes, 1600), status: 'Signed and accepted' });
+          if (application) Object.assign(application, { stage: 'Approved', status: 'Approved - Stripe Identity ready', onboardingStatus: 'Final staff review approved', approvedAt: reviewedAt, approvedBy: reviewer, updatedAt: reviewedAt });
+          await queueEmailNotification(data, {
+            event: 'customer_onboarding_approved',
+            deliveryId: 'onboarding-approved-' + session.id,
+            customer: application && application.name || 'Applicant',
+            to: application && application.email || '',
+            subject: 'WheelsonAuto file approved - complete Stripe Identity',
+            template: 'Onboarding approved',
+            body: [
+              'Hi ' + (application && application.firstName || 'there') + ',',
+              '',
+              'WheelsonAuto approved your completed file for the ' + nativeSite.vehicleTitle(vehicle) + '.',
+              'Return to your secure setup page from the original email and complete the one-time Stripe Identity check. After Stripe verifies your live license and selfie, the separate down payment and first weekly payment will unlock.',
+              '',
+              'No payment was taken during card setup.',
+              'Active full-coverage insurance for VIN ' + vin + ' must still be verified before the vehicle is released. You can upload proof later or request help at pickup.'
+            ].join('\n')
+          });
+        } else {
+          const correctionKinds = [...new Set((Array.isArray(payload.correctionKinds) ? payload.correctionKinds : []).map(kind => String(kind || '').trim()).filter(kind => screeningKinds.includes(kind)))];
+          const signatureCorrection = payload.signatureCorrection === true;
+          if (!correctionKinds.length && !signatureCorrection) return json(res, 400, { ok: false, error: 'Choose at least one screening file or the signature that needs correction.' });
+          Object.assign(session, { finalReviewStatus: 'Correction requested', finalReviewedAt: reviewedAt, finalReviewedBy: reviewer, finalReviewNotes: onboarding.text(payload.notes, 1600), documentCorrectionKinds: correctionKinds, documentReviewStatus: correctionKinds.length ? 'Correction requested' : session.documentReviewStatus, signatureReviewStatus: signatureCorrection ? 'Correction requested' : session.signatureReviewStatus, reviewStatus: 'Customer correction requested', status: 'Customer correction requested' });
+          documents.filter(row => correctionKinds.includes(row.documentKind)).forEach(document => Object.assign(document, { status: 'Correction requested', verifiedAt: reviewedAt, verifiedBy: reviewer, reviewNotes: onboarding.text(payload.notes, 1600) }));
+          if (signatureCorrection) Object.assign(signature, { verificationStatus: 'Correction requested', status: 'Signature correction requested', reviewNotes: onboarding.text(payload.notes, 1600) });
+          if (application) Object.assign(application, { status: 'Customer correction requested', onboardingStatus: 'Correction requested', updatedAt: reviewedAt });
+        }
+      } else if (payload.stage === 'documents') {
         const documents = (data.documents || []).filter(row => row.onboardingSessionId === session.id);
         const kinds = new Set(documents.map(row => row.documentKind));
-        if (!['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'].every(kind => kinds.has(kind))) return json(res, 409, { ok: false, error: 'License front, license back, identity selfie, and insurance proof must all be uploaded.' });
         const stripeIdentity = normalizedIdentityProvider(session.identityProvider) === 'stripe';
+        const allowedKinds = ['driver_license_front', 'driver_license_back', 'identity_selfie', 'insurance'];
+        const requiredKinds = stripeIdentity ? ['insurance'] : allowedKinds;
+        if (!requiredKinds.every(kind => kinds.has(kind))) return json(res, 409, { ok: false, error: stripeIdentity ? 'Full-coverage insurance proof must be uploaded.' : 'License front, license back, identity selfie, and insurance proof must all be uploaded.' });
         if (decision === 'approve' && stripeIdentity && session.identityVerificationStatus !== 'verified') return json(res, 409, { ok: false, error: 'Stripe Identity must verify the live driver license and selfie before staff can approve the insurance and unlock the agreement.' });
+        if (decision === 'approve' && stripeIdentity && session.identityLegalNameMatch !== true) return json(res, 409, { ok: false, error: session.identityLegalNameMatch === false ? 'The legal name on the WheelsonAuto application does not match the Stripe-verified driver license.' : 'WheelsonAuto has not yet confirmed that the application legal name matches Stripe Identity. Refresh the secure onboarding page, then review again.' });
         if (decision === 'approve' && payload.identityConfirmed !== true) return json(res, 400, { ok: false, error: stripeIdentity ? 'Confirm the Stripe Identity result is verified and full-coverage insurance is active before approval.' : 'Confirm the selfie matches the license photo, the license is valid, and full-coverage insurance is active before approval.' });
+        const correctionKinds = decision === 'request_correction'
+          ? [...new Set((Array.isArray(payload.correctionKinds) ? payload.correctionKinds : requiredKinds).map(kind => String(kind || '').trim()).filter(kind => requiredKinds.includes(kind)))]
+          : [];
+        if (decision === 'request_correction' && !correctionKinds.length) return json(res, 400, { ok: false, error: 'Choose the file that needs correction.' });
         session.documentReviewStatus = decision === 'approve' ? 'Approved' : 'Correction requested';
+        session.documentCorrectionKinds = correctionKinds;
         session.documentsReviewedAt = reviewedAt;
         session.documentsReviewedBy = reviewer;
         session.documentReviewNotes = onboarding.text(payload.notes, 1600);
         session.reviewStatus = decision === 'approve' ? 'Documents approved - signature ready' : 'Document correction requested';
         documents.forEach(document => {
-          document.status = decision === 'approve' ? (stripeIdentity && document.documentKind !== 'insurance' ? 'Verified - Stripe Identity and staff' : 'Verified - staff') : 'Correction requested';
+          if (decision === 'approve' && !requiredKinds.includes(document.documentKind)) return;
+          if (decision === 'request_correction' && !correctionKinds.includes(document.documentKind)) return;
+          document.status = decision === 'approve' ? 'Verified - staff' : 'Correction requested';
           document.verifiedAt = reviewedAt;
           document.verifiedBy = reviewer;
           document.reviewNotes = onboarding.text(payload.notes, 1600);
@@ -23127,11 +23383,11 @@ const server = http.createServer(async (req, res) => {
           application.onboardingStatus = session.status;
           application.updatedAt = reviewedAt;
         }
-      } else return json(res, 400, { ok: false, error: 'Review stage must be documents or signature.' });
+      } else return json(res, 400, { ok: false, error: 'Review stage must be final, documents, or signature.' });
       appendAuditLog(data, user, 'Onboarding ' + payload.stage + ' review', [application && application.name || session.applicationId, decision === 'approve' ? 'Approved' : 'Correction requested', session.id]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, status: session.status, documentReviewStatus: session.documentReviewStatus, signatureReviewStatus: session.signatureReviewStatus });
+      return json(res, 200, { ok: true, status: session.status, finalReviewStatus: session.finalReviewStatus, documentReviewStatus: session.documentReviewStatus, signatureReviewStatus: session.signatureReviewStatus });
     }
     if (url.pathname.startsWith('/api/onboarding/documents/') && req.method === 'GET') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can view private identity documents.' });

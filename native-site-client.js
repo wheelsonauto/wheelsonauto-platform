@@ -34,7 +34,7 @@
     if(label) label.classList.toggle('invalid', !!text);
   }
   function validateProfile(form, focusFirst){
-    var data = values(form), errors = {}, licenseKey = String(data.driverLicenseId || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), policyKey = String(data.insurancePolicyNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), providerLetters = String(data.insuranceProvider || '').replace(/[^A-Z]/gi, ''), pickupDate = String(data.requestedPickupDate || '').slice(0, 10), expiration = String(data.driverLicenseExpires || '').slice(0, 10);
+    var data = values(form), errors = {}, licenseKey = String(data.driverLicenseId || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), pickupDate = String(data.requestedPickupDate || '').slice(0, 10), expiration = String(data.driverLicenseExpires || '').slice(0, 10);
     if(String(data.address || '').trim().length < 5) errors.address = 'Enter the complete legal street address.';
     if(String(data.city || '').trim().length < 2 || !/[A-Z]/i.test(String(data.city || ''))) errors.city = 'Enter a valid city.';
     if(!/^[A-Z]{2}$/i.test(String(data.state || '').trim())) errors.state = 'Use the two-letter state abbreviation.';
@@ -42,12 +42,10 @@
     if(licenseKey.length < 5 || licenseKey.length > 24 || /^([A-Z0-9])\1+$/.test(licenseKey)) errors.driverLicenseId = 'Enter the complete number exactly as shown on the license.';
     if(!/^\d{4}-\d{2}-\d{2}$/.test(expiration)) errors.driverLicenseExpires = 'Choose the license expiration date.';
     else if(pickupDate && expiration < pickupDate) errors.driverLicenseExpires = 'The license must remain valid through pickup.';
-    if(providerLetters.length < 2) errors.insuranceProvider = 'Enter the insurance company name.';
-    if(policyKey.length < 4 || policyKey.length > 60) errors.insurancePolicyNumber = 'Enter the complete policy number.';
     if(!pickupDate) errors.requestedPickupDate = 'Choose the requested pickup date.';
     if(!String(data.requestedPickupTime || '')) errors.requestedPickupTime = 'Choose an available pickup time.';
     if(data.pickupAutopayConsent !== true) errors.pickupAutopayConsent = 'Confirm the pickup-day weekly autopay schedule.';
-    ['address','city','state','postalCode','driverLicenseId','driverLicenseExpires','insuranceProvider','insurancePolicyNumber','requestedPickupDate','requestedPickupTime','pickupAutopayConsent'].forEach(function(name){ profileFieldError(form, name, errors[name] || ''); });
+    ['address','city','state','postalCode','driverLicenseId','driverLicenseExpires','requestedPickupDate','requestedPickupTime','pickupAutopayConsent'].forEach(function(name){ profileFieldError(form, name, errors[name] || ''); });
     var names = Object.keys(errors), review = one('[data-profile-review]', form);
     if(review){ review.classList.toggle('invalid', !!names.length); var count = names.length; review.querySelector('strong').textContent = count ? count + ' field' + (count === 1 ? '' : 's') + ' need attention' : 'Profile details look complete'; review.querySelector('span').textContent = count ? 'Correct the highlighted fields before continuing.' : 'Review the details once more, then save and continue.'; }
     if(names.length && focusFirst){ var first = form.elements[names[0]]; if(first){ first.focus({preventScroll:true}); first.scrollIntoView({behavior:'smooth',block:'center'}); } }
@@ -157,7 +155,8 @@
       delete payload.confirmPassword;
       try{
         var result = await request('/api/public/applications', payload);
-        applicationForm.innerHTML = '<div class="form-title"><span>Application received</span><h2>Thank you, ' + String(payload.firstName || '').replace(/[<>]/g,'') + '.</h2><p>Your application for ' + String(result.application && result.application.vehicle || 'this vehicle').replace(/[<>]/g,'') + ' is now in staff review. No payment has been charged. Your customer portal is ready now using the same email or phone number and password. WheelsonAuto will send your secure onboarding link after approval.</p></div><a class="button primary wide" href="' + String(result.loginUrl || '/customer/login').replace(/[<>\"]/g,'') + '">Open customer portal</a>';
+        var onboardingUrl = String(result.onboardingUrl || '').replace(/[<>\"]/g,'');
+        applicationForm.innerHTML = '<div class="form-title"><span>Application received</span><h2>Thank you, ' + String(payload.firstName || '').replace(/[<>]/g,'') + '.</h2><p>Your secure setup is ready. Continue with the pickup request, private screening files, agreement, and no-charge card setup. WheelsonAuto reviews the complete file once. No payment has been charged.</p></div>' + (onboardingUrl ? '<a class="button primary wide" href="' + onboardingUrl + '">Continue secure setup</a>' : '') + '<a class="button secondary wide" href="' + String(result.loginUrl || '/customer/login').replace(/[<>\"]/g,'') + '">Open customer portal</a>';
         window.scrollTo({top:applicationForm.offsetTop - 90, behavior:'smooth'});
       }catch(error){ message(error.message, true); }
     });
@@ -179,6 +178,30 @@
     if(clear) clear.addEventListener('click', function(){ context.clearRect(0,0,canvas.width,canvas.height); canvas.dataset.signed=''; var hidden=one('[data-signature-data]',canvas.closest('form')); if(hidden) hidden.value=''; });
   });
 
+  all('[data-selfie-capture]').forEach(function(shell){
+    var video = one('[data-selfie-video]', shell), canvas = one('[data-selfie-canvas]', shell), preview = one('[data-selfie-preview]', shell), placeholder = one('[data-selfie-placeholder]', shell), hidden = one('[data-live-selfie]', shell), openButton = one('[data-selfie-open]', shell), takeButton = one('[data-selfie-take]', shell), retakeButton = one('[data-selfie-retake]', shell), errorBox = one('[data-selfie-error]', shell), stream = null;
+    function stopCamera(){ if(stream) stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
+    function showError(text){ errorBox.textContent = text; errorBox.hidden = !text; }
+    async function openCamera(){
+      showError('');
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ showError('This browser cannot open a secure live camera. Use a current Safari, Chrome, or Edge browser with camera permission enabled.'); return; }
+      try{
+        stopCamera();
+        stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1080}, height:{ideal:1440} }, audio:false });
+        video.srcObject = stream; await video.play();
+        video.hidden = false; placeholder.hidden = true; preview.hidden = true; openButton.hidden = true; takeButton.hidden = false; retakeButton.hidden = true;
+      }catch(error){ showError('Camera permission is required for the live selfie. Allow camera access in your browser settings and try again.'); }
+    }
+    function takePhoto(){
+      if(!stream || !video.videoWidth || !video.videoHeight){ showError('The camera is not ready yet. Hold still and try again.'); return; }
+      var width = Math.min(1080, video.videoWidth), height = Math.round(width * video.videoHeight / video.videoWidth);
+      canvas.width = width; canvas.height = height; canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+      hidden.value = canvas.toDataURL('image/jpeg', 0.9); preview.src = hidden.value; preview.hidden = false; video.hidden = true; takeButton.hidden = true; retakeButton.hidden = false; stopCamera();
+    }
+    openButton.addEventListener('click', openCamera); takeButton.addEventListener('click', takePhoto); retakeButton.addEventListener('click', function(){ hidden.value = ''; openCamera(); });
+    window.addEventListener('pagehide', stopCamera, {once:true});
+  });
+
   all('form[data-onboarding-form]').forEach(function(form){
     if(form.getAttribute('data-onboarding-form') === 'profile'){
       all('input,select', form).forEach(function(input){
@@ -192,9 +215,21 @@
       try{
         if(kind === 'profile' && !validateProfile(form, true)) throw new Error('Correct the highlighted profile fields before continuing.');
         if(kind === 'documents'){
-          payload.documents = await Promise.all(['driver_license_front','driver_license_back','identity_selfie','insurance'].map(async function(name){
-            var input = form.elements[name], document = await filePayload(input && input.files && input.files[0]); document.kind = name; return document;
+          var documentInputs = all('input[type="file"]', form);
+          payload.documents = await Promise.all(documentInputs.map(async function(input){
+            var document = await filePayload(input && input.files && input.files[0]); document.kind = input.name; return document;
           }));
+          var liveSelfie = one('[data-live-selfie]', form);
+          if(liveSelfie){
+            if(!liveSelfie.value) throw new Error('Take the live selfie while holding your license below your chin.');
+            payload.documents.push({ name:'live-selfie-with-license.jpg', type:'image/jpeg', dataUrl:liveSelfie.value, kind:'identity_selfie' });
+          }
+        }
+        if(kind === 'insurance' && payload.insuranceOption === 'upload'){
+          var insuranceInput = one('input[name="insurance"]', form);
+          var insuranceDocument = await filePayload(insuranceInput && insuranceInput.files && insuranceInput.files[0]);
+          insuranceDocument.kind = 'insurance';
+          payload.documents = [insuranceDocument];
         }
         if(kind === 'signature'){
           var canvas = one('[data-signature-pad]', form), hidden = one('[data-signature-data]', form);
