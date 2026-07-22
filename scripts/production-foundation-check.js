@@ -91,6 +91,22 @@ async function main() {
   assert.strictEqual(pilotSelection.candidates[0].paymentProvider, 'clover', 'The pilot chooser must expose the actual configured onboarding payment provider instead of guessing in the browser.');
   assert.strictEqual(pilotSelection.candidates[0].identityProvider, 'manual', 'The pilot chooser must expose the actual configured identity provider instead of guessing in the browser.');
   assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
+  const duplicateHoldState = {
+    onboardingSessions: [
+      { id: 'onboarding-one', applicationId: 'application-one', onlineVehicleId: 'online-shared', status: 'Identity pending' },
+      { id: 'onboarding-two', applicationId: 'application-two', onlineVehicleId: 'online-shared', status: 'Card setup pending' }
+    ]
+  };
+  assert.strictEqual(stateRepository.activeOnboardingVehicleHoldConflicts(duplicateHoldState).length, 1, 'Two active onboarding files must never hold the same vehicle.');
+  assert.throws(
+    () => stateRepository.criticalResourceIndexRows(duplicateHoldState),
+    error => error && error.code === 'woa_onboarding_vehicle_hold_conflict' && error.vehicleId === 'online-shared',
+    'The transactional PostgreSQL write must reject a second active onboarding hold for the same vehicle.'
+  );
+  assert.doesNotThrow(() => stateRepository.criticalResourceIndexRows({ onboardingSessions: [
+    duplicateHoldState.onboardingSessions[0],
+    { ...duplicateHoldState.onboardingSessions[1], status: 'Completed' }
+  ] }), 'A completed onboarding file must not block a later legitimate vehicle hold.');
   const schemaContractRows = [
     ...stateRepository.REQUIRED_SCHEMA_CONTRACT.constraints.map(([tableName, type, definition]) => ({
       kind: 'constraint',

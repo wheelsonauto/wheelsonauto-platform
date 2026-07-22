@@ -663,6 +663,27 @@ const CRITICAL_RESOURCE_COLLECTIONS = Object.freeze([
   ['customerAccounts', 'customer_account']
 ]);
 
+function activeOnboardingVehicleHoldConflicts(state = {}) {
+  const sessions = Array.isArray(state.onboardingSessions) ? state.onboardingSessions : [];
+  const active = sessions.filter(session => {
+    const vehicleId = String(session && (session.onlineVehicleId || session.vehicleId) || '').trim();
+    if (!vehicleId) return false;
+    return !/completed|cancelled|expired|replaced|picked up/i.test(String(session && session.status || ''));
+  });
+  const byVehicle = new Map();
+  active.forEach(session => {
+    const vehicleId = String(session.onlineVehicleId || session.vehicleId || '').trim();
+    const rows = byVehicle.get(vehicleId) || [];
+    rows.push(session);
+    byVehicle.set(vehicleId, rows);
+  });
+  return [...byVehicle.entries()].filter(([, rows]) => rows.length > 1).map(([vehicleId, rows]) => ({
+    vehicleId,
+    sessionIds: rows.map(row => rowId(row)).filter(Boolean),
+    applicationIds: [...new Set(rows.map(row => String(row && row.applicationId || '').trim()).filter(Boolean))]
+  }));
+}
+
 function exactDuplicateCriticalResourcePlan(state = {}) {
   const repairs = [];
   const conflicts = [];
@@ -726,6 +747,16 @@ const INACTIVE_ASSIGNMENT_PATTERN = /(removed|history|returned|ended|closed|canc
 const AVAILABLE_VEHICLE_PATTERN = /\b(ready|available|in lot|fleet ready|prep|in prep)\b/i;
 
 function criticalResourceIndexRows(state = {}) {
+  const holdConflicts = activeOnboardingVehicleHoldConflicts(state);
+  if (holdConflicts.length) {
+    const conflict = holdConflicts[0];
+    const error = new Error('Vehicle ' + conflict.vehicleId + ' has more than one active onboarding hold. Refusing an ambiguous database write.');
+    error.code = 'woa_onboarding_vehicle_hold_conflict';
+    error.vehicleId = conflict.vehicleId;
+    error.sessionIds = conflict.sessionIds;
+    error.applicationIds = conflict.applicationIds;
+    throw error;
+  }
   const rows = [];
   const seen = new Set();
   CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
@@ -3295,6 +3326,7 @@ module.exports = {
   identityWarnings,
   privateDocumentRows,
   CRITICAL_RESOURCE_COLLECTIONS,
+  activeOnboardingVehicleHoldConflicts,
   exactDuplicateCriticalResourcePlan,
   collapseExactDuplicateCriticalResources,
   criticalResourceIndexRows,
