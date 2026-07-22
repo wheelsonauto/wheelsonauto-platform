@@ -258,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-pilot-preparation-274';
+const ASSET_VERSION = 'platform-20260721-pilot-chooser-275';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -10667,6 +10667,75 @@ function controlledStripePilotEvidence(data, options = {}) {
     error: approved ? '' : candidate && candidate.missing.length ? candidate.missing.join(', ') : 'No completed Stripe onboarding pilot candidate was found.'
   };
 }
+function controlledStripePilotSelection(data) {
+  const activeSession = row => row && !/completed|cancelled|expired|replaced|picked up/i.test(String(row.status || ''));
+  const applications = (data.applications || []).slice().sort((a, b) =>
+    Date.parse(b.submittedAt || b.updatedAt || b.createdAt || 0) - Date.parse(a.submittedAt || a.updatedAt || a.createdAt || 0)
+  );
+  const sessions = (data.onboardingSessions || []).filter(activeSession);
+  const candidates = applications.map(application => {
+    const applicationId = String(application.id || '').trim();
+    const onlineVehicleId = String(application.onlineVehicleId || '').trim();
+    const publicVehicle = onlineVehicleId ? onboarding.findPublicVehicle(data, onlineVehicleId) : null;
+    const platformVehicleId = String(publicVehicle && publicVehicle.platformVehicleId || '').trim();
+    const linkedVehicle = platformVehicleId ? (data.vehicles || []).find(row => String(row.id || '') === platformVehicleId) || null : null;
+    const applicationSessions = sessions.filter(row => String(row.applicationId || '') === applicationId);
+    const session = applicationSessions[0] || null;
+    const competingSession = publicVehicle && sessions.find(row =>
+      String(row.onlineVehicleId || '') === String(publicVehicle.id || '')
+      && String(row.applicationId || '') !== applicationId
+    ) || null;
+    const pricing = application.pricingSnapshot || {};
+    const weeklyPayment = Number(pricing.weeklyPayment !== undefined ? pricing.weeklyPayment : application.weekly);
+    const downPayment = Number(pricing.downPayment !== undefined ? pricing.downPayment : application.down);
+    const vin = String(publicVehicle && publicVehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
+    const plate = String(publicVehicle && publicVehicle.plate || linkedVehicle && (linkedVehicle.plate || linkedVehicle.stock) || '').trim();
+    const blockers = [];
+    if (/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || ''))) blockers.push('Application is denied, removed, cancelled, or archived.');
+    if (!String(application.name || '').trim()) blockers.push('Applicant name is missing.');
+    if (!String(application.email || application.phone || '').trim()) blockers.push('Applicant email or phone is missing.');
+    if (!onlineVehicleId || !publicVehicle) blockers.push('Exact native online vehicle is not linked.');
+    if (publicVehicle && !platformVehicleId) blockers.push('Online vehicle is not linked to an internal fleet record.');
+    if (publicVehicle && platformVehicleId && !linkedVehicle) blockers.push('Linked fleet vehicle record was not found.');
+    if (!vin) blockers.push('Vehicle VIN is missing.');
+    if (!plate) blockers.push('Vehicle tag/plate is missing.');
+    if (!Number.isFinite(weeklyPayment) || weeklyPayment <= 0) blockers.push('Locked weekly payment is missing.');
+    if (!Number.isFinite(downPayment) || downPayment < 0) blockers.push('Locked nonrefundable deposit is missing.');
+    if (applicationSessions.length > 1) blockers.push('More than one active onboarding session exists for this application.');
+    if (competingSession) blockers.push('This vehicle is already in another active onboarding file.');
+    if (publicVehicle && publicVehicle.heldApplicationId && String(publicVehicle.heldApplicationId) !== applicationId) blockers.push('This vehicle is held for another application.');
+    if (!session && publicVehicle && (publicVehicle.published === false || /held|assigned|rented|sold|service/i.test(String(publicVehicle.availability || '')))) blockers.push('This online vehicle is not currently available for a new onboarding file.');
+    const eligible = blockers.length === 0;
+    return {
+      applicationId,
+      onboardingSessionId: session && String(session.id || '') || '',
+      customer: String(application.name || '').trim(),
+      contact: String(application.email || application.phone || '').trim(),
+      vehicle: publicVehicle ? nativeSite.vehicleTitle(publicVehicle) : String(application.vehicle || '').trim(),
+      onlineVehicleId,
+      vehicleId: platformVehicleId,
+      vin,
+      plate,
+      weeklyPayment: Number.isFinite(weeklyPayment) ? Number(weeklyPayment.toFixed(2)) : 0,
+      downPayment: Number.isFinite(downPayment) ? Number(downPayment.toFixed(2)) : 0,
+      applicationStatus: String(application.status || application.stage || 'New'),
+      onboardingStatus: session ? String(session.status || 'Onboarding started') : 'Not started',
+      eligible,
+      action: session ? 'continue' : 'prepare',
+      blockers
+    };
+  }).filter(row => row.applicationId);
+  candidates.sort((a, b) => Number(b.eligible) - Number(a.eligible) || Number(b.action === 'continue') - Number(a.action === 'continue'));
+  const eligible = candidates.filter(row => row.eligible);
+  return {
+    candidates: candidates.slice(0, 50),
+    eligibleCount: eligible.length,
+    blockedCount: candidates.length - eligible.length,
+    message: eligible.length
+      ? eligible.length + ' exact applicant and vehicle file' + (eligible.length === 1 ? ' is' : 's are') + ' ready to open for controlled pilot review.'
+      : 'No exact applicant and vehicle file is ready yet. Review the listed blockers without guessing or changing live records.'
+  };
+}
 function assertControlledStripePilotApproved(data, options = {}) {
   if (STRIPE_ISOLATED_PROVIDER_TEST_MODE && options.enforceInIsolatedTest !== true) return { skipped: true, isolatedTestMode: true };
   const evidence = controlledStripePilotEvidence(data, { liveRequired: options.liveRequired !== false });
@@ -11650,6 +11719,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   const cloverRecurring = cloverRecurringMigrationReadiness(state);
   const cardSetupPlanConflicts = cardSetupPlanReview(state);
   const controlledStripePilot = controlledStripePilotEvidence(state, { liveRequired: true });
+  const controlledStripePilotSelectionReview = controlledStripePilotSelection(state);
   const identityConflicts = stateRepository.identityConflicts(state);
   const assignmentClassification = assignmentConflictPreflightClassification(state);
   const assignmentConflicts = assignmentClassification.all;
@@ -11770,6 +11840,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     cardSetupPlanConflictCount: cardSetupPlanConflicts.length,
     cardSetupPlanReview: cardSetupPlanConflicts.slice(0, 50),
     controlledStripePilot,
+    controlledStripePilotSelection: controlledStripePilotSelectionReview,
     identityConflictCount: identityConflicts.length,
     assignmentConflictCount: assignmentConflicts.length,
     blockingAssignmentConflictCount: blockingAssignmentConflicts.length,
@@ -25659,6 +25730,7 @@ module.exports = {
   cloverRecurringMigrationReadiness,
   controlledStripePilotSessionEvidence,
   controlledStripePilotEvidence,
+  controlledStripePilotSelection,
   assertControlledStripePilotApproved,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,

@@ -663,6 +663,16 @@ function ownerSmoke() {
     telnyxMessaging: { provider: 'telnyx', brandStatus: 'VERIFIED', brandVerified: true, campaignStatus: 'TCR_FAILED', campaignActive: false, numberAssigned: false, carrierUsecaseQualified: true, carrierUsecaseQualificationUsecase: 'CUSTOMER_CARE', carrierUsecaseQualificationFees: { monthly: 10, quarterly: 30, annual: 120 }, live: false, error: 'Create and receive approval for the corrected campaign.' },
     resendEmail: { provider: 'resend', senderDomain: 'notify.wheelsonauto.com', senderDomainVerified: true, outboundVerified: true, inboundVerified: false, live: false, error: 'Send a reply into the signed Resend inbound webhook.' },
     starAi: { provider: 'openai', model: 'gpt-5.5', configured: true, operational: true, healthVerified: true, dailyRemaining: 47, monthlyRemaining: 490, autoSendEnabled: false, live: true, health: { checkedAt: new Date().toISOString() } },
+    controlledStripePilot: { approved: false, readyForApproval: false, message: 'Complete one exact live pilot.' },
+    controlledStripePilotSelection: {
+      eligibleCount: 1,
+      blockedCount: 1,
+      message: '1 exact applicant and vehicle file is ready to open for controlled pilot review.',
+      candidates: [
+        { applicationId: 'app-pilot-ready', customer: 'Pilot Customer', vehicle: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, onboardingStatus: 'Not started', eligible: true, action: 'prepare', blockers: [] },
+        { applicationId: 'app-pilot-blocked', customer: 'Blocked Customer', vehicle: '2021 Pilot Blocked', weeklyPayment: 0, downPayment: 0, onboardingStatus: 'Not started', eligible: false, action: 'prepare', blockers: ['Vehicle VIN is missing.', 'Locked weekly payment is missing.'] }
+      ]
+    },
     assignmentConflicts: [
       { vehicleId: 'veh-owner-resolver-reachability', vehicle: '2025 Resolver Reachability', vin: 'RESOLVERREACHVIN', plate: 'RES-OLVE', claimedBy: 'Resolver Primary / Resolver Alias', sources: ['WheelsonAuto autopay', 'recurring_payment', 'Customer file', 'customer_file'] },
       { vehicleId: 'veh-owner-review-warning', vehicle: '2024 Resolver Review', vin: 'RESOLVERREVIEWVIN', plate: 'RES-WARN', claimedBy: 'Saved Customer / Imported Name', sources: ['Customer record'] }
@@ -675,6 +685,16 @@ function ownerSmoke() {
   assert(launchAssignmentReview.includes('Current owner alert delivery test is verified.'), 'A verified operational-alert gate must not tell the owner that another current test is still required.');
   assert(launchAssignmentReview.includes('1 transactional assignment conflict blocks PostgreSQL and Stripe cutover.'), 'The assignment blocker sentence must derive its singular count from the transactional conflict list.');
   assert(launchAssignmentReview.includes('1 review-only warning remains visible'), 'The assignment summary must derive its singular review-only count without presenting it as a blocker.');
+  assert(launchAssignmentReview.includes('Choose first live pilot (1)') && launchAssignmentReview.includes('data-action="choose-stripe-pilot"'), 'A blocked first pilot must expose one compact owner-only chooser in the existing preflight instead of requiring an off-app customer guess.');
+  const pilotChooser = context.stripePilotSelectionModal({
+    eligibleCount: 1,
+    message: '1 exact applicant and vehicle file is ready to open for controlled pilot review.',
+    candidates: [
+      { applicationId: 'app-pilot-ready', customer: 'Pilot Customer', vehicle: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, onboardingStatus: 'Not started', eligible: true, action: 'prepare', blockers: [] },
+      { applicationId: 'app-pilot-blocked', customer: 'Blocked Customer', vehicle: '2021 Pilot Blocked', weeklyPayment: 0, downPayment: 0, onboardingStatus: 'Not started', eligible: false, action: 'prepare', blockers: ['Vehicle VIN is missing.', 'Locked weekly payment is missing.'] }
+    ]
+  });
+  assert(pilotChooser.includes('Opening a file is read-only preparation.') && pilotChooser.includes('does not create onboarding, send a link, hold a vehicle, save a card, or charge money') && pilotChooser.includes('PILOTREADYVIN0001') && pilotChooser.includes('data-action="open-stripe-pilot-file"') && pilotChooser.includes('1 file needs review') && pilotChooser.includes('Vehicle VIN is missing.') && !pilotChooser.includes('data-application-id="app-pilot-blocked"'), 'The pilot chooser must show exact identity and prices, keep blocked files read-only, and explain that opening a file has no external side effect.');
   const detachedConflictButton = { dataset: { id: 'veh-detached-review', vehicleName: '2023 Detached Review', vin: 'DETACHEDVIN', plate: 'DET-123', tracker: 'Tracker 9', claimedBy: 'One Name / Two Name', jobErrorId: 'job-error-42' } };
   const detachedConflictVehicle = context.assignmentConflictVehicleFromButton(detachedConflictButton);
   assert(detachedConflictVehicle && detachedConflictVehicle.id === 'veh-detached-review' && detachedConflictVehicle.vin === 'DETACHEDVIN' && detachedConflictVehicle.assignmentConflict === 'One Name / Two Name' && detachedConflictVehicle.jobErrorId === 'job-error-42', 'A preflight review must retain enough safe vehicle and job-error identity to open the exact server resolver even when that vehicle is absent from the current client list.');

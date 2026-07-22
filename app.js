@@ -3497,7 +3497,7 @@ function liveLaunchCardSetupPlanReview(rows){
 }
 function liveLaunchPreflightModal(preflight){
   preflight=preflight||{};
-  var database=preflight.database||{},schemaContract=database.schemaContract||{},databaseCredentialIsolation=preflight.databaseCredentialIsolation||{},backendCutover=preflight.backendCutover||{},recoveryDrill=preflight.recoveryDrill||database.recoveryDrill||{},stateBackup=preflight.stateBackup||{},storage=preflight.documentStorage||{},storageValidation=preflight.documentStorageValidation||{},documentEncryptionKeys=preflight.documentEncryptionKeys||{},privateArtifacts=preflight.privateArtifacts||{},alerts=preflight.operationalAlerts||{},owner=preflight.ownerAuthentication||{},cloverRecurring=preflight.cloverRecurring||{},controlledPilot=preflight.controlledStripePilot||{},pilotCandidate=controlledPilot.candidate||{};
+  var database=preflight.database||{},schemaContract=database.schemaContract||{},databaseCredentialIsolation=preflight.databaseCredentialIsolation||{},backendCutover=preflight.backendCutover||{},recoveryDrill=preflight.recoveryDrill||database.recoveryDrill||{},stateBackup=preflight.stateBackup||{},storage=preflight.documentStorage||{},storageValidation=preflight.documentStorageValidation||{},documentEncryptionKeys=preflight.documentEncryptionKeys||{},privateArtifacts=preflight.privateArtifacts||{},alerts=preflight.operationalAlerts||{},owner=preflight.ownerAuthentication||{},cloverRecurring=preflight.cloverRecurring||{},controlledPilot=preflight.controlledStripePilot||{},pilotCandidate=controlledPilot.candidate||{},pilotSelection=preflight.controlledStripePilotSelection||{};
   var databaseReady=!!database.productionReady&&!!database.snapshotRecoveryReady&&!!database.migrationProofReady,schemaReady=database.schemaContractReady===true||schemaContract.ready===true,schemaMissing=Math.max(0,(schemaContract.missingMigrations||[]).length+(schemaContract.missingConstraints||[]).length+(schemaContract.missingIndexes||[]).length),databaseCredentialIsolationReady=databaseCredentialIsolation.ready===true,backendCutoverReady=!!backendCutover.ready,recoveryDrillReady=!!recoveryDrill.ready,stateBackupReady=!!stateBackup.live,storageReady=!!storage.productionReady&&!!storageValidation.live,documentEncryptionKeysReady=!!documentEncryptionKeys.ready,privateArtifactsReady=!!privateArtifacts.ready,alertsReady=!!alerts.live,ownerReady=!!owner.passwordLoginConfigured&&!!owner.passwordLoginStrong&&!!owner.passwordLoginVerified&&!owner.pinFallbackAllowed,cloverRecurringReady=!!cloverRecurring.ready;
   var rows=[
     liveLaunchGateRow('PostgreSQL state',databaseReady,liveLaunchGateDetail(database,databaseReady,'Transactional database, import proof, and recovery snapshot are required.')),
@@ -3532,8 +3532,18 @@ function liveLaunchPreflightModal(preflight){
     : 'No transactional assignment conflict currently blocks PostgreSQL or Stripe cutover.';
   if(assignmentWarningCount)assignmentSummary+=' '+assignmentWarningCount+' review-only warning'+(assignmentWarningCount===1?' remains':'s remain')+' visible without changing customers, vehicles, or payment plans.';
   var assignmentHtml=assignmentConflicts.length?'<div class="section-head"><div><h2>Vehicle assignment review</h2><p>'+esc(assignmentSummary)+'</p></div><button class="btn" data-view="Operations" data-tab="Assigned">Open Assigned</button></div><div class="launch-assignment-review-list">'+assignmentConflicts.slice(0,12).map(function(item){return liveLaunchAssignmentReviewItem(item,!!structuralAssignmentIds[String(item.vehicleId||'')])}).join('')+'</div>'+(assignmentConflicts.length>12?'<div class="notice mini">Showing 12 of '+assignmentConflicts.length+'. Resolve active conflicts in Operations / Assigned; review-only rows remain visible without blocking launch.</div>':''):'<div class="notice good">No active vehicle assignment conflict is blocking cutover.</div>';
-  var pilotAction=controlledPilot.readyForApproval===true&&!controlledPilot.approved?'<button class="btn gold" data-action="review-stripe-pilot" data-session-id="'+esc(pilotCandidate.sessionId||'')+'" data-customer="'+esc(pilotCandidate.customer||'')+'" data-vehicle="'+esc(pilotCandidate.vehicle||'')+'" data-vin="'+esc(pilotCandidate.vin||'')+'" data-plate="'+esc(pilotCandidate.plate||'')+'" data-deposit-amount="'+esc(pilotCandidate.depositAmount||0)+'" data-first-week-amount="'+esc(pilotCandidate.firstWeekAmount||0)+'" data-total-collected="'+esc(pilotCandidate.totalCollected||0)+'">Review pilot</button>':'';
+  var pilotAction=controlledPilot.readyForApproval===true&&!controlledPilot.approved?'<button class="btn gold" data-action="review-stripe-pilot" data-session-id="'+esc(pilotCandidate.sessionId||'')+'" data-customer="'+esc(pilotCandidate.customer||'')+'" data-vehicle="'+esc(pilotCandidate.vehicle||'')+'" data-vin="'+esc(pilotCandidate.vin||'')+'" data-plate="'+esc(pilotCandidate.plate||'')+'" data-deposit-amount="'+esc(pilotCandidate.depositAmount||0)+'" data-first-week-amount="'+esc(pilotCandidate.firstWeekAmount||0)+'" data-total-collected="'+esc(pilotCandidate.totalCollected||0)+'">Review pilot</button>':controlledPilot.approved?'':'<button class="btn gold" data-action="choose-stripe-pilot">Choose first live pilot'+(Number(pilotSelection.eligibleCount||0)?' ('+Number(pilotSelection.eligibleCount||0)+')':'')+'</button>';
   return summary+liveLaunchProviderConsole(preflight)+'<section class="section" style="padding:0;margin-top:12px"><div class="section-head"><h2>Launch safeguards</h2><div class="actions">'+pilotAction+'<button class="btn" data-action="open-owner-access-settings">Owner access</button><button class="btn" data-action="open-recovery-console">Recovery log</button><button class="btn" data-action="create-state-backup">Create &amp; verify backup</button></div></div>'+table(['Gate','State','Proof / next action'],rows)+'</section><section class="section" style="padding:0;margin-top:12px">'+assignmentHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Clover cutover review</h2>'+liveLaunchCloverQuarantineReview(cloverRecurring)+liveLaunchCardSetupPlanReview(cardSetupPlanReview)+'</section><section class="section" style="padding:0;margin-top:12px"><div class="section-head"><h2>Recent job failures</h2>'+badge(jobErrors.length+' open',jobErrors.length?'bad':'good')+'</div>'+liveLaunchJobErrorReview(jobErrors)+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Remaining blockers</h2>'+missingHtml+'</section><section class="section" style="padding:0;margin-top:12px"><h2>Vehicle identity review</h2>'+warningHtml+'</section>'+(issues.length?'<div class="notice warn" style="margin-top:12px">'+esc(issues.join(' '))+'</div>':'')+'<div class="notice" style="margin-top:12px">This check never sends a charge, changes a customer, or turns on a provider. Pilot approval only unlocks future owner-confirmed customer cutovers; it does not charge or migrate anyone.</div>'
+}
+function stripePilotChoiceCard(candidate){
+  candidate=candidate||{};
+  var vehicleIdentity=[candidate.vehicle,candidate.vin?'VIN '+candidate.vin:'VIN missing',candidate.plate?'Tag '+candidate.plate:'Tag missing'].filter(Boolean).join(' | '),terms=money(candidate.downPayment||0)+' deposit / '+money(candidate.weeklyPayment||0)+' weekly',blocked=Array.isArray(candidate.blockers)?candidate.blockers:[];
+  return '<article class="stripe-pilot-choice '+(candidate.eligible?'eligible':'blocked')+'"><div class="stripe-pilot-choice-main"><div class="item-row"><strong>'+esc(candidate.customer||'Applicant not identified')+'</strong>'+badge(candidate.eligible?(candidate.action==='continue'?'Continue':'Ready'):'Review needed',candidate.eligible?'good':'warn')+'</div><span>'+esc(vehicleIdentity||'Exact vehicle is not linked')+'</span><small>'+esc(terms+' | '+(candidate.onboardingStatus||candidate.applicationStatus||'New'))+'</small>'+(blocked.length?'<ul>'+blocked.map(function(reason){return '<li>'+esc(reason)+'</li>'}).join('')+'</ul>':'')+'</div>'+(candidate.eligible?'<button class="btn primary" data-action="open-stripe-pilot-file" data-application-id="'+esc(candidate.applicationId||'')+'" data-has-session="'+(candidate.onboardingSessionId?'1':'0')+'">'+(candidate.action==='continue'?'Continue exact file':'Open exact file')+'</button>':'')+'</article>'
+}
+function stripePilotSelectionModal(selection){
+  selection=selection||{};
+  var rows=Array.isArray(selection.candidates)?selection.candidates:[],eligible=rows.filter(function(row){return row.eligible}),blocked=rows.filter(function(row){return !row.eligible});
+  return '<div class="notice good"><strong>Opening a file is read-only preparation.</strong><div>Choosing here does not create onboarding, send a link, hold a vehicle, save a card, or charge money. The exact application file explains the next action before anything changes.</div></div><div class="section-head compact"><div><h2>Exact pilot candidates</h2><p>'+esc(selection.message||'Choose the exact applicant and vehicle only after reviewing every identifier and price.')+'</p></div>'+badge(eligible.length+' ready',eligible.length?'good':'warn')+'</div><div class="stripe-pilot-choice-list">'+(eligible.length?eligible.map(stripePilotChoiceCard).join(''):'<div class="notice warn">No exact file is ready. Use the review list below to correct missing vehicle identity, pricing, or contact data.</div>')+'</div>'+(blocked.length?'<details class="stripe-pilot-blocked"><summary>'+blocked.length+' file'+(blocked.length===1?' needs':'s need')+' review</summary><div class="stripe-pilot-choice-list">'+blocked.map(stripePilotChoiceCard).join('')+'</div></details>':'')+'<div class="actions"><button class="btn" data-action="open-live-launch-preflight">Back to launch preflight</button></div>'
 }
 function stripePilotApprovalModal(button){
   var sessionId=button.getAttribute('data-session-id')||'',customer=button.getAttribute('data-customer')||'Customer',vehicle=button.getAttribute('data-vehicle')||'Vehicle',vin=button.getAttribute('data-vin')||'',plate=button.getAttribute('data-plate')||'',depositAmount=Number(button.getAttribute('data-deposit-amount')||0),firstWeekAmount=Number(button.getAttribute('data-first-week-amount')||0),totalCollected=Number(button.getAttribute('data-total-collected')||0),phrase='APPROVE FIRST LIVE STRIPE PILOT';
@@ -3580,6 +3590,7 @@ document.addEventListener('click',async function(event){
   try{
     var response=await fetch('/api/system/infrastructure/preflight',{headers:{Accept:'application/json'},cache:'no-store'}),result=await response.json().catch(function(){return{}});
     if(!response.ok||result.ok===false&&result.error){openModal('Controlled Stripe launch preflight','<div class="notice bad"><strong>Launch check unavailable</strong><div>'+esc(result.error||'Live launch preflight failed')+'</div></div><div class="actions"><button class="btn" onclick="closeModal()">Close</button></div>');return}
+    window.__woaLastLaunchPreflight=result;
     openModal('Controlled Stripe launch preflight',liveLaunchPreflightModal(result));
   }catch(error){
     openModal('Controlled Stripe launch preflight','<div class="notice bad"><strong>Launch check unavailable</strong><div>The server could not answer the readiness check. No provider or customer data was changed.</div></div><div class="actions"><button class="btn" onclick="closeModal()">Close</button></div>');
@@ -3587,6 +3598,31 @@ document.addEventListener('click',async function(event){
     button.disabled=false;
     button.classList.remove('is-loading');
   }
+},true);
+document.addEventListener('click',function(event){
+  var button=event.target.closest('button[data-action="choose-stripe-pilot"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can choose the live Stripe pilot');return}
+  var preflight=window.__woaLastLaunchPreflight||{},selection=preflight.controlledStripePilotSelection||{};
+  openModal('Choose first live Stripe pilot',stripePilotSelectionModal(selection));
+},true);
+document.addEventListener('click',function(event){
+  var button=event.target.closest('button[data-action="open-stripe-pilot-file"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can choose the live Stripe pilot');return}
+  var applicationId=button.getAttribute('data-application-id')||'',application=(db.applications||[]).find(function(row){return row.id===applicationId});
+  if(!application){notify('That application is no longer available. Refresh the launch preflight.');return}
+  closeModal();
+  view='Applications';
+  tab=button.getAttribute('data-has-session')==='1'?'Onboarding':'Pipeline';
+  render();
+  setTimeout(function(){openNativeApplication(applicationId)},0);
 },true);
 document.addEventListener('click',function(event){
   var button=event.target.closest('button[data-action="review-stripe-pilot"]');

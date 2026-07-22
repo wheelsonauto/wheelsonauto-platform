@@ -9,7 +9,7 @@ const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
 const encryptedStateBackup = require('../encrypted-state-backup');
 const stripeMigration = require('../stripe-migration');
-const { assignmentConflictPreflightClassification, cardSetupPlanReview } = require('../server');
+const { assignmentConflictPreflightClassification, cardSetupPlanReview, controlledStripePilotSelection } = require('../server');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
 async function verifyGracefulShutdown(root, dataDir) {
@@ -70,6 +70,25 @@ async function verifyGracefulShutdown(root, dataDir) {
 
 async function main() {
   runCliArgumentChecks();
+  const pilotSelection = controlledStripePilotSelection({
+    applications: [
+      { id: 'app-pilot-ready', name: 'Pilot Customer', email: 'pilot@example.com', onlineVehicleId: 'online-pilot-ready', vehicle: '2020 Pilot Ready', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'New', submittedAt: '2026-07-21T12:00:00.000Z' },
+      { id: 'app-pilot-blocked', name: 'Blocked Customer', email: 'blocked@example.com', onlineVehicleId: 'online-pilot-blocked', vehicle: '2021 Pilot Blocked', pricingSnapshot: {}, status: 'New', submittedAt: '2026-07-21T11:00:00.000Z' }
+    ],
+    onlineVehicles: [
+      { id: 'online-pilot-ready', platformVehicleId: 'veh-pilot-ready', title: '2020 Pilot Ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', weeklyPayment: 229, downPayment: 485, published: true, availability: 'Available' },
+      { id: 'online-pilot-blocked', platformVehicleId: 'veh-pilot-blocked', title: '2021 Pilot Blocked', published: true, availability: 'Available' }
+    ],
+    vehicles: [
+      { id: 'veh-pilot-ready', vin: 'PILOTREADYVIN0001', plate: 'PIL-001', status: 'Ready' },
+      { id: 'veh-pilot-blocked', status: 'Ready' }
+    ],
+    onboardingSessions: []
+  });
+  assert.strictEqual(pilotSelection.eligibleCount, 1, 'The owner pilot chooser must expose only applications with exact customer, fleet identity, and locked pricing.');
+  assert.strictEqual(pilotSelection.candidates[0].applicationId, 'app-pilot-ready', 'Eligible pilot files must sort ahead of review-only files.');
+  assert.deepStrictEqual(pilotSelection.candidates[0].blockers, [], 'An exact available applicant and vehicle must open without a false blocker.');
+  assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
   const schemaContractRows = [
     ...stateRepository.REQUIRED_SCHEMA_CONTRACT.constraints.map(([tableName, type, definition]) => ({
       kind: 'constraint',
