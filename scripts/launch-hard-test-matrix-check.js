@@ -56,6 +56,9 @@ function run(label, script) {
   if (result.status !== 0) {
     throw new Error(label + ' failed' + (output ? ':\n' + output : '.'));
   }
+  if (/\bskipped\b/i.test(output)) {
+    throw new Error(label + ' did not run and cannot be counted as verified' + (output ? ':\n' + output : '.'));
+  }
   console.log('ok - ' + label);
 }
 
