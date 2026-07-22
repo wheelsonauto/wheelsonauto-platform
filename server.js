@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-stripe-review-301';
+const ASSET_VERSION = 'platform-20260722-duplicate-review-302';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -12377,6 +12377,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/payments/manual-charge', 'Provider-aware saved-card manual charges'),
     route('POST', '/api/payment-provider/switch', 'Owner-confirmed Clover/Stripe autopay provider switch'),
     route('POST', '/api/payment-provider/review/resolve', 'Owner-confirmed late Stripe payment resolution'),
+    route('POST', '/api/payment-provider/duplicate-review/resolve', 'Owner-confirmed duplicate billing-period resolution after verified refund'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
     route('POST', '/api/integrations/clover/payments/match', 'Owner-confirmed Clover payment customer match'),
@@ -19120,6 +19121,169 @@ function resolveProviderMigrationReview(data, payload = {}, user = {}) {
     payment,
     resolution,
     cloverAutopayResumed: canResumeAutopay
+  };
+}
+function duplicateBillingPeriodReviewContext(data, payload = {}) {
+  const recurringPaymentId = String(payload.recurringPaymentId || payload.id || '').trim();
+  const paymentIntentId = String(payload.stripePaymentIntentId || payload.paymentIntentId || '').trim();
+  if (!recurringPaymentId || !paymentIntentId) {
+    const error = new Error('Choose the exact recurring customer and duplicate Stripe payment before resolving this review.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const recurring = findRecurringRow(data, recurringPaymentId);
+  if (!recurring) {
+    const error = new Error('Recurring customer was not found. Refresh Payments and try again.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const review = recurring.duplicateBillingPeriodReview;
+  if (!review || String(review.status || '').toLowerCase() !== 'owner review required') {
+    const error = new Error('This duplicate billing-period review is no longer open. Refresh Payments before taking another action.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (String(review.stripePaymentIntentId || '') !== paymentIntentId) {
+    const error = new Error('The Stripe payment does not match the exact duplicate held for this review. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const duplicatePayment = (data.payments || []).find(row => String(row && row.stripePaymentIntentId || '') === paymentIntentId);
+  if (!duplicatePayment || String(duplicatePayment.recurringPaymentId || '') !== String(recurring.id || recurringPaymentId) || duplicatePayment.duplicateBillingPeriod !== true) {
+    const error = new Error('The duplicate Stripe payment record is missing or no longer linked to this exact recurring customer. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const existingPaymentId = String(review.existingPaymentId || duplicatePayment.duplicatePaymentId || '').trim();
+  const existingPayment = (data.payments || []).find(row => String(row && row.id || '') === existingPaymentId);
+  if (!existingPayment || String(existingPayment.recurringPaymentId || '') !== String(recurring.id || recurringPaymentId) || !stripeMigration.paymentIsPaid(existingPayment.status)) {
+    const error = new Error('The original paid receipt for this billing period is missing or inconsistent. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const scheduledDueDate = validCalendarDateKey(review.scheduledDueDate || duplicatePayment.scheduledDueDate);
+  if (!scheduledDueDate || scheduledDueDate !== validCalendarDateKey(duplicatePayment.scheduledDueDate) || !stripeMigration.paymentCoversBillingDate(existingPayment, recurring, scheduledDueDate)) {
+    const error = new Error('The two payment records do not prove the same exact billing period. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const providerReview = recurring.providerMigrationReview;
+  if (providerReview && String(providerReview.stripePaymentIntentId || '') !== paymentIntentId) {
+    const error = new Error('A different provider-migration review is also open on this plan. Resolve it before clearing the duplicate payment.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const refundRequests = (data.refundRequests || []).filter(row => {
+    if (String(row.sourcePaymentId || '') !== String(duplicatePayment.id || '')) return false;
+    return !/cancelled|canceled|failed|declined|rejected/i.test(String(row.status || ''));
+  });
+  return { recurring, review, duplicatePayment, existingPayment, scheduledDueDate, refundRequests };
+}
+function resolveDuplicateBillingPeriodReview(data, payload = {}, user = {}) {
+  if (String(payload.action || '').trim().toLowerCase() !== 'confirm_stripe_duplicate_refunded') {
+    const error = new Error('Confirm the verified full Stripe refund before resolving this duplicate billing period.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const context = duplicateBillingPeriodReviewContext(data, payload);
+  const { recurring, duplicatePayment, existingPayment, scheduledDueDate, refundRequests } = context;
+  const completedRefunds = refundRequests.filter(row => refundRequestCompleted(row.status));
+  const completedAmount = completedRefunds.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  if (!completedRefunds.length || completedAmount + 0.001 < Number(duplicatePayment.amount || 0) || Number(duplicatePayment.refundedAmount || 0) + 0.001 < Number(duplicatePayment.amount || 0)) {
+    const error = new Error('Stripe must confirm a full refund for this exact duplicate payment before the review can close. Pending or partial refunds keep autopay paused.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const actor = String(user.name || user.username || user.role || 'Owner');
+  const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+  const inactive = /removed|returned|history|archived|ended|inactive|cancelled|canceled|expired|disabled/.test(String(recurring.status || '').toLowerCase());
+  const providerChargeable = provider === 'stripe'
+    ? recurringCardReadyForProvider(recurring, provider)
+    : !!(recurringCustomerSource(recurring) && recurringCardChargeSource(recurring));
+  const currentNextRun = validCalendarDateKey(recurring.nextRun || recurring.adminNextRun);
+  const nextRun = currentNextRun && currentNextRun > scheduledDueDate
+    ? currentNextRun
+    : nextFutureRecurringDate(recurring, localDateKey(), scheduledDueDate);
+  if (!nextRun) {
+    const error = new Error('WheelsonAuto could not calculate the next recurring date. The duplicate review remains paused.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const canResumeAutopay = !inactive && providerChargeable;
+  const resolutionLabel = 'Duplicate Stripe payment fully refunded; original ' + paymentProviderLabel(existingPayment.paymentProvider || existingPayment.provider || 'payment') + ' receipt retained';
+  const resolution = {
+    resolvedAt: now,
+    resolvedBy: actor,
+    action: 'confirm_stripe_duplicate_refunded',
+    scheduledDueDate,
+    nextRun,
+    stripePaymentIntentId: duplicatePayment.stripePaymentIntentId,
+    duplicatePaymentId: duplicatePayment.id,
+    retainedPaymentId: existingPayment.id,
+    retainedPaymentProvider: normalizedPaymentProvider(existingPayment.paymentProvider || existingPayment.provider || ''),
+    paymentProvider: provider,
+    autopayResumed: canResumeAutopay,
+    note: resolutionLabel
+  };
+  duplicatePayment.status = 'Refunded - duplicate billing period';
+  duplicatePayment.tone = 'warn';
+  duplicatePayment.duplicateBillingPeriod = false;
+  duplicatePayment.duplicateBillingPeriodResolved = resolution;
+  duplicatePayment.providerMigrationReview = false;
+  duplicatePayment.providerMigrationReviewResolved = recurring.providerMigrationReview ? resolution : duplicatePayment.providerMigrationReviewResolved;
+  duplicatePayment.billingPeriodReleasedAfterRefund = true;
+  duplicatePayment.billingPeriodReleasedAt = now;
+  duplicatePayment.billingPeriodReleasedBy = actor;
+  duplicatePayment.billingPeriodReleaseReason = 'The duplicate Stripe payment was fully refunded. The original payment ' + existingPayment.id + ' still occupies this billing period.';
+  duplicatePayment.notes = appendUniqueNote(duplicatePayment.notes || '', resolutionLabel + ' by ' + actor + '. The billing period remains paid by ' + existingPayment.id + '.');
+  const status = inactive
+    ? recurring.status
+    : canResumeAutopay
+      ? 'Active'
+      : 'Setup needed - ' + paymentProviderLabel(provider) + ' payment source';
+  const patch = {
+    paymentProvider: provider,
+    provider: paymentProviderLabel(provider),
+    nextRun,
+    adminNextRun: nextRun,
+    paymentDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(nextRun) : recurring.paymentDay,
+    chargeDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(nextRun) : recurring.chargeDay,
+    status,
+    tone: inactive || !canResumeAutopay ? 'warn' : 'good',
+    autoChargeEnabled: canResumeAutopay,
+    autopayManagedBy: canResumeAutopay
+      ? 'WheelsonAuto / ' + paymentProviderLabel(provider)
+      : 'WheelsonAuto / ' + paymentProviderLabel(provider) + ' (paused - payment source review)',
+    retryCount: 0,
+    failedAttempts: 0,
+    duplicateBillingPeriodReview: null,
+    duplicateBillingPeriodReviewResolved: resolution,
+    providerMigrationReview: null,
+    providerMigrationReviewResolved: recurring.providerMigrationReview ? resolution : recurring.providerMigrationReviewResolved,
+    lastPaymentResult: 'Paid - original receipt retained',
+    lastPaymentNote: resolutionLabel,
+    lastScheduleAdvancedAt: now,
+    lastScheduleAdvancedFrom: scheduledDueDate,
+    lastScheduleAdvanceSource: 'Owner duplicate billing-period review',
+    updatedAt: now
+  };
+  updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
+  appendAuditLog(data, user, 'Duplicate Stripe billing period resolved', [
+    recurring.customer || 'Unknown customer',
+    scheduledDueDate,
+    'Refunded Stripe ' + (duplicatePayment.stripePaymentIntentId || duplicatePayment.id),
+    'Retained ' + paymentProviderLabel(existingPayment.paymentProvider || existingPayment.provider || 'payment') + ' ' + existingPayment.id,
+    'Billing period remains paid',
+    canResumeAutopay ? paymentProviderLabel(provider) + ' autopay resumed' : paymentProviderLabel(provider) + ' autopay remains paused for payment-source review'
+  ]);
+  return {
+    recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId),
+    duplicatePayment,
+    retainedPayment: existingPayment,
+    resolution,
+    paymentProvider: provider,
+    autopayResumed: canResumeAutopay
   };
 }
 function applyStripePaymentIntentFailed(data, intent = {}) {
@@ -25960,6 +26124,20 @@ const server = http.createServer(async (req, res) => {
       try {
         const result = resolveProviderMigrationReview(data, payload, user);
         await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'resolve late Stripe provider payment review' });
+        await writeData(data);
+        return json(res, 200, { ok: true, ...result });
+      } catch (err) {
+        return json(res, Number(err && err.statusCode || 400), { ok: false, error: String(err && err.message || err) });
+      }
+    }
+    if (url.pathname === '/api/payment-provider/duplicate-review/resolve' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can resolve a duplicate billing-period payment review.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required before resolving a real duplicate payment.' });
+      const data = await readData();
+      try {
+        const result = resolveDuplicateBillingPeriodReview(data, payload, user);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'resolve duplicate Stripe billing-period payment review' });
         await writeData(data);
         return json(res, 200, { ok: true, ...result });
       } catch (err) {

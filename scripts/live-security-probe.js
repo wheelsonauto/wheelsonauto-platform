@@ -72,6 +72,7 @@ const anonymousProtectedRoutes = [
   ['POST', '/api/contract-template', 'Contract template administration'],
   ['POST', '/api/payment-provider/switch', 'Payment-provider cutover'],
   ['POST', '/api/payment-provider/review/resolve', 'Late Stripe payment owner review'],
+  ['POST', '/api/payment-provider/duplicate-review/resolve', 'Duplicate billing-period owner review'],
   ['GET', '/api/woa-autopay/status', 'Autopay monitor status'],
   ['POST', '/api/system/infrastructure/document-storage/validate', 'Private document storage validation'],
   ['POST', '/api/system/infrastructure/state-backup/create', 'Encrypted state backup creation'],

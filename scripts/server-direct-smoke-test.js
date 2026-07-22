@@ -4693,6 +4693,59 @@ async function main() {
     assert(stripeDuplicatePeriodPayment && stripeDuplicatePeriodPayment.status === 'Paid - duplicate billing period review' && stripeDuplicatePeriodPayment.duplicatePaymentId === 'direct-duplicate-period-clover-paid', 'A delayed Stripe success must retain both payment references for an owner refund/dispute review.');
     assert(stripeDuplicatePeriodRow && stripeDuplicatePeriodRow.status === 'Payment review - duplicate billing period' && stripeDuplicatePeriodRow.autoChargeEnabled === false && stripeDuplicatePeriodRow.nextRun === autopayTodayKey && stripeDuplicatePeriodRow.stripeMigration && stripeDuplicatePeriodRow.stripeMigration.state === 'first_stripe_charge_pending', 'A duplicate billing-period webhook must pause future autopay and must not advance schedule or complete the Clover-to-Stripe migration.');
     assert((stripeDuplicatePeriodResolved.json.auditLogs || []).some(row => row.action === 'Duplicate Stripe billing period needs review' && /Direct Stripe Duplicate Review Customer/.test(String(row.details || ''))), 'A duplicate billing-period webhook must create an owner-visible audit trail.');
+    const managerDuplicateBillingReview = await request(server, 'POST', '/api/payment-provider/duplicate-review/resolve', {
+      cookie: managerCookie,
+      json: { recurringPaymentId: stripeDuplicatePeriodRecurringId, stripePaymentIntentId: stripeDuplicatePeriodObject.id, action: 'confirm_stripe_duplicate_refunded', confirmed: true }
+    });
+    assert(managerDuplicateBillingReview.status === 403, 'Managers must not resolve a real duplicate billing-period payment.');
+    const unconfirmedDuplicateBillingReview = await request(server, 'POST', '/api/payment-provider/duplicate-review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeDuplicatePeriodRecurringId, stripePaymentIntentId: stripeDuplicatePeriodObject.id, action: 'confirm_stripe_duplicate_refunded' }
+    });
+    assert(unconfirmedDuplicateBillingReview.status === 409, 'A duplicate billing-period resolution must require owner confirmation.');
+    const unrefundedDuplicateBillingReview = await request(server, 'POST', '/api/payment-provider/duplicate-review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeDuplicatePeriodRecurringId, stripePaymentIntentId: stripeDuplicatePeriodObject.id, action: 'confirm_stripe_duplicate_refunded', confirmed: true }
+    });
+    assert(unrefundedDuplicateBillingReview.status === 409 && /full refund/.test(String(unrefundedDuplicateBillingReview.json.error || '')), 'A duplicate billing-period review must remain paused until Stripe verifies the exact full refund.');
+    const refundedDuplicateBillingState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const refundedDuplicateBillingPayment = refundedDuplicateBillingState.json.payments.find(payment => payment.stripePaymentIntentId === stripeDuplicatePeriodObject.id);
+    refundedDuplicateBillingPayment.refundedAmount = refundedDuplicateBillingPayment.amount;
+    refundedDuplicateBillingPayment.refundStatus = 'Refunded';
+    refundedDuplicateBillingState.json.refundRequests.unshift({
+      id: 'refund-direct-duplicate-billing-period',
+      sourcePaymentId: refundedDuplicateBillingPayment.id,
+      paymentProvider: 'stripe',
+      stripePaymentIntentId: stripeDuplicatePeriodObject.id,
+      customer: stripeDuplicatePeriodRow.customer,
+      amount: refundedDuplicateBillingPayment.amount,
+      status: 'Refunded',
+      providerRefundId: 're_direct_duplicate_billing_period',
+      completedAt: new Date().toISOString()
+    });
+    const refundedDuplicateBillingSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: refundedDuplicateBillingState.json });
+    assert(refundedDuplicateBillingSeed.status === 200 && refundedDuplicateBillingSeed.json.ok, 'Completed duplicate-payment refund setup failed.');
+    const resolvedDuplicateBillingReview = await request(server, 'POST', '/api/payment-provider/duplicate-review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeDuplicatePeriodRecurringId, stripePaymentIntentId: stripeDuplicatePeriodObject.id, action: 'confirm_stripe_duplicate_refunded', confirmed: true }
+    });
+    assert(resolvedDuplicateBillingReview.status === 200 && resolvedDuplicateBillingReview.json.autopayResumed === true && resolvedDuplicateBillingReview.json.paymentProvider === 'stripe', 'A verified duplicate Stripe refund must safely resume the already selected chargeable provider.');
+    const resolvedDuplicateBillingState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const resolvedDuplicateBillingRow = resolvedDuplicateBillingState.json.recurringPayments.find(row => row.id === stripeDuplicatePeriodRecurringId);
+    const resolvedDuplicateBillingPayment = resolvedDuplicateBillingState.json.payments.find(payment => payment.stripePaymentIntentId === stripeDuplicatePeriodObject.id);
+    const retainedDuplicateBillingPayment = resolvedDuplicateBillingState.json.payments.find(payment => payment.id === 'direct-duplicate-period-clover-paid');
+    assert(resolvedDuplicateBillingRow && resolvedDuplicateBillingRow.paymentProvider === 'stripe' && resolvedDuplicateBillingRow.status === 'Active' && resolvedDuplicateBillingRow.autoChargeEnabled === true && resolvedDuplicateBillingRow.nextRun > autopayTodayKey && !resolvedDuplicateBillingRow.duplicateBillingPeriodReview, 'Resolving a duplicate billing period must keep the selected provider, advance only beyond the paid date, clear the exact review, and resume autopay.');
+    assert(resolvedDuplicateBillingRow.stripeMigration && resolvedDuplicateBillingRow.stripeMigration.state === 'first_stripe_charge_pending', 'Refunding the duplicate Stripe charge must not falsely mark the first Stripe migration charge as successful.');
+    assert(resolvedDuplicateBillingPayment && resolvedDuplicateBillingPayment.status === 'Refunded - duplicate billing period' && resolvedDuplicateBillingPayment.duplicateBillingPeriod === false && resolvedDuplicateBillingPayment.billingPeriodReleasedAfterRefund === true && resolvedDuplicateBillingPayment.duplicateBillingPeriodResolved, 'The refunded Stripe copy must retain exact owner resolution evidence and stop consuming the billing period itself.');
+    assert(retainedDuplicateBillingPayment && retainedDuplicateBillingPayment.status === 'Paid' && stripeMigration.existingBillingPeriodPayment({ payments: [resolvedDuplicateBillingPayment, retainedDuplicateBillingPayment] }, resolvedDuplicateBillingRow, autopayTodayKey) === retainedDuplicateBillingPayment, 'The original paid receipt must continue to occupy the billing period after the duplicate Stripe refund.');
+    const resolvedDuplicateNextRun = resolvedDuplicateBillingRow.nextRun;
+    const repeatedDuplicateBillingReview = await request(server, 'POST', '/api/payment-provider/duplicate-review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: stripeDuplicatePeriodRecurringId, stripePaymentIntentId: stripeDuplicatePeriodObject.id, action: 'confirm_stripe_duplicate_refunded', confirmed: true }
+    });
+    assert(repeatedDuplicateBillingReview.status === 409, 'A resolved duplicate billing-period review must reject a repeated resolution request.');
+    const repeatedDuplicateBillingState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(repeatedDuplicateBillingState.json.recurringPayments.find(row => row.id === stripeDuplicatePeriodRecurringId).nextRun === resolvedDuplicateNextRun, 'A repeated duplicate-payment resolution must not advance the schedule twice.');
 
     const stripeAuthenticationRecurringId = 'direct-stripe-authentication-required';
     const stripeAuthenticationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
