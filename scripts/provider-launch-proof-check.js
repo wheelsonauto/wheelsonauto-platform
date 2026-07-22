@@ -42,6 +42,7 @@ const {
   stripeAccountConfigurationFingerprint,
   stripeAccountLiveEvidence,
   stripeWebhookConfigurationFingerprint,
+  stripeWebhookDestinationEvidence,
   stripeLiveWebhookEvidence,
   stripeIdentityLiveWebhookEvidence,
   stateForUserRead,
@@ -150,6 +151,16 @@ data.integrations.stripe = {
   lastAccountDisabledReason: '',
   lastAccountHealthConfigurationFingerprint: stripeAccountFingerprint,
   lastAccountHealthError: '',
+  lastWebhookDestinationCheckAt: new Date().toISOString(),
+  lastWebhookDestinationCheckSuccess: true,
+  lastWebhookDestinationKeyMode: 'live',
+  lastWebhookDestinationId: 'we_provider_launch_proof',
+  lastWebhookDestinationUrl: 'https://wheelsonauto-platform.onrender.com/api/webhooks/stripe',
+  lastWebhookDestinationStatus: 'enabled',
+  lastWebhookDestinationEnabledEvents: require('../server').STRIPE_REQUIRED_WEBHOOK_EVENTS.slice(),
+  lastWebhookDestinationApiVersion: '2026-06-30.basil',
+  lastWebhookDestinationConfigurationFingerprint: stripeFingerprint,
+  lastWebhookDestinationError: '',
   lastLaunchWebhookAt: new Date().toISOString(),
   lastLaunchWebhookType: 'payment_intent.succeeded',
   lastLaunchWebhookEventId: 'evt_live_provider_launch_payment',
@@ -262,6 +273,29 @@ assert.strictEqual(stripePayment.live, true, 'Stripe payment launch proof must r
 assert.strictEqual(stripePayment.relevantEvent, true);
 assert.strictEqual(stripePayment.fresh, true);
 
+const stripeDestination = stripeWebhookDestinationEvidence(data);
+assert.strictEqual(stripeDestination.live, true, 'Stripe destination proof must require the exact active endpoint and exact required event contract.');
+assert.strictEqual(stripeDestination.endpointMatched, true);
+assert.strictEqual(stripeDestination.active, true);
+assert.strictEqual(stripeDestination.exactEvents, true);
+assert.strictEqual(stripeDestination.enabledEventCount, stripeDestination.requiredEventCount);
+assert.strictEqual(stripeDestination.missingEvents.length, 0);
+assert.strictEqual(stripeDestination.unexpectedEvents.length, 0);
+
+const stripeDestinationMissingEvent = clone(data);
+stripeDestinationMissingEvent.integrations.stripe.lastWebhookDestinationEnabledEvents.pop();
+assert.strictEqual(stripeWebhookDestinationEvidence(stripeDestinationMissingEvent).live, false, 'A destination missing any required event must fail closed.');
+assert.strictEqual(stripeWebhookDestinationEvidence(stripeDestinationMissingEvent).missingEvents.length, 1);
+
+const stripeDestinationUnexpectedEvent = clone(data);
+stripeDestinationUnexpectedEvent.integrations.stripe.lastWebhookDestinationEnabledEvents.push('customer.updated');
+assert.strictEqual(stripeWebhookDestinationEvidence(stripeDestinationUnexpectedEvent).live, false, 'Unexpected broad event subscriptions must fail the exact least-privilege contract.');
+assert.strictEqual(stripeWebhookDestinationEvidence(stripeDestinationUnexpectedEvent).unexpectedEvents.length, 1);
+
+const stripeDestinationWrongUrl = clone(data);
+stripeDestinationWrongUrl.integrations.stripe.lastWebhookDestinationUrl = 'https://example.com/api/webhooks/stripe';
+assert.strictEqual(stripeWebhookDestinationEvidence(stripeDestinationWrongUrl).live, false, 'A destination on another origin must never satisfy the launch contract.');
+
 const stripeAccount = stripeAccountLiveEvidence(data);
 assert.strictEqual(stripeAccount.live, true, 'Stripe account proof must require a fresh live-mode account check with charges, payouts, and business details enabled.');
 assert.strictEqual(stripeAccount.chargesEnabled, true);
@@ -341,6 +375,7 @@ assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.m
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastLaunchWebhookConfigurationFingerprint'), false, 'Stripe payment proof fingerprints must never be returned to browser state.');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastIdentityWebhookConfigurationFingerprint'), false, 'Stripe Identity proof fingerprints must never be returned to browser state.');
 assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastAccountHealthConfigurationFingerprint'), false, 'Stripe account proof fingerprints must never be returned to browser state.');
+assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerRead.integrations.stripe, 'lastWebhookDestinationConfigurationFingerprint'), false, 'Stripe destination proof fingerprints must never be returned to browser state.');
 
 const forgedState = clone(data);
 forgedState.integrations.stripe.lastAccountChargesEnabled = false;
@@ -349,6 +384,9 @@ forgedState.integrations.stripe.lastAccountCardPaymentsCapability = 'inactive';
 forgedState.integrations.stripe.lastAccountTransfersCapability = 'pending';
 forgedState.integrations.stripe.lastAccountRequirementsPendingVerificationCount = 99;
 forgedState.integrations.stripe.lastAccountHealthConfigurationFingerprint = 'forged-account-proof';
+forgedState.integrations.stripe.lastWebhookDestinationStatus = 'disabled';
+forgedState.integrations.stripe.lastWebhookDestinationEnabledEvents = [];
+forgedState.integrations.stripe.lastWebhookDestinationConfigurationFingerprint = 'forged-destination-proof';
 forgedState.messages.find(record => record.id === 'resend-inbound-proof').providerConfigurationFingerprint = 'forged-proof';
 forgedState.messages.push({
   id: 'forged-provider-proof',
@@ -367,6 +405,9 @@ assert.strictEqual(Object.prototype.hasOwnProperty.call(ownerWrite.messages.find
 assert.strictEqual(ownerWrite.integrations.stripe.lastLaunchWebhookConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe payment proof fingerprint.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastIdentityWebhookConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe Identity proof fingerprint.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountHealthConfigurationFingerprint, stripeAccountFingerprint, 'Browser writes must preserve the server-only Stripe account proof fingerprint.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastWebhookDestinationConfigurationFingerprint, stripeFingerprint, 'Browser writes must preserve the server-only Stripe destination proof fingerprint.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastWebhookDestinationStatus, 'enabled', 'Browser writes must not disable the server-verified Stripe destination.');
+assert.strictEqual(ownerWrite.integrations.stripe.lastWebhookDestinationEnabledEvents.length, require('../server').STRIPE_REQUIRED_WEBHOOK_EVENTS.length, 'Browser writes must not forge or clear the server-verified Stripe event contract.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountChargesEnabled, true, 'Browser writes must not forge or clear the server-verified Stripe account readiness values.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountPayoutsEnabled, true, 'Browser writes must not forge or clear the server-verified Stripe payout readiness value.');
 assert.strictEqual(ownerWrite.integrations.stripe.lastAccountCardPaymentsCapability, 'active', 'Browser writes must not forge the server-verified Stripe card-payments capability.');

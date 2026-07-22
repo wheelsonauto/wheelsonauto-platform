@@ -281,7 +281,7 @@ if (functionSlice('liveLaunchProviderConsole').includes('Telnyx') || functionSli
   fail('Optional Telnyx SMS must not appear in or distort the launch-critical provider console.');
 }
 assertIncludes('Launch summary text hierarchy', functionSlice('liveLaunchPreflightModal'), ['<span>Controlled Stripe launch</span><b>', "launchStage==='provider_proof_collection'?'Collect proof'", "launchStage==='enable_final_hardening'?'Arm launch'", 'proofCollection.message']);
-assertIncludes('Stripe owner handoff remains complete and non-duplicative', functionSlice('liveLaunchProviderConsole'), ['stripeMissingDetails', 'Complete one matched signed live Stripe webhook event.', 'Complete one matched signed live Stripe Identity verification.', "stripeOwnerHandoff=!stripe.live", 'WheelsonAuto never accepts legal terms automatically.']);
+assertIncludes('Stripe owner handoff remains complete and non-duplicative', functionSlice('liveLaunchProviderConsole'), ['stripeMissingDetails', 'Verify the exact active Stripe webhook destination and required event contract.', 'Complete one matched signed live Stripe webhook event.', 'Complete one matched signed live Stripe Identity verification.', "stripeOwnerHandoff=!stripe.live", 'WheelsonAuto never accepts legal terms automatically.', "['Destination'", "['Events'", "['Signed event'"]);
 assertIncludes('Launch VIN review links to the source workflow', functionSlice('liveLaunchPreflightModal'), ['data-view="Fleet" data-tab="VIN review"', 'Review in Fleet']);
 assertIncludes('Launch modal long-blocker wrapping', stylesCss, ['.modal .compact-list li', 'overflow-wrap:anywhere', 'word-break:break-word']);
 assertIncludes('Launch provider responsive console', stylesCss, ['.modal:has(.launch-provider-console)', '.launch-provider-grid', '.launch-provider-card', '.launch-provider-facts', '.launch-provider-link', 'grid-template-columns:1fr']);
@@ -350,7 +350,7 @@ assertIncludes('Owner-approved Telnyx paid campaign flow', app + server, [
 ]);
 assertIncludes('Stripe owner activation review', app + server, [
   'stripeAccountReadinessReview',
-  'Stripe account activation',
+  'Stripe launch connection',
   'Business details',
   'API mode',
   'Charges',
@@ -359,10 +359,12 @@ assertIncludes('Stripe owner activation review', app + server, [
   'Transfers capability',
   'Account requirements',
   'pending verification',
-  'Fresh account proof',
+  'Webhook destination',
+  'Webhook events',
+  'Fresh connection proof',
   'Safe check only',
   'does not save a card, charge a customer, issue a refund, or change Clover',
-  'https://dashboard.stripe.com/settings/account',
+  'https://dashboard.stripe.com/workbench/webhooks',
   'Live launch preflight'
 ]);
 assertIncludes('Activated Stripe Identity advances to matched proof', server, [

@@ -266,6 +266,7 @@ async function main() {
     stripeLiveWebhookEvidence,
     stripeIdentityLiveWebhookEvidence,
     stripeWebhookConfigurationFingerprint,
+    STRIPE_REQUIRED_WEBHOOK_EVENTS,
     documentStorageConfigurationFingerprint,
     privateDocumentStorageEvidence,
     privateDocumentKeyCoverage,
@@ -399,6 +400,20 @@ async function main() {
         details_submitted: true,
         capabilities: { card_payments: 'active', transfers: 'active' },
         requirements: { currently_due: [], past_due: [], pending_verification: [], eventually_due: [], disabled_reason: null }
+      });
+    }
+    if (requestUrl === 'https://api.stripe.com/v1/webhook_endpoints?limit=100') {
+      return providerResponse(200, {
+        object: 'list',
+        data: [{
+          id: 'we_direct_smoke_ready',
+          object: 'webhook_endpoint',
+          url: 'https://wheelsonauto-platform.onrender.com/api/webhooks/stripe',
+          status: 'enabled',
+          api_version: '2026-06-30.basil',
+          enabled_events: STRIPE_REQUIRED_WEBHOOK_EVENTS.slice()
+        }],
+        has_more: false
       });
     }
     if (cloverRecurringFixture && requestUrl.includes('/recurring/v1/')) {
@@ -1875,6 +1890,8 @@ async function main() {
     const ownerStripeReadiness = await request(server, 'POST', '/api/integrations/stripe/readiness', { cookie: ownerCookie, json: {} });
     assert(ownerStripeReadiness.status === 200 && ownerStripeReadiness.json && ownerStripeReadiness.json.stripeAccount.live === true, 'Owner Stripe readiness must verify the read-only account endpoint and persist live charges, payouts, active capabilities, and a clear requirements state.');
     assert(ownerStripeReadiness.json.stripeAccount.cardPaymentsCapability === 'active' && ownerStripeReadiness.json.stripeAccount.transfersCapability === 'active' && ownerStripeReadiness.json.stripeAccount.accountRequirementsClear === true, 'The readiness response must expose safe capability and requirements evidence without exposing account secrets.');
+    assert(ownerStripeReadiness.json.stripeWebhookDestination && ownerStripeReadiness.json.stripeWebhookDestination.live === true && ownerStripeReadiness.json.stripeWebhookDestination.endpointMatched === true && ownerStripeReadiness.json.stripeWebhookDestination.exactEvents === true, 'Owner Stripe readiness must verify the exact active production webhook destination and least-privilege event contract.');
+    assert(ownerStripeReadiness.json.stripeWebhookDestination.enabledEventCount === ownerStripeReadiness.json.stripeWebhookDestination.requiredEventCount, 'Stripe destination readiness must expose a complete safe event count without exposing any signing secret.');
     assert(!Object.prototype.hasOwnProperty.call(ownerStripeReadiness.json.stripeAccount, 'configurationFingerprint'), 'Stripe account readiness responses must not expose the server-only configuration fingerprint.');
     const ownerStateAfterStripeReadiness = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const ownerStripeProviderRow = ownerStateAfterStripeReadiness.json && ownerStateAfterStripeReadiness.json.integrations && (ownerStateAfterStripeReadiness.json.integrations.apiProviderRuntime || []).find(row => row.id === 'stripe-payments');
@@ -1898,10 +1915,12 @@ async function main() {
     assert(ownerLaunchPreflight.json.cloverRecurring && ownerLaunchPreflight.json.cloverRecurring.ready === false && ownerLaunchPreflight.json.missing.includes('fresh Clover recurring roster for controlled cutover'), 'The owner launch preflight must block cutover when active Clover recurring records do not have a fresh complete roster.');
     assert(ownerLaunchPreflight.json.stripeAccount && ownerLaunchPreflight.json.stripeAccount.live === true && !ownerLaunchPreflight.json.missing.includes('Stripe live account activation proof'), 'A fresh owner-verified Stripe account with live charges and payouts must clear only the account-activation gate.');
     assert(ownerLaunchPreflight.json.stripeAccount.provider === 'stripe' && ownerLaunchPreflight.json.stripeAccount.keyMode === 'live' && ownerLaunchPreflight.json.stripeAccount.configured === true, 'Owner preflight must expose the safe Stripe mode and configuration state without exposing a key.');
+    assert(ownerLaunchPreflight.json.stripeWebhookDestination && ownerLaunchPreflight.json.stripeWebhookDestination.live === true && !ownerLaunchPreflight.json.missing.includes('Stripe active webhook destination with the exact required event contract'), 'The exact active Stripe webhook destination must clear its configuration gate without clearing the separate signed-event gate.');
+    assert(ownerLaunchPreflight.json.missing.includes('Stripe signed live webhook event'), 'Read-only Stripe destination proof must never masquerade as a matched signed live event.');
     assert(ownerLaunchPreflight.json.telnyxMessaging && ownerLaunchPreflight.json.telnyxMessaging.provider === 'telnyx' && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.telnyxMessaging, 'numberAssigned') && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.telnyxMessaging, 'carrierUsecaseQualificationFees') && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.telnyxMessaging, 'campaignDraftReady'), 'Owner preflight must expose safe Telnyx campaign, no-charge draft, number, and carrier-fee evidence.');
     assert(ownerLaunchPreflight.json.resendEmail && ownerLaunchPreflight.json.resendEmail.provider === 'resend' && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.resendEmail, 'senderDomain'), 'Owner preflight must expose the verified Resend domain state without exposing credentials.');
     assert(ownerLaunchPreflight.json.starAi && ownerLaunchPreflight.json.starAi.provider === 'openai' && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.starAi, 'model') && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.starAi, 'dailyRemaining') && Object.prototype.hasOwnProperty.call(ownerLaunchPreflight.json.starAi, 'autoSendEnabled'), 'Owner preflight must expose the safe Star model, remaining request budget, and reply mode.');
-    assert(!/((?:sk|rk)_live_|KEY-|re_[A-Za-z0-9]{8,}|whsec_)/.test(JSON.stringify({ stripe: ownerLaunchPreflight.json.stripeAccount, telnyx: ownerLaunchPreflight.json.telnyxMessaging, resend: ownerLaunchPreflight.json.resendEmail, star: ownerLaunchPreflight.json.starAi })), 'Provider readiness responses must never expose provider credentials.');
+    assert(!/((?:sk|rk)_live_|KEY-|re_[A-Za-z0-9]{8,}|whsec_)/.test(JSON.stringify({ stripe: ownerLaunchPreflight.json.stripeAccount, destination: ownerLaunchPreflight.json.stripeWebhookDestination, telnyx: ownerLaunchPreflight.json.telnyxMessaging, resend: ownerLaunchPreflight.json.resendEmail, star: ownerLaunchPreflight.json.starAi })), 'Provider readiness responses must never expose provider credentials.');
     assert(ownerLaunchPreflight.json.ok === false && ownerLaunchPreflight.json.missing.includes('resolve active vehicle assignment conflicts'), 'The launch preflight must remain blocked while Operations / Assigned still has a customer/autopay conflict.');
     assert(Array.isArray(ownerLaunchPreflight.json.assignmentConflicts) && ownerLaunchPreflight.json.assignmentConflicts.some(row => row.vehicleId === 'veh-direct-assignment-conflict' && row.vin === 'DIRECTCONFLICTVIN' && /Direct Conflict One/.test(row.claimedBy || '') && Array.isArray(row.sources) && row.sources.includes('WheelsonAuto autopay')), 'The owner launch preflight must expose a safe vehicle/VIN/claimed-by/source review row for each active assignment conflict.');
     assert(Array.isArray(ownerLaunchPreflight.json.blockingAssignmentConflicts) && ownerLaunchPreflight.json.blockingAssignmentConflicts.some(row => row.vehicleId === 'veh-direct-assignment-conflict'), 'The owner launch preflight must expose the exact active assignment rows that block Stripe launch.');

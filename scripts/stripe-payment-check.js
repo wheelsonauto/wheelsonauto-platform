@@ -105,6 +105,10 @@ async function run() {
   assert(captured.url.endsWith('/account'), 'Stripe account readiness must use the authenticated account endpoint.');
   assert.strictEqual(captured.options.method, 'GET', 'Stripe account readiness must be a read-only request.');
   assert.strictEqual(captured.options.body, undefined, 'Stripe account readiness must never submit money or account changes.');
+  await client.listWebhookEndpoints({ limit: 100 });
+  assert(captured.url.endsWith('/webhook_endpoints?limit=100'), 'Stripe launch readiness must list webhook destinations through the authenticated read-only endpoint.');
+  assert.strictEqual(captured.options.method, 'GET', 'Stripe webhook destination readiness must be read-only.');
+  assert.strictEqual(captured.options.body, undefined, 'Stripe webhook destination readiness must never modify provider configuration.');
   await client.createCustomer({ name: 'Test Customer', metadata: { recurringPaymentId: 'rec-1' } }, 'woa-customer-test-key');
   assert(captured.url.endsWith('/customers'), 'Stripe customer creation must use the provider customer endpoint.');
   assert.strictEqual(captured.options.headers['Idempotency-Key'], 'woa-customer-test-key', 'Stripe customer creation must use a deterministic idempotency key so a restart cannot create a duplicate customer.');
@@ -159,6 +163,7 @@ async function run() {
     'STRIPE_WEBHOOK_SECRET',
     "'/api/integrations/stripe/readiness'",
     'stripeAccountLiveEvidence',
+    'stripeWebhookDestinationEvidence',
     'lastAccountChargesEnabled',
     'lastAccountPayoutsEnabled',
     'lastAccountCardPaymentsCapability',
@@ -197,6 +202,7 @@ async function run() {
     'stripeLiveResultAccepted',
     'STRIPE_REQUIRED_WEBHOOK_EVENTS',
     'stripeWebhookContract',
+    'listWebhookEndpoints',
     'stripeLivemode',
     'Owner must review reason-specific evidence',
     'Stripe card ready - Clover remains active until owner confirmation',

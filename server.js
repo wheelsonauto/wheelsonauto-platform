@@ -201,6 +201,7 @@ const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(proc
 const WOA_EMAIL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_EMAIL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_AI_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_AI_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_STRIPE_ACCOUNT_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STRIPE_ACCOUNT_VALIDATION_MAX_AGE_MS || 24 * 60 * 60 * 1000));
+const WOA_STRIPE_WEBHOOK_DESTINATION_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STRIPE_WEBHOOK_DESTINATION_VALIDATION_MAX_AGE_MS || 24 * 60 * 60 * 1000));
 const WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_STRIPE_WEBHOOK_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS = Math.max(5 * 60 * 1000, Number(process.env.WOA_CLOVER_RECURRING_VALIDATION_MAX_AGE_MS || 6 * 60 * 60 * 1000));
 const WOA_STATE_BACKUP_ENABLED = process.env.WOA_STATE_BACKUP_ENABLED === '1';
@@ -258,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-pilot-guidance-290';
+const ASSET_VERSION = 'platform-20260722-stripe-destination-proof-291';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -8909,7 +8910,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const priorMessaging = current && current.integrations && current.integrations.messaging || {};
   const priorClover = current && current.integrations && current.integrations.clover || {};
-  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountCardPaymentsCapability', 'lastAccountTransfersCapability', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountRequirementsPendingVerificationCount', 'lastAccountRequirementsEventuallyDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError', 'controlledPilotOnboardingSessionId', 'controlledPilotEvidenceHash', 'controlledPilotEvidenceVersion', 'controlledPilotApprovedAt', 'controlledPilotApprovedBy', 'controlledPilotApprovedLivemode'];
+  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountCardPaymentsCapability', 'lastAccountTransfersCapability', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountRequirementsPendingVerificationCount', 'lastAccountRequirementsEventuallyDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError', 'lastWebhookDestinationCheckAt', 'lastWebhookDestinationCheckSuccess', 'lastWebhookDestinationKeyMode', 'lastWebhookDestinationId', 'lastWebhookDestinationUrl', 'lastWebhookDestinationStatus', 'lastWebhookDestinationEnabledEvents', 'lastWebhookDestinationApiVersion', 'lastWebhookDestinationConfigurationFingerprint', 'lastWebhookDestinationError', 'controlledPilotOnboardingSessionId', 'controlledPilotEvidenceHash', 'controlledPilotEvidenceVersion', 'controlledPilotApprovedAt', 'controlledPilotApprovedBy', 'controlledPilotApprovedLivemode'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError', 'telnyx10dlc', 'aiUsage', 'smsWebhookConnected', 'smsWebhookConfiguredAt'];
@@ -8957,6 +8958,7 @@ function redactStaffSecrets(data) {
     delete safe.integrations.stripe.lastLaunchWebhookConfigurationFingerprint;
     delete safe.integrations.stripe.lastIdentityWebhookConfigurationFingerprint;
     delete safe.integrations.stripe.lastAccountHealthConfigurationFingerprint;
+    delete safe.integrations.stripe.lastWebhookDestinationConfigurationFingerprint;
     delete safe.integrations.stripe.controlledPilotEvidenceHash;
   }
   if (safe.integrations && safe.integrations.documentStorage) delete safe.integrations.documentStorage.lastValidationConfigurationFingerprint;
@@ -11320,6 +11322,70 @@ function stripeWebhookContract() {
     message: 'Use one signed live Stripe webhook destination with only these WheelsonAuto payment, dispute, refund, card-setup, and Identity events.'
   };
 }
+function normalizedStripeWebhookUrl(value) {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    parsed.hash = '';
+    parsed.search = '';
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+function stripeWebhookDestinationEvidence(data = {}) {
+  const stripeState = data && data.integrations && data.integrations.stripe || {};
+  const checkedAt = String(stripeState.lastWebhookDestinationCheckAt || '');
+  const checkedKeyMode = String(stripeState.lastWebhookDestinationKeyMode || '');
+  const destinationUrl = normalizedStripeWebhookUrl(stripeState.lastWebhookDestinationUrl);
+  const expectedUrl = normalizedStripeWebhookUrl(stripeWebhookContract().endpoint);
+  const destinationStatus = String(stripeState.lastWebhookDestinationStatus || '').toLowerCase();
+  const enabledEvents = Array.isArray(stripeState.lastWebhookDestinationEnabledEvents)
+    ? [...new Set(stripeState.lastWebhookDestinationEnabledEvents.map(value => String(value || '').trim()).filter(Boolean))]
+    : [];
+  const missingEvents = STRIPE_REQUIRED_WEBHOOK_EVENTS.filter(eventType => !enabledEvents.includes(eventType));
+  const unexpectedEvents = enabledEvents.filter(eventType => !STRIPE_REQUIRED_WEBHOOK_EVENTS.includes(eventType));
+  const endpointMatched = !!(destinationUrl && expectedUrl && destinationUrl === expectedUrl);
+  const active = destinationStatus === 'enabled';
+  const successful = stripeState.lastWebhookDestinationCheckSuccess === true;
+  const recordedFingerprint = String(stripeState.lastWebhookDestinationConfigurationFingerprint || '');
+  const configurationMatched = !!(recordedFingerprint && secureWebhookValueMatch(recordedFingerprint, stripeWebhookConfigurationFingerprint()));
+  const freshness = providerEvidenceFreshness(checkedAt, WOA_STRIPE_WEBHOOK_DESTINATION_VALIDATION_MAX_AGE_MS);
+  const exactEvents = missingEvents.length === 0 && unexpectedEvents.length === 0 && enabledEvents.length === STRIPE_REQUIRED_WEBHOOK_EVENTS.length;
+  const live = STRIPE_KEY_MODE === 'live' && checkedKeyMode === 'live' && successful && endpointMatched && active && exactEvents && configurationMatched && freshness.fresh;
+  let error = '';
+  if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') error = 'Deploy the Stripe live secret key before checking the webhook destination.';
+  else if (!successful) error = String(stripeState.lastWebhookDestinationError || 'Run Check Stripe account to verify the active webhook destination and its subscribed events.');
+  else if (checkedKeyMode !== 'live') error = 'The most recent webhook destination check used Stripe test mode.';
+  else if (!configurationMatched) error = 'The webhook destination proof belongs to an older Stripe or Render configuration. Check Stripe again.';
+  else if (!freshness.fresh) error = 'The webhook destination proof is stale. Check Stripe again before the controlled launch.';
+  else if (!endpointMatched) error = 'Stripe does not have an active webhook destination for the exact WheelsonAuto production endpoint.';
+  else if (!active) error = 'The WheelsonAuto Stripe webhook destination is not enabled.';
+  else if (missingEvents.length) error = 'The Stripe webhook destination is missing ' + missingEvents.length + ' required event' + (missingEvents.length === 1 ? '' : 's') + '.';
+  else if (unexpectedEvents.length) error = 'The Stripe webhook destination has ' + unexpectedEvents.length + ' unexpected event subscription' + (unexpectedEvents.length === 1 ? '' : 's') + '. Keep only the WheelsonAuto launch contract events.';
+  return {
+    provider: 'stripe',
+    checkedAt,
+    checkedKeyMode,
+    endpoint: expectedUrl,
+    endpointMatched,
+    active,
+    status: destinationStatus,
+    apiVersion: String(stripeState.lastWebhookDestinationApiVersion || ''),
+    enabledEventCount: enabledEvents.length,
+    requiredEventCount: STRIPE_REQUIRED_WEBHOOK_EVENTS.length,
+    missingEvents,
+    unexpectedEvents,
+    exactEvents,
+    successful,
+    configurationMatched,
+    fresh: freshness.fresh,
+    maxAgeHours: freshness.maxAgeHours,
+    live,
+    summary: live ? 'Stripe webhook destination is active at the exact WheelsonAuto endpoint with all ' + STRIPE_REQUIRED_WEBHOOK_EVENTS.length + ' required events.' : error,
+    error
+  };
+}
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
   const expectedFingerprint = stripeWebhookConfigurationFingerprint();
@@ -11726,6 +11792,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   const stateReadReady = stateRead && stateRead.__preflightStateReadFailed !== true;
   const state = stateReadReady ? stateRead : emptyPlatformState();
   const stripeAccount = stripeAccountLiveEvidence(state);
+  const stripeWebhookDestination = stripeWebhookDestinationEvidence(state);
   const stripeWebhook = stripeLiveWebhookEvidence(state);
   const stripeIdentityWebhook = stripeIdentityLiveWebhookEvidence(state);
   const documentStorageValidation = privateDocumentStorageEvidence(state, documentStorage);
@@ -11777,6 +11844,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   if (!/^https:\/\//i.test(PUBLIC_BASE_URL || '')) providerProofCollectionMissing.push('HTTPS public origin');
   if (WOA_MIGRATION_MAINTENANCE_MODE) providerProofCollectionMissing.push('migration maintenance mode disabled');
   if (!stripeAccount.live) providerEvidenceMissing.push('Stripe live account activation proof');
+  if (!stripeWebhookDestination.live) providerEvidenceMissing.push('Stripe webhook destination configuration proof');
   if (!stripeWebhook.live) providerEvidenceMissing.push('Stripe signed live webhook event');
   if (!stripeIdentityWebhook.live) providerEvidenceMissing.push('signed live Stripe Identity verification');
   if (!operationalAlerts.live) providerEvidenceMissing.push('verified operational error alert delivery');
@@ -11804,6 +11872,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
   if (!STRIPE_SECRET_KEY || STRIPE_KEY_MODE !== 'live') missing.push('Stripe live secret key');
   if (!stripeAccount.live) missing.push('Stripe live account activation proof');
   if (!STRIPE_WEBHOOK_SECRET) missing.push('Stripe signed webhook secret');
+  if (!stripeWebhookDestination.live) missing.push('Stripe active webhook destination with the exact required event contract');
   if (!stripeWebhook.live) missing.push('Stripe signed live webhook event');
   if (WOA_ONBOARDING_PAYMENT_PROVIDER !== 'stripe') missing.push('Stripe onboarding payment provider');
   if (IDENTITY_PROVIDER !== 'stripe') missing.push('Stripe Identity provider');
@@ -11863,6 +11932,7 @@ async function productionInfrastructurePreflight(data = null, options = {}) {
     documentEncryptionKeys,
     privateArtifacts,
     stripeAccount,
+    stripeWebhookDestination,
     stripeWebhook,
     stripeIdentityWebhook,
     operationalAlerts,
@@ -13620,6 +13690,7 @@ function defaultApiProviderRows(data = {}) {
   const messageStatus = publicMessagingStatus(data);
   const verificationReadiness = verificationProviderReadiness();
   const stripeAccount = stripeAccountLiveEvidence(data);
+  const stripeWebhookDestination = stripeWebhookDestinationEvidence(data);
   return [
     {
       id: 'clover-core',
@@ -13655,7 +13726,7 @@ function defaultApiProviderRows(data = {}) {
 	      id: 'stripe-payments',
 	      name: 'Stripe Payments',
 	      group: 'Money',
-	      status: stripeAccount.live ? 'Connected' : (stripe.configured() ? (STRIPE_KEY_MODE === 'live' ? 'Testing - account activation proof needed' : 'Prepared - live Stripe key needed') : 'Ready for credentials'),
+          status: stripeAccount.live && stripeWebhookDestination.live ? 'Testing - signed event needed' : (stripeAccount.live ? 'Testing - webhook setup needed' : (stripe.configured() ? (STRIPE_KEY_MODE === 'live' ? 'Testing - account activation proof needed' : 'Prepared - live Stripe key needed') : 'Ready for credentials')),
 	      owner: 'Owner',
 	      envKeys: 'STRIPE_SECRET_KEY, STRIPE_PUBLISHABLE_KEY, STRIPE_WEBHOOK_SECRET, WOA_ONBOARDING_PAYMENT_PROVIDER',
 	      endpoint: '/api/integrations/stripe/readiness, /api/webhooks/stripe',
@@ -13764,11 +13835,12 @@ function apiProviderTruthOverrides(data = {}) {
     ? 'Autopay monitor completed: ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.charged || 0) + ' charged, ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.failed || 0) + ' failed, ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.notFound || 0) + ' payment not found, ' + Number(autopayEvidence.lastResult && autopayEvidence.lastResult.skipped || 0) + ' skipped. ' + managedAutopayCount + ' managed saved-card schedule(s).' + (autopayCustomerErrors.length ? ' ' + autopayCustomerErrors.length + ' customer result(s) need review.' : '')
     : 'Autopay monitor has not completed a production run since the current server started.';
   const stripeAccount = stripeAccountLiveEvidence(data);
+  const stripeWebhookDestination = stripeWebhookDestinationEvidence(data);
   const stripeWebhook = stripeLiveWebhookEvidence(data);
-  const stripePaymentsLive = stripeAccount.live && stripeWebhook.live;
+  const stripePaymentsLive = stripeAccount.live && stripeWebhookDestination.live && stripeWebhook.live;
   const stripePaymentsResult = stripePaymentsLive
-    ? stripeAccount.summary + ' A fresh matched signed Stripe payment-path event is also verified.'
-    : [stripeAccount.error, stripeWebhook.error].filter(Boolean).join(' ');
+    ? stripeAccount.summary + ' The exact webhook destination, required event contract, and a fresh matched signed Stripe payment-path event are verified.'
+    : [stripeAccount.error, stripeWebhookDestination.error, stripeWebhook.error].filter(Boolean).join(' ');
   const smsResult = status.smsDeliveryLive
     ? 'Carrier delivery verified.'
     : (status.carrierRegistrationRequired
@@ -13849,9 +13921,9 @@ function apiProviderTruthOverrides(data = {}) {
       lastTestResult: autopayFatalError ? autopayResult + ' Monitor error: ' + autopayFatalError : autopayResult
     },
     'stripe-payments': {
-      status: stripePaymentsLive ? 'Connected' : (STRIPE_KEY_MODE === 'live' ? (stripeAccount.live ? 'Testing - signed event needed' : 'Blocked - account activation') : (stripe.configured() ? 'Prepared - live Stripe key needed' : 'Ready for credentials')),
-      lastTestAt: newestEvidenceAt([stripeAccount.checkedAt, stripeWebhook.receivedAt]),
-      lastTestResult: stripePaymentsResult || 'Deploy Stripe live credentials, verify account activation, and complete one matched signed live payment-path event.'
+      status: stripePaymentsLive ? 'Connected' : (STRIPE_KEY_MODE === 'live' ? (stripeAccount.live ? (stripeWebhookDestination.live ? 'Testing - signed event needed' : 'Testing - webhook setup needed') : 'Blocked - account activation') : (stripe.configured() ? 'Prepared - live Stripe key needed' : 'Ready for credentials')),
+      lastTestAt: newestEvidenceAt([stripeAccount.checkedAt, stripeWebhookDestination.checkedAt, stripeWebhook.receivedAt]),
+      lastTestResult: stripePaymentsResult || 'Deploy Stripe live credentials, verify account activation and the exact webhook destination, then complete one matched signed live payment-path event.'
     },
     'sms-phone': {
       status: status.smsDeliveryLive ? 'Connected' : (status.carrierRegistrationRequired ? 'Blocked - 10DLC approval' : (status.configured ? 'Testing - delivery pending' : 'Provider needed')),
@@ -23371,8 +23443,12 @@ const server = http.createServer(async (req, res) => {
       data.integrations = data.integrations || {};
       data.integrations.stripe = data.integrations.stripe || {};
       const checkedAt = new Date().toISOString();
-      try {
-        const account = await stripe.retrieveAccount();
+      const [accountResult, destinationResult] = await Promise.allSettled([
+        stripe.retrieveAccount(),
+        stripe.listWebhookEndpoints({ limit: 100 })
+      ]);
+      if (accountResult.status === 'fulfilled') {
+        const account = accountResult.value;
         const requirements = account && account.requirements || {};
         const capabilities = account && account.capabilities || {};
         Object.assign(data.integrations.stripe, {
@@ -23394,13 +23470,8 @@ const server = http.createServer(async (req, res) => {
           lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
           lastAccountHealthError: ''
         });
-        const stripeAccount = stripeAccountLiveEvidence(data);
-        appendAuditLog(data, user, 'Stripe account readiness checked', [stripeAccount.accountId, stripeAccount.checkedKeyMode, stripeAccount.live ? 'Ready' : stripeAccount.error]);
-        await protectConcurrentLocalWrites(data, { preferIncoming: true });
-        await writeData(data);
-        return json(res, 200, { ok: true, stripeAccount, webhookContract: stripeWebhookContract(), message: stripeAccount.summary });
-      } catch (err) {
-        const error = String(err && err.message || err).slice(0, 500);
+      } else {
+        const error = String(accountResult.reason && accountResult.reason.message || accountResult.reason || 'Stripe account check failed.').slice(0, 500);
         Object.assign(data.integrations.stripe, {
           lastAccountHealthAt: checkedAt,
           lastAccountHealthSuccess: false,
@@ -23408,11 +23479,49 @@ const server = http.createServer(async (req, res) => {
           lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
           lastAccountHealthError: error
         });
-        appendAuditLog(data, user, 'Stripe account readiness failed', [STRIPE_KEY_MODE, error]);
-        await protectConcurrentLocalWrites(data, { preferIncoming: true });
-        await writeData(data);
-        return json(res, Number(err && err.statusCode || 502), { ok: false, error, stripeAccount: stripeAccountLiveEvidence(data), webhookContract: stripeWebhookContract() });
       }
+      if (destinationResult.status === 'fulfilled') {
+        const endpoints = Array.isArray(destinationResult.value && destinationResult.value.data) ? destinationResult.value.data : [];
+        const expectedUrl = normalizedStripeWebhookUrl(stripeWebhookContract().endpoint);
+        const destination = endpoints
+          .filter(item => normalizedStripeWebhookUrl(item && item.url) === expectedUrl)
+          .sort((left, right) => Number(String(right && right.status || '').toLowerCase() === 'enabled') - Number(String(left && left.status || '').toLowerCase() === 'enabled'))[0] || null;
+        Object.assign(data.integrations.stripe, {
+          lastWebhookDestinationCheckAt: checkedAt,
+          lastWebhookDestinationCheckSuccess: true,
+          lastWebhookDestinationKeyMode: STRIPE_KEY_MODE,
+          lastWebhookDestinationId: String(destination && destination.id || ''),
+          lastWebhookDestinationUrl: String(destination && destination.url || ''),
+          lastWebhookDestinationStatus: String(destination && destination.status || ''),
+          lastWebhookDestinationEnabledEvents: Array.isArray(destination && destination.enabled_events) ? destination.enabled_events.map(value => String(value || '')) : [],
+          lastWebhookDestinationApiVersion: String(destination && destination.api_version || ''),
+          lastWebhookDestinationConfigurationFingerprint: stripeWebhookConfigurationFingerprint(),
+          lastWebhookDestinationError: destination ? '' : 'Stripe returned no webhook destination for the exact WheelsonAuto production endpoint.'
+        });
+      } else {
+        const error = String(destinationResult.reason && destinationResult.reason.message || destinationResult.reason || 'Stripe webhook destination check failed.').slice(0, 500);
+        Object.assign(data.integrations.stripe, {
+          lastWebhookDestinationCheckAt: checkedAt,
+          lastWebhookDestinationCheckSuccess: false,
+          lastWebhookDestinationKeyMode: STRIPE_KEY_MODE,
+          lastWebhookDestinationConfigurationFingerprint: stripeWebhookConfigurationFingerprint(),
+          lastWebhookDestinationError: error
+        });
+      }
+      const stripeAccount = stripeAccountLiveEvidence(data);
+      const stripeWebhookDestination = stripeWebhookDestinationEvidence(data);
+      const accountError = accountResult.status === 'rejected' ? String(accountResult.reason && accountResult.reason.message || accountResult.reason || 'Stripe account check failed.').slice(0, 500) : '';
+      appendAuditLog(data, user, accountResult.status === 'fulfilled' ? 'Stripe account readiness checked' : 'Stripe account readiness failed', [stripeAccount.accountId || STRIPE_KEY_MODE, stripeAccount.live ? 'Account ready' : stripeAccount.error, stripeWebhookDestination.live ? 'Webhook destination ready' : stripeWebhookDestination.error]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, accountResult.status === 'fulfilled' ? 200 : Number(accountResult.reason && accountResult.reason.statusCode || 502), {
+        ok: accountResult.status === 'fulfilled',
+        ...(accountError ? { error: accountError } : {}),
+        stripeAccount,
+        stripeWebhookDestination,
+        webhookContract: stripeWebhookContract(),
+        message: [stripeAccount.summary, stripeWebhookDestination.summary].filter(Boolean).join(' ')
+      });
     }
     if (url.pathname === '/api/integrations/twilio/configure' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can connect the Twilio inbox.' });
@@ -25754,6 +25863,7 @@ module.exports = {
   storePrivateArtifactForDocument,
   runPrivateArtifactBackfill,
   stripeLiveWebhookEvidence,
+  stripeWebhookDestinationEvidence,
   stripeIdentityLiveWebhookEvidence,
   stripeWebhookContract,
   STRIPE_REQUIRED_WEBHOOK_EVENTS,
