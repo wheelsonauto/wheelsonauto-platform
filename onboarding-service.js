@@ -7,6 +7,39 @@ function text(value, max = 500) {
   return String(value === undefined || value === null ? '' : value).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function validDateKey(value) {
+  const raw = String(value || '').slice(0, 10);
+  const date = new Date(raw + 'T12:00:00Z');
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === raw ? raw : '';
+}
+
+function validateCustomerProfile(payload = {}, options = {}) {
+  const values = {
+    address: text(payload.address, 220),
+    city: text(payload.city, 100),
+    state: text(payload.state, 40).toUpperCase(),
+    postalCode: text(payload.postalCode, 20),
+    driverLicenseId: text(payload.driverLicenseId, 80).toUpperCase(),
+    driverLicenseExpires: validDateKey(payload.driverLicenseExpires),
+    insuranceProvider: text(payload.insuranceProvider, 160),
+    insurancePolicyNumber: text(payload.insurancePolicyNumber, 120)
+  };
+  if (values.address.length < 5) return { ok: false, error: 'Enter the complete legal street address shown on the customer file.' };
+  if (values.city.length < 2 || !/[A-Z]/i.test(values.city)) return { ok: false, error: 'Enter a valid city.' };
+  if (!/^[A-Z]{2}$/.test(values.state)) return { ok: false, error: 'Enter the two-letter state abbreviation.' };
+  if (!/^\d{5}(?:-\d{4})?$/.test(values.postalCode)) return { ok: false, error: 'Enter a valid 5-digit or ZIP+4 postal code.' };
+  const licenseKey = values.driverLicenseId.replace(/[^A-Z0-9]/g, '');
+  if (licenseKey.length < 5 || licenseKey.length > 24 || /^([A-Z0-9])\1+$/.test(licenseKey)) return { ok: false, error: 'Enter the complete driver license number exactly as shown on the license.' };
+  if (!values.driverLicenseExpires) return { ok: false, error: 'Enter a valid driver license expiration date.' };
+  const minimumExpirationDate = validDateKey(options.minimumExpirationDate) || businessDateKey(options.nowValue || new Date());
+  if (values.driverLicenseExpires < minimumExpirationDate) return { ok: false, error: 'The driver license must remain valid through the requested pickup date.' };
+  const providerLetters = values.insuranceProvider.replace(/[^A-Z]/gi, '');
+  if (providerLetters.length < 2) return { ok: false, error: 'Enter the insurance company name.' };
+  const policyKey = values.insurancePolicyNumber.replace(/[^A-Z0-9]/gi, '');
+  if (policyKey.length < 4 || policyKey.length > 60) return { ok: false, error: 'Enter the complete insurance policy number.' };
+  return { ok: true, values };
+}
+
 function dateDisplay(value) {
   const raw = String(value || '').slice(0, 10);
   const parts = raw.split('-');
@@ -555,6 +588,7 @@ function createPendingCustomerAccount(data, application, links = {}) {
 
 module.exports = {
   text,
+  validateCustomerProfile,
   tokenHash,
   ensureCollections,
   activeContractTemplate,

@@ -258,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-new-york-pickup-286';
+const ASSET_VERSION = 'platform-20260721-profile-gate-287';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -20222,17 +20222,10 @@ const server = http.createServer(async (req, res) => {
         const selectedAvailability = onboarding.pickupAvailability(data, settings, pickup.raw, { excludeSessionId: session.id }).find(slot => slot.time === payload.requestedPickupTime);
         if (!selectedAvailability || !selectedAvailability.available) return json(res, 409, { ok: false, error: 'That pickup time is full. Choose another available time.' });
         if (payload.pickupAutopayConsent !== true) return json(res, 400, { ok: false, error: 'Confirm that the pickup date becomes the weekly autopay weekday.' });
-        const required = ['address', 'city', 'state', 'postalCode', 'driverLicenseId', 'driverLicenseExpires', 'insuranceProvider', 'insurancePolicyNumber'];
-        if (required.some(field => !onboarding.text(payload[field], 240))) return json(res, 400, { ok: false, error: 'Complete every profile, license, and insurance field.' });
+        const profile = onboarding.validateCustomerProfile(payload, { minimumExpirationDate: pickup.raw });
+        if (!profile.ok) return json(res, 400, { ok: false, error: profile.error });
         Object.assign(application, {
-          address: onboarding.text(payload.address, 220),
-          city: onboarding.text(payload.city, 100),
-          state: onboarding.text(payload.state, 40).toUpperCase(),
-          postalCode: onboarding.text(payload.postalCode, 20),
-          driverLicenseId: onboarding.text(payload.driverLicenseId, 80),
-          driverLicenseExpires: onboarding.text(payload.driverLicenseExpires, 20),
-          insuranceProvider: onboarding.text(payload.insuranceProvider, 160),
-          insurancePolicyNumber: onboarding.text(payload.insurancePolicyNumber, 120),
+          ...profile.values,
           requestedPickupDate: pickup.raw,
           requestedPickupTime: onboarding.text(payload.requestedPickupTime, 30),
           onboardingStatus: 'Profile and pickup request complete',
