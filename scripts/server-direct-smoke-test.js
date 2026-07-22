@@ -1419,6 +1419,18 @@ async function main() {
     const releasedHeldVehicleState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const releasedHeldVehicle = releasedHeldVehicleState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
     assert(releasedHeldVehicle && releasedHeldVehicle.published === true && releasedHeldVehicle.availability === 'Available' && !releasedHeldVehicle.heldApplicationId, 'Archiving the exact application that owns a vehicle hold must restore the prior publication and availability state.');
+    const archivedExactApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: publicApplication.json.application.id, decision: 'deny', notes: 'Archive exact linked application before restore regression.' } });
+    assert(archivedExactApplication.status === 200 && archivedExactApplication.json.ok, 'Owner could not archive an exact linked application before restore regression.');
+    const restoredExactApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: publicApplication.json.application.id, decision: 'restore', notes: 'Restore exact linked application for controlled review.' } });
+    assert(restoredExactApplication.status === 200 && restoredExactApplication.json.ok && restoredExactApplication.json.restored && restoredExactApplication.json.portalEnabled, 'Owner should be able to restore an archived application only when its exact online and internal vehicle identity is available.');
+    const restoredExactApplicationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const restoredExactApplicationRow = restoredExactApplicationState.json.applications.find(row => row.id === publicApplication.json.application.id);
+    const restoredExactApplicationAccount = restoredExactApplicationState.json.customerAccounts.find(row => row.applicationId === publicApplication.json.application.id);
+    const restoredExactApplicationVehicle = restoredExactApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-001');
+    assert(restoredExactApplicationRow && restoredExactApplicationRow.stage === 'New' && restoredExactApplicationAccount && restoredExactApplicationAccount.status === 'Active', 'Restore must reactivate only the exact pending application and its portal account.');
+    assert(restoredExactApplicationVehicle && restoredExactApplicationVehicle.published === true && restoredExactApplicationVehicle.availability === 'Available' && !restoredExactApplicationVehicle.heldApplicationId, 'Restoring an archived application must not hold or unpublish its vehicle.');
+    const repeatedRestoreExactApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: publicApplication.json.application.id, decision: 'restore' } });
+    assert(repeatedRestoreExactApplication.status === 409, 'An active application must not be restorable again.');
     for (let i = 0; i < 8; i += 1) {
       const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
       assert([400, 409].includes(limitedApplicationAttempt.status), 'Public application attempts should validate normally before the per-IP submission limit.');

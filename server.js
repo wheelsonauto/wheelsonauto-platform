@@ -258,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-stripe-card-only-279';
+const ASSET_VERSION = 'platform-20260721-application-restore-280';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -22872,7 +22872,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/applications/review' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can review an application.' });
       const payload = await readJsonBody(req, 128 * 1024);
-      if (payload.decision !== 'deny') return json(res, 400, { ok: false, error: 'Choose the deny/archive decision.' });
+      const decision = String(payload.decision || '').toLowerCase();
+      if (!['deny', 'restore'].includes(decision)) return json(res, 400, { ok: false, error: 'Choose deny/archive or restore.' });
       const data = await readData();
       onboarding.ensureCollections(data);
       const application = (data.applications || []).find(row => row.id === String(payload.applicationId || ''));
@@ -22885,6 +22886,39 @@ const server = http.createServer(async (req, res) => {
       const reviewedAt = new Date().toISOString();
       const reviewer = user.name || user.username || user.role || 'Staff';
       const notes = onboarding.text(payload.notes, 1600);
+      if (decision === 'restore') {
+        if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can restore an archived application.' });
+        if (!/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || ''))) return json(res, 409, { ok: false, error: 'Only a denied or archived application can be restored.' });
+        const publicVehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
+        const linkedVehicle = publicVehicle && (data.vehicles || []).find(row => String(row.id || '') === String(publicVehicle.platformVehicleId || ''));
+        const vehicleVin = String(publicVehicle && publicVehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
+        const vehiclePlate = String(publicVehicle && publicVehicle.plate || linkedVehicle && (linkedVehicle.plate || linkedVehicle.stock) || '').trim();
+        const activeSessions = (data.onboardingSessions || []).filter(row => row.applicationId === application.id && !/completed|cancelled|expired|replaced|picked up/i.test(String(row.status || '')));
+        const competingSession = publicVehicle && (data.onboardingSessions || []).find(row => String(row.onlineVehicleId || '') === String(publicVehicle.id || '') && row.applicationId !== application.id && !/completed|cancelled|expired|replaced|picked up/i.test(String(row.status || '')));
+        if (!publicVehicle || !linkedVehicle || !vehicleVin || !vehiclePlate) return json(res, 409, { ok: false, error: 'Restore is blocked until the exact online vehicle, internal fleet record, VIN, and tag are linked.' });
+        if (activeSessions.length) return json(res, 409, { ok: false, error: 'This application already has an active onboarding file. Continue that file instead of restoring it.' });
+        if (competingSession || publicVehicle.heldApplicationId && String(publicVehicle.heldApplicationId) !== String(application.id)) return json(res, 409, { ok: false, error: 'This vehicle is already held for another active onboarding file.' });
+        if (publicVehicle.published !== true || !/^available$/i.test(String(publicVehicle.availability || ''))) return json(res, 409, { ok: false, error: 'Restore is blocked until the exact vehicle is published and available.' });
+        if (/rented|assigned|sold|service|pending application|held/i.test(String(linkedVehicle.status || ''))) return json(res, 409, { ok: false, error: 'Restore is blocked because the linked fleet vehicle is not ready for a new application.' });
+        Object.assign(application, {
+          stage: 'New',
+          status: 'New - staff review',
+          restoredAt: reviewedAt,
+          restoredBy: reviewer,
+          restoreNotes: notes,
+          deniedAt: '',
+          deniedBy: '',
+          denialNotes: '',
+          updatedAt: reviewedAt
+        });
+        const account = (data.customerAccounts || []).find(row => row.applicationId === application.id);
+        if (account) Object.assign(account, { status: 'Active', portalStage: 'Application under review', disabledAt: '', disabledBy: '', updatedAt: reviewedAt });
+        (data.websiteLeads || []).filter(row => row.applicationId === application.id).forEach(row => Object.assign(row, { status: 'Submitted', updatedAt: reviewedAt }));
+        appendAuditLog(data, user, 'Archived application restored for review', [application.name || 'Applicant', nativeSite.vehicleTitle(publicVehicle), vehicleVin, vehiclePlate, notes || 'No review note']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+        return json(res, 200, { ok: true, restored: true, application: publicApplicationSummary(application), portalEnabled: !!account });
+      }
       Object.assign(application, { stage: 'Denied', status: 'Denied - archived', deniedAt: reviewedAt, deniedBy: reviewer, denialNotes: notes, updatedAt: reviewedAt });
       const sessions = (data.onboardingSessions || []).filter(row => row.applicationId === application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
       sessions.forEach(session => Object.assign(session, { status: 'Cancelled', cancelledAt: reviewedAt, cancelledBy: reviewer, cancellationReason: notes || 'Application denied and archived.' }));
