@@ -261,6 +261,7 @@ async function main() {
     cloverRecurringCountWarning,
     preserveCloverRecurringRosterAfterProviderError,
     cloverRecurringMigrationReadiness,
+    assertStripeCardPaymentMethod,
     cloverRecurringConfigurationFingerprint,
     stripeLiveWebhookEvidence,
     stripeIdentityLiveWebhookEvidence,
@@ -283,6 +284,14 @@ async function main() {
   };
   assert(allRecurringRows(exactRecurringLookupState)[0].id === 'local-operating-plan', 'Server recurring lookup must prefer the local WheelsonAuto operating row over its provider mirror.');
   assert(findRecurringRow(exactRecurringLookupState, 'shared-provider-subscription').id === 'local-operating-plan', 'Exact Clover subscription lookup must return the local operating schedule so charges and cutover actions cannot use stale provider-mirror fields.');
+  assert(assertStripeCardPaymentMethod({ type: 'card', card: { brand: 'visa', last4: '4242' } }).last4 === '4242', 'Stripe card-only validation must accept a real card payment method.');
+  let stripeAchRejected = false;
+  try {
+    assertStripeCardPaymentMethod({ type: 'us_bank_account', us_bank_account: { bank_name: 'Example Bank' } });
+  } catch (error) {
+    stripeAchRejected = error && error.code === 'stripe_card_only_required' && error.statusCode === 409;
+  }
+  assert(stripeAchRejected, 'Stripe ACH or bank-account payment methods must fail closed before they can become WheelsonAuto autopay sources.');
   assert(importedRecordEndedForDifferentRenter({ assignmentEndedAt: '2026-07-20T08:00:00.000Z', previousVehicleId: 'veh-direct-transfer' }, { id: 'veh-direct-transfer', currentCustomer: 'New Current Renter' }, 'Old Sheet Renter'), 'A historical spreadsheet renter must not reactivate after an owner-confirmed transfer.');
   assert(!importedRecordEndedForDifferentRenter({ assignmentEndedAt: '2026-07-20T08:00:00.000Z', previousVehicleId: 'veh-direct-transfer' }, { id: 'veh-direct-transfer', currentCustomer: 'Old Sheet Renter' }, 'Old Sheet Renter'), 'The spreadsheet importer may preserve an ended row only when the same customer is still authoritative on the vehicle.');
   const forgedLaunchState = stateForUserWrite({}, {
@@ -4509,7 +4518,7 @@ async function main() {
         id: 'seti_direct_authentication_replacement',
         status: 'succeeded',
         customer: 'cus_direct_authentication',
-        payment_method: { id: 'pm_direct_authentication_replacement', card: { brand: 'visa', last4: '4242' } }
+        payment_method: { id: 'pm_direct_authentication_replacement', type: 'card', card: { brand: 'visa', last4: '4242' } }
       }
     };
     const stripeAuthenticationSetupBody = JSON.stringify({ id: 'evt_direct_stripe_authentication_card_updated', type: 'checkout.session.completed', livemode: true, created: Math.floor(Date.now() / 1000), data: { object: stripeAuthenticationSetupObject } });

@@ -201,7 +201,7 @@ function createFakeStripe() {
           object: 'setup_intent',
           status: 'succeeded',
           customer: 'cus_test_lifecycle',
-          payment_method: { id: 'pm_test_lifecycle', object: 'payment_method', card: { brand: 'visa', last4: '4242' } }
+          payment_method: { id: 'pm_test_lifecycle', object: 'payment_method', type: 'card', card: { brand: 'visa', last4: '4242' } }
         });
       }
       if (method === 'GET' && pathname === '/v1/charges/ch_test_first_week') {

@@ -258,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-application-release-278';
+const ASSET_VERSION = 'platform-20260721-stripe-card-only-279';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -16223,6 +16223,16 @@ async function recordStripeCardSetupFailure(data, request, setupIntent, type) {
   });
   return { recurring: rows[0] || null, alreadyCompleted: false, failed: true, cancelled, actionRequired };
 }
+function assertStripeCardPaymentMethod(paymentMethod) {
+  const method = paymentMethod && typeof paymentMethod === 'object' ? paymentMethod : {};
+  if (String(method.type || '').toLowerCase() !== 'card' || !method.card || typeof method.card !== 'object') {
+    const error = new Error('WheelsonAuto recurring payments accept Stripe cards only. ACH and bank-account payment methods cannot be saved for autopay.');
+    error.statusCode = 409;
+    error.code = 'stripe_card_only_required';
+    throw error;
+  }
+  return method.card;
+}
 async function completeStripeCardSetup(data, request, sessionInput) {
   if (publicLinkExplicitlyRevoked(request)) throw stripeMigration.stripeLaunchSafetyError('This Stripe card setup request was cancelled or revoked. Send a fresh secure link before saving another card.', 'stripe_setup_link_revoked', ['Fresh owner-issued Stripe setup link'], 409);
   assertStripeCardPreparationReady();
@@ -16279,7 +16289,7 @@ async function completeStripeCardSetup(data, request, sessionInput) {
   const paymentMethod = setupIntent.payment_method || {};
   const paymentMethodId = stripeObjectId(paymentMethod);
   if (!paymentMethodId) throw new Error('Stripe did not return a reusable payment method.');
-  const card = paymentMethod.card || {};
+  const card = assertStripeCardPaymentMethod(paymentMethod);
   const customerId = stripeObjectId(session.customer) || stripeObjectId(setupIntent.customer) || request.stripeCustomerId;
   const completedAt = new Date().toISOString();
   Object.assign(request, {
@@ -25738,6 +25748,7 @@ module.exports = {
   controlledStripePilotEvidence,
   controlledStripePilotSelection,
   assertControlledStripePilotApproved,
+  assertStripeCardPaymentMethod,
   nativeOnboardingReadyForPickup,
   finalizeNativePickup,
   activeHostedCheckoutHref,
