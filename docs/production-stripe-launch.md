@@ -770,6 +770,11 @@ Stripe customer card preparation is exposed only when the server has a live
 signed webhook secret. The restricted key must grant only the account,
 customer, Checkout Session, SetupIntent, PaymentIntent, charge, refund,
 dispute, and Identity VerificationSession permissions used by WheelsonAuto.
+WheelsonAuto recurring billing is card-only. Every Checkout Session and
+PaymentIntent requests `card`, and the server rejects ACH or bank-account
+payment methods before they can become a saved autopay source. Do not enable
+ACH for the recurring workflow: its delayed settlement does not meet the
+business requirement for immediate payment outcomes.
 Do not grant access to sensitive Identity verification results; the platform
 uses the hosted verification status and stores its own encrypted customer
 documents. Charges, hosted payment
