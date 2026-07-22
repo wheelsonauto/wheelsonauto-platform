@@ -258,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-onboarding-hold-277';
+const ASSET_VERSION = 'platform-20260721-application-release-278';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js']);
@@ -22885,8 +22885,12 @@ const server = http.createServer(async (req, res) => {
       (data.websiteLeads || []).filter(row => row.applicationId === application.id).forEach(row => Object.assign(row, { status: 'Denied', updatedAt: reviewedAt }));
       (data.messages || []).filter(row => row.applicationId === application.id && /draft|ready to send|needs approval/i.test(String(row.status || row.direction || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', updatedAt: reviewedAt }));
       const publicVehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
-      if (publicVehicle && (!publicVehicle.heldApplicationId || publicVehicle.heldApplicationId === application.id)) {
-        Object.assign(publicVehicle, { published: publicVehicle.holdPreviousPublished === undefined ? true : !!publicVehicle.holdPreviousPublished, availability: publicVehicle.holdPreviousAvailability || 'Available', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousPublished: '', holdPreviousAvailability: '', updatedAt: reviewedAt });
+      const applicationOwnsVehicleHold = publicVehicle && String(publicVehicle.heldApplicationId || '') === String(application.id || '');
+      if (applicationOwnsVehicleHold) {
+        const previousPublished = typeof publicVehicle.holdPreviousPublished === 'boolean'
+          ? publicVehicle.holdPreviousPublished
+          : publicVehicle.published !== false;
+        Object.assign(publicVehicle, { published: previousPublished, availability: publicVehicle.holdPreviousAvailability || 'Available', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousPublished: '', holdPreviousAvailability: '', updatedAt: reviewedAt });
         const linkedVehicle = (data.vehicles || []).find(row => row.id === publicVehicle.platformVehicleId);
         if (linkedVehicle && (!linkedVehicle.heldApplicationId || linkedVehicle.heldApplicationId === application.id) && /pending application|held for onboarding/i.test(String(linkedVehicle.status || ''))) {
           Object.assign(linkedVehicle, { status: linkedVehicle.holdPreviousStatus || 'Ready', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousStatus: '', updatedAt: reviewedAt });

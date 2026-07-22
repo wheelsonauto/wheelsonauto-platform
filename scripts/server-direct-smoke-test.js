@@ -1362,6 +1362,54 @@ async function main() {
     const releasedApplicationVehicle = deniedApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
     assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Disabled', 'Denied application and pending login should move to archived/disabled state together.');
     assert(releasedApplicationVehicle && releasedApplicationVehicle.published === true && releasedApplicationVehicle.availability === 'Available', 'Denying an application should leave its unused online vehicle available for another applicant.');
+    const secondUnusedVehicleApplication = await request(server, 'POST', '/api/public/applications', {
+      headers: { 'x-forwarded-for': '198.51.100.89' },
+      json: nativePublicApplicationPayload({
+        onlineVehicleId: 'online-direct-002',
+        firstName: 'Second',
+        lastName: 'Unused Applicant',
+        phone: '3135550148',
+        email: 'second-unused-applicant@example.com',
+        password: 'SecondUnusedApplicant123!'
+      })
+    });
+    assert(secondUnusedVehicleApplication.status === 201 && secondUnusedVehicleApplication.json.ok, 'A second applicant should be able to apply for an available vehicle after an unused file is archived.');
+    const deniedSecondUnusedVehicleApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: secondUnusedVehicleApplication.json.application.id, decision: 'deny', notes: 'Second unused direct smoke applicant cleanup.' } });
+    assert(deniedSecondUnusedVehicleApplication.status === 200 && deniedSecondUnusedVehicleApplication.json.ok, 'Owner should be able to archive a second unused application for the same online vehicle.');
+    const secondUnusedVehicleState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const vehicleAfterSecondUnusedArchive = secondUnusedVehicleState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
+    assert(vehicleAfterSecondUnusedArchive && vehicleAfterSecondUnusedArchive.published === true && vehicleAfterSecondUnusedArchive.availability === 'Available', 'Archiving repeated applications that never held a vehicle must not unpublish or reserve the inventory record.');
+
+    const heldVehicleApplication = await request(server, 'POST', '/api/public/applications', {
+      headers: { 'x-forwarded-for': '198.51.100.90' },
+      json: nativePublicApplicationPayload({
+        onlineVehicleId: 'online-direct-002',
+        firstName: 'Held',
+        lastName: 'Vehicle Applicant',
+        phone: '3135550149',
+        email: 'held-vehicle-applicant@example.com',
+        password: 'HeldVehicleApplicant123!'
+      })
+    });
+    assert(heldVehicleApplication.status === 201 && heldVehicleApplication.json.ok, 'Held-vehicle release regression application did not save.');
+    const heldVehicleSeedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const heldVehicleSeed = heldVehicleSeedState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
+    Object.assign(heldVehicleSeed, {
+      published: false,
+      availability: 'Held for onboarding',
+      heldFor: heldVehicleApplication.json.application.name,
+      heldApplicationId: heldVehicleApplication.json.application.id,
+      heldUntil: futureDateKey(7) + 'T18:00:00.000Z',
+      holdPreviousPublished: true,
+      holdPreviousAvailability: 'Available'
+    });
+    const heldVehicleSeedWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: heldVehicleSeedState.json });
+    assert(heldVehicleSeedWrite.status === 200 && heldVehicleSeedWrite.json.ok, 'Owner could not seed an exact onboarding vehicle hold for release regression coverage.');
+    const deniedHeldVehicleApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: heldVehicleApplication.json.application.id, decision: 'deny', notes: 'Exact held vehicle release regression cleanup.' } });
+    assert(deniedHeldVehicleApplication.status === 200 && deniedHeldVehicleApplication.json.ok, 'Owner should be able to archive the application that owns an onboarding vehicle hold.');
+    const releasedHeldVehicleState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const releasedHeldVehicle = releasedHeldVehicleState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
+    assert(releasedHeldVehicle && releasedHeldVehicle.published === true && releasedHeldVehicle.availability === 'Available' && !releasedHeldVehicle.heldApplicationId, 'Archiving the exact application that owns a vehicle hold must restore the prior publication and availability state.');
     for (let i = 0; i < 8; i += 1) {
       const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
       assert([400, 409].includes(limitedApplicationAttempt.status), 'Public application attempts should validate normally before the per-IP submission limit.');
