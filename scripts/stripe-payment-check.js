@@ -196,6 +196,10 @@ async function run() {
     'assertStripeCardPreparationReady',
     'assertStripeIdentityPreparationReady',
     'assertStripeMoneyActionsArmed',
+    'controlledStripePilotMoneyActionReview',
+    'assertStripeScopedMoneyActionAllowed',
+    'assertStripeGeneralMoneyActionAllowed',
+    'The hardening flag alone never unlocks ordinary customer money actions',
     "transactionalStateReady: STATE_REPOSITORY.kind === 'postgres'",
     'privateDocumentStorageReady: WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED',
     'stateBackupConfigured: WOA_STATE_BACKUP_ENABLED',
@@ -253,6 +257,7 @@ async function run() {
   assert(server.includes("stableId('woa-stripe-customer'") && server.includes('stripeCustomerIdempotencyKey'), 'Stripe customer creation must derive and retain a deterministic company-and-customer-scoped idempotency key.');
   assert(server.includes('await assertStripeCutoverLaunchReady(data);'), 'The live provider-switch route must enforce the complete production launch gate before scheduling Stripe.');
   assert(server.includes('assertControlledStripePilotApproved(data);') && server.includes('controlled_stripe_pilot_required'), 'Every live Clover-to-Stripe cutover must remain locked until one complete owner-approved Stripe onboarding pilot is still valid.');
+  assert(server.includes('lockControlledStripePilotCandidate(data, application, session, user);') && app.includes('payload.controlledStripePilotCandidate=true'), 'The owner final review must lock one exact pilot before its deposit or first-week Stripe actions can run.');
   ['claim_token', 'idempotencyClaimToken', 'claimIdempotencyKey', 'completeIdempotencyKey', 'failIdempotencyKey'].forEach(value => {
     assert(stateRepository.includes(value), 'Missing durable Stripe idempotency repository marker: ' + value);
   });

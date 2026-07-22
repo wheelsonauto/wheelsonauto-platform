@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-real-pilot-identity-295';
+const ASSET_VERSION = 'platform-20260722-pilot-money-scope-296';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10848,6 +10848,96 @@ function assertControlledStripePilotApproved(data, options = {}) {
   }
   return evidence;
 }
+function controlledStripePilotCandidateLock(data = {}) {
+  const stripeState = data.integrations && data.integrations.stripe || {};
+  return {
+    applicationId: String(stripeState.controlledPilotCandidateApplicationId || '').trim(),
+    onboardingSessionId: String(stripeState.controlledPilotCandidateOnboardingSessionId || '').trim(),
+    lockedAt: String(stripeState.controlledPilotCandidateLockedAt || '').trim(),
+    lockedBy: String(stripeState.controlledPilotCandidateLockedBy || '').trim()
+  };
+}
+function controlledStripePilotCandidateIsActive(data, lock = controlledStripePilotCandidateLock(data)) {
+  if (!lock.applicationId || !lock.onboardingSessionId) return false;
+  const session = (data.onboardingSessions || []).find(row => String(row.id || '') === lock.onboardingSessionId);
+  const application = (data.applications || []).find(row => String(row.id || '') === lock.applicationId);
+  return !!(session && application
+    && String(session.applicationId || '') === lock.applicationId
+    && !/completed|cancelled|expired|replaced/i.test(String(session.status || ''))
+    && !/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || '')));
+}
+function lockControlledStripePilotCandidate(data, application, session, user = {}) {
+  const applicationId = String(application && application.id || '').trim();
+  const onboardingSessionId = String(session && session.id || '').trim();
+  if (!applicationId || !onboardingSessionId || String(session.applicationId || '') !== applicationId) {
+    throw Object.assign(new Error('The first Stripe pilot must remain connected to one exact application and onboarding file.'), { statusCode: 409, code: 'stripe_pilot_candidate_mismatch' });
+  }
+  const candidate = controlledStripePilotSelection(data).candidates.find(row => row.applicationId === applicationId);
+  if (!candidate || candidate.eligible !== true || candidate.onboardingSessionId !== onboardingSessionId) {
+    throw Object.assign(new Error('This file cannot be locked as the first Stripe pilot until its real vehicle, VIN, tag, pricing, contact, and single onboarding record are exact.'), { statusCode: 409, code: 'stripe_pilot_candidate_not_eligible', blockers: candidate && candidate.blockers || [] });
+  }
+  const current = controlledStripePilotCandidateLock(data);
+  if (current.onboardingSessionId && current.onboardingSessionId !== onboardingSessionId && controlledStripePilotCandidateIsActive(data, current)) {
+    throw Object.assign(new Error('Another active onboarding file is already locked as the first Stripe pilot. Finish or cancel that exact file before choosing another pilot.'), { statusCode: 409, code: 'stripe_pilot_candidate_already_locked' });
+  }
+  const now = new Date().toISOString();
+  data.integrations = data.integrations || {};
+  data.integrations.stripe = data.integrations.stripe || {};
+  Object.assign(data.integrations.stripe, {
+    controlledPilotCandidateApplicationId: applicationId,
+    controlledPilotCandidateOnboardingSessionId: onboardingSessionId,
+    controlledPilotCandidateLockedAt: now,
+    controlledPilotCandidateLockedBy: String(user.name || user.username || 'Owner')
+  });
+  return controlledStripePilotCandidateLock(data);
+}
+function controlledStripePilotMoneyActionReview(data, reference = {}, options = {}) {
+  const isolatedTestMode = options.isolatedTestMode === undefined ? STRIPE_ISOLATED_PROVIDER_TEST_MODE : options.isolatedTestMode === true;
+  if (isolatedTestMode) return { allowed: true, isolatedTestMode: true, reason: 'Isolated Stripe test mode' };
+  const pilotApproved = options.pilotApproved === undefined
+    ? controlledStripePilotEvidence(data, { liveRequired: true }).approved === true
+    : options.pilotApproved === true;
+  if (pilotApproved) return { allowed: true, pilotApproved: true, reason: 'Owner-approved live Stripe pilot' };
+  const lock = controlledStripePilotCandidateLock(data);
+  if (!controlledStripePilotCandidateIsActive(data, lock)) return { allowed: false, code: 'stripe_pilot_candidate_required', reason: 'No active owner-selected Stripe pilot is locked.' };
+  const onboardingSessionId = String(reference.onboardingSessionId || '').trim();
+  const applicationId = String(reference.applicationId || '').trim();
+  if (onboardingSessionId !== lock.onboardingSessionId || applicationId && applicationId !== lock.applicationId) {
+    return { allowed: false, code: 'stripe_pilot_money_scope_required', reason: 'This money action does not belong to the locked first Stripe pilot.' };
+  }
+  const candidate = controlledStripePilotSelection(data).candidates.find(row => row.applicationId === lock.applicationId);
+  if (!candidate || candidate.eligible !== true || candidate.onboardingSessionId !== lock.onboardingSessionId) {
+    return { allowed: false, code: 'stripe_pilot_candidate_not_eligible', reason: 'The locked pilot no longer has exact customer, vehicle, VIN, tag, pricing, and onboarding evidence.' };
+  }
+  const paymentType = String(reference.paymentType || reference.reason || '').trim();
+  const allowedPaymentType = ['Nonrefundable down payment', 'First weekly payment'].includes(paymentType);
+  if (options.allowPilotEvidenceAction !== true && !allowedPaymentType) {
+    return { allowed: false, code: 'stripe_pilot_payment_type_required', reason: 'Before pilot approval, only the locked deposit and first weekly payment may use Stripe.' };
+  }
+  return { allowed: true, pilotApproved: false, pilotCandidate: true, lock, candidate, reason: 'Locked first Stripe pilot' };
+}
+function assertStripeScopedMoneyActionAllowed(data, reference = {}, options = {}) {
+  assertStripeMoneyActionsArmed();
+  const review = controlledStripePilotMoneyActionReview(data, reference, options);
+  if (review.allowed) return review;
+  throw stripeMigration.stripeLaunchSafetyError(
+    review.reason + ' All other Stripe money actions remain locked until the completed pilot is owner-approved.',
+    review.code || 'stripe_pilot_money_action_locked',
+    ['Owner-selected live Stripe pilot', 'Exact pilot onboarding and payment record'],
+    409
+  );
+}
+function assertStripeGeneralMoneyActionAllowed(data, label = 'this Stripe action') {
+  assertStripeMoneyActionsArmed();
+  const evidence = controlledStripePilotEvidence(data, { liveRequired: !STRIPE_ISOLATED_PROVIDER_TEST_MODE });
+  if (STRIPE_ISOLATED_PROVIDER_TEST_MODE || evidence.approved) return evidence;
+  throw stripeMigration.stripeLaunchSafetyError(
+    'Complete and owner-approve the first live Stripe onboarding pilot before ' + label + '. The hardening flag alone never unlocks ordinary customer money actions.',
+    'stripe_pilot_approval_required_for_general_money_action',
+    ['Owner-approved complete live Stripe onboarding pilot'],
+    409
+  );
+}
 function finalizeNativePickup(data, session, application, vehicle, actor = { name: 'WheelsonAuto system', role: 'System' }) {
   onboarding.ensureCollections(data);
   const existing = data.pickupAppointments.find(row => row.onboardingSessionId === session.id && !/cancel/i.test(String(row.status || '')));
@@ -12668,7 +12758,9 @@ async function executePreparedRefund(data, request, user = {}) {
   if (refundRequestCompleted(request.status)) return request;
   const provider = normalizedRefundProvider(request.paymentProvider || request.provider);
   if (provider === 'stripe') {
-    assertStripeMoneyActionsArmed();
+    const sourcePayment = (data.payments || []).find(row => String(row.id || '') === String(request.sourcePaymentId || '')) || {};
+    const sourceRequest = (data.paymentRequests || []).find(row => String(row.id || '') === String(sourcePayment.paymentRequestId || '')) || sourcePayment;
+    assertStripeScopedMoneyActionAllowed(data, sourceRequest, { allowPilotEvidenceAction: true });
     assertStripeLiveResult(request.stripeLivemode, 'Stripe refund source payment');
   }
   const now = new Date().toISOString();
@@ -15902,12 +15994,12 @@ function splitName(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   return { firstName: parts[0] || 'WheelsonAuto', lastName: parts.slice(1).join(' ') || 'Customer' };
 }
-function publicPayHtml(request, message = '') {
+function publicPayHtml(data, request, message = '') {
   const safeName = escapeHtml(request.customer || 'Customer');
   const amount = '$' + Number(request.amount || 0).toLocaleString();
   const vehicle = escapeHtml(request.vehicle || 'WheelsonAuto recurring payment');
   const provider = paymentProviderLabel(request.paymentProvider);
-  const paymentReady = normalizedPaymentProvider(request.paymentProvider) !== 'stripe' || stripeMoneyActionsArmed();
+  const paymentReady = normalizedPaymentProvider(request.paymentProvider) !== 'stripe' || stripeMoneyActionsArmed() && controlledStripePilotMoneyActionReview(data, request).allowed;
   const providerNotice = paymentReady ? '' : '<div class="notice" style="margin-top:12px">This Stripe payment link is not live yet. WheelsonAuto will send a fresh secure link after production launch checks are complete.</div>';
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + providerNotice + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit"' + (paymentReady ? '' : ' disabled') + '>Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
 }
@@ -17418,7 +17510,7 @@ async function completeStripeRecurringChargeClaim(scope, key, response = {}, cla
 async function chargeStripeSavedCard(data, recurring, payload = {}) {
   const amount = Number(payload.amount || recurring.amount || 0);
   if (!amount || amount <= 0) throw new Error('Enter a valid amount before charging.');
-  assertStripeMoneyActionsArmed();
+  assertStripeGeneralMoneyActionAllowed(data, 'charging a saved card or running Stripe autopay');
   assertStripeLiveResult(recurring.stripeLivemode, 'Saved Stripe card');
   const chargeGuard = assertRecurringChargeAllowed(data, recurring, payload, 'stripe');
   const customerId = String(recurring.stripeCustomerId || '').trim();
@@ -18126,7 +18218,7 @@ async function attachCloverCheckout(data, request) {
   return checkout;
 }
 async function attachStripeCheckout(data, request) {
-  assertStripeMoneyActionsArmed();
+  assertStripeScopedMoneyActionAllowed(data, request);
   const customerId = await ensureStripeCustomer(data, request);
   const metadata = stripeMetadata({ ...request, paymentRequestId: request.id }, { flow: 'payment' });
   const session = await stripe.createSetupCheckoutSession({
@@ -19011,9 +19103,11 @@ async function executeStripeDisputeEvidenceSubmission(data, claim, user = {}, op
   if (stripeDisputeTerminalStatus(claim.disputeWorkflowStatus || claim.status)) throw Object.assign(new Error('Stripe already closed this dispute. Final outcomes can only come from signed Stripe webhooks.'), { statusCode: 409 });
   const disputeId = String(claim.stripeDisputeId || claim.disputeId || '').trim();
   if (!disputeId) throw Object.assign(new Error('This Stripe case has no provider dispute ID.'), { statusCode: 409 });
-  assertStripeMoneyActionsArmed();
+  const disputePayment = options.payment || (data.payments || []).find(row => row.id === claim.paymentId || claim.stripePaymentIntentId && row.stripePaymentIntentId === claim.stripePaymentIntentId) || {};
+  const disputeRequest = (data.paymentRequests || []).find(row => String(row.id || '') === String(disputePayment.paymentRequestId || '')) || disputePayment;
+  assertStripeScopedMoneyActionAllowed(data, disputeRequest, { allowPilotEvidenceAction: true });
   assertStripeLiveResult(claim.stripeLivemode === true, 'Stripe dispute');
-  const payment = options.payment || (data.payments || []).find(row => row.id === claim.paymentId || claim.stripePaymentIntentId && row.stripePaymentIntentId === claim.stripePaymentIntentId) || null;
+  const payment = options.payment || disputePayment || null;
   const recurring = options.recurring || findRecurringRow(data, payment && payment.recurringPaymentId || claim.recurringPaymentId || '');
   claim.evidencePacket = claim.evidencePacket && typeof claim.evidencePacket === 'object'
     ? claim.evidencePacket
@@ -20180,7 +20274,7 @@ const server = http.createServer(async (req, res) => {
         if (returnedSessionId && expectedSessionId && returnedSessionId !== expectedSessionId) return send(res, 400, paymentResultHtml('Payment could not be matched', 'The returned secure checkout did not match this WheelsonAuto payment request. No payment was recorded.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         if (normalizedPaymentProvider(request.paymentProvider) === 'stripe' && returnedSessionId) {
           try {
-            assertStripeMoneyActionsArmed();
+            assertStripeScopedMoneyActionAllowed(data, request);
             const session = await stripe.retrieveCheckoutSession(returnedSessionId);
             assertStripeLiveResult(session && session.livemode, 'Stripe payment checkout');
             const paymentIntent = session.payment_intent || {};
@@ -20206,9 +20300,9 @@ const server = http.createServer(async (req, res) => {
       if (markPublicLinkExpired(request)) await writeData(data);
       if (publicLinkRevoked(request) || publicLinkExpired(request)) return send(res, 410, paymentResultHtml('Payment link expired', 'This secure payment link is no longer active. Contact WheelsonAuto for a fresh link.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       if (parts[2] === 'failure') {
-        return send(res, 200, publicPayHtml(request, 'Checkout was cancelled or returned without verified payment. No failed payment was recorded. You can try again below, or contact WheelsonAuto for help.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+        return send(res, 200, publicPayHtml(data, request, 'Checkout was cancelled or returned without verified payment. No failed payment was recorded. You can try again below, or contact WheelsonAuto for help.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
-      return send(res, 200, publicPayHtml(request), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
+      return send(res, 200, publicPayHtml(data, request), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
     }
     if (url.pathname.startsWith('/api/public/payment-links/') && url.pathname.endsWith('/checkout') && req.method === 'POST') {
       const checkoutRate = await publicActionLimit(req, 'payment-link-checkout', PUBLIC_SECURE_LINK_LIMIT, PUBLIC_SECURE_LINK_WINDOW_MS);
@@ -23318,6 +23412,14 @@ const server = http.createServer(async (req, res) => {
           if (payload.signatureMatchConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the drawn signature matches the license signature.' });
           if (payload.vehicleConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the exact vehicle and VIN in the application and signed agreement.' });
           if (payload.cardConfirmed !== true) return json(res, 400, { ok: false, error: 'Confirm that the saved card token is linked without taking payment.' });
+          if (payload.controlledStripePilotCandidate === true) {
+            if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can lock the first live Stripe pilot.' });
+            try {
+              lockControlledStripePilotCandidate(data, application, session, user);
+            } catch (error) {
+              return json(res, Number(error.statusCode || 409), { ok: false, code: error.code, error: error.message, blockers: error.blockers || [] });
+            }
+          }
           Object.assign(session, {
             finalReviewStatus: 'Approved',
             finalReviewedAt: reviewedAt,
@@ -23406,7 +23508,7 @@ const server = http.createServer(async (req, res) => {
           application.updatedAt = reviewedAt;
         }
       } else return json(res, 400, { ok: false, error: 'Review stage must be final, documents, or signature.' });
-      appendAuditLog(data, user, 'Onboarding ' + payload.stage + ' review', [application && application.name || session.applicationId, decision === 'approve' ? 'Approved' : 'Correction requested', session.id]);
+      appendAuditLog(data, user, 'Onboarding ' + payload.stage + ' review', [application && application.name || session.applicationId, decision === 'approve' ? 'Approved' : 'Correction requested', session.id, payload.controlledStripePilotCandidate === true ? 'Locked as first live Stripe pilot' : '']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, status: session.status, finalReviewStatus: session.finalReviewStatus, documentReviewStatus: session.documentReviewStatus, signatureReviewStatus: session.signatureReviewStatus });
@@ -26195,6 +26297,9 @@ module.exports = {
   controlledStripePilotSessionEvidence,
   controlledStripePilotEvidence,
   controlledStripePilotSelection,
+  controlledStripePilotCandidateLock,
+  controlledStripePilotMoneyActionReview,
+  lockControlledStripePilotCandidate,
   assertControlledStripePilotApproved,
   assertStripeCardPaymentMethod,
   nativeOnboardingReadyForPickup,

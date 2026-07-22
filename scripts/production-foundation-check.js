@@ -9,7 +9,13 @@ const stateRepository = require('../state-repository');
 const secureDocumentStore = require('../secure-document-store');
 const encryptedStateBackup = require('../encrypted-state-backup');
 const stripeMigration = require('../stripe-migration');
-const { assignmentConflictPreflightClassification, cardSetupPlanReview, controlledStripePilotSelection } = require('../server');
+const {
+  assignmentConflictPreflightClassification,
+  cardSetupPlanReview,
+  controlledStripePilotSelection,
+  controlledStripePilotMoneyActionReview,
+  lockControlledStripePilotCandidate
+} = require('../server');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
 async function verifyGracefulShutdown(root, dataDir) {
@@ -109,6 +115,25 @@ async function main() {
   assert.match(inProgressActions, /complete driver license number/i, 'An in-progress pilot file must identify the incomplete license without showing its raw value.');
   assert.match(inProgressActions, /pickup date/i, 'An in-progress pilot file must identify a stale pickup request before the customer reaches a server rejection.');
   assert(!inProgressActions.includes('66'), 'Pilot guidance must never echo the raw driver-license value.');
+  const pilotMoneyState = {
+    integrations: { stripe: {} },
+    applications: [{ id: 'app-pilot-money', name: 'Pilot Money Customer', email: 'pilot-money@example.com', onlineVehicleId: 'online-pilot-money', vehicle: '2020 Pilot Money', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T14:00:00.000Z' }],
+    onlineVehicles: [{ id: 'online-pilot-money', platformVehicleId: 'veh-pilot-money', title: '2020 Pilot Money', vin: '1N4AL3AP8JC123456', plate: 'PIL-003', weeklyPayment: 229, downPayment: 485, published: false, availability: 'Held', heldApplicationId: 'app-pilot-money' }],
+    vehicles: [{ id: 'veh-pilot-money', vin: '1N4AL3AP8JC123456', plate: 'PIL-003', status: 'Held for onboarding' }],
+    onboardingSessions: [{ id: 'onboard-pilot-money', applicationId: 'app-pilot-money', onlineVehicleId: 'online-pilot-money', status: 'Approved - Stripe Identity ready', paymentProvider: 'stripe', identityProvider: 'stripe' }]
+  };
+  lockControlledStripePilotCandidate(pilotMoneyState, pilotMoneyState.applications[0], pilotMoneyState.onboardingSessions[0], { name: 'Owner' });
+  const pilotDepositReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'app-pilot-money', onboardingSessionId: 'onboard-pilot-money', paymentType: 'Nonrefundable down payment' }, { isolatedTestMode: false, pilotApproved: false });
+  assert.strictEqual(pilotDepositReview.allowed, true, 'Final hardening may unlock only the exact owner-selected pilot deposit before pilot approval.');
+  const unrelatedPaymentReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'another-application', onboardingSessionId: 'another-session', paymentType: 'First weekly payment' }, { isolatedTestMode: false, pilotApproved: false });
+  assert.strictEqual(unrelatedPaymentReview.allowed, false, 'Final hardening must not unlock another customer payment before the first pilot is approved.');
+  const ordinaryPilotChargeReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'app-pilot-money', onboardingSessionId: 'onboard-pilot-money', paymentType: 'Weekly payment' }, { isolatedTestMode: false, pilotApproved: false });
+  assert.strictEqual(ordinaryPilotChargeReview.allowed, false, 'The selected pilot lock must allow only its separate deposit and first-week transactions before approval.');
+  const approvedGeneralMoneyReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'another-application', onboardingSessionId: 'another-session', paymentType: 'Weekly payment' }, { isolatedTestMode: false, pilotApproved: true });
+  assert.strictEqual(approvedGeneralMoneyReview.allowed, true, 'Owner approval of the completed pilot may release later Stripe money actions while the cutover gate remains separate.');
+  pilotMoneyState.onboardingSessions[0].status = 'Cancelled';
+  const cancelledPilotReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'app-pilot-money', onboardingSessionId: 'onboard-pilot-money', paymentType: 'Nonrefundable down payment' }, { isolatedTestMode: false, pilotApproved: false });
+  assert.strictEqual(cancelledPilotReview.allowed, false, 'Cancelling the selected pilot must immediately revoke its pre-approval money scope.');
   const duplicateHoldState = {
     onboardingSessions: [
       { id: 'onboarding-one', applicationId: 'application-one', onlineVehicleId: 'online-shared', status: 'Identity pending' },

@@ -3901,6 +3901,10 @@ document.addEventListener('click',async function(event){
   if(action==='native-copy-visible-link'){var visible=val('nativeOnboardingLink');if(visible)navigator.clipboard.writeText(visible);notify('Secure onboarding link copied');return}
   if(action==='native-review-final'||action==='native-request-final-correction'||action==='native-review-documents'||action==='native-review-signature'||action==='native-request-correction'){
     var finalStage=action==='native-review-final'||action==='native-request-final-correction',stage=finalStage?'final':action==='native-review-documents'?'documents':action==='native-review-signature'?'signature':b.dataset.stage,approve=action==='native-review-final'||action==='native-review-documents'||action==='native-review-signature',payload={onboardingSessionId:id,stage:stage,decision:approve?'approve':'request_correction',notes:val('nativeReviewNotes')};
+    if(finalStage&&approve&&roleName()==='owner'){
+      var pilotReviewSession=(db.onboardingSessions||[]).find(function(row){return row.id===id}),selectedPilot=window.__woaSelectedPilotCandidate;
+      if(pilotReviewSession&&selectedPilot&&selectedPilot.applicationId===pilotReviewSession.applicationId)payload.controlledStripePilotCandidate=true;
+    }
     if(stage==='final'){
       payload.identityConfirmed=!!(document.getElementById('nativeIdentityConfirmed')&&document.getElementById('nativeIdentityConfirmed').checked);
       payload.signatureMatchConfirmed=!!(document.getElementById('nativeSignatureConfirmed')&&document.getElementById('nativeSignatureConfirmed').checked);
