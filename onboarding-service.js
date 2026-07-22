@@ -24,20 +24,22 @@ function validateCustomerProfile(payload = {}, options = {}) {
     insuranceProvider: text(payload.insuranceProvider, 160),
     insurancePolicyNumber: text(payload.insurancePolicyNumber, 120)
   };
-  if (values.address.length < 5) return { ok: false, error: 'Enter the complete legal street address shown on the customer file.' };
-  if (values.city.length < 2 || !/[A-Z]/i.test(values.city)) return { ok: false, error: 'Enter a valid city.' };
-  if (!/^[A-Z]{2}$/.test(values.state)) return { ok: false, error: 'Enter the two-letter state abbreviation.' };
-  if (!/^\d{5}(?:-\d{4})?$/.test(values.postalCode)) return { ok: false, error: 'Enter a valid 5-digit or ZIP+4 postal code.' };
+  const errors = [];
+  if (values.address.length < 5) errors.push('Enter the complete legal street address shown on the customer file.');
+  if (values.city.length < 2 || !/[A-Z]/i.test(values.city)) errors.push('Enter a valid city.');
+  if (!/^[A-Z]{2}$/.test(values.state)) errors.push('Enter the two-letter state abbreviation.');
+  if (!/^\d{5}(?:-\d{4})?$/.test(values.postalCode)) errors.push('Enter a valid 5-digit or ZIP+4 postal code.');
   const licenseKey = values.driverLicenseId.replace(/[^A-Z0-9]/g, '');
-  if (licenseKey.length < 5 || licenseKey.length > 24 || /^([A-Z0-9])\1+$/.test(licenseKey)) return { ok: false, error: 'Enter the complete driver license number exactly as shown on the license.' };
-  if (!values.driverLicenseExpires) return { ok: false, error: 'Enter a valid driver license expiration date.' };
+  if (licenseKey.length < 5 || licenseKey.length > 24 || /^([A-Z0-9])\1+$/.test(licenseKey)) errors.push('Enter the complete driver license number exactly as shown on the license.');
+  if (!values.driverLicenseExpires) errors.push('Enter a valid driver license expiration date.');
   const minimumExpirationDate = validDateKey(options.minimumExpirationDate) || businessDateKey(options.nowValue || new Date());
-  if (values.driverLicenseExpires < minimumExpirationDate) return { ok: false, error: 'The driver license must remain valid through the requested pickup date.' };
+  if (values.driverLicenseExpires && values.driverLicenseExpires < minimumExpirationDate) errors.push('The driver license must remain valid through the requested pickup date.');
   const providerLetters = values.insuranceProvider.replace(/[^A-Z]/gi, '');
-  if (providerLetters.length < 2) return { ok: false, error: 'Enter the insurance company name.' };
+  if (providerLetters.length < 2) errors.push('Enter the insurance company name.');
   const policyKey = values.insurancePolicyNumber.replace(/[^A-Z0-9]/gi, '');
-  if (policyKey.length < 4 || policyKey.length > 60) return { ok: false, error: 'Enter the complete insurance policy number.' };
-  return { ok: true, values };
+  if (policyKey.length < 4 || policyKey.length > 60) errors.push('Enter the complete insurance policy number.');
+  if (errors.length) return { ok: false, error: errors[0], errors };
+  return { ok: true, values, errors: [] };
 }
 
 function dateDisplay(value) {

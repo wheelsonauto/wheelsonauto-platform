@@ -258,7 +258,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260721-inline-profile-289';
+const ASSET_VERSION = 'platform-20260722-pilot-guidance-290';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10707,6 +10707,7 @@ function controlledStripePilotSelection(data) {
     if (publicVehicle && publicVehicle.heldApplicationId && String(publicVehicle.heldApplicationId) !== applicationId) blockers.push('This vehicle is held for another application.');
     if (!session && publicVehicle && (publicVehicle.published === false || /held|assigned|rented|sold|service/i.test(String(publicVehicle.availability || '')))) blockers.push('This online vehicle is not currently available for a new onboarding file.');
     const eligible = blockers.length === 0;
+    const nextActions = controlledStripePilotNextActions(data, application, session);
     return {
       applicationId,
       onboardingSessionId: session && String(session.id || '') || '',
@@ -10725,7 +10726,8 @@ function controlledStripePilotSelection(data) {
       identityProvider: normalizedIdentityProvider(session && session.identityProvider || IDENTITY_PROVIDER),
       eligible,
       action: session ? 'continue' : 'prepare',
-      blockers
+      blockers,
+      nextActions
     };
   }).filter(row => row.applicationId);
   candidates.sort((a, b) => Number(b.eligible) - Number(a.eligible) || Number(b.action === 'continue') - Number(a.action === 'continue'));
@@ -10738,6 +10740,35 @@ function controlledStripePilotSelection(data) {
       ? eligible.length + ' exact applicant and vehicle file' + (eligible.length === 1 ? ' is' : 's are') + ' ready to open for controlled pilot review.'
       : 'No exact applicant and vehicle file is ready yet. Review the listed blockers without guessing or changing live records.'
   };
+}
+function controlledStripePilotNextActions(data, application, session) {
+  if (!session) return [{ owner: 'Staff', text: 'Approve this exact application to create the private Stripe Identity and card-setup path. Nothing is sent or charged automatically.' }];
+  const state = nativeSite.onboardingStatus(data, session, application);
+  if (!state.profile) {
+    const settings = nativeSite.publicSettings(data);
+    const requestedDate = String(session.requestedPickupDate || application.requestedPickupDate || '').slice(0, 10);
+    const requestedTime = String(session.requestedPickupTime || application.requestedPickupTime || '').trim();
+    const pickup = onboarding.pickupWindow(settings, requestedDate);
+    const profile = onboarding.validateCustomerProfile(application, { minimumExpirationDate: pickup.ok ? pickup.raw : undefined });
+    const actions = (profile.errors || (profile.error ? [profile.error] : [])).map(text => ({ owner: 'Customer', text }));
+    if (!pickup.ok) actions.push({ owner: 'Customer', text: pickup.error });
+    else if (!onboarding.validatePickupTime(requestedTime, settings)) actions.push({ owner: 'Customer', text: 'Choose an available pickup time during business hours.' });
+    actions.push({ owner: 'Customer', text: 'Review the profile, choose the current pickup date and time, and explicitly confirm that pickup day becomes the weekly autopay weekday.' });
+    return actions.slice(0, 8);
+  }
+  if (!state.documents) return [{ owner: 'Customer', text: 'Upload the license front and back, a current selfie, and full-coverage insurance proof.' }];
+  if (state.identityProvider === 'stripe' && !state.identityVerified) {
+    if (state.identityProcessing) return [{ owner: 'Stripe', text: 'The signed live Identity verification is processing. No staff approval is available until Stripe returns the result.' }];
+    return [{ owner: 'Customer', text: state.identityLastError || 'Complete the hosted Stripe license and selfie verification.' }];
+  }
+  if (!state.documentsApproved) return [{ owner: 'Staff', text: 'Review the private insurance proof and approve full coverage for this exact customer and vehicle.' }];
+  if (!state.signature) return [{ owner: 'Customer', text: 'Read and electronically sign the locked agreement.' }];
+  if (!state.signatureApproved) return [{ owner: 'Staff', text: 'Compare the drawn signature with the driver-license signature, then accept or request a correction.' }];
+  if (!state.card) return [{ owner: 'Customer', text: 'Save and authorize a reusable card through the live Stripe setup form.' }];
+  if (!state.deposit) return [{ owner: 'Customer', text: 'Pay the locked nonrefundable deposit as its own Stripe transaction.' }];
+  if (!state.firstWeek) return [{ owner: 'Customer', text: 'Pay the locked first weekly payment as a separate Stripe transaction.' }];
+  if (!state.pickup) return [{ owner: 'System', text: 'Finalize the pickup appointment and verify the weekly autopay anchor before handoff.' }];
+  return [{ owner: 'Owner', text: 'Review the completed pilot evidence and approve this exact file before any Clover cutover.' }];
 }
 function assertControlledStripePilotApproved(data, options = {}) {
   if (STRIPE_ISOLATED_PROVIDER_TEST_MODE && options.enforceInIsolatedTest !== true) return { skipped: true, isolatedTestMode: true };

@@ -90,7 +90,19 @@ async function main() {
   assert.deepStrictEqual(pilotSelection.candidates[0].blockers, [], 'An exact available applicant and vehicle must open without a false blocker.');
   assert.strictEqual(pilotSelection.candidates[0].paymentProvider, 'clover', 'The pilot chooser must expose the actual configured onboarding payment provider instead of guessing in the browser.');
   assert.strictEqual(pilotSelection.candidates[0].identityProvider, 'manual', 'The pilot chooser must expose the actual configured identity provider instead of guessing in the browser.');
+  assert.strictEqual(pilotSelection.candidates[0].nextActions[0].owner, 'Staff', 'A prepared pilot candidate must explain the next responsible party without mutating the file.');
+  assert.match(pilotSelection.candidates[0].nextActions[0].text, /Nothing is sent or charged automatically/i, 'Pilot preparation must state that opening or preparing the file does not send or charge anything.');
   assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
+  const inProgressPilotSelection = controlledStripePilotSelection({
+    applications: [{ id: 'app-pilot-progress', name: 'Progress Customer', email: 'progress@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: '66', driverLicenseExpires: '2035-01-01', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: '2020-01-01', requestedPickupTime: '11:00 AM', onlineVehicleId: 'online-pilot-progress', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T13:00:00.000Z' }],
+    onlineVehicles: [{ id: 'online-pilot-progress', platformVehicleId: 'veh-pilot-progress', title: '2019 Pilot Progress', vin: 'PILOTPROGRESS001', plate: 'PIL-002', weeklyPayment: 229, downPayment: 485, published: false, availability: 'Held', heldApplicationId: 'app-pilot-progress' }],
+    vehicles: [{ id: 'veh-pilot-progress', vin: 'PILOTPROGRESS001', plate: 'PIL-002', status: 'Held for onboarding' }],
+    onboardingSessions: [{ id: 'onboard-pilot-progress', applicationId: 'app-pilot-progress', onlineVehicleId: 'online-pilot-progress', status: 'Open', paymentProvider: 'stripe', identityProvider: 'stripe' }]
+  });
+  const inProgressActions = inProgressPilotSelection.candidates[0].nextActions.map(action => action.text).join(' ');
+  assert.match(inProgressActions, /complete driver license number/i, 'An in-progress pilot file must identify the incomplete license without showing its raw value.');
+  assert.match(inProgressActions, /pickup date/i, 'An in-progress pilot file must identify a stale pickup request before the customer reaches a server rejection.');
+  assert(!inProgressActions.includes('66'), 'Pilot guidance must never echo the raw driver-license value.');
   const duplicateHoldState = {
     onboardingSessions: [
       { id: 'onboarding-one', applicationId: 'application-one', onlineVehicleId: 'online-shared', status: 'Identity pending' },
