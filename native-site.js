@@ -71,7 +71,14 @@ function pickupTimeSlots(settings = {}) {
 }
 
 function localDateKey(date = new Date()) {
-  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: process.env.WOA_TIME_ZONE || 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return [values.year, values.month, values.day].join('-');
 }
 
 function baseHead({ title, description, canonical, image, jsonLd, noIndex = false }) {
@@ -258,8 +265,8 @@ function onboardingHtml(data, session, application, vehicle, template, renderedC
   const pickupSlots = pickupTimeSlots(settings);
   const originalPickupDate = String(session.requestedPickupDate || application.requestedPickupDate || '').slice(0, 10);
   const originalPickupTime = session.requestedPickupTime || application.requestedPickupTime || '';
-  const originalPickupDay = new Date(originalPickupDate + 'T12:00:00');
-  const proposedPickupDate = originalPickupDate >= localDateKey(pickupMin) && originalPickupDate <= localDateKey(pickupMax) && !Number.isNaN(originalPickupDay.getTime()) && originalPickupDay.getDay() !== 0 ? originalPickupDate : '';
+  const originalPickupDay = new Date(originalPickupDate + 'T12:00:00Z');
+  const proposedPickupDate = originalPickupDate >= localDateKey(pickupMin) && originalPickupDate <= localDateKey(pickupMax) && !Number.isNaN(originalPickupDay.getTime()) && originalPickupDay.getUTCDay() !== 0 ? originalPickupDate : '';
   const proposedPickupTime = proposedPickupDate && pickupSlots.includes(originalPickupTime) ? originalPickupTime : '';
   const pickupOptions = pickupSlots.map(time => '<option value="' + esc(time) + '"' + (time === proposedPickupTime ? ' selected' : '') + '>' + esc(time) + '</option>').join('');
   const body = '<section class="onboarding-hero"><div><span class="eyebrow">Secure customer onboarding</span><h1>Welcome, ' + esc(application.name || 'customer') + '</h1><p>' + esc(vehicleTitle(vehicle)) + ' · ' + money(pricing.weeklyPayment) + '/week · ' + (Number(pricing.downPayment || 0) ? money(pricing.downPayment) + ' nonrefundable down payment' : 'No down payment') + '</p></div><div class="onboarding-progress">' +

@@ -448,16 +448,34 @@ async function saveSignedContractArtifact(details = {}, dataDir, documentStore =
   };
 }
 
-function pickupWindow(settings, requestedDate) {
+function businessDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: process.env.WOA_TIME_ZONE || 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return [values.year, values.month, values.day].join('-');
+}
+
+function addCalendarDays(dateKey, days) {
+  const date = new Date(String(dateKey || '').slice(0, 10) + 'T12:00:00Z');
+  if (Number.isNaN(date.getTime())) return '';
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function pickupWindow(settings, requestedDate, nowValue = new Date()) {
   const raw = String(requestedDate || '').slice(0, 10);
-  const requested = new Date(raw + 'T12:00:00');
-  if (!raw || Number.isNaN(requested.getTime())) return { ok: false, error: 'Choose a valid pickup date.' };
-  const today = new Date();
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() + Number(settings.minimumPickupDays || 1), 12);
-  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + Number(settings.maximumVehicleHoldDays || 7), 12);
-  if (requested < start) return { ok: false, error: 'Online pickup must be scheduled at least one day ahead. Call the office for same-day availability.' };
-  if (requested > end) return { ok: false, error: 'A specific vehicle can only be held for seven days. Call the office for a later general inventory appointment.' };
-  if (requested.getDay() === 0) return { ok: false, error: 'WheelsonAuto pickup is closed on Sunday.' };
+  const requested = new Date(raw + 'T12:00:00Z');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || Number.isNaN(requested.getTime()) || requested.toISOString().slice(0, 10) !== raw) return { ok: false, error: 'Choose a valid pickup date.' };
+  const today = businessDateKey(nowValue);
+  const start = addCalendarDays(today, Number(settings.minimumPickupDays || 1));
+  const end = addCalendarDays(today, Number(settings.maximumVehicleHoldDays || 7));
+  if (raw < start) return { ok: false, error: 'Online pickup must be scheduled at least one day ahead. Call the office for same-day availability.' };
+  if (raw > end) return { ok: false, error: 'A specific vehicle can only be held for seven days. Call the office for a later general inventory appointment.' };
+  if (requested.getUTCDay() === 0) return { ok: false, error: 'WheelsonAuto pickup is closed on Sunday.' };
   return { ok: true, raw, weekday: requested.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/New_York' }) };
 }
 

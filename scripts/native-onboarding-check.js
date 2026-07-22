@@ -141,7 +141,11 @@ async function main() {
   process.env.WOA_EMAIL_ENABLED = '0';
   process.env.WOA_MESSAGING_ENABLED = '0';
   process.env.PUBLIC_BASE_URL = 'http://127.0.0.1:4181';
+  const localTimeZone = process.env.TZ;
+  process.env.TZ = 'UTC';
   assert(nativeSite.localDateKey(new Date('2026-07-15T23:30:00-04:00')) === '2026-07-15', 'Pickup date bounds must use New Jersey local calendar dates instead of shifting through UTC after evening hours.');
+  assert(onboardingService.pickupWindow({ minimumPickupDays: 1, maximumVehicleHoldDays: 7 }, '2026-07-22', new Date('2026-07-22T03:30:00Z')).ok, 'Backend pickup validation must still accept the next New Jersey business day after UTC has crossed midnight.');
+  process.env.TZ = localTimeZone;
   const stripeStatusFixture = {
     documents: [
       { applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', documentKind: 'driver_license_front' },
