@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-stripe-stale-result-300';
+const ASSET_VERSION = 'platform-20260722-stripe-review-301';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -12376,6 +12376,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/integrations/clover/manual-charge', 'Saved-card manual charges'),
     route('POST', '/api/integrations/payments/manual-charge', 'Provider-aware saved-card manual charges'),
     route('POST', '/api/payment-provider/switch', 'Owner-confirmed Clover/Stripe autopay provider switch'),
+    route('POST', '/api/payment-provider/review/resolve', 'Owner-confirmed late Stripe payment resolution'),
     route('POST', '/api/integrations/clover/sync-all', 'Clover full sync'),
     route('GET', '/api/integrations/clover/reconciliation', 'Clover webhook, dispute, unmatched payment, and refund reconciliation'),
     route('POST', '/api/integrations/clover/payments/match', 'Owner-confirmed Clover payment customer match'),
@@ -18934,6 +18935,191 @@ function applyStripePaymentIntentSucceeded(data, intent = {}) {
     idempotencyClaimScope: claim.scope,
     idempotencyClaimKey: claim.key,
     stripeIdempotencyKey: claim.idempotencyKey
+  };
+}
+function providerMigrationReviewContext(data, payload = {}) {
+  const recurringPaymentId = String(payload.recurringPaymentId || payload.id || '').trim();
+  const paymentIntentId = String(payload.stripePaymentIntentId || payload.paymentIntentId || '').trim();
+  if (!recurringPaymentId || !paymentIntentId) {
+    const error = new Error('Choose the exact recurring customer and Stripe payment before resolving this review.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const recurring = findRecurringRow(data, recurringPaymentId);
+  if (!recurring) {
+    const error = new Error('Recurring customer was not found. Refresh Payments and try again.');
+    error.statusCode = 404;
+    throw error;
+  }
+  const review = recurring.providerMigrationReview;
+  if (!review || String(review.status || '').toLowerCase() !== 'owner review required') {
+    const error = new Error('This provider-migration payment review is no longer open. Refresh Payments before taking another action.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover') !== 'clover') {
+    const error = new Error('This resolution is only for a late Stripe result after the plan returned to Clover. Review the active provider before continuing.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (String(review.stripePaymentIntentId || '') !== paymentIntentId) {
+    const error = new Error('The Stripe payment does not match the exact payment held for this review. Refresh Payments and verify the provider reference.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const payment = (data.payments || []).find(row => String(row && row.stripePaymentIntentId || '') === paymentIntentId);
+  if (!payment || String(payment.recurringPaymentId || '') !== String(recurring.id || recurringPaymentId)) {
+    const error = new Error('The reviewed Stripe payment is not linked to this exact recurring customer. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!stripeMigration.paymentIsPaid(payment.status) || payment.providerMigrationReview !== true) {
+    const error = new Error('The linked Stripe payment is not a paid provider-migration review record. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (payment.duplicateBillingPeriod === true || recurring.duplicateBillingPeriodReview) {
+    const error = new Error('This payment also has a duplicate billing-period conflict. Resolve the duplicate payment evidence before changing the provider review.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const scheduledDueDate = validCalendarDateKey(review.scheduledDueDate || payment.scheduledDueDate);
+  if (!scheduledDueDate || scheduledDueDate !== validCalendarDateKey(payment.scheduledDueDate)) {
+    const error = new Error('The reviewed payment billing date is missing or inconsistent. No schedule was changed.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const refundRequests = (data.refundRequests || []).filter(row => {
+    if (String(row.sourcePaymentId || '') !== String(payment.id || '')) return false;
+    return !/cancelled|canceled|failed|declined|rejected/i.test(String(row.status || ''));
+  });
+  return { recurring, review, payment, scheduledDueDate, refundRequests };
+}
+function resolveProviderMigrationReview(data, payload = {}, user = {}) {
+  const action = String(payload.action || '').trim().toLowerCase();
+  if (!['accept_stripe_payment_keep_clover', 'resume_clover_after_verified_refund'].includes(action)) {
+    const error = new Error('Choose whether to accept the Stripe payment or resume Clover after a verified full refund.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const context = providerMigrationReviewContext(data, payload);
+  const { recurring, payment, scheduledDueDate, refundRequests } = context;
+  const now = new Date().toISOString();
+  const actor = String(user.name || user.username || user.role || 'Owner');
+  const inactive = /removed|returned|history|archived|ended|inactive|cancelled|canceled|expired|disabled/.test(String(recurring.status || '').toLowerCase());
+  const cloverChargeable = !!(recurringCustomerSource(recurring) && recurringCardChargeSource(recurring));
+  let nextRun = '';
+  let resolutionLabel = '';
+  let billingDecision = '';
+
+  if (action === 'accept_stripe_payment_keep_clover') {
+    if (refundRequests.length) {
+      const error = new Error('An active or completed refund record already exists for this Stripe payment. Finish that refund review before accepting the payment.');
+      error.statusCode = 409;
+      throw error;
+    }
+    nextRun = nextFutureRecurringDate(recurring, localDateKey(), scheduledDueDate);
+    if (!nextRun) {
+      const error = new Error('WheelsonAuto could not calculate the next recurring date. The payment review remains paused.');
+      error.statusCode = 409;
+      throw error;
+    }
+    resolutionLabel = 'Stripe payment accepted; Clover remains selected';
+    payment.status = 'Paid';
+    payment.tone = 'good';
+  } else {
+    const completedRefunds = refundRequests.filter(row => refundRequestCompleted(row.status));
+    const completedAmount = completedRefunds.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    if (!completedRefunds.length || completedAmount + 0.001 < Number(payment.amount || 0) || Number(payment.refundedAmount || 0) + 0.001 < Number(payment.amount || 0)) {
+      const error = new Error('Stripe must confirm a full refund for this exact payment before Clover can resume. Pending or partial refunds keep autopay paused.');
+      error.statusCode = 409;
+      throw error;
+    }
+    billingDecision = String(payload.billingDecision || '').trim().toLowerCase();
+    if (!['retry_same_period', 'skip_to_next_period'].includes(billingDecision)) {
+      const error = new Error('Choose whether this refunded billing period is still owed or should move to the next recurring date.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (billingDecision === 'retry_same_period') {
+      nextRun = scheduledDueDate;
+      payment.billingPeriodReleasedAfterRefund = true;
+      payment.billingPeriodReleasedAt = now;
+      payment.billingPeriodReleasedBy = actor;
+      payment.billingPeriodReleaseReason = 'Owner confirmed the full Stripe refund and kept this billing period due on Clover.';
+      resolutionLabel = 'Full Stripe refund verified; Clover will retry the same billing period';
+    } else {
+      nextRun = nextFutureRecurringDate(recurring, localDateKey(), scheduledDueDate);
+      if (!nextRun) {
+        const error = new Error('WheelsonAuto could not calculate the next recurring date. The payment review remains paused.');
+        error.statusCode = 409;
+        throw error;
+      }
+      resolutionLabel = 'Full Stripe refund verified; Clover resumes next billing period';
+    }
+    payment.status = 'Refunded';
+    payment.tone = 'warn';
+  }
+
+  const canResumeAutopay = !inactive && cloverChargeable;
+  const resolution = {
+    resolvedAt: now,
+    resolvedBy: actor,
+    action,
+    billingDecision,
+    scheduledDueDate,
+    nextRun,
+    stripePaymentIntentId: payment.stripePaymentIntentId,
+    paymentId: payment.id,
+    paymentProvider: 'clover',
+    cloverAutopayResumed: canResumeAutopay,
+    note: resolutionLabel
+  };
+  payment.providerMigrationReview = false;
+  payment.providerMigrationReviewResolved = resolution;
+  payment.notes = appendUniqueNote(payment.notes || '', resolutionLabel + ' by ' + actor + '.');
+  const recurringStatus = inactive
+    ? recurring.status
+    : canResumeAutopay
+      ? 'Active'
+      : 'Setup needed - Clover payment source';
+  const patch = {
+    paymentProvider: 'clover',
+    provider: 'Clover',
+    nextRun,
+    adminNextRun: nextRun,
+    paymentDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(nextRun) : recurring.paymentDay,
+    chargeDay: /week/i.test(String(recurring.frequency || '')) ? calendarDayName(nextRun) : recurring.chargeDay,
+    status: recurringStatus,
+    tone: inactive || !canResumeAutopay ? 'warn' : 'good',
+    paymentSetup: cloverChargeable ? 'Clover card saved and chargeable' : 'Clover payment source needs review',
+    autopayManagedBy: canResumeAutopay ? 'WheelsonAuto / Clover' : 'WheelsonAuto / Clover (paused - payment source review)',
+    autoChargeEnabled: canResumeAutopay,
+    retryCount: 0,
+    failedAttempts: 0,
+    providerMigrationReview: null,
+    providerMigrationReviewResolved: resolution,
+    lastPaymentResult: action === 'accept_stripe_payment_keep_clover' ? 'Paid' : 'Refunded',
+    lastPaymentNote: resolutionLabel,
+    lastScheduleAdvancedAt: now,
+    lastScheduleAdvancedFrom: scheduledDueDate,
+    lastScheduleAdvanceSource: 'Owner provider-migration review',
+    updatedAt: now
+  };
+  updateRecurringChargeState(data, recurring.id || recurring.cloverSubscriptionId, patch);
+  appendAuditLog(data, user, 'Stripe provider review resolved', [
+    recurring.customer || 'Unknown customer',
+    payment.stripePaymentIntentId || payment.id,
+    moneyText(payment.amount || 0),
+    scheduledDueDate,
+    resolutionLabel,
+    canResumeAutopay ? 'Clover autopay resumed' : 'Clover autopay remains paused for payment-source review'
+  ]);
+  return {
+    recurring: findRecurringRow(data, recurring.id || recurring.cloverSubscriptionId),
+    payment,
+    resolution,
+    cloverAutopayResumed: canResumeAutopay
   };
 }
 function applyStripePaymentIntentFailed(data, intent = {}) {
@@ -25765,6 +25951,20 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, 'Card setup link created', [created.autopay.customer || payload.customer || 'Unknown customer', moneyText(created.autopay.amount || payload.amount || 0), created.request.url || 'Setup link saved']);
       await writeData(data);
       return json(res, 201, { ok: true, autopay: created.autopay, setupLink: created.request });
+    }
+    if (url.pathname === '/api/payment-provider/review/resolve' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can resolve a late Stripe payment review.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 409, { ok: false, error: 'Owner confirmation is required before resolving a real Stripe payment.' });
+      const data = await readData();
+      try {
+        const result = resolveProviderMigrationReview(data, payload, user);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'resolve late Stripe provider payment review' });
+        await writeData(data);
+        return json(res, 200, { ok: true, ...result });
+      } catch (err) {
+        return json(res, Number(err && err.statusCode || 400), { ok: false, error: String(err && err.message || err) });
+      }
     }
     if (url.pathname === '/api/payment-provider/switch' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can switch an active autopay provider.' });

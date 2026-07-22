@@ -29,6 +29,7 @@ async function main() {
     '/api/integrations/payments/refunds/prepare',
     '/api/integrations/payments/refunds/execute',
     '/api/integrations/payments/refunds/complete-manual',
+    '/api/payment-provider/review/resolve',
     '/api/integrations/payments/disputes/action',
     '/api/verification/document',
     '/api/contract-template',

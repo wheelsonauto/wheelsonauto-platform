@@ -7,6 +7,7 @@ const zlib = require('node:zlib');
 const onboarding = require('../onboarding-service.js');
 const secureDocumentStore = require('../secure-document-store.js');
 const stateRepository = require('../state-repository.js');
+const stripeMigration = require('../stripe-migration.js');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
@@ -4339,7 +4340,7 @@ async function main() {
       provider: 'Clover',
       cloverCustomerId: 'cus_direct_rolled_back_clover',
       cloverSubscriptionId: 'sub_direct_rolled_back_clover',
-      cloverPaymentSource: 'card_direct_rolled_back_clover',
+      cloverPaymentSource: 'clv_direct_rolled_back_clover',
       stripeCustomerId: 'cus_direct_rolled_back_stripe',
       stripePaymentMethodId: 'pm_direct_rolled_back_stripe',
       stripeCardSavedAt: new Date().toISOString(),
@@ -4414,6 +4415,122 @@ async function main() {
     const staleStripeFailureRow = staleStripeFailureRead.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId);
     assert(staleStripeFailureRow && staleStripeFailureRow.paymentProvider === 'clover' && staleStripeFailureRow.status === 'Payment review - unexpected Stripe result' && Number(staleStripeFailureRow.retryCount || 0) === 0, 'A stale Stripe failure must preserve the current provider, review state, and retry count.');
     assert(!(staleStripeFailureRead.json.payments || []).some(payment => payment.stripePaymentIntentId === staleStripeFailureObject.id), 'A stale Stripe failure must not create a misleading current failed-payment transaction.');
+
+    const managerProviderReview = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: managerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'accept_stripe_payment_keep_clover', confirmed: true }
+    });
+    assert(managerProviderReview.status === 403, 'Managers must not resolve a real late Stripe payment review.');
+    const unconfirmedProviderReview = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'accept_stripe_payment_keep_clover' }
+    });
+    assert(unconfirmedProviderReview.status === 409, 'A late Stripe payment review must require owner confirmation.');
+    const wrongProviderReviewPayment = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: 'pi_wrong_provider_review', action: 'accept_stripe_payment_keep_clover', confirmed: true }
+    });
+    assert(wrongProviderReviewPayment.status === 409, 'A late Stripe payment review must reject a different PaymentIntent reference.');
+    const failedRefundProviderReviewState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const failedRefundProviderReviewPayment = (failedRefundProviderReviewState.json.payments || []).find(payment => payment.stripePaymentIntentId === staleStripeSuccessObject.id);
+    failedRefundProviderReviewState.json.refundRequests.unshift({
+      id: 'refund-direct-provider-review-failed',
+      sourcePaymentId: failedRefundProviderReviewPayment.id,
+      paymentProvider: 'stripe',
+      stripePaymentIntentId: staleStripeSuccessObject.id,
+      amount: failedRefundProviderReviewPayment.amount,
+      status: 'Refund failed',
+      lastError: 'Direct test failure before provider-review acceptance'
+    });
+    const failedRefundProviderReviewSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: failedRefundProviderReviewState.json });
+    assert(failedRefundProviderReviewSeed.status === 200 && failedRefundProviderReviewSeed.json.ok, 'Failed-refund provider-review setup failed.');
+    const acceptedProviderReview = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'accept_stripe_payment_keep_clover', confirmed: true }
+    });
+    assert(acceptedProviderReview.status === 200 && acceptedProviderReview.json.cloverAutopayResumed === true, 'A failed refund attempt must not trap the owner review or prevent accepting an exact late Stripe payment.');
+    const acceptedProviderReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const acceptedProviderReviewRow = acceptedProviderReviewRead.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId);
+    const acceptedProviderReviewPayment = (acceptedProviderReviewRead.json.payments || []).find(payment => payment.stripePaymentIntentId === staleStripeSuccessObject.id);
+    assert(acceptedProviderReviewRow && acceptedProviderReviewRow.paymentProvider === 'clover' && acceptedProviderReviewRow.autoChargeEnabled === true && !acceptedProviderReviewRow.providerMigrationReview && acceptedProviderReviewRow.nextRun > autopayTodayKey, 'Accepting the reviewed payment must keep Clover selected, clear only the exact review, resume autopay, and advance once.');
+    assert(acceptedProviderReviewPayment && acceptedProviderReviewPayment.status === 'Paid' && acceptedProviderReviewPayment.providerMigrationReview === false && acceptedProviderReviewPayment.providerMigrationReviewResolved, 'The accepted Stripe payment must retain a durable owner resolution record.');
+    const acceptedNextRun = acceptedProviderReviewRow.nextRun;
+    const repeatedProviderReview = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'accept_stripe_payment_keep_clover', confirmed: true }
+    });
+    assert(repeatedProviderReview.status === 409, 'A resolved provider review must reject a repeated resolution request.');
+    const repeatedProviderReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(repeatedProviderReviewRead.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId).nextRun === acceptedNextRun, 'A repeated provider-review request must not advance the recurring schedule twice.');
+
+    const refundProviderReviewState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const refundProviderReviewRow = refundProviderReviewState.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId);
+    const refundProviderReviewPayment = (refundProviderReviewState.json.payments || []).find(payment => payment.stripePaymentIntentId === staleStripeSuccessObject.id);
+    Object.assign(refundProviderReviewRow, {
+      nextRun: autopayTodayKey,
+      adminNextRun: autopayTodayKey,
+      status: 'Payment review - unexpected Stripe result',
+      tone: 'bad',
+      autoChargeEnabled: false,
+      providerMigrationReview: {
+        detectedAt: new Date().toISOString(),
+        scheduledDueDate: autopayTodayKey,
+        paymentProvider: 'clover',
+        stripeMigrationState: 'stripe_card_saved',
+        stripePaymentIntentId: staleStripeSuccessObject.id,
+        status: 'Owner review required'
+      }
+    });
+    Object.assign(refundProviderReviewPayment, {
+      status: 'Paid - provider migration review',
+      tone: 'bad',
+      providerMigrationReview: true,
+      refundedAmount: 0,
+      refundStatus: '',
+      billingPeriodReleasedAfterRefund: false
+    });
+    refundProviderReviewState.json.refundRequests.unshift({
+      id: 'refund-direct-provider-review',
+      sourcePaymentId: refundProviderReviewPayment.id,
+      paymentProvider: 'stripe',
+      stripePaymentIntentId: staleStripeSuccessObject.id,
+      customer: refundProviderReviewRow.customer,
+      amount: refundProviderReviewPayment.amount,
+      status: 'Refund pending',
+      providerRefundId: 're_direct_provider_review'
+    });
+    const refundProviderReviewSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: refundProviderReviewState.json });
+    assert(refundProviderReviewSeed.status === 200 && refundProviderReviewSeed.json.ok, 'Refunded provider-review resolution setup failed.');
+    const pendingRefundProviderReview = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'resume_clover_after_verified_refund', billingDecision: 'retry_same_period', confirmed: true }
+    });
+    assert(pendingRefundProviderReview.status === 409 && /full refund/.test(String(pendingRefundProviderReview.json.error || '')), 'A pending Stripe refund must not release the billing period or resume Clover.');
+    const completedRefundProviderReviewState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const completedRefundProviderReviewPayment = completedRefundProviderReviewState.json.payments.find(payment => payment.stripePaymentIntentId === staleStripeSuccessObject.id);
+    const completedRefundProviderReviewRequest = completedRefundProviderReviewState.json.refundRequests.find(row => row.id === 'refund-direct-provider-review');
+    completedRefundProviderReviewPayment.refundedAmount = completedRefundProviderReviewPayment.amount;
+    completedRefundProviderReviewPayment.refundStatus = 'Refunded';
+    completedRefundProviderReviewRequest.status = 'Refunded';
+    completedRefundProviderReviewRequest.completedAt = new Date().toISOString();
+    const completedRefundProviderReviewSeed = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: completedRefundProviderReviewState.json });
+    assert(completedRefundProviderReviewSeed.status === 200 && completedRefundProviderReviewSeed.json.ok, 'Completed provider-review refund setup failed.');
+    const missingRefundDecision = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'resume_clover_after_verified_refund', confirmed: true }
+    });
+    assert(missingRefundDecision.status === 400, 'A verified refund resolution must require the owner to choose whether the billing period remains due.');
+    const resumedRefundProviderReview = await request(server, 'POST', '/api/payment-provider/review/resolve', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: staleStripeResultRecurringId, stripePaymentIntentId: staleStripeSuccessObject.id, action: 'resume_clover_after_verified_refund', billingDecision: 'retry_same_period', confirmed: true }
+    });
+    assert(resumedRefundProviderReview.status === 200 && resumedRefundProviderReview.json.cloverAutopayResumed === true, 'A verified full refund must let the owner safely resume Clover after an explicit billing-period decision.');
+    const resumedRefundProviderReviewRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const resumedRefundProviderReviewRow = resumedRefundProviderReviewRead.json.recurringPayments.find(row => row.id === staleStripeResultRecurringId);
+    const resumedRefundProviderReviewPayment = resumedRefundProviderReviewRead.json.payments.find(payment => payment.stripePaymentIntentId === staleStripeSuccessObject.id);
+    assert(resumedRefundProviderReviewRow && resumedRefundProviderReviewRow.nextRun === autopayTodayKey && resumedRefundProviderReviewRow.autoChargeEnabled === true && !resumedRefundProviderReviewRow.providerMigrationReview, 'Retrying a fully refunded period must keep the exact billing date, clear the review, and resume chargeable Clover autopay.');
+    assert(resumedRefundProviderReviewPayment && resumedRefundProviderReviewPayment.status === 'Refunded' && resumedRefundProviderReviewPayment.billingPeriodReleasedAfterRefund === true, 'A refunded billing period must be released only by the explicit owner resolution.');
+    assert(stripeMigration.existingBillingPeriodPayment({ payments: [resumedRefundProviderReviewPayment] }, resumedRefundProviderReviewRow, autopayTodayKey) === null, 'A fully refunded and explicitly released billing period must not block the approved Clover retry.');
 
     const stripeFailureRecoveryRecurringId = 'direct-stripe-failure-recovery';
     const stripeFailureRecoveryState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

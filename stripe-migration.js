@@ -319,13 +319,13 @@ function paymentLinkedToRecurring(payment = {}, recurring = {}) {
 function existingPaidPayment(data = {}, recurring = {}, dueDate) {
   if (!billingPeriodKey(dueDate)) return null;
   const payments = Array.isArray(data.payments) ? data.payments : [];
-  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentIsPaid(payment.status) && paymentCoversBillingDate(payment, recurring, dueDate)) || null;
+  return payments.find(payment => payment.billingPeriodReleasedAfterRefund !== true && paymentLinkedToRecurring(payment, recurring) && paymentIsPaid(payment.status) && paymentCoversBillingDate(payment, recurring, dueDate)) || null;
 }
 
 function existingBillingPeriodPayment(data = {}, recurring = {}, dueDate) {
   if (!billingPeriodKey(dueDate)) return null;
   const payments = Array.isArray(data.payments) ? data.payments : [];
-  return payments.find(payment => paymentLinkedToRecurring(payment, recurring) && paymentConsumesBillingPeriod(payment.status) && paymentCoversBillingDate(payment, recurring, dueDate)) || null;
+  return payments.find(payment => payment.billingPeriodReleasedAfterRefund !== true && paymentLinkedToRecurring(payment, recurring) && paymentConsumesBillingPeriod(payment.status) && paymentCoversBillingDate(payment, recurring, dueDate)) || null;
 }
 
 function isolatedProviderTestMode(environment = process.env) {

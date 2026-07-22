@@ -479,6 +479,7 @@ const criticalActionRequirements = [
   ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'inspectionChecklist', 'lastInspectionChecklist', 'await save()', 'closeModal()', 'Maintenance()']],
   ['Provider-neutral refund preparation flow', 'integrated-prepare-refund', ['/api/integrations/payments/refunds/prepare', 'amount:Number', 'await refreshData(true)', 'integratedOpenRefundRecord']],
   ['Provider-neutral refund execution flow', 'integrated-execute-refund', ['/api/integrations/payments/refunds/execute', 'confirmed:true', 'await refreshData(true)', 'closeModal()']],
+  ['Late Stripe payment review flow', 'resolve-provider-migration-review', ['/api/payment-provider/review/resolve', 'stripePaymentIntentId', 'confirmed:true', 'await refreshData(true)', "tab='Active'", 'closeModal()']],
   ['Manual provider refund completion flow', 'integrated-complete-refund', ['/api/integrations/payments/refunds/complete-manual', 'providerRefundId', 'confirmed:true', 'await refreshData(true)']],
   ['Provider-neutral dispute review flow', 'integrated-save-dispute', ['/api/integrations/payments/disputes/action', 'claimId', 'providerSubmissionReference:val', 'confirmed:confirmed', "disputeAction==='submitted'", 'await refreshData(true)']],
   ['Verification case creation flow', 'integrated-create-verification', ['/api/verification/cases', 'reference:val', 'expiresAt:val', 'await refreshData(true)']],
