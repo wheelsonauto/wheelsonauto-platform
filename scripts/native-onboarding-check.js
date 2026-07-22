@@ -221,6 +221,7 @@ async function main() {
     const onboardingPage = await request(server, 'GET', '/onboard/' + token);
     assert(onboardingPage.status === 200 && /<option value="11:30 AM">11:30 AM<\/option>/.test(onboardingPage.text) && /<option value="4:30 PM">4:30 PM<\/option>/.test(onboardingPage.text), 'Thirty-minute pickup settings should render every valid appointment start through 4:30 PM.');
     assert(new RegExp('name="requestedPickupDate"[^>]+value="' + savedApplication.requestedPickupDate + '"').test(onboardingPage.text) && /<option value="1:00 PM" selected>1:00 PM<\/option>/.test(onboardingPage.text), 'Onboarding should prefill the original pickup request without marking the customer profile complete.');
+    assert(/data-profile-validation/.test(onboardingPage.text) && /data-field-error="driverLicenseId"/.test(onboardingPage.text) && /autocomplete="street-address"/.test(onboardingPage.text), 'Profile onboarding should expose inline customer-side validation before a server rejection.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedSession = saved.onboardingSessions.find(row => row.id === onboardingId);
     assert(savedSession && savedSession.tokenHash && !savedSession.publicToken, 'Onboarding session should persist only a token hash.');

@@ -27,6 +27,32 @@
   }
   function normalizePhone(value){ return String(value || '').replace(/\D/g, '').slice(-10); }
   function passwordValid(password){ return String(password || '').length >= 8 && /[A-Za-z]/.test(password) && /[0-9]/.test(password); }
+  function profileFieldError(form, name, text){
+    var input = form.elements[name], error = one('[data-field-error="' + name + '"]', form), label = input && input.closest('label');
+    if(error){ error.textContent = text || ''; error.classList.toggle('visible', !!text); }
+    if(input){ input.setAttribute('aria-invalid', text ? 'true' : 'false'); }
+    if(label) label.classList.toggle('invalid', !!text);
+  }
+  function validateProfile(form, focusFirst){
+    var data = values(form), errors = {}, licenseKey = String(data.driverLicenseId || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), policyKey = String(data.insurancePolicyNumber || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), providerLetters = String(data.insuranceProvider || '').replace(/[^A-Z]/gi, ''), pickupDate = String(data.requestedPickupDate || '').slice(0, 10), expiration = String(data.driverLicenseExpires || '').slice(0, 10);
+    if(String(data.address || '').trim().length < 5) errors.address = 'Enter the complete legal street address.';
+    if(String(data.city || '').trim().length < 2 || !/[A-Z]/i.test(String(data.city || ''))) errors.city = 'Enter a valid city.';
+    if(!/^[A-Z]{2}$/i.test(String(data.state || '').trim())) errors.state = 'Use the two-letter state abbreviation.';
+    if(!/^\d{5}(?:-\d{4})?$/.test(String(data.postalCode || '').trim())) errors.postalCode = 'Enter a valid 5-digit or ZIP+4 code.';
+    if(licenseKey.length < 5 || licenseKey.length > 24 || /^([A-Z0-9])\1+$/.test(licenseKey)) errors.driverLicenseId = 'Enter the complete number exactly as shown on the license.';
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(expiration)) errors.driverLicenseExpires = 'Choose the license expiration date.';
+    else if(pickupDate && expiration < pickupDate) errors.driverLicenseExpires = 'The license must remain valid through pickup.';
+    if(providerLetters.length < 2) errors.insuranceProvider = 'Enter the insurance company name.';
+    if(policyKey.length < 4 || policyKey.length > 60) errors.insurancePolicyNumber = 'Enter the complete policy number.';
+    if(!pickupDate) errors.requestedPickupDate = 'Choose the requested pickup date.';
+    if(!String(data.requestedPickupTime || '')) errors.requestedPickupTime = 'Choose an available pickup time.';
+    if(data.pickupAutopayConsent !== true) errors.pickupAutopayConsent = 'Confirm the pickup-day weekly autopay schedule.';
+    ['address','city','state','postalCode','driverLicenseId','driverLicenseExpires','insuranceProvider','insurancePolicyNumber','requestedPickupDate','requestedPickupTime','pickupAutopayConsent'].forEach(function(name){ profileFieldError(form, name, errors[name] || ''); });
+    var names = Object.keys(errors), review = one('[data-profile-review]', form);
+    if(review){ review.classList.toggle('invalid', !!names.length); var count = names.length; review.querySelector('strong').textContent = count ? count + ' field' + (count === 1 ? '' : 's') + ' need attention' : 'Profile details look complete'; review.querySelector('span').textContent = count ? 'Correct the highlighted fields before continuing.' : 'Review the details once more, then save and continue.'; }
+    if(names.length && focusFirst){ var first = form.elements[names[0]]; if(first){ first.focus({preventScroll:true}); first.scrollIntoView({behavior:'smooth',block:'center'}); } }
+    return !names.length;
+  }
   function filePayload(file){
     return new Promise(function(resolve, reject){
       if(!file){ reject(new Error('Choose every required document.')); return; }
@@ -153,10 +179,17 @@
   });
 
   all('form[data-onboarding-form]').forEach(function(form){
+    if(form.getAttribute('data-onboarding-form') === 'profile'){
+      all('input,select', form).forEach(function(input){
+        input.addEventListener(input.type === 'checkbox' || input.tagName === 'SELECT' ? 'change' : 'input', function(){ validateProfile(form, false); });
+      });
+      validateProfile(form, false);
+    }
     form.addEventListener('submit', async function(event){
       event.preventDefault(); message('');
       var token = onboardingToken(), kind = form.getAttribute('data-onboarding-form'), payload = values(form), url = '/api/public/onboarding/' + encodeURIComponent(token) + '/' + kind;
       try{
+        if(kind === 'profile' && !validateProfile(form, true)) throw new Error('Correct the highlighted profile fields before continuing.');
         if(kind === 'documents'){
           payload.documents = await Promise.all(['driver_license_front','driver_license_back','identity_selfie','insurance'].map(async function(name){
             var input = form.elements[name], document = await filePayload(input && input.files && input.files[0]); document.kind = name; return document;
