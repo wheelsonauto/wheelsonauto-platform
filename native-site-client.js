@@ -48,6 +48,8 @@
     ['address','city','state','postalCode','driverLicenseId','driverLicenseExpires','requestedPickupDate','requestedPickupTime','pickupAutopayConsent'].forEach(function(name){ profileFieldError(form, name, errors[name] || ''); });
     var names = Object.keys(errors), review = one('[data-profile-review]', form);
     if(review){ review.classList.toggle('invalid', !!names.length); var count = names.length; review.querySelector('strong').textContent = count ? count + ' field' + (count === 1 ? '' : 's') + ' need attention' : 'Profile details look complete'; review.querySelector('span').textContent = count ? 'Correct the highlighted fields before continuing.' : 'Review the details once more, then save and continue.'; }
+    var submit = one('button[type="submit"]', form);
+    if(submit){ submit.disabled = !!names.length; submit.setAttribute('aria-disabled', names.length ? 'true' : 'false'); }
     if(names.length && focusFirst){ var first = form.elements[names[0]]; if(first){ first.focus({preventScroll:true}); first.scrollIntoView({behavior:'smooth',block:'center'}); } }
     return !names.length;
   }

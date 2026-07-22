@@ -125,6 +125,7 @@ function cloverSignature(secret, rawBody) {
 async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-native-onboarding-'));
   const nativeCss = await fs.readFile(path.join(__dirname, '..', 'native-site.css'), 'utf8');
+  const nativeSiteClient = await fs.readFile(path.join(__dirname, '..', 'native-site-client.js'), 'utf8');
   assert(nativeCss.includes('[hidden]{display:none!important}'), 'Hidden selfie preview and camera controls must stay invisible until the live-camera flow reveals them.');
   assert(/@media\(max-width:980px\)[^{]*\{[^}]*[\s\S]*?\.onboarding-progress\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/.test(nativeCss), 'Tablet and phone onboarding milestones must use a compact grid instead of a horizontal scroller.');
   const webhookSecret = 'native-onboarding-hco-secret';
@@ -225,6 +226,7 @@ async function main() {
     assert(onboardingPage.status === 200 && /<option value="11:30 AM">11:30 AM<\/option>/.test(onboardingPage.text) && /<option value="4:30 PM">4:30 PM<\/option>/.test(onboardingPage.text), 'Thirty-minute pickup settings should render every valid appointment start through 4:30 PM.');
     assert(new RegExp('name="requestedPickupDate"[^>]+value="' + savedApplication.requestedPickupDate + '"').test(onboardingPage.text) && /<option value="1:00 PM" selected>1:00 PM<\/option>/.test(onboardingPage.text), 'Onboarding should prefill the original pickup request without marking the customer profile complete.');
     assert(/data-profile-validation/.test(onboardingPage.text) && /data-field-error="driverLicenseId"/.test(onboardingPage.text) && /autocomplete="street-address"/.test(onboardingPage.text) && onboardingPage.text.includes('/native-site-client.js?v=' + nativeSite.NATIVE_SITE_ASSET_VERSION) && onboardingPage.text.includes('/native-site.css?v=' + nativeSite.NATIVE_SITE_ASSET_VERSION), 'Profile onboarding should expose and freshly load inline customer-side validation before a server rejection.');
+    assert(/submit\.disabled = !!names\.length/.test(nativeSiteClient) && /submit\.setAttribute\('aria-disabled'/.test(nativeSiteClient), 'The profile save control must stay disabled until license, pickup, expiration, and autopay-consent checks are complete.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(savedSession && savedSession.tokenHash && !savedSession.publicToken, 'Onboarding session should persist only a token hash.');
     assert(saved.onlineVehicles[0].published === false && saved.onlineVehicles[0].heldApplicationId === applicationId, 'Application submission should immediately unpublish and hold the selected car.');
