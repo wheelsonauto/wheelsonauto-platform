@@ -453,6 +453,16 @@ async function main() {
     saved = await readSaved(dataDir);
     assert(saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt === firstSetupCompletedAt, 'Out-of-order Stripe setup webhooks must not complete or mutate the saved-card request twice.');
 
+    const proofRecoveryState = await readSaved(dataDir);
+    const proofRecoveryStripe = proofRecoveryState.integrations && proofRecoveryState.integrations.stripe || {};
+    ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint'].forEach(field => delete proofRecoveryStripe[field]);
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(proofRecoveryState, null, 2));
+    const replayedSetupWebhook = await request(server, 'POST', '/api/webhooks/stripe', { raw: setupRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, setupRaw) } });
+    assert(replayedSetupWebhook.status === 200 && replayedSetupWebhook.json.duplicate === true && replayedSetupWebhook.json.recoveredLaunchProof === true, 'A signed replay of an already-processed exact SetupIntent must safely recover launch proof without rerunning card setup.');
+    saved = await readSaved(dataDir);
+    assert(saved.integrations.stripe.lastLaunchWebhookEventId === setupEvent.id && saved.integrations.stripe.lastLaunchWebhookType === 'setup_intent.succeeded', 'Recovered processed-event proof must become visible to the live launch preflight.');
+    assert(saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt === firstSetupCompletedAt, 'Recovering launch proof must not re-complete or mutate the saved-card request.');
+
     const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Application, preliminary files, agreement, signature, VIN, and saved card reviewed together.' } });
     assert(finalReview.status === 200 && finalReview.json.finalReviewStatus === 'Approved', 'Staff must give one combined approval only after the preliminary file and saved card are complete.');
     saved = await readSaved(dataDir);

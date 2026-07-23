@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-direct-stripe-card-309';
+const ASSET_VERSION = 'platform-20260722-stripe-proof-recovery-310';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -11495,6 +11495,66 @@ function stripeLaunchWebhookEventType(type) {
     'charge.refunded'
   ].includes(String(type || ''));
 }
+function recordStripeWebhookProof(data, event = {}, options = {}) {
+  data.integrations = data.integrations || {};
+  data.integrations.stripe = data.integrations.stripe || {};
+  const stripeState = data.integrations.stripe;
+  const type = String(event.type || '');
+  stripeState.webhookEventIds = Array.isArray(stripeState.webhookEventIds) ? stripeState.webhookEventIds : [];
+  stripeState.webhookEventIds = event.id ? [event.id, ...stripeState.webhookEventIds.filter(id => id !== event.id)].slice(0, 500) : stripeState.webhookEventIds;
+  stripeState.lastWebhookAt = new Date().toISOString();
+  stripeState.lastWebhookType = type;
+  stripeState.lastWebhookEventId = event.id || '';
+  stripeState.lastWebhookLivemode = event.livemode === true;
+  stripeState.lastWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
+  stripeState.lastWebhookError = '';
+  if (options.matchedLaunchEvent === true && stripeLaunchWebhookEventType(type)) {
+    stripeState.lastLaunchWebhookAt = stripeState.lastWebhookAt;
+    stripeState.lastLaunchWebhookType = type;
+    stripeState.lastLaunchWebhookEventId = event.id || '';
+    stripeState.lastLaunchWebhookLivemode = event.livemode === true;
+    stripeState.lastLaunchWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
+    stripeState.lastLaunchWebhookError = '';
+  }
+  if (options.signedIdentityVerified === true) {
+    stripeState.lastIdentityWebhookAt = stripeState.lastWebhookAt;
+    stripeState.lastIdentityWebhookType = type;
+    stripeState.lastIdentityWebhookEventId = event.id || '';
+    stripeState.lastIdentityWebhookLivemode = event.livemode === true;
+    stripeState.lastIdentityWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
+    stripeState.lastIdentityWebhookError = '';
+  }
+  return stripeState;
+}
+function processedStripeSetupEventMatches(data, event = {}) {
+  if (String(event.type || '') !== 'setup_intent.succeeded' || event.livemode !== true && !stripeMigration.isolatedProviderTestMode(process.env)) return false;
+  const setupIntent = event.data && event.data.object || {};
+  const metadata = setupIntent.metadata || {};
+  const requestId = String(metadata.cardSetupRequestId || '').trim();
+  if (String(metadata.wheelsonauto || '').toLowerCase() !== 'true' || metadata.flow !== 'card_setup' || !requestId) return false;
+  const request = (data.cardSetupRequests || []).find(row => String(row && row.id || '') === requestId);
+  if (!request || request.stripeLivemode !== true && !stripeMigration.isolatedProviderTestMode(process.env)) return false;
+  const setupIntentId = stripeObjectId(setupIntent);
+  const paymentMethodId = stripeObjectId(setupIntent.payment_method);
+  return !!(
+    setupIntentId && paymentMethodId &&
+    setupIntentId === String(request.stripeSetupIntentId || '') &&
+    paymentMethodId === String(request.stripePaymentMethodId || '') &&
+    (!request.stripeCustomerId || !stripeObjectId(setupIntent.customer) || stripeObjectId(setupIntent.customer) === request.stripeCustomerId) &&
+    String(request.stripeCardSetupStatus || '').toLowerCase() === 'saved'
+  );
+}
+async function recoverProcessedStripeLaunchProof(event = {}) {
+  if (!stripeLaunchWebhookEventType(event.type) || !stripeMigration.stripeLiveResultAccepted({ ...stripeProviderSafetyOptions(), livemode: event.livemode === true })) return false;
+  const data = await readData();
+  if (!processedStripeSetupEventMatches(data, event)) return false;
+  const existing = data.integrations && data.integrations.stripe || {};
+  if (String(existing.lastLaunchWebhookEventId || '') === String(event.id || '') && existing.lastLaunchWebhookLivemode === (event.livemode === true)) return false;
+  recordStripeWebhookProof(data, event, { matchedLaunchEvent: true });
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return true;
+}
 function stripeWebhookContract() {
   return {
     endpoint: PUBLIC_BASE_URL + '/api/webhooks/stripe',
@@ -19891,7 +19951,17 @@ async function settleStripePaymentIntentClaimFromWebhook(type, result = {}) {
 }
 async function recordStripeWebhookEvent(event = {}) {
   const durableClaim = await STATE_REPOSITORY.claimWebhookEvent('stripe', event.id || '', { type: event.type || '', created: event.created || 0 });
-  if (!durableClaim.accepted) return { ok: !durableClaim.inProgress, received: false, duplicate: true, retry: !!durableClaim.inProgress, inProgress: !!durableClaim.inProgress, eventId: event.id || '' };
+  if (!durableClaim.accepted) {
+    let recoveredLaunchProof = false;
+    if (!durableClaim.inProgress) {
+      try {
+        recoveredLaunchProof = await recoverProcessedStripeLaunchProof(event);
+      } catch (error) {
+        await recordOperationalFailure('stripe-webhook-proof-recovery', error, { eventId: event.id || '', route: '/api/webhooks/stripe', source: 'processed signed event replay' }).catch(() => {});
+      }
+    }
+    return { ok: !durableClaim.inProgress, received: recoveredLaunchProof, duplicate: true, recoveredLaunchProof, retry: !!durableClaim.inProgress, inProgress: !!durableClaim.inProgress, eventId: event.id || '' };
+  }
   try {
   if (!stripeMigration.stripeLiveResultAccepted({ ...stripeProviderSafetyOptions(), livemode: event.livemode === true })) {
     await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id || '', { claimToken: durableClaim.claimToken });
@@ -19907,9 +19977,9 @@ async function recordStripeWebhookEvent(event = {}) {
   const data = await readData();
   data.integrations = data.integrations || {};
   data.integrations.stripe = data.integrations.stripe || {};
-  const stripeState = data.integrations.stripe;
-  stripeState.webhookEventIds = Array.isArray(stripeState.webhookEventIds) ? stripeState.webhookEventIds : [];
-  if (event.id && stripeState.webhookEventIds.includes(event.id)) {
+  const initialStripeState = data.integrations.stripe;
+  initialStripeState.webhookEventIds = Array.isArray(initialStripeState.webhookEventIds) ? initialStripeState.webhookEventIds : [];
+  if (event.id && initialStripeState.webhookEventIds.includes(event.id)) {
     await STATE_REPOSITORY.completeWebhookEvent('stripe', event.id, { claimToken: durableClaim.claimToken });
     return { ok: true, received: false, duplicate: true, eventId: event.id };
   }
@@ -20001,13 +20071,6 @@ async function recordStripeWebhookEvent(event = {}) {
   if (/^refund\.(created|updated|failed)$/.test(type) || type === 'charge.refunded') {
     refundRequestId = recordStripeRefundWebhookEvent(data, event, object);
   }
-  stripeState.webhookEventIds = event.id ? [event.id, ...stripeState.webhookEventIds].slice(0, 500) : stripeState.webhookEventIds;
-  stripeState.lastWebhookAt = new Date().toISOString();
-  stripeState.lastWebhookType = type;
-  stripeState.lastWebhookEventId = event.id || '';
-  stripeState.lastWebhookLivemode = event.livemode === true;
-  stripeState.lastWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
-  stripeState.lastWebhookError = '';
   const matchedLaunchEvent = !!(
     cardSetupRequestId ||
     paymentRequestId ||
@@ -20015,22 +20078,7 @@ async function recordStripeWebhookEvent(event = {}) {
     (disputeClaimId && !stripeDisputeIgnored) ||
     (stripePaymentIntentResult && stripePaymentIntentResult.matched)
   );
-  if (matchedLaunchEvent && stripeLaunchWebhookEventType(type)) {
-    stripeState.lastLaunchWebhookAt = stripeState.lastWebhookAt;
-    stripeState.lastLaunchWebhookType = type;
-    stripeState.lastLaunchWebhookEventId = event.id || '';
-    stripeState.lastLaunchWebhookLivemode = event.livemode === true;
-    stripeState.lastLaunchWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
-    stripeState.lastLaunchWebhookError = '';
-  }
-  if (signedIdentityVerified) {
-    stripeState.lastIdentityWebhookAt = stripeState.lastWebhookAt;
-    stripeState.lastIdentityWebhookType = type;
-    stripeState.lastIdentityWebhookEventId = event.id || '';
-    stripeState.lastIdentityWebhookLivemode = event.livemode === true;
-    stripeState.lastIdentityWebhookConfigurationFingerprint = stripeWebhookConfigurationFingerprint();
-    stripeState.lastIdentityWebhookError = '';
-  }
+  recordStripeWebhookProof(data, event, { matchedLaunchEvent, signedIdentityVerified });
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   const transactionEffects = {
     webhookCompletions: [{ provider: 'stripe', eventId: event.id || '', claimToken: durableClaim.claimToken }],
@@ -26777,6 +26825,8 @@ module.exports = {
   storePrivateArtifactForDocument,
   runPrivateArtifactBackfill,
   stripeLiveWebhookEvidence,
+  recordStripeWebhookProof,
+  processedStripeSetupEventMatches,
   stripeWebhookDestinationEvidence,
   stripeIdentityLiveWebhookEvidence,
   stripeWebhookContract,

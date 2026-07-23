@@ -6,7 +6,7 @@ process.env.WOA_AUTO_SYNC_MS = '3600000';
 process.env.WOA_AUTOPAY_MS = '3600000';
 process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
 
-const { mergeConcurrentState, mergeConcurrentValue } = require('../server');
+const { mergeConcurrentState, mergeConcurrentValue, recordStripeWebhookProof } = require('../server');
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -101,6 +101,24 @@ assert.strictEqual(customer.vehicleId, 'vehicle-new', 'The concurrent vehicle as
 assert.strictEqual(merged.vehicles.some(row => row.id === 'vehicle-delete-1'), false, 'An explicit deletion must not be resurrected by a concurrent update.');
 assert(merged.tasks.some(row => row.id === 'task-owner') && merged.tasks.some(row => row.id === 'task-worker'), 'Concurrent record additions must both survive.');
 assert.strictEqual(merged.integrations.stripe.lastWebhookEventId, 'evt-latest', 'Server-only integration evidence must keep the latest value.');
+
+const transactionalWebhookState = clone(base);
+const detachedStripeReference = transactionalWebhookState.integrations.stripe;
+const transactionalLatest = clone(base);
+transactionalLatest.integrations.stripe.lastWebhookAt = '2026-07-22T16:52:21.729Z';
+mergeConcurrentState(transactionalWebhookState, transactionalLatest, { preferIncoming: true, baseState: base });
+assert.notStrictEqual(transactionalWebhookState.integrations.stripe, detachedStripeReference, 'A transactional merge may replace the nested Stripe integration object.');
+recordStripeWebhookProof(transactionalWebhookState, {
+  id: 'evt_live_postgres_card_setup',
+  type: 'setup_intent.succeeded',
+  livemode: true
+}, { matchedLaunchEvent: true });
+assert.strictEqual(transactionalWebhookState.integrations.stripe.lastWebhookEventId, 'evt_live_postgres_card_setup', 'Stripe webhook proof must attach to the current post-merge integration object.');
+assert.strictEqual(transactionalWebhookState.integrations.stripe.lastLaunchWebhookEventId, 'evt_live_postgres_card_setup', 'A matched card setup must retain launch evidence after a transactional merge.');
+assert.strictEqual(transactionalWebhookState.integrations.stripe.lastLaunchWebhookType, 'setup_intent.succeeded', 'The current Stripe launch proof must retain the matched event type.');
+assert.strictEqual(transactionalWebhookState.integrations.stripe.lastLaunchWebhookLivemode, true, 'The current Stripe launch proof must retain live mode.');
+assert(transactionalWebhookState.integrations.stripe.lastLaunchWebhookAt && transactionalWebhookState.integrations.stripe.lastLaunchWebhookConfigurationFingerprint, 'The current Stripe launch proof must retain its timestamp and configuration fingerprint.');
+assert.strictEqual(detachedStripeReference.lastLaunchWebhookEventId, undefined, 'The regression fixture must prove the old detached integration object was not used.');
 
 const conflict = mergeConcurrentValue({ amount: 229 }, { amount: 249 }, { amount: 239 }, true);
 assert.strictEqual(conflict.amount, 249, 'When both writers change the exact same field, the explicitly saved incoming action must win.');
