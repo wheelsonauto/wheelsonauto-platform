@@ -151,6 +151,10 @@ async function main() {
   process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS = '3600000';
   process.env.WOA_EMAIL_ENABLED = '0';
   process.env.WOA_MESSAGING_ENABLED = '0';
+  process.env.WOA_DOCUMENT_STORAGE_PROVIDER = 'local';
+  process.env.WOA_DOCUMENT_ENCRYPTION_KEY = crypto.createHash('sha256').update('native-onboarding-private-document-key').digest('base64');
+  process.env.WOA_DOCUMENT_ENCRYPTION_KEY_VERSION = 'native-onboarding-v1';
+  process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = '1';
   process.env.PUBLIC_BASE_URL = 'http://127.0.0.1:4181';
   const localTimeZone = process.env.TZ;
   process.env.TZ = 'UTC';
@@ -292,11 +296,14 @@ async function main() {
     const signedContractDocument = saved.documents.find(row => row.onboardingSessionId === onboardingId && row.documentKind === 'signed_contract');
     assert(signedAgreement && /nineteen \(19\) consecutive months/i.test(signedAgreement.contractBody || ''), 'New signed agreements should lock the corrected 19-month optional-purchase term.');
     assert(signedAgreement && Number(signedAgreement.pricingSnapshot && signedAgreement.pricingSnapshot.contractMonths) === 19, 'The immutable pricing snapshot should store the canonical 19-month term.');
+    assert(signedAgreement && signedAgreement.privateArtifactId === signedAgreement.signatureImageId, 'Encrypted signatures must retain the authenticated storage artifact ID so existing staff and customer contract views can read the drawn signature.');
     assert(signedContractDocument && signedAgreement.contractDocumentId === signedContractDocument.id && signedContractDocument.customerVisible === true && signedContractDocument.customerAccountId === pendingCustomerAccount.id, 'Signing must atomically add a private immutable contract artifact linked to the e-signature and customer portal account.');
+    delete signedAgreement.privateArtifactId;
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
     const customerContractDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(signedContractDocument.id), { cookie: String(customerEmailLogin.cookie).split(';')[0] });
     assert(customerContractDownload.status === 200 && /WHEELSONAUTO SIGNED AGREEMENT/.test(customerContractDownload.text) && /nineteen \(19\) consecutive months/i.test(customerContractDownload.text) && /END OF SIGNED AGREEMENT/.test(customerContractDownload.text), 'The signed-in customer must be able to open only their own complete signed-agreement artifact.');
     const customerContractPage = await request(server, 'GET', '/customer/contracts/' + encodeURIComponent(signedAgreement.id), { cookie: String(customerEmailLogin.cookie).split(';')[0] });
-    assert(customerContractPage.status === 200 && /LONG-TERM VEHICLE RENTAL WITH OPTIONAL PURCHASE AGREEMENT/.test(customerContractPage.text) && /Customer drawn signature/.test(customerContractPage.text) && /Electronic signature certificate/.test(customerContractPage.text) && customerContractPage.text.includes(signedAgreement.documentHash) && customerContractPage.text.includes(signedAgreement.signatureImageHash), 'The customer signed-contract view must look like the full agreement and visibly bind the drawn signature, signer, timestamp, and certificate hashes.');
+    assert(customerContractPage.status === 200 && /LONG-TERM VEHICLE RENTAL WITH OPTIONAL PURCHASE AGREEMENT/.test(customerContractPage.text) && /Customer drawn signature/.test(customerContractPage.text) && /Electronic signature certificate/.test(customerContractPage.text) && customerContractPage.text.includes(signedAgreement.documentHash) && customerContractPage.text.includes(signedAgreement.signatureImageHash), 'The customer signed-contract view must look like the full agreement and visibly bind the drawn signature, signer, timestamp, and certificate hashes, including encrypted signatures saved before privateArtifactId was added.');
     const staffContractPage = await request(server, 'GET', '/api/onboarding/contracts/' + encodeURIComponent(signedAgreement.id), { cookie: ownerCookie });
     assert(staffContractPage.status === 200 && /Print \/ save PDF/.test(staffContractPage.text) && /Native Applicant/.test(staffContractPage.text) && /1FADP3K24GL123456/.test(staffContractPage.text), 'Owner review must open the same printable signed agreement with the exact customer and vehicle proof.');
     const foreignContractDownload = await request(server, 'GET', '/customer/documents/' + encodeURIComponent(signedContractDocument.id), { cookie: String(legacyCustomerLogin.cookie).split(';')[0] });

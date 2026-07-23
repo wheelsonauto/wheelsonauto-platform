@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-signed-contract-proof-311';
+const ASSET_VERSION = 'platform-20260722-signed-contract-compat-312';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -7997,10 +7997,24 @@ function json(res, status, payload, extra = {}) { send(res, status, JSON.stringi
 function privateDocumentAvailable(record = {}) {
   return !!(record.storageKey || record.storagePath || record.signatureImagePath);
 }
+function privateDocumentReadRecord(record = {}) {
+  const expectedIds = [record.id, record.privateArtifactId, record.signatureImageId]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  let authenticatedId = '';
+  try {
+    const aad = Buffer.from(String(record.encryption && record.encryption.aad || ''), 'base64').toString('utf8').split('|');
+    if (aad.length === 3 && expectedIds.includes(String(aad[1] || '').trim())) authenticatedId = String(aad[1] || '').trim();
+  } catch {}
+  return {
+    ...record,
+    id: authenticatedId || String(record.privateArtifactId || record.id || '').trim(),
+    contentType: record.contentType || record.signatureImageContentType || ''
+  };
+}
 async function readPrivateDocumentBytes(record = {}) {
   if (PRIVATE_DOCUMENT_STORE.isEncryptedDocument(record)) {
-    const storageRecord = record.privateArtifactId ? { ...record, id: record.privateArtifactId } : record;
-    return PRIVATE_DOCUMENT_STORE.read(storageRecord);
+    return PRIVATE_DOCUMENT_STORE.read(privateDocumentReadRecord(record));
   }
   const relativePath = String(record.storagePath || record.signatureImagePath || '');
   const root = path.resolve(DATA_DIR, 'onboarding-uploads');
@@ -21314,6 +21328,7 @@ const server = http.createServer(async (req, res) => {
             contractDocumentId: contractDocument.id,
             contractArtifactHash: contractDocument.sha256,
             signatureImageId: signatureImage.id,
+            privateArtifactId: signatureImage.id,
             signatureImageHash: signatureImage.sha256,
             signatureImagePath: signatureImage.storagePath,
             storagePath: signatureImage.storagePath || '',
