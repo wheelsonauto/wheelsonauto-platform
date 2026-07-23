@@ -111,6 +111,12 @@ function plusDays(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function latestStaffedDate() {
+  let candidate = dateKey(0);
+  if (new Date(candidate + 'T12:00:00Z').getUTCDay() === 0) candidate = plusDays(candidate, -1);
+  return candidate;
+}
+
 function pngDataUrl() {
   const header = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   return 'data:image/png;base64,' + Buffer.concat([header, Buffer.alloc(256, 1)]).toString('base64');
@@ -444,11 +450,12 @@ async function main() {
     saved.onboardingSessions.find(row => row.id === onboardingId).finalReviewStatus = 'Approved';
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
-    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000, notes: 'License, keys, and active insurance checked in person.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100' } });
+    const actualPickupDate = latestStaffedDate();
+    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, actualPickupDate, mileage: 91000, notes: 'License, keys, and active insurance checked in person.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100' } });
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Only the staff insurance check and physical handoff should activate the rental and recurring card schedule.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
-    assert(finalRecurring.autoChargeEnabled === true && finalRecurring.nextRun === plusDays(pickupDate, 7), 'Handoff must activate weekly autopay without changing its pickup-day anchor.');
+    assert(finalRecurring.autoChargeEnabled === true && finalRecurring.autopayAnchorDate === actualPickupDate && finalRecurring.nextRun === plusDays(actualPickupDate, 7), 'Handoff must activate weekly autopay from the actual physical pickup date.');
     assert(saved.customers.find(row => row.id === sameNameCustomer.id).status === 'History' && saved.contracts.find(row => row.id === sameNameContract.id).status === 'Ended' && saved.customerAccounts.find(row => row.id === sameNameAccount.id).portalStage === 'History', 'Physical handoff must update only the application-owned customer, contract, and portal account when names collide.');
 
     await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });

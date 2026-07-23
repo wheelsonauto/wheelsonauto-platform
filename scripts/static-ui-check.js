@@ -498,7 +498,7 @@ const criticalActionRequirements = [
   ['Verification review flow', 'integrated-review-verification', ['/api/verification/cases/review', 'caseId', 'decision:', 'await refreshData(true)']],
   ['Accounting ledger rebuild flow', 'integrated-rebuild-accounting', ['/api/accounting/ledger/rebuild', 'await refreshData(true)', '/api/accounting/ledger']],
   ['Pickup calendar preparation flow', 'integrated-prepare-pickup', ['/api/pickups/', '/calendar', 'await refreshData(true)', '/api/pickups/calendar']],
-  ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['/api/pickups/', '/complete', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']]
+  ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['/api/pickups/', '/complete', 'integratedPickupActualDate', 'actualPickupDate:', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
 assertIncludes('Clover refund eligibility guard', app, ['function cloverPaymentRefundable(row)', 'provider&&paid&&remaining>0', 'isOwner()&&!needsMatch&&cloverPaymentRefundable(row)']);

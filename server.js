@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-cutover-owner-view-325';
+const ASSET_VERSION = 'platform-20260723-pickup-anchor-326';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -11562,6 +11562,19 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (pickupSession && pickupSession.insuranceOption === 'upload' && !insuranceDocument) throw new Error('The uploaded insurance proof is missing or still needs correction.');
   const mileage = Number(payload.mileage);
   if (!Number.isFinite(mileage) || mileage < 0) throw new Error('Enter the vehicle mileage shown at physical pickup.');
+  const scheduledPickupDate = String(appointment.date || '').slice(0, 10);
+  const actualPickupDate = String(payload.actualPickupDate || localDateKey()).slice(0, 10);
+  const actualPickupDateValue = new Date(actualPickupDate + 'T12:00:00Z');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(actualPickupDate)
+    || Number.isNaN(actualPickupDateValue.getTime())
+    || actualPickupDateValue.toISOString().slice(0, 10) !== actualPickupDate) {
+    throw new Error('Enter the actual physical pickup date.');
+  }
+  if (actualPickupDate > localDateKey()) throw new Error('The actual physical pickup date cannot be in the future.');
+  if (actualPickupDateValue.getUTCDay() === 0) throw new Error('WheelsonAuto pickup is closed on Sunday. Choose the actual staffed handoff date.');
+  const actualPickupWeekday = onboarding.pickupWeekday(actualPickupDate);
+  const nextRecurringCharge = addDaysToDateKey(actualPickupDate, 7);
+  if (!actualPickupWeekday || !nextRecurringCharge) throw new Error('The physical pickup date could not be used as the weekly billing anchor.');
   const now = new Date().toISOString();
   const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId) || null;
   const recurring = pickupGate.recurring;
@@ -11572,6 +11585,12 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   const contract = onboardingOwnedRecord(data.contracts, application, session, recurring, account);
   const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
   Object.assign(appointment, {
+    originallyScheduledDate: appointment.originallyScheduledDate || scheduledPickupDate,
+    date: actualPickupDate,
+    actualPickupDate,
+    weekday: actualPickupWeekday,
+    autopayAnchorDate: actualPickupDate,
+    nextRecurringCharge,
     status: 'Picked up',
     insuranceReleaseStatus: 'Approved',
     insuranceConfirmed: true,
@@ -11587,11 +11606,11 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     completionNotes: onboarding.text(payload.notes, 1200)
   });
   if (vehicle) Object.assign(vehicle, { status: 'Rented', currentCustomer: appointment.customer || vehicle.currentCustomer || '', mileage, pickupMileage: mileage, pickupCompletedAt: now, updatedAt: now });
-  if (recurring) Object.assign(recurring, { status: 'Active', tone: 'good', autoChargeEnabled: true, autopayManagedBy: 'WheelsonAuto', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
-  if (customer) Object.assign(customer, { status: 'Active', stage: 'Active', vehicleId: appointment.vehicleId || customer.vehicleId || '', pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
-  if (contract) Object.assign(contract, { status: 'Active', rentalStartDate: contract.rentalStartDate || appointment.date || '', pickupCompletedAt: now, startingMileage: mileage, updatedAt: now });
-  if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', insuranceProvider, insurancePolicyNumber, insuranceVerifiedAt: now, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
-  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', insuranceReleaseStatus: 'Approved', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceVerifiedAt: now, insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
+  if (recurring) Object.assign(recurring, { status: 'Active', tone: 'good', autoChargeEnabled: true, autopayManagedBy: 'WheelsonAuto', paymentDay: actualPickupWeekday, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, firstWeekCoverageStarts: actualPickupDate, nextRun: nextRecurringCharge, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (customer) Object.assign(customer, { status: 'Active', stage: 'Active', vehicleId: appointment.vehicleId || customer.vehicleId || '', pickupDate: actualPickupDate, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (contract) Object.assign(contract, { status: 'Active', rentalStartDate: contract.rentalStartDate || scheduledPickupDate, scheduledRentalStartDate: contract.scheduledRentalStartDate || contract.rentalStartDate || scheduledPickupDate, actualRentalStartDate: actualPickupDate, actualPickupDate, billingAnchorDate: actualPickupDate, autopayWeekday: actualPickupWeekday, pickupCompletedAt: now, startingMileage: mileage, updatedAt: now });
+  if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', actualPickupDate, insuranceProvider, insurancePolicyNumber, insuranceVerifiedAt: now, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', actualPickupDate, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, nextRecurringCharge, insuranceReleaseStatus: 'Approved', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceVerifiedAt: now, insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
   if (insuranceDocument) Object.assign(insuranceDocument, { status: 'Verified - active at pickup', verifiedAt: now, verifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff' });
   if (account) Object.assign(account, { portalStage: 'Active customer', recurringPaymentId: recurring && recurring.id || account.recurringPaymentId || '', vehicleId: appointment.vehicleId || account.vehicleId || '', updatedAt: now });
   if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });

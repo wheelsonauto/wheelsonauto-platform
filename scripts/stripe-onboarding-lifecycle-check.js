@@ -100,6 +100,12 @@ function plusDays(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function latestStaffedDate() {
+  let candidate = localDateKey(0);
+  if (new Date(candidate + 'T12:00:00Z').getUTCDay() === 0) candidate = plusDays(candidate, -1);
+  return candidate;
+}
+
 function pngDataUrl(seed = 3) {
   const header = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   return 'data:image/png;base64,' + Buffer.concat([header, Buffer.alloc(384, seed)]).toString('base64');
@@ -550,10 +556,20 @@ async function main() {
     assert(appointment && appointment.date === pickupDate && appointment.autopayAnchorDate === pickupDate, 'Insurance selection must reserve the requested pickup exactly once.');
     assert(scheduledRecurring.nextRun === plusDays(pickupDate, 7) && scheduledRecurring.autopayAnchorDate === pickupDate && scheduledRecurring.paymentDay === appointment.weekday && scheduledRecurring.autoChargeEnabled === false, 'Weekly autopay must be prepared for the pickup weekday but remain disabled before handoff.');
 
-    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510, notes: 'Keys and vehicle delivered after identity and insurance checks.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Lifecycle Full Coverage Insurance', insurancePolicyNumber: 'FULL-COVERAGE-918' } });
+    const futureHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, actualPickupDate: pickupDate, mileage: 68510, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Lifecycle Full Coverage Insurance', insurancePolicyNumber: 'FULL-COVERAGE-918' } });
+    assert(futureHandoff.status === 409 && /cannot be in the future/i.test(futureHandoff.json.error || ''), 'Staff must never activate a rental or autopay against a future physical handoff date.');
+    const actualPickupDate = latestStaffedDate();
+    const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, actualPickupDate, mileage: 68510, notes: 'Keys and vehicle delivered after identity and insurance checks.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Lifecycle Full Coverage Insurance', insurancePolicyNumber: 'FULL-COVERAGE-918' } });
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Physical handoff must activate the vehicle, customer file, contract, and Stripe autopay together.');
     const postHandoffAuditState = await readSaved(dataDir);
     const postHandoffAuditSession = postHandoffAuditState.onboardingSessions.find(row => row.id === onboardingId);
+    const postHandoffRecurring = postHandoffAuditState.recurringPayments.find(row => row.id === recurring.id);
+    const postHandoffAppointment = postHandoffAuditState.pickupAppointments.find(row => row.id === appointment.id);
+    const postHandoffContract = postHandoffAuditState.contracts.find(row => row.onboardingSessionId === onboardingId);
+    assert(postHandoffAppointment.date === actualPickupDate && postHandoffAppointment.originallyScheduledDate === pickupDate && postHandoffAppointment.autopayAnchorDate === actualPickupDate, 'A delayed physical handoff must preserve the scheduled date as history and move the pickup anchor to the actual date.');
+    assert(postHandoffRecurring.autopayAnchorDate === actualPickupDate && postHandoffRecurring.nextRun === plusDays(actualPickupDate, 7) && postHandoffRecurring.paymentDay === postHandoffAppointment.weekday, 'The actual handoff date must atomically move the Stripe weekly billing anchor and next charge.');
+    assert(postHandoffAuditSession.requestedPickupDate === pickupDate && postHandoffAuditSession.actualPickupDate === actualPickupDate, 'The onboarding file must preserve the customer-requested date while recording the actual physical handoff separately.');
+    assert(postHandoffContract.rentalStartDate === pickupDate && postHandoffContract.scheduledRentalStartDate === pickupDate && postHandoffContract.actualRentalStartDate === actualPickupDate && postHandoffContract.billingAnchorDate === actualPickupDate && postHandoffContract.autopayWeekday === postHandoffAppointment.weekday, 'The signed contract date must stay immutable while operational rental start and weekly billing evidence use the actual handoff.');
     const postHandoffPilotTasks = postHandoffAuditState.tasks.filter(row => row.type === 'Stripe pilot approval' && row.onboardingSessionId === onboardingId);
     assert(postHandoffAuditSession.stripePilotAuditStatus === 'Ready for owner approval' && /^[a-f0-9]{64}$/.test(postHandoffAuditSession.stripePilotEvidenceHash || '') && postHandoffAuditSession.stripePilotAuditMissing.length === 0, 'The exact physical handoff must automatically seal a complete pilot evidence audit for owner review.');
     assert(postHandoffPilotTasks.length === 1 && postHandoffPilotTasks[0].status === 'Owner review' && postHandoffPilotTasks[0].evidenceHash === postHandoffAuditSession.stripePilotEvidenceHash, 'Physical handoff must create exactly one durable owner task linked to the sealed pilot evidence hash.');
@@ -750,7 +766,7 @@ async function main() {
     const completedControlledRecurring = completedControlledState.recurringPayments.find(row => row.id === recurring.id);
     const completedControlledPickup = completedControlledState.pickupAppointments.find(row => row.onboardingSessionId === onboardingId);
     const completedControlledCustomer = completedControlledState.customers.find(row => row.applicationId === applicationId);
-    assert(completedControlledRecurring.autoChargeEnabled === true && completedControlledRecurring.status === 'Active' && completedControlledRecurring.nextRun === plusDays(pickupDate, 7), 'The $1 pilot must retain real active pickup-day autopay.');
+    assert(completedControlledRecurring.autoChargeEnabled === true && completedControlledRecurring.status === 'Active' && completedControlledRecurring.nextRun === plusDays(actualPickupDate, 7), 'The $1 pilot must retain real active pickup-day autopay.');
     assert(completedControlledPickup && completedControlledPickup.completedAt, 'The $1 pilot must retain the completed physical pickup.');
     assert(completedControlledCustomer && completedControlledCustomer.vehicleId === 'veh-stripe-life-1', 'The $1 pilot must retain the real customer and fleet assignment.');
     assert(completedControlledState.vehicles.find(row => row.id === 'veh-stripe-life-1').status === 'Rented', 'The $1 pilot vehicle must remain rented after handoff.');
