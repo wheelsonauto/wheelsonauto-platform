@@ -653,6 +653,7 @@ function buildAccountingLedger(data = {}, existing = []) {
     });
   }
   (data.payments || []).forEach(payment => {
+    if (payment.controlledStripePilotTest === true) return;
     if (!paymentIsCollected(payment)) return;
     const id = payment.id || payment.cloverPaymentId || payment.providerPaymentId;
     add('payment', id, payment, payment.amount, ledgerCategory(payment), 'credit', payment.status || 'Paid');

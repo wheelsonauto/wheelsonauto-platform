@@ -342,6 +342,10 @@ async function main() {
     const ownerLogin = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'StripeLifecycleOwner123!' } });
     const ownerCookie = String(ownerLogin.cookie).split(';')[0];
     assert(ownerLogin.status === 302 && ownerCookie.includes('woa_session='), 'The owner must be able to enter the review workflow.');
+    const overCapControlledListing = await request(server, 'POST', '/api/online-vehicles', { cookie: ownerCookie, json: { title: 'Over-cap Stripe test', weeklyPayment: 6, downPayment: 1, stripePilotTestOnly: true } });
+    assert(overCapControlledListing.status === 409 && /\$0-\$5 down, \$0\.01-\$5 weekly/i.test(overCapControlledListing.json.error || ''), 'A controlled Stripe listing must reject any charge above the hard low-dollar cap before saving.');
+    const unlinkedControlledListing = await request(server, 'POST', '/api/online-vehicles', { cookie: ownerCookie, json: { title: 'Unlinked Stripe test', weeklyPayment: 1, downPayment: 1, stripePilotTestOnly: true } });
+    assert(unlinkedControlledListing.status === 409 && /linked internal fleet car/i.test(unlinkedControlledListing.json.error || ''), 'A controlled Stripe listing must require the exact internal fleet car before onboarding can begin.');
     const providerRequestsBeforeAmbiguousLink = fakeStripe.state.requests.length;
     const ambiguousLegacyCheckout = await request(server, 'POST', '/api/public/card-setup/setup-legacy-shared-name/stripe-checkout', { form: { consent: 'yes' } });
     assert(ambiguousLegacyCheckout.status === 409 && /more than one payment schedule/i.test(ambiguousLegacyCheckout.text) && /No card was saved or charged/i.test(ambiguousLegacyCheckout.text), 'A legacy same-name Stripe link must stop before Stripe when more than one recurring plan exists.');
@@ -565,7 +569,7 @@ async function main() {
     const approvedPilot = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
     assert(approvedPilot.status === 200 && approvedPilot.json.controlledStripePilot.approved === true, 'The exact completed Stripe onboarding file must unlock the isolated pilot only after owner approval: ' + JSON.stringify(approvedPilot.json));
     saved = await readSaved(dataDir);
-    assert(saved.integrations.stripe.controlledPilotEvidenceVersion === 2, 'Pilot approval must record the real-vehicle identity evidence contract version so older weaker approvals cannot remain valid.');
+    assert(saved.integrations.stripe.controlledPilotEvidenceVersion === 3, 'Pilot approval must record the current evidence contract version so older weaker approvals cannot remain valid.');
     const duplicatePilotApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
     assert(duplicatePilotApproval.status === 200 && duplicatePilotApproval.json.alreadyApproved === true, 'Repeated approval of the same unchanged pilot evidence must be idempotent.');
     const browserState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -698,6 +702,41 @@ async function main() {
 
     const duplicateDispute = await request(server, 'POST', '/api/webhooks/stripe', { raw: disputeRaw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, disputeRaw) } });
     assert(duplicateDispute.status === 200 && duplicateDispute.json.duplicate === true, 'Repeated Stripe events must be idempotent.');
+
+    const controlledState = await readSaved(dataDir);
+    const controlledVehicle = controlledState.onlineVehicles.find(row => row.id === 'online-stripe-life-1');
+    const controlledApplication = controlledState.applications.find(row => row.id === applicationId);
+    const controlledRecurring = controlledState.recurringPayments.find(row => row.id === recurring.id);
+    Object.assign(controlledVehicle, { stripePilotTestOnly: true, published: false, availability: 'Controlled Stripe test', weeklyPayment: 1, downPayment: 1 });
+    controlledApplication.pricingSnapshot = { ...controlledApplication.pricingSnapshot, weeklyPayment: 1, downPayment: 1 };
+    Object.assign(controlledRecurring, { amount: 1, controlledStripePilotTest: true });
+    controlledState.paymentRequests.filter(row => row.onboardingSessionId === onboardingId).forEach(row => Object.assign(row, { amount: 1, controlledStripePilotTest: true }));
+    controlledState.payments.filter(row => row.onboardingSessionId === onboardingId).forEach(row => Object.assign(row, { amount: 1, controlledStripePilotTest: true }));
+    controlledState.documents.filter(row => row.onboardingSessionId === onboardingId && String(row.kind || '').toLowerCase() === 'receipt').forEach(row => Object.assign(row, { amount: 1, controlledStripePilotTest: true }));
+    ['controlledPilotOnboardingSessionId', 'controlledPilotEvidenceHash', 'controlledPilotEvidenceVersion', 'controlledPilotApprovedAt', 'controlledPilotApprovedBy', 'controlledPilotApprovedLivemode'].forEach(field => delete controlledState.integrations.stripe[field]);
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(controlledState, null, 2));
+
+    const hiddenControlledListing = await request(server, 'GET', '/site-preview');
+    assert(hiddenControlledListing.status === 200 && !/2018 Honda Accord/.test(hiddenControlledListing.text), 'The controlled $1 vehicle must stay hidden from public shoppers even while its real customer file remains active.');
+    const controlledPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
+    const controlledPilot = controlledPreflight.json && controlledPreflight.json.controlledStripePilot;
+    const controlledLifecycleChecks = new Map((controlledPilot && controlledPilot.candidate && controlledPilot.candidate.checks || []).map(row => [row.key, row.ready]));
+    assert(controlledPreflight.status === 200 && controlledPilot.candidate.controlledTest === true && controlledPilot.candidate.depositAmount === 1 && controlledPilot.candidate.firstWeekAmount === 1, 'The live preflight must identify the exact capped $1 pilot and locked amounts: ' + JSON.stringify(controlledPilot));
+    ['insurance', 'signature', 'pickup', 'weekly_anchor', 'customer_contract', 'dispute_packet'].forEach(key => assert(controlledLifecycleChecks.get(key) === true, 'The controlled $1 pilot must complete the normal ' + key + ' lifecycle gate.'));
+    const completedControlledState = await readSaved(dataDir);
+    const completedControlledRecurring = completedControlledState.recurringPayments.find(row => row.id === recurring.id);
+    const completedControlledPickup = completedControlledState.pickupAppointments.find(row => row.onboardingSessionId === onboardingId);
+    const completedControlledCustomer = completedControlledState.customers.find(row => row.applicationId === applicationId);
+    assert(completedControlledRecurring.autoChargeEnabled === true && completedControlledRecurring.status === 'Active' && completedControlledRecurring.nextRun === plusDays(pickupDate, 7), 'The $1 pilot must retain real active pickup-day autopay.');
+    assert(completedControlledPickup && completedControlledPickup.completedAt, 'The $1 pilot must retain the completed physical pickup.');
+    assert(completedControlledCustomer && completedControlledCustomer.vehicleId === 'veh-stripe-life-1', 'The $1 pilot must retain the real customer and fleet assignment.');
+    assert(completedControlledState.vehicles.find(row => row.id === 'veh-stripe-life-1').status === 'Rented', 'The $1 pilot vehicle must remain rented after handoff.');
+    assert(completedControlledState.recurringPayments.find(row => row.id === 'rec-clover-kept-active').paymentProvider === 'clover' && completedControlledState.recurringPayments.find(row => row.id === 'rec-clover-kept-active').autoChargeEnabled === true, 'The $1 pilot must never change an unrelated active Clover plan.');
+    const controlledLedger = require('../integration-engine').buildAccountingLedger(completedControlledState, []);
+    assert(!controlledLedger.some(row => completedControlledState.payments.filter(payment => payment.onboardingSessionId === onboardingId).some(payment => payment.id === row.sourceId)), 'Controlled $1 payments must stay out of accounting revenue while the lifecycle remains real.');
+    const controlledApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
+    assert(controlledApproval.status === 200 && controlledApproval.json.controlledStripePilot.approved === true && controlledApproval.json.controlledStripePilot.candidate.controlledTest === true, 'Owner approval must accept the complete real-lifecycle $1 pilot evidence.');
+
     const final = await readSaved(dataDir);
     assert(final.claims.filter(row => row.stripeDisputeId === 'dp_test_first_week').length === 1, 'Repeated dispute webhooks must never duplicate claims.');
     assert(final.payments.find(row => row.paymentRequestId === firstWeek.paymentRequest.id).stripePaymentIntentId === 'pi_test_first_week', 'Verified Stripe transactions must retain their explicit PaymentIntent identity for reconciliation and disputes.');

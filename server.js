@@ -193,8 +193,10 @@ const WOA_DEPLOY_COMMIT = String(process.env.RENDER_GIT_COMMIT || process.env.WO
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_PRODUCTION_HARDENING_REQUIRED = process.env.WOA_PRODUCTION_HARDENING_REQUIRED === '1';
 const WOA_MIGRATION_MAINTENANCE_MODE = process.env.WOA_MIGRATION_MAINTENANCE_MODE === '1';
-const CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION = 2;
+const CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION = 3;
 const CONTROLLED_STRIPE_PILOT_APPROVAL_PHRASE = 'APPROVE FIRST LIVE STRIPE PILOT';
+const CONTROLLED_STRIPE_TEST_MAX_PAYMENT_CENTS = 500;
+const CONTROLLED_STRIPE_TEST_MAX_TOTAL_CENTS = 1000;
 const WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_DOCUMENT_STORAGE_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
 const WOA_MESSAGING_VALIDATION_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(process.env.WOA_MESSAGING_VALIDATION_MAX_AGE_MS || 30 * 24 * 60 * 60 * 1000));
@@ -259,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-signed-contract-compat-312';
+const ASSET_VERSION = 'platform-20260723-controlled-dollar-lifecycle-313';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -4195,7 +4197,7 @@ function uniqueCloseoutRecurringMoneyRows(rows = []) {
   });
 }
 function dailyCloseoutMoneyTruth(data = {}, dateKeyValue = localDateKey(), recurringRows = allRecurringRows(data)) {
-  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
+  const payments = uniqueCloseoutPayments((data.payments || []).filter(payment => payment.controlledStripePilotTest !== true && recordDateKey(payment.date || payment.createdAt) === dateKeyValue));
   const collectedPayments = payments.filter(closeoutPaymentPaid);
   const expectedRows = uniqueCloseoutRecurringMoneyRows(recurringRows.filter(row => {
     if (!recurringEligibleForToday(row)) return false;
@@ -4518,7 +4520,7 @@ function reviewPaidOutsideProof(data, user, payload = {}) {
   return payment;
 }
 function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), ownerNote = '') {
-  const allRecurring = allRecurringRows(data);
+  const allRecurring = allRecurringRows(data).filter(row => row.controlledStripePilotTest !== true);
   const recurring = allRecurring.filter(row => recurringDueOrTouchedToday(row, dateKeyValue));
   const moneyTruth = dailyCloseoutMoneyTruth(data, dateKeyValue, allRecurring);
   const payments = moneyTruth.payments;
@@ -4529,11 +4531,11 @@ function dailyCloseoutNotificationPayload(data, dateKeyValue = localDateKey(), o
   const cloverCollected = cloverPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const expected = moneyTruth.expected;
   const collected = moneyTruth.collected;
-  const openPaymentRequests = (data.paymentRequests || []).filter(isOpenCustomerPaymentRequest);
+  const openPaymentRequests = (data.paymentRequests || []).filter(row => row.controlledStripePilotTest !== true).filter(isOpenCustomerPaymentRequest);
   const openPaymentRequestAmount = openPaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
   const stalePaymentRequests = staleOpenPaymentRequests(openPaymentRequests);
   const stalePaymentRequestAmount = stalePaymentRequests.reduce((sum, request) => sum + Number(request.amount || 0), 0);
-  const openCardSetupRequests = (data.cardSetupRequests || []).filter(isOpenCardSetupRequest);
+  const openCardSetupRequests = (data.cardSetupRequests || []).filter(row => row.controlledStripePilotTest !== true).filter(isOpenCardSetupRequest);
   const staleCardSetupRequests = staleOpenCardSetupRequests(openCardSetupRequests);
   const pendingStarApprovals = pendingStarApprovalRows(data);
   const staleAutopaySchedules = staleAutopayScheduleRows(data, dateKeyValue);
@@ -5134,8 +5136,8 @@ function systemHealthSnapshot(data = {}, user = { role: 'Owner' }) {
   enrichLinkedProfiles(scoped);
   const today = localDateKey();
   const role = String(user && user.role || 'Owner');
-  const recurring = allRecurringRows(scoped);
-  const payments = uniqueCloseoutPayments(scoped.payments || []);
+  const recurring = allRecurringRows(scoped).filter(row => row.controlledStripePilotTest !== true);
+  const payments = uniqueCloseoutPayments((scoped.payments || []).filter(row => row.controlledStripePilotTest !== true));
   const dueToday = recurring.filter(row => recurringDueOrTouchedToday(row, today));
   const moneyTruth = dailyCloseoutMoneyTruth(scoped, today, recurring);
   const failedOnce = dueToday.filter(row => closeoutRecurringState(row) === 'Failed once');
@@ -8924,7 +8926,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
   const priorNotifications = current && current.integrations && current.integrations.notifications || {};
   const priorMessaging = current && current.integrations && current.integrations.messaging || {};
   const priorClover = current && current.integrations && current.integrations.clover || {};
-  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountCardPaymentsCapability', 'lastAccountTransfersCapability', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountRequirementsPendingVerificationCount', 'lastAccountRequirementsEventuallyDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError', 'lastWebhookDestinationCheckAt', 'lastWebhookDestinationCheckSuccess', 'lastWebhookDestinationKeyMode', 'lastWebhookDestinationId', 'lastWebhookDestinationUrl', 'lastWebhookDestinationStatus', 'lastWebhookDestinationEnabledEvents', 'lastWebhookDestinationApiVersion', 'lastWebhookDestinationConfigurationFingerprint', 'lastWebhookDestinationError', 'controlledPilotOnboardingSessionId', 'controlledPilotEvidenceHash', 'controlledPilotEvidenceVersion', 'controlledPilotApprovedAt', 'controlledPilotApprovedBy', 'controlledPilotApprovedLivemode'];
+  const stripeProofFields = ['lastWebhookAt', 'lastWebhookType', 'lastWebhookEventId', 'lastWebhookLivemode', 'lastWebhookConfigurationFingerprint', 'lastWebhookError', 'lastLaunchWebhookAt', 'lastLaunchWebhookType', 'lastLaunchWebhookEventId', 'lastLaunchWebhookLivemode', 'lastLaunchWebhookConfigurationFingerprint', 'lastLaunchWebhookError', 'lastIdentityWebhookAt', 'lastIdentityWebhookType', 'lastIdentityWebhookEventId', 'lastIdentityWebhookLivemode', 'lastIdentityWebhookConfigurationFingerprint', 'lastIdentityWebhookError', 'lastAccountHealthAt', 'lastAccountHealthSuccess', 'lastAccountHealthKeyMode', 'lastAccountId', 'lastAccountCountry', 'lastAccountChargesEnabled', 'lastAccountPayoutsEnabled', 'lastAccountDetailsSubmitted', 'lastAccountCardPaymentsCapability', 'lastAccountTransfersCapability', 'lastAccountRequirementsCurrentlyDueCount', 'lastAccountRequirementsPastDueCount', 'lastAccountRequirementsPendingVerificationCount', 'lastAccountRequirementsEventuallyDueCount', 'lastAccountDisabledReason', 'lastAccountHealthConfigurationFingerprint', 'lastAccountHealthError', 'lastWebhookDestinationCheckAt', 'lastWebhookDestinationCheckSuccess', 'lastWebhookDestinationKeyMode', 'lastWebhookDestinationId', 'lastWebhookDestinationUrl', 'lastWebhookDestinationStatus', 'lastWebhookDestinationEnabledEvents', 'lastWebhookDestinationApiVersion', 'lastWebhookDestinationConfigurationFingerprint', 'lastWebhookDestinationError', 'controlledPilotCandidateApplicationId', 'controlledPilotCandidateOnboardingSessionId', 'controlledPilotCandidateLockedAt', 'controlledPilotCandidateLockedBy', 'controlledPilotOnboardingSessionId', 'controlledPilotEvidenceHash', 'controlledPilotEvidenceVersion', 'controlledPilotApprovedAt', 'controlledPilotApprovedBy', 'controlledPilotApprovedLivemode'];
   const documentStorageProofFields = ['lastValidationAt', 'lastValidationSuccess', 'lastValidationProvider', 'lastValidationPublicReadBlocked', 'lastValidationImmutableWriteProtected', 'lastValidationObjectDeleted', 'lastValidationProofVersion', 'lastValidationConfigurationFingerprint', 'lastValidationError'];
   const operationalAlertProofFields = ['lastOperationalAlertAt', 'lastOperationalAlertSuccess', 'lastOperationalAlertProvider', 'lastOperationalAlertExternalId', 'lastOperationalAlertConfigurationFingerprint', 'lastOperationalAlertError'];
   const messagingProofFields = ['lastTelnyxDeliveryEvidenceAt', 'lastTelnyxDeliveryConfigurationFingerprint', 'lastTelnyxInboundEvidenceAt', 'lastTelnyxInboundConfigurationFingerprint', 'lastAiHealthAt', 'lastAiHealthStatus', 'lastAiHealthConfigurationFingerprint', 'lastAiProviderAt', 'lastAiProvider', 'lastAiProviderError', 'telnyx10dlc', 'aiUsage', 'smsWebhookConnected', 'smsWebhookConfiguredAt'];
@@ -10091,6 +10093,7 @@ function cleanOnlineVehiclePayload(payload = {}, existing = null) {
     description: onboarding.text(payload.description || existing && existing.description || '', 3000),
     availability: onboarding.text(payload.availability || existing && existing.availability || 'Available', 60),
     published: payload.published === undefined ? !!(existing && existing.published) : payload.published === true || payload.published === 'true' || payload.published === 1,
+    stripePilotTestOnly: payload.stripePilotTestOnly === undefined ? !!(existing && existing.stripePilotTestOnly) : payload.stripePilotTestOnly === true || payload.stripePilotTestOnly === 'true' || payload.stripePilotTestOnly === 1,
     source: onboarding.text(payload.source || existing && existing.source || 'Native WheelsonAuto inventory', 120),
     sourceProductId: onboarding.text(payload.sourceProductId || existing && existing.sourceProductId || '', 160),
     sourceHandle: onboarding.text(payload.sourceHandle || existing && existing.sourceHandle || '', 160),
@@ -10534,6 +10537,24 @@ function controlledStripePilotVehicleTitleReady(value) {
   if (!title || /\b(?:test|testing|sample|placeholder)\b/i.test(title)) return false;
   return !/^(?:online\s+vehicle|wheelsonauto\s+vehicle|vehicle)$/i.test(title);
 }
+function controlledStripePilotTestVehicle(vehicle = {}) {
+  return vehicle && vehicle.stripePilotTestOnly === true;
+}
+function controlledStripePilotTestPricing(pricing = {}) {
+  const weeklyCents = cents(pricing.weeklyPayment);
+  const depositCents = cents(pricing.downPayment);
+  const totalCents = weeklyCents + depositCents;
+  return {
+    weeklyCents,
+    depositCents,
+    totalCents,
+    ready: weeklyCents > 0
+      && weeklyCents <= CONTROLLED_STRIPE_TEST_MAX_PAYMENT_CENTS
+      && depositCents >= 0
+      && depositCents <= CONTROLLED_STRIPE_TEST_MAX_PAYMENT_CENTS
+      && totalCents <= CONTROLLED_STRIPE_TEST_MAX_TOTAL_CENTS
+  };
+}
 function controlledStripePilotSessionEvidence(data, session, options = {}) {
   const liveRequired = options.liveRequired !== false;
   const application = session && (data.applications || []).find(row => row.id === session.applicationId) || null;
@@ -10559,6 +10580,8 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     && String(row.kind || '').toLowerCase() === 'receipt'
   ) : [];
   const pricing = application && application.pricingSnapshot || {};
+  const controlledTest = controlledStripePilotTestVehicle(vehicle);
+  const controlledTestPricing = controlledStripePilotTestPricing(pricing);
   const expectedDepositCents = cents(pricing.downPayment);
   const expectedFirstWeekCents = cents(pricing.weeklyPayment);
   const depositRequired = expectedDepositCents > 0;
@@ -10618,9 +10641,11 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     && String(application && application.insuranceProvider || appointment.insuranceProvider || '').trim()
     && String(application && application.insurancePolicyNumber || appointment.insurancePolicyNumber || '').trim()
     && (String(session.insuranceOption || '').toLowerCase() === 'help_at_pickup' || insuranceDocuments.length));
+  const vehicleIdentityReady = !!(exactVehicleId && (controlledTest || controlledStripePilotVehicleTitleReady(exactVehicleTitle)) && controlledStripePilotVinReady(exactVin) && controlledStripePilotPlateReady(exactPlate));
   const checks = [
     ['application', 'Approved application for one online vehicle', !!(application && vehicle && application.onlineVehicleId && exactCustomer)],
-    ['vehicle_identity', 'Real vehicle title, complete 17-character VIN, and tag/plate', !!(exactVehicleId && controlledStripePilotVehicleTitleReady(exactVehicleTitle) && controlledStripePilotVinReady(exactVin) && controlledStripePilotPlateReady(exactPlate))],
+    ['vehicle_identity', controlledTest ? 'Dedicated controlled test vehicle with complete 17-character VIN and tag/plate' : 'Real vehicle title, complete 17-character VIN, and tag/plate', vehicleIdentityReady],
+    ['test_price_cap', controlledTest ? 'Controlled test charges stay within the $5-per-charge and $10-total cap' : 'Production vehicle pricing is not a controlled test', controlledTest ? controlledTestPricing.ready : true],
     ['profile_pickup_consent', 'Profile, pickup date, and autopay consent', !!(session && session.profileCompletedAt && session.requestedPickupDate && session.pickupAutopayConsentAt)],
     ['final_review', 'Preliminary WheelsonAuto screening approval before paid identity verification', !!(session && session.finalReviewStatus === 'Approved' && session.finalReviewedAt)],
     ['stripe_identity', liveRequired ? 'Live Stripe Identity license and selfie verification with legal-name match' : 'Stripe Identity license and selfie verification with legal-name match', !!(session && session.identityProvider === 'stripe' && session.identityVerificationStatus === 'verified' && session.identityLegalNameMatch === true && (!liveRequired || session.identityVerificationLivemode === true))],
@@ -10642,6 +10667,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
   const evidenceSource = {
     version: CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION,
     livemode: liveRequired,
+    controlledTest,
     sessionId: session && session.id || '',
     applicationId: application && application.id || '',
     onlineVehicleId: vehicle && vehicle.id || '',
@@ -10679,6 +10705,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
   return {
     ready: missing.length === 0,
     livemode: liveRequired,
+    controlledTest,
     evidenceHash: crypto.createHash('sha256').update(JSON.stringify(evidenceSource)).digest('hex'),
     sessionId: session && session.id || '',
     applicationId: application && application.id || '',
@@ -10728,6 +10755,7 @@ function controlledStripePilotEvidence(data, options = {}) {
     firstWeekAmount: candidate.firstWeekAmount,
     totalCollected: candidate.totalCollected,
     completedAt: candidate.completedAt,
+    controlledTest: candidate.controlledTest === true,
     ready: candidate.ready,
     checks: candidate.checks,
     missing: candidate.missing
@@ -10743,10 +10771,16 @@ function controlledStripePilotEvidence(data, options = {}) {
     candidate: safeCandidate,
     approvalPhrase: candidate && candidate.ready && !approved ? CONTROLLED_STRIPE_PILOT_APPROVAL_PHRASE : '',
     message: approved
-      ? 'One complete live Stripe onboarding pilot is owner-approved. Controlled customer-by-customer Clover cutovers may now be scheduled.'
+      ? (approvedEvidence && approvedEvidence.controlledTest
+          ? 'The owner-approved controlled low-dollar live Stripe pilot completed the full customer, vehicle handoff, and pickup-day autopay lifecycle. Its test money stays outside business revenue, and controlled customer-by-customer cutovers may now be scheduled.'
+          : 'One complete live Stripe onboarding pilot is owner-approved. Controlled customer-by-customer Clover cutovers may now be scheduled.')
       : candidate && candidate.ready
-        ? 'A complete Stripe onboarding pilot is ready for owner approval. Clover cutovers remain locked until the owner confirms this exact file.'
-        : 'Complete one real Stripe onboarding from online vehicle through pickup, receipts, and dispute-evidence readiness before migrating any Clover customer.',
+        ? (candidate.controlledTest
+            ? 'The controlled low-dollar live Stripe pilot completed the full customer workflow and is ready for owner approval. Its capped test payments remain outside real revenue.'
+            : 'A complete Stripe onboarding pilot is ready for owner approval. Clover cutovers remain locked until the owner confirms this exact file.')
+        : candidate && candidate.controlledTest
+          ? 'Complete the dedicated low-dollar live Stripe test through insurance, physical pickup, active pickup-day autopay, receipts, and dispute-evidence readiness.'
+          : 'Complete one real Stripe onboarding from online vehicle through pickup, receipts, and dispute-evidence readiness before migrating any Clover customer.',
     error: approved ? '' : candidate && candidate.missing.length ? candidate.missing.join(', ') : 'No completed Stripe onboarding pilot candidate was found.'
   };
 }
@@ -10774,6 +10808,8 @@ function controlledStripePilotSelection(data) {
     const vin = String(publicVehicle && publicVehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
     const plate = String(publicVehicle && publicVehicle.plate || linkedVehicle && (linkedVehicle.plate || linkedVehicle.stock) || '').trim();
     const vehicleTitle = publicVehicle ? nativeSite.vehicleTitle(publicVehicle) : String(application.vehicle || '').trim();
+    const controlledTest = controlledStripePilotTestVehicle(publicVehicle);
+    const controlledTestPricing = controlledStripePilotTestPricing({ weeklyPayment, downPayment });
     const blockers = [];
     if (/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || ''))) blockers.push('Application is denied, removed, cancelled, or archived.');
     if (!String(application.name || '').trim()) blockers.push('Applicant name is missing.');
@@ -10785,9 +10821,10 @@ function controlledStripePilotSelection(data) {
     else if (!controlledStripePilotVinReady(vin)) blockers.push('Vehicle VIN must be the complete real 17-character VIN before a live Stripe pilot.');
     if (!plate) blockers.push('Vehicle tag/plate is missing.');
     else if (!controlledStripePilotPlateReady(plate)) blockers.push('Vehicle tag/plate must be a real assigned identifier, not a test or placeholder value.');
-    if (publicVehicle && !controlledStripePilotVehicleTitleReady(vehicleTitle)) blockers.push('Vehicle year, make, and model must identify a real online vehicle before a live Stripe pilot.');
+    if (publicVehicle && !controlledTest && !controlledStripePilotVehicleTitleReady(vehicleTitle)) blockers.push('Vehicle year, make, and model must identify a real online vehicle before a live Stripe pilot.');
     if (!Number.isFinite(weeklyPayment) || weeklyPayment <= 0) blockers.push('Locked weekly payment is missing.');
     if (!Number.isFinite(downPayment) || downPayment < 0) blockers.push('Locked nonrefundable deposit is missing.');
+    if (controlledTest && !controlledTestPricing.ready) blockers.push('Controlled Stripe test pricing must be $0-$5 down, $0.01-$5 weekly, and no more than $10 total.');
     if (applicationSessions.length > 1) blockers.push('More than one active onboarding session exists for this application.');
     if (competingSession) blockers.push('This vehicle is already in another active onboarding file.');
     if (publicVehicle && publicVehicle.heldApplicationId && String(publicVehicle.heldApplicationId) !== applicationId) blockers.push('This vehicle is held for another application.');
@@ -10810,6 +10847,7 @@ function controlledStripePilotSelection(data) {
       onboardingStatus: session ? String(session.status || 'Onboarding started') : 'Not started',
       paymentProvider: normalizedPaymentProvider(session && session.paymentProvider || WOA_ONBOARDING_PAYMENT_PROVIDER),
       identityProvider: normalizedIdentityProvider(session && session.identityProvider || IDENTITY_PROVIDER),
+      controlledTest,
       eligible,
       action: session ? 'continue' : 'prepare',
       blockers,
@@ -18478,6 +18516,7 @@ function ensurePaymentReceiptDocument(data, payment = {}, details = {}) {
     source: payment.source || details.source || document.source || providerName + ' verified payment',
     privateArtifactRequired: true,
     privateArtifactKind: 'payment_receipt',
+    controlledStripePilotTest: payment.controlledStripePilotTest === true,
     privateArtifactStatus: document.storageKey ? 'Stored encrypted' : (document.privateArtifactStatus || 'Pending secure storage')
   });
   if (!existing) data.documents.unshift(document);
@@ -18735,7 +18774,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   let payment = data.payments.find(row => row.paymentRequestId === request.id);
   if (!payment) {
-    payment = { id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' };
+    payment = { id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', controlledStripePilotTest: request.controlledStripePilotTest === true, paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' };
     data.payments.unshift(payment);
   }
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
@@ -18743,6 +18782,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
     recurring.status = request.onboardingSessionId ? 'Card linked - onboarding payments' : 'Active';
     recurring.tone = 'good';
     recurring.lastPaymentAt = request.paidAt;
+    if (request.controlledStripePilotTest === true) recurring.controlledStripePilotTest = true;
   }
   ensurePaymentReceiptDocument(data, payment, request);
   if (request.onboardingSessionId) {
@@ -21418,6 +21458,11 @@ const server = http.createServer(async (req, res) => {
           onboardingReturnUrl: returnUrl,
           notes: 'Customer authorized card on file and weekly autopay anchored to pickup date ' + session.requestedPickupDate + '.'
         });
+        if (controlledStripePilotTestVehicle(vehicle)) {
+          Object.assign(setup.request, { controlledStripePilotTest: true });
+          Object.assign(setup.autopay, { controlledStripePilotTest: true });
+          Object.assign(session, { controlledStripePilotTest: true });
+        }
         Object.assign(session, {
           autopayConsentAt: consentAt,
           autopayConsentIp: requestIp(req),
@@ -21500,6 +21545,7 @@ const server = http.createServer(async (req, res) => {
           notes: label + ' for ' + application.name + ' - ' + nativeSite.vehicleTitle(vehicle),
           onboardingReturnUrl: returnUrl
         });
+        if (controlledStripePilotTestVehicle(vehicle)) request.controlledStripePilotTest = true;
         data.paymentRequests.unshift(request);
         session.status = label + ' checkout opened';
         try {
@@ -23756,6 +23802,9 @@ const server = http.createServer(async (req, res) => {
       onboarding.ensureCollections(data);
       const existing = data.onlineVehicles.find(row => row.id === payload.id) || null;
       if (existing && !rowVisibleToUserOrganization(existing, user)) return json(res, 403, { ok: false, error: 'That vehicle belongs to another company.' });
+      const requestedControlledTest = payload.stripePilotTestOnly === true || payload.stripePilotTestOnly === 'true' || payload.stripePilotTestOnly === 1 || payload.stripePilotTestOnly === undefined && existing && existing.stripePilotTestOnly === true;
+      if (requestedControlledTest && !isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can create or change the controlled Stripe test listing.' });
+      if (existing && existing.stripePilotTestOnly === true && !isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can edit the controlled Stripe test listing.' });
       const requestedPlatformVehicleId = String(payload.platformVehicleId || existing && existing.platformVehicleId || '');
       const duplicateLink = requestedPlatformVehicleId && data.onlineVehicles.find(row => row.id !== (existing && existing.id || payload.id) && row.platformVehicleId === requestedPlatformVehicleId);
       if (duplicateLink) return json(res, 409, { ok: false, error: 'That internal fleet car is already connected to another online vehicle record.' });
@@ -23763,6 +23812,13 @@ const server = http.createServer(async (req, res) => {
       if (payload.published === true && linked && /rented|active contract|assigned|removed/i.test(String(linked.status || ''))) return json(res, 409, { ok: false, error: 'Assigned or rented vehicles cannot be published online.' });
       const clean = cleanOnlineVehiclePayload({ ...payload, organizationId: existing && existing.organizationId || userOrganizationId(user) }, existing);
       clean.organizationId = existing && existing.organizationId || userOrganizationId(user);
+      if (clean.stripePilotTestOnly) {
+        const pricing = controlledStripePilotTestPricing(clean);
+        if (!pricing.ready) return json(res, 409, { ok: false, error: 'Controlled Stripe test pricing must be $0-$5 down, $0.01-$5 weekly, and no more than $10 total.' });
+        if (!linked) return json(res, 409, { ok: false, error: 'Choose the exact linked internal fleet car before saving a controlled Stripe test. The test must complete the normal vehicle pickup and assignment lifecycle.' });
+        clean.published = false;
+        clean.availability = 'Controlled Stripe test';
+      }
       if (linked) {
         clean.platformVehicleId = linked.id;
         clean.vin = clean.vin || linked.vin || '';
@@ -23775,7 +23831,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (existing) Object.assign(existing, clean);
       else data.onlineVehicles.unshift(clean);
-      appendAuditLog(data, user, existing ? 'Online vehicle updated' : 'Online vehicle created', [clean.title, clean.published ? 'Published' : 'Draft', moneyText(clean.weeklyPayment) + ' weekly', moneyText(clean.downPayment) + ' down']);
+      appendAuditLog(data, user, existing ? 'Online vehicle updated' : 'Online vehicle created', [clean.title, clean.stripePilotTestOnly ? 'Controlled Stripe test only' : clean.published ? 'Published' : 'Draft', moneyText(clean.weeklyPayment) + ' weekly', moneyText(clean.downPayment) + ' down']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, existing ? 200 : 201, { ok: true, vehicle: clean });
@@ -25296,7 +25352,7 @@ const server = http.createServer(async (req, res) => {
           controlledPilotApprovedBy: String(user.name || user.username || 'Owner'),
           controlledPilotApprovedLivemode: !STRIPE_ISOLATED_PROVIDER_TEST_MODE
         });
-        appendAuditLog(data, user, STRIPE_ISOLATED_PROVIDER_TEST_MODE ? 'Stripe onboarding test pilot approved' : 'Live Stripe onboarding pilot approved', [evidence.customer, evidence.vehicle, evidence.vin, evidence.plate, sessionId]);
+        appendAuditLog(data, user, evidence.controlledTest ? 'Controlled low-dollar live Stripe pilot approved' : STRIPE_ISOLATED_PROVIDER_TEST_MODE ? 'Stripe onboarding test pilot approved' : 'Live Stripe onboarding pilot approved', [evidence.customer, evidence.vehicle, evidence.vin, evidence.plate, sessionId]);
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
       }
@@ -25305,7 +25361,9 @@ const server = http.createServer(async (req, res) => {
         approved: true,
         alreadyApproved,
         controlledStripePilot: controlledStripePilotEvidence(data, { sessionId, liveRequired: !STRIPE_ISOLATED_PROVIDER_TEST_MODE }),
-        message: STRIPE_ISOLATED_PROVIDER_TEST_MODE
+        message: evidence.controlledTest
+          ? 'The controlled low-dollar live Stripe pilot is approved. It did not assign a vehicle, activate autopay, or change Clover. Controlled customer-by-customer cutovers are now unlocked.'
+          : STRIPE_ISOLATED_PROVIDER_TEST_MODE
           ? 'The complete isolated Stripe onboarding test pilot is approved. Production still requires one real live-mode pilot.'
           : 'The complete live Stripe onboarding pilot is approved. Controlled customer-by-customer Clover cutovers are now unlocked.'
       });
