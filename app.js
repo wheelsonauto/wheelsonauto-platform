@@ -4446,8 +4446,8 @@ async function integratedSubmitPickupCompletion(button,alreadyLocked){
 }
 
 function hydrateIntegratedPickupActions(){
-  document.querySelectorAll('[data-action="integrated-open-pickup-completion"]').forEach(function(button){if(button.dataset.pickupBound==='1')return;button.dataset.pickupBound='1';button.addEventListener('click',function(event){event.preventDefault();event.stopImmediatePropagation();event.stopPropagation();integratedOpenPickupCompletion(button.dataset.id)},true)});
-  document.querySelectorAll('[data-action="integrated-save-pickup-completion"]').forEach(function(button){if(button.dataset.pickupBound==='1')return;button.dataset.pickupBound='1';button.addEventListener('click',function(event){event.preventDefault();event.stopImmediatePropagation();event.stopPropagation();integratedSubmitPickupCompletion(button,false)},true)})
+  document.querySelectorAll('[data-action="integrated-open-pickup-completion"]').forEach(function(button){if(button.dataset.pickupBound==='1')return;button.dataset.pickupBound='1';button.onclick=function(event){event.preventDefault();event.stopPropagation();integratedOpenPickupCompletion(button.dataset.id)}});
+  document.querySelectorAll('[data-action="integrated-save-pickup-completion"]').forEach(function(button){if(button.dataset.pickupBound==='1')return;button.dataset.pickupBound='1';button.onclick=function(event){event.preventDefault();event.stopPropagation();integratedSubmitPickupCompletion(button,false)}})
 }
 
 function integratedPickupCard(appointment){
