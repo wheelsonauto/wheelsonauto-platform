@@ -33,6 +33,7 @@ async function main() {
     '/api/payment-provider/duplicate-review/resolve',
     '/api/integrations/payments/disputes/action',
     '/api/verification/document',
+    '/api/onboarding/contracts/security-probe-does-not-exist',
     '/api/contract-template',
     '/api/woa-autopay/status',
     '/api/woa-autopay/run',
@@ -46,6 +47,7 @@ async function main() {
   ].forEach(route => {
     assert.ok(securityProbeSource.includes("'" + route + "'"), 'Live security probe must cover the launch-critical boundary ' + route + '.');
   });
+  assert.ok(securityProbeSource.includes("'/customer/contracts/security-probe-does-not-exist'"), 'Live security probe must verify that signed-agreement pages redirect anonymous customers to customer login.');
 
   assert.equal(isTransientRenderRoutingError(response(502, 'dynamic-paid-error')), true);
   assert.equal(isTransientRenderRoutingError(response(503, 'service-error')), true);

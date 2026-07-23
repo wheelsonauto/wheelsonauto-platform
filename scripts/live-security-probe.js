@@ -115,6 +115,7 @@ async function main() {
   await expectStatus('/api/system/recovery/snapshots', 401, 'Owner recovery history');
   await expectStatus('/api/system/recovery/restore', 401, 'Owner recovery restore', 'POST');
   await expectStatus('/api/onboarding/documents/security-probe-does-not-exist', 401, 'Private identity document');
+  await expectStatus('/api/onboarding/contracts/security-probe-does-not-exist', 401, 'Private signed agreement');
   await expectStatus('/api/onboarding/signatures/security-probe-does-not-exist', 401, 'Private signature');
   await expectStatus('/api/contract-template', 401, 'Editable contract template');
   for (const [method, pathname, label] of anonymousProtectedRoutes) {
@@ -134,7 +135,11 @@ async function main() {
   assert.equal(customerDocument.headers.get('location'), '/customer/login', 'An unauthenticated customer document request must return to customer login.');
   assert.equal(customerDocument.headers.get('cache-control'), 'no-store', 'The customer document redirect must not be cached.');
 
-  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous access across ' + anonymousProtectedRoutes.length + ' staff/customer API boundaries, protects four public bearer-link families, and guards state, preflight, recovery, contract, identity-document, signature, and customer-document routes with hardened response headers.');
+  const customerAgreement = await expectStatus('/customer/contracts/security-probe-does-not-exist', 302, 'Customer signed agreement');
+  assert.equal(customerAgreement.headers.get('location'), '/customer/login', 'An unauthenticated customer agreement request must return to customer login.');
+  assert.equal(customerAgreement.headers.get('cache-control'), 'no-store', 'The customer agreement redirect must not be cached.');
+
+  console.log('Live security probe passed for ' + target + ': release ' + healthBody.release + ' at ' + healthBody.commit + ' rejects anonymous access across ' + anonymousProtectedRoutes.length + ' staff/customer API boundaries, protects four public bearer-link families, and guards state, preflight, recovery, contract, signed-agreement, identity-document, signature, and customer-document routes with hardened response headers.');
 }
 
 main().catch(error => {
