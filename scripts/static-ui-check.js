@@ -498,9 +498,10 @@ const criticalActionRequirements = [
   ['Verification review flow', 'integrated-review-verification', ['/api/verification/cases/review', 'caseId', 'decision:', 'await refreshData(true)']],
   ['Accounting ledger rebuild flow', 'integrated-rebuild-accounting', ['/api/accounting/ledger/rebuild', 'await refreshData(true)', '/api/accounting/ledger']],
   ['Pickup calendar preparation flow', 'integrated-prepare-pickup', ['/api/pickups/', '/calendar', 'await refreshData(true)', '/api/pickups/calendar']],
-  ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['/api/pickups/', '/complete', 'integratedPickupActualDate', 'actualPickupDate:', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']]
+  ['Physical pickup completion flow', 'integrated-save-pickup-completion', ['integratedSubmitPickupCompletion(button,true)']]
 ];
 criticalActionRequirements.forEach(([label, action, required]) => assertIncludes(label, actionSlice(action), required));
+assertIncludes('Direct physical pickup implementation', app, ['integratedSubmitPickupCompletion(this,false)', "event.stopPropagation();integratedOpenPickupCompletion(this.dataset.id)", '/api/pickups/', '/complete', 'integratedPickupActualDate', 'actualPickupDate:', 'integratedPickupMileage', 'integratedPickupConfirmed', 'await refreshData(true)']);
 assertIncludes('Clover refund eligibility guard', app, ['function cloverPaymentRefundable(row)', 'provider&&paid&&remaining>0', 'isOwner()&&!needsMatch&&cloverPaymentRefundable(row)']);
 assertIncludes('Server-authoritative unmatched Clover queue', app, ['function cloverQueuePaymentKey(row)', 'forceMatch===true', "customer='Customer match needed'", 'if(!cache&&unmatchedKeys[key])return', 'serverUnmatched.map(function(row){return integratedRefundPaymentRow(row,true)}', 'integratedRefundPaymentRow(row,false)']);
 assertIncludes('Clover reconciliation Operations repaint target', app, ["integrationScheduleCache('clover','/api/integrations/clover/reconciliation','Operations')", "integrationLoadCache('clover','/api/integrations/clover/reconciliation','Operations')"]);
