@@ -851,21 +851,30 @@ validation rejection returns the case to evidence review with a new revision
 key available after correction. Only signed Stripe dispute webhooks can mark a
 case won or lost; neither the owner UI nor Star can manufacture that outcome.
 
-Run one complete controlled test record:
+Run one complete owner-controlled live-mode pilot on one exact published vehicle.
+The owner or another informed pilot customer may use the flow, but the record
+must contain a real inventory vehicle, VIN/tag, live Stripe card authorization,
+and live Stripe Identity result. A fake VIN, placeholder car, Stripe test-mode
+event, or synthetic paid record can exercise code but cannot clear production.
 
-1. Choose an online vehicle.
-2. Submit an application.
-3. Complete license/selfie verification and insurance upload.
-4. Approve as admin.
-5. Save a card through Stripe SetupIntent/Checkout.
-6. Charge the deposit and first weekly payment as separate transactions.
-7. E-sign the agreement.
-8. Schedule pickup within the allowed window.
-9. Confirm the weekly schedule is anchored to pickup day.
-10. Check the payment, customer, vehicle, VIN/tag, receipt, contract, and
-    dispute-evidence record in the admin and customer views.
+1. Choose one real published online vehicle and submit the application.
+2. Confirm the requested pickup slot and pickup-day autopay consent.
+3. Capture the preliminary license front/back and live selfie-with-license.
+4. E-sign the exact versioned vehicle agreement.
+5. Save the card through Stripe SetupIntent/Checkout without taking payment.
+6. Complete the combined staff review and explicitly lock that exact file as
+   the first live pilot.
+7. Complete the paid Stripe Identity license-and-selfie verification.
+8. Charge the nonrefundable deposit and first weekly payment as two separately
+   confirmed transactions with separate receipts.
+9. Upload VIN-specific insurance or choose staff help, then complete the
+   physical pickup and mileage handoff.
+10. Confirm the weekly schedule is anchored to pickup day and verify the
+    customer, vehicle, VIN/tag, receipts, contract, and dispute-evidence packet
+    in both the admin and customer views.
 
-Only use real customer funds after the test has a clear, written result.
+Do not migrate or disable any existing Clover subscription until this exact
+live pilot has a clear owner-approved result.
 
 ## 5. Controlled Clover-to-Stripe Migration
 
@@ -1097,11 +1106,15 @@ production gate. A known high-severity runtime dependency vulnerability blocks
 Render's checks-passed deployment path until the dependency is corrected and
 the full regression suite passes again.
 
-For Stripe, the final evidence comes from the controlled onboarding record:
-complete the test application, Stripe Identity verification, card setup,
-separate deposit and first-week charges, e-sign, and pickup scheduling. Keep
-the record clearly labeled as a controlled test and do not use a real customer
-until its receipts, vehicle context, and webhook evidence are all visible.
+For Stripe, the final evidence comes from one owner-controlled live-mode
+onboarding pilot on an exact published vehicle: complete the application,
+preliminary screening, e-sign, no-charge card setup, combined staff approval,
+Stripe Identity verification, separate deposit and first-week charges,
+VIN-specific insurance choice, and physical pickup. Test-mode or placeholder
+records remain useful regression fixtures, but they never satisfy the live
+pilot gate. Do not migrate an existing Clover customer until the live pilot's
+receipts, vehicle context, weekly anchor, signed webhook evidence, and dispute
+packet are all visible and owner-approved.
 
 ## 7. Enable the Launch Guard Last
 

@@ -1,8 +1,12 @@
 'use strict';
 
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { buildProductionReadinessAudit } = require('../production-readiness-audit');
 const { auditPasses, providerProofOnly } = require('./production-readiness-audit');
+
+const launchRunbook = fs.readFileSync(path.resolve(__dirname, '..', 'docs', 'production-stripe-launch.md'), 'utf8');
 
 function readyInfrastructure() {
   return {
@@ -157,5 +161,21 @@ const pilotSerialized = JSON.stringify(pilotBlocked);
 ['pilot_private_session', 'Pilot Private Customer', 'Live Identity', 'First weekly payment'].forEach(identifier => {
   assert(!pilotSerialized.includes(identifier), 'The aggregate pilot audit must not expose customer, session, or checklist details.');
 });
+
+assert.match(
+  launchRunbook,
+  /one complete owner-controlled live-mode pilot on one exact published vehicle/i,
+  'The production runbook must describe the same exact live-mode pilot required by the launch gate.'
+);
+assert.doesNotMatch(
+  launchRunbook,
+  /complete the test application[\s\S]{0,300}do not use a real customer/i,
+  'The production runbook must not direct the owner toward a synthetic record that cannot clear the live pilot gate.'
+);
+assert.match(
+  launchRunbook,
+  /Test-mode evidence can exercise the workflow but never satisfies\s+the production\s+live-mode gate/i,
+  'The production runbook must keep test-mode evidence distinct from live launch clearance.'
+);
 
 console.log('Production readiness audit check passed: the default audit requires owner-approved live pilot clearance, provider-only mode is explicit, and aggregate evidence remains read-only and private.');
