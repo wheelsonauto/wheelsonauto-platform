@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const nativeSite = require('../native-site');
 
 const root = path.resolve(__dirname, '..');
 const adminPin = '1234';
@@ -138,26 +139,42 @@ async function main() {
     const applyPage = await request(base, 'GET', '/apply');
     assert(applyPage.status === 302 && applyPage.location === '/inventory', 'Public application entry point should route to native inventory.');
 
-    const publicApplication = await request(base, 'POST', '/api/public/applications', {
-      json: {
-        onlineVehicleId: onlineVehicle.json.vehicle.id,
-        firstName: 'Smoke',
-        lastName: 'Applicant',
+    const applicationPayload = {
+      onlineVehicleId: onlineVehicle.json.vehicle.id,
+      firstName: 'Smoke',
+      lastName: 'Applicant',
+      phone: '3135550111',
+      email: 'smoke-applicant@example.com',
+      address: '5150 NJ-42',
+      city: 'Blackwood',
+      state: 'NJ',
+      postalCode: '08012',
+      dateOfBirth: '1990-01-15',
+      driverLicenseId: 'D12345678901234',
+      driverLicenseExpires: '2030-01-15',
+      employer: 'Smoke Test Employer',
+      income: 4500,
+      applicationConsent: true,
+      insurancePickupConsent: true
+    };
+    const unauthenticatedApplication = await request(base, 'POST', '/api/public/applications', { json: applicationPayload });
+    assert(unauthenticatedApplication.status === 401 && unauthenticatedApplication.json.code === 'customer_login_required', 'A public application must require one signed customer account before saving.');
+    const firstApplyPath = '/apply/' + nativeSite.publicVehicleSlug(onlineVehicle.json.vehicle);
+    const customerRegistration = await request(base, 'POST', '/customer/register', {
+      form: {
+        next: firstApplyPath,
+        name: 'Smoke Applicant',
         phone: '3135550111',
         email: 'smoke-applicant@example.com',
         password: 'SmokeApplicant123!',
-        address: '5150 NJ-42',
-        city: 'Blackwood',
-        state: 'NJ',
-        postalCode: '08012',
-        dateOfBirth: '1990-01-15',
-        driverLicenseId: 'D12345678901234',
-        driverLicenseExpires: '2030-01-15',
-        employer: 'Smoke Test Employer',
-        income: 4500,
-        applicationConsent: true,
-        insurancePickupConsent: true
+        confirmPassword: 'SmokeApplicant123!'
       }
+    });
+    assert(customerRegistration.status === 303 && customerRegistration.location === firstApplyPath && customerRegistration.cookie.includes('woa_customer_session='), 'Customer account registration must return to the selected vehicle application.');
+    const registeredCustomerCookie = customerRegistration.cookie.split(';')[0];
+    const publicApplication = await request(base, 'POST', '/api/public/applications', {
+      cookie: registeredCustomerCookie,
+      json: applicationPayload
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
     const applicationState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
@@ -168,7 +185,7 @@ async function main() {
     const availableFleetVehicle = (applicationState.json.vehicles || []).find(vehicle => vehicle.id === duplicateSmokeVehicles[0].id);
     assert(savedApplication && savedApplication.stage === 'Onboarding' && savedApplication.onlineVehicleId === onlineVehicle.json.vehicle.id, 'Native public application is missing its selected online vehicle and automatic setup state in admin data.');
     assert(savedApplication.vehicleId === duplicateSmokeVehicles[0].id && savedPortal, 'Native application must connect the fleet car and customer portal draft immediately.');
-    assert(savedSession && /\/onboard\//.test(String(publicApplication.json.onboardingUrl || '')), 'Native application must create and return one secure onboarding session immediately.');
+    assert(savedSession && /\/customer\/onboarding\//.test(String(publicApplication.json.onboardingUrl || '')), 'Native application must create and return one account-bound onboarding session immediately.');
     assert(availableOnlineVehicle && availableOnlineVehicle.published === true && /available/i.test(String(availableOnlineVehicle.availability || '')) && !availableOnlineVehicle.heldApplicationId && availableFleetVehicle && /^ready$/i.test(String(availableFleetVehicle.status || '')) && !availableFleetVehicle.heldApplicationId, 'Applying, signing, or saving a card must not hold or hide a vehicle before a required payment is verified.');
 
     const existingAccountPasswordHash = savedPortal.passwordHash;
@@ -207,8 +224,8 @@ async function main() {
       insurancePickupConsent: true
     };
     const unauthenticatedExistingApplication = await request(base, 'POST', '/api/public/applications', { json: existingApplicationPayload });
-    assert(unauthenticatedExistingApplication.status === 409 && unauthenticatedExistingApplication.json.code === 'existing_customer_login_required', 'An existing customer must be sent to login instead of creating a replacement portal password.');
-    const existingApplyPath = '/apply/smoke-existing-customer-vehicle-stomer';
+    assert(unauthenticatedExistingApplication.status === 401 && unauthenticatedExistingApplication.json.code === 'customer_login_required', 'An existing customer must be sent to login instead of creating a replacement portal password.');
+    const existingApplyPath = '/apply/' + nativeSite.publicVehicleSlug(existingCustomerVehicle.json.vehicle);
     const customerLogin = await request(base, 'POST', '/customer/login', {
       form: { username: 'smoke-applicant@example.com', password: 'SmokeApplicant123!', next: existingApplyPath }
     });
