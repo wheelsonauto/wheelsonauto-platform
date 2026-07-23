@@ -552,6 +552,9 @@ async function main() {
 
     const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510, notes: 'Keys and vehicle delivered after identity and insurance checks.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Lifecycle Full Coverage Insurance', insurancePolicyNumber: 'FULL-COVERAGE-918' } });
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Physical handoff must activate the vehicle, customer file, contract, and Stripe autopay together.');
+    const postHandoffAuditState = await readSaved(dataDir);
+    const postHandoffAuditSession = postHandoffAuditState.onboardingSessions.find(row => row.id === onboardingId);
+    assert(postHandoffAuditSession.stripePilotAuditStatus === 'Ready for owner approval' && /^[a-f0-9]{64}$/.test(postHandoffAuditSession.stripePilotEvidenceHash || '') && postHandoffAuditSession.stripePilotAuditMissing.length === 0, 'The exact physical handoff must automatically seal a complete pilot evidence audit for owner review.');
     const duplicateHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510 } });
     assert(duplicateHandoff.status === 200 && duplicateHandoff.json.alreadyCompleted === true, 'Repeated pickup confirmation must be idempotent.');
 
@@ -736,7 +739,7 @@ async function main() {
     const controlledPilot = controlledPreflight.json && controlledPreflight.json.controlledStripePilot;
     const controlledLifecycleChecks = new Map((controlledPilot && controlledPilot.candidate && controlledPilot.candidate.checks || []).map(row => [row.key, row.ready]));
     assert(controlledPreflight.status === 200 && controlledPilot.candidate.controlledTest === true && controlledPilot.candidate.depositAmount === 1 && controlledPilot.candidate.firstWeekAmount === 1, 'The live preflight must identify the exact capped $1 pilot and locked amounts: ' + JSON.stringify(controlledPilot));
-    ['insurance', 'signature', 'pickup', 'weekly_anchor', 'customer_contract', 'dispute_packet'].forEach(key => assert(controlledLifecycleChecks.get(key) === true, 'The controlled $1 pilot must complete the normal ' + key + ' lifecycle gate.'));
+    ['insurance', 'signature', 'pickup', 'weekly_anchor', 'provider_exclusivity', 'customer_contract', 'dispute_packet'].forEach(key => assert(controlledLifecycleChecks.get(key) === true, 'The controlled $1 pilot must complete the normal ' + key + ' lifecycle gate.'));
     const completedControlledState = await readSaved(dataDir);
     const completedControlledRecurring = completedControlledState.recurringPayments.find(row => row.id === recurring.id);
     const completedControlledPickup = completedControlledState.pickupAppointments.find(row => row.onboardingSessionId === onboardingId);
@@ -750,6 +753,7 @@ async function main() {
     assert(!controlledLedger.some(row => completedControlledState.payments.filter(payment => payment.onboardingSessionId === onboardingId).some(payment => payment.id === row.sourceId)), 'Controlled $1 payments must stay out of accounting revenue while the lifecycle remains real.');
     const controlledApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
     assert(controlledApproval.status === 200 && controlledApproval.json.controlledStripePilot.approved === true && controlledApproval.json.controlledStripePilot.candidate.controlledTest === true, 'Owner approval must accept the complete real-lifecycle $1 pilot evidence.');
+    assert(/vehicle handoff.*pickup-day autopay.*provider-exclusivity/i.test(controlledApproval.json.message || ''), 'Controlled pilot approval must accurately describe the real vehicle assignment and autopay proof instead of claiming those actions did not occur.');
 
     const final = await readSaved(dataDir);
     assert(final.claims.filter(row => row.stripeDisputeId === 'dp_test_first_week').length === 1, 'Repeated dispute webhooks must never duplicate claims.');

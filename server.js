@@ -10884,7 +10884,23 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
   const disputePacket = firstWeekPayment && recurring
     ? stripeDisputeEvidencePacket(data, virtualClaim, firstWeekPayment, recurring)
     : { missing: ['Exact Stripe payment'], proof: [], contractId: '', signatureId: '', pickupAppointmentId: '', priorPaymentIds: [] };
-  const customer = application && (data.customers || []).find(row => row.applicationId === application.id || normKey(row.name || row.customer) === normKey(exactCustomer));
+  const customer = application ? onboardingOwnedRecord(data.customers, application, session, recurring) : null;
+  const applicationPhone = phoneKey(application && application.phone);
+  const applicationEmail = emailKey(application && application.email);
+  const linkedActiveCloverRows = application ? allRecurringRows(data).filter(row => {
+    if (row === recurring || normalizedPaymentProvider(row.paymentProvider || row.provider || 'clover') !== 'clover') return false;
+    if (/removed|history|ended|cancel/i.test(String(row.status || ''))) return false;
+    const exactReference = !!(
+      application.id && String(row.applicationId || '') === String(application.id)
+      || session && session.id && String(row.onboardingSessionId || '') === String(session.id)
+      || application.customerAccountId && String(row.customerAccountId || '') === String(application.customerAccountId)
+    );
+    const rowPhone = phoneKey(row.phone);
+    const rowEmail = emailKey(row.email);
+    const contactReference = !!(applicationPhone && rowPhone === applicationPhone || applicationEmail && rowEmail === applicationEmail);
+    const conflictingContact = !!(applicationPhone && rowPhone && rowPhone !== applicationPhone || applicationEmail && rowEmail && rowEmail !== applicationEmail);
+    return exactReference || contactReference && !conflictingContact;
+  }) : [];
   const insuranceVerified = !!(session
     && session.insuranceReleaseStatus === 'Approved'
     && appointment
@@ -10912,6 +10928,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     ['receipts', (depositRequired ? 'Two' : 'One') + ' exact customer and vehicle receipt' + (depositRequired ? 's' : '') + ' stored privately', new Set(receiptMatches.map(row => row.id)).size === requiredPilotPayments.length && receiptStorageReady],
     ['pickup', 'Physical pickup completed by staff', completedPickup],
     ['weekly_anchor', 'Weekly autopay anchored one week after pickup', !!(recurring && appointment && recurring.autopayAnchorDate === appointment.date && recurring.nextRun === expectedNextRun && recurring.paymentDay === appointment.weekday && recurring.autoChargeEnabled === true && /active/i.test(String(recurring.status || '')))],
+    ['provider_exclusivity', 'Pilot has one Stripe schedule and no active Clover billing path', !!(recurring && normalizedPaymentProvider(recurring.paymentProvider || recurring.provider) === 'stripe' && !String(recurring.cloverPaymentSource || recurring.paymentSourceId || '').trim() && linkedActiveCloverRows.length === 0)],
     ['customer_contract', 'Customer file and signed contract linked to the same vehicle', !!(customer && contract && contract.signatureId && appointment && contract.onboardingSessionId === appointment.onboardingSessionId && String(customer.vehicleId || '') === String(exactVehicleId || '') && String(contract.vehicleId || '') === String(exactVehicleId || ''))]
   ].map(row => ({ key: row[0], label: row[1], ready: row[2] }));
   checks.push({ key: 'dispute_packet', label: 'Complete dispute evidence packet can be generated', ready: !!(disputePacket && Array.isArray(disputePacket.missing) && disputePacket.missing.length === 0) });
@@ -10951,6 +10968,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     pickupCompletedAt: appointment && appointment.completedAt || '',
     autopayAnchorDate: recurring && recurring.autopayAnchorDate || '',
     nextRun: recurring && recurring.nextRun || '',
+    activeCloverBillingIds: linkedActiveCloverRows.map(row => String(row.id || row.subscriptionId || '')).filter(Boolean).sort(),
     disputeProof: (disputePacket.proof || []).map(row => [row.key, !!row.ready]),
     checks: checks.map(row => [row.key, !!row.ready])
   };
@@ -11577,6 +11595,18 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (insuranceDocument) Object.assign(insuranceDocument, { status: 'Verified - active at pickup', verifiedAt: now, verifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff' });
   if (account) Object.assign(account, { portalStage: 'Active customer', recurringPaymentId: recurring && recurring.id || account.recurringPaymentId || '', vehicleId: appointment.vehicleId || account.vehicleId || '', updatedAt: now });
   if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });
+  const pilotLock = controlledStripePilotCandidateLock(data);
+  if (pilotLock.onboardingSessionId === session.id && pilotLock.applicationId === application.id) {
+    const pilotAudit = controlledStripePilotSessionEvidence(data, session, { liveRequired: !STRIPE_ISOLATED_PROVIDER_TEST_MODE });
+    const pilotAuditPatch = {
+      stripePilotAuditStatus: pilotAudit.ready ? 'Ready for owner approval' : 'Needs review',
+      stripePilotAuditAt: now,
+      stripePilotEvidenceHash: pilotAudit.evidenceHash,
+      stripePilotAuditMissing: pilotAudit.missing.slice(0, 20)
+    };
+    Object.assign(appointment, pilotAuditPatch);
+    Object.assign(session, pilotAuditPatch);
+  }
   return { appointment, vehicle, recurring, customer, contract, application, session, account, onlineVehicle, alreadyCompleted: false };
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
@@ -25871,7 +25901,7 @@ const server = http.createServer(async (req, res) => {
         alreadyApproved,
         controlledStripePilot: controlledStripePilotEvidence(data, { sessionId, liveRequired: !STRIPE_ISOLATED_PROVIDER_TEST_MODE }),
         message: evidence.controlledTest
-          ? 'The controlled low-dollar live Stripe pilot is approved. It did not assign a vehicle, activate autopay, or change Clover. Controlled customer-by-customer cutovers are now unlocked.'
+          ? 'The controlled low-dollar live Stripe pilot is approved after the complete customer, vehicle handoff, pickup-day autopay, receipt, dispute-evidence, and provider-exclusivity audit. Its capped test payments remain outside business revenue, and controlled customer-by-customer cutovers are now unlocked.'
           : STRIPE_ISOLATED_PROVIDER_TEST_MODE
           ? 'The complete isolated Stripe onboarding test pilot is approved. Production still requires one real live-mode pilot.'
           : 'The complete live Stripe onboarding pilot is approved. Controlled customer-by-customer Clover cutovers are now unlocked.'
