@@ -665,23 +665,53 @@ const CRITICAL_RESOURCE_COLLECTIONS = Object.freeze([
 
 function activeOnboardingVehicleHoldConflicts(state = {}) {
   const sessions = Array.isArray(state.onboardingSessions) ? state.onboardingSessions : [];
-  const active = sessions.filter(session => {
-    const vehicleId = String(session && (session.onlineVehicleId || session.vehicleId) || '').trim();
-    if (!vehicleId) return false;
-    return !/completed|cancelled|expired|replaced|picked up/i.test(String(session && session.status || ''));
+  const applications = Array.isArray(state.applications) ? state.applications : [];
+  const paymentRequests = Array.isArray(state.paymentRequests) ? state.paymentRequests : [];
+  const onlineVehicles = Array.isArray(state.onlineVehicles) ? state.onlineVehicles : [];
+  const sessionsById = new Map(sessions.map(session => [String(session && session.id || ''), session]));
+  const applicationsById = new Map(applications.map(application => [String(application && application.id || ''), application]));
+  const paidStatus = value => {
+    const status = String(value || '').trim().toLowerCase();
+    if (!status || /unpaid|not paid|failed|declined|cancel|incomplete|awaiting|pending/.test(status)) return false;
+    return /^paid\b/.test(status) || /success|succeeded|completed/.test(status);
+  };
+  const claims = [];
+  const addClaim = (vehicleIdValue, applicationIdValue, source) => {
+    const vehicleId = String(vehicleIdValue || '').trim();
+    const applicationId = String(applicationIdValue || '').trim();
+    if (!vehicleId || !applicationId) return;
+    claims.push({ id: rowId(source), vehicleId, applicationId });
+  };
+  paymentRequests.forEach(request => {
+    if (!paidStatus(request && request.status)) return;
+    const session = sessionsById.get(String(request.onboardingSessionId || '')) || {};
+    const applicationId = String(request.applicationId || session.applicationId || '').trim();
+    const application = applicationsById.get(applicationId) || {};
+    addClaim(request.onlineVehicleId || session.onlineVehicleId || application.onlineVehicleId || application.vehicleId, applicationId, request);
+  });
+  sessions.forEach(session => {
+    if (!session || !(session.vehicleClaimedAt || /claimed after verified payment/i.test(String(session.vehicleClaimStatus || '')))) return;
+    const application = applicationsById.get(String(session.applicationId || '')) || {};
+    addClaim(session.onlineVehicleId || application.onlineVehicleId || application.vehicleId, session.applicationId, session);
+  });
+  onlineVehicles.forEach(vehicle => {
+    addClaim(vehicle && vehicle.id, vehicle && vehicle.paymentClaimApplicationId, vehicle);
   });
   const byVehicle = new Map();
-  active.forEach(session => {
-    const vehicleId = String(session.onlineVehicleId || session.vehicleId || '').trim();
+  claims.forEach(claim => {
+    const vehicleId = claim.vehicleId;
     const rows = byVehicle.get(vehicleId) || [];
-    rows.push(session);
+    rows.push(claim);
     byVehicle.set(vehicleId, rows);
   });
-  return [...byVehicle.entries()].filter(([, rows]) => rows.length > 1).map(([vehicleId, rows]) => ({
-    vehicleId,
-    sessionIds: rows.map(row => rowId(row)).filter(Boolean),
-    applicationIds: [...new Set(rows.map(row => String(row && row.applicationId || '').trim()).filter(Boolean))]
-  }));
+  return [...byVehicle.entries()].map(([vehicleId, rows]) => {
+    const applicationIds = [...new Set(rows.map(row => row.applicationId).filter(Boolean))];
+    return {
+      vehicleId,
+      sessionIds: rows.map(row => row.id).filter(Boolean),
+      applicationIds
+    };
+  }).filter(conflict => conflict.applicationIds.length > 1);
 }
 
 function exactDuplicateCriticalResourcePlan(state = {}) {
@@ -750,7 +780,7 @@ function criticalResourceIndexRows(state = {}) {
   const holdConflicts = activeOnboardingVehicleHoldConflicts(state);
   if (holdConflicts.length) {
     const conflict = holdConflicts[0];
-    const error = new Error('Vehicle ' + conflict.vehicleId + ' has more than one active onboarding hold. Refusing an ambiguous database write.');
+    const error = new Error('Vehicle ' + conflict.vehicleId + ' has verified payment claims from more than one application. Refusing an ambiguous database write.');
     error.code = 'woa_onboarding_vehicle_hold_conflict';
     error.vehicleId = conflict.vehicleId;
     error.sessionIds = conflict.sessionIds;
