@@ -398,13 +398,11 @@ async function main() {
     assert(signature.status === 201, 'The customer must sign the immutable agreement before nonrefundable money is collected.');
 
     const card = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
-    assert(card.status === 201 && /\/setup-card\//.test(card.json.redirectUrl || ''), 'The signed file must open a Stripe card-on-file authorization.');
+    assert(card.status === 201 && /^https:\/\/checkout\.stripe\.test\//.test(card.json.redirectUrl || ''), 'The signed onboarding file must go directly to Stripe-hosted card fields after the customer authorizes card-on-file and autopay.');
     let saved = await readSaved(dataDir);
     const cardRequest = saved.cardSetupRequests.find(row => row.onboardingSessionId === onboardingId);
     const recurring = saved.recurringPayments.find(row => row.onboardingSessionId === onboardingId);
     assert(cardRequest && recurring && recurring.nextRun === plusDays(pickupDate, 7), 'Card authorization must pre-anchor the first recurring run one week after pickup.');
-    const cardCheckout = await request(server, 'POST', '/api/public/card-setup/' + cardRequest.id + '/stripe-checkout', { form: { consent: 'yes' } });
-    assert(cardCheckout.status === 303 && /^https:\/\/checkout\.stripe\.test\//.test(cardCheckout.location), 'Card entry must redirect into Stripe-hosted secure fields.');
     const setupCheckoutRequest = fakeStripe.state.requests.filter(row => row.method === 'POST' && row.pathname === '/v1/checkout/sessions').at(-1);
     const setupCheckoutForm = new URLSearchParams(setupCheckoutRequest && setupCheckoutRequest.body || '');
     assert(setupCheckoutForm.get('mode') === 'setup' && setupCheckoutForm.get('currency') === 'usd' && setupCheckoutForm.get('payment_method_types[0]') === 'card', 'Stripe card setup must create a USD, card-only hosted setup session.');
