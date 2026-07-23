@@ -405,6 +405,10 @@ async function main() {
     assert(cardRequest && recurring && recurring.nextRun === plusDays(pickupDate, 7), 'Card authorization must pre-anchor the first recurring run one week after pickup.');
     const cardCheckout = await request(server, 'POST', '/api/public/card-setup/' + cardRequest.id + '/stripe-checkout', { form: { consent: 'yes' } });
     assert(cardCheckout.status === 303 && /^https:\/\/checkout\.stripe\.test\//.test(cardCheckout.location), 'Card entry must redirect into Stripe-hosted secure fields.');
+    const setupCheckoutRequest = fakeStripe.state.requests.filter(row => row.method === 'POST' && row.pathname === '/v1/checkout/sessions').at(-1);
+    const setupCheckoutForm = new URLSearchParams(setupCheckoutRequest && setupCheckoutRequest.body || '');
+    assert(setupCheckoutForm.get('mode') === 'setup' && setupCheckoutForm.get('currency') === 'usd' && setupCheckoutForm.get('payment_method_types[0]') === 'card', 'Stripe card setup must create a USD, card-only hosted setup session.');
+    assert(!setupCheckoutForm.has('setup_intent_data[usage]'), 'Stripe Checkout setup must not send the unsupported setup_intent_data[usage] parameter that prevents hosted card fields from rendering.');
     saved = await readSaved(dataDir);
     const openedCardRequest = saved.cardSetupRequests.find(row => row.id === cardRequest.id);
     const setupMetadata = { wheelsonauto: 'true', flow: 'card_setup', cardSetupRequestId: cardRequest.id, recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, customerName: 'Stripe Lifecycle', vehicleId: 'veh-stripe-life-1', vin: '1HGCV1F30JA123456', licensePlate: 'WOA-918' };

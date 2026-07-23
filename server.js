@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-closed-onboarding-money-guard-307';
+const ASSET_VERSION = 'platform-20260722-stripe-card-fields-308';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -16401,6 +16401,7 @@ async function attachStripeCardSetupCheckout(data, request, req) {
   const customerId = await ensureStripeCustomer(data, request);
   const session = await stripe.createSetupCheckoutSession({
     mode: 'setup',
+    currency: 'usd',
     customer: customerId,
     client_reference_id: request.id,
     payment_method_types: ['card'],
@@ -16408,7 +16409,6 @@ async function attachStripeCardSetupCheckout(data, request, req) {
     customer_update: { name: 'auto', address: 'auto' },
     setup_intent_data: {
       description: ('WheelsonAuto ' + (request.frequency || 'recurring') + ' card authorization - ' + (request.customer || 'Customer')).slice(0, 500),
-      usage: 'off_session',
       metadata: stripeMetadata(request)
     },
     metadata: stripeMetadata(request),
