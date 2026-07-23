@@ -168,6 +168,36 @@ async function main() {
       stripePaymentMethodId: 'pm_timeout_1',
       stripeCardSavedAt: new Date().toISOString(),
       organizationId: 'org-wheelsonauto'
+    }, {
+      id: 'rec-cutover-failure-1',
+      customer: 'Cutover Failure Customer',
+      phone: '8565550177',
+      email: 'cutover-failure@example.com',
+      vehicle: '2020 Cutover Failure Car',
+      vehicleId: 'veh-cutover-failure-1',
+      vin: 'CUTOVERFAILUREVIN1',
+      licensePlate: 'WOA-CF1',
+      amount: 229,
+      frequency: 'Weekly',
+      nextRun: today,
+      status: 'Active',
+      autoChargeEnabled: true,
+      paymentProvider: 'stripe',
+      provider: 'Stripe',
+      cloverCustomerId: 'clover_cutover_failure_1',
+      cloverSubscriptionId: 'clover_subscription_cutover_failure_1',
+      cloverPaymentSource: 'clover_source_cutover_failure_1',
+      stripeCustomerId: 'cus_cutover_failure_1',
+      stripePaymentMethodId: 'pm_cutover_failure_1',
+      stripeCardSavedAt: new Date().toISOString(),
+      stripeMigration: {
+        state: 'first_stripe_charge_pending',
+        cutoverDate: today,
+        scheduledCloverSubscriptionId: 'clover_subscription_cutover_failure_1',
+        cloverStoppedConfirmedAt: new Date().toISOString(),
+        cloverStoppedConfirmedBy: 'Test Owner'
+      },
+      organizationId: 'org-wheelsonauto'
     }],
     payments: [], paymentRequests: [], refundRequests: [], cardSetupRequests: [], applications: [], websiteLeads: [], contracts: [], maintenance: [], claims: [], messages: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], customerAccounts: [], staffAccounts: [], dailyCloseouts: [], auditLogs: [], apiProviders: [], verificationCases: [],
     organizations: [{ id: 'org-wheelsonauto', name: 'WheelsonAuto', status: 'Active' }],
@@ -247,7 +277,45 @@ async function main() {
     assert(recurring.status === 'Active' && recurring.retryCount === 0, 'The customer must remain active and paid after the out-of-order failure is ignored.');
     assert(saved.payments.filter(row => row.stripePaymentIntentId === 'pi_timeout_late_success').length === 1, 'All reconciliation paths must retain one canonical Stripe transaction.');
 
-    console.log('Stripe timeout reconciliation passed: a timed-out request, signed late success, webhook replay, out-of-order failure, and duplicate staff charge remain one protected payment.');
+    const cutoverFailureIntent = attempt => ({
+      id: 'pi_cutover_failure_' + attempt,
+      object: 'payment_intent',
+      status: 'requires_payment_method',
+      amount: 22900,
+      amount_received: 0,
+      created: Math.floor(Date.now() / 1000) + attempt,
+      customer: 'cus_cutover_failure_1',
+      payment_method: 'pm_cutover_failure_1',
+      last_payment_error: { code: 'card_declined', message: 'Protected cutover decline ' + attempt + '.' },
+      metadata: {
+        recurringPaymentId: 'rec-cutover-failure-1',
+        flow: 'autopay',
+        scheduledDueDate: today,
+        billingPeriodKey: 'due:' + today,
+        amount: '22900'
+      }
+    });
+    for (const attempt of [1, 2]) {
+      const intent = cutoverFailureIntent(attempt);
+      const event = { id: 'evt_cutover_failure_' + attempt, type: 'payment_intent.payment_failed', created: intent.created, data: { object: intent } };
+      const raw = JSON.stringify(event);
+      const response = await request(server, 'POST', '/api/webhooks/stripe', { raw, headers: { 'content-type': 'application/json', 'stripe-signature': stripeSignature(webhookSecret, raw) } });
+      assert(response.status === 200 && response.json && response.json.stripePaymentIntentResult && response.json.stripePaymentIntentResult.matched === true, 'A signed protected-cutover decline must match the exact recurring customer.');
+      saved = await readSaved(dataDir);
+      const cutoverRow = saved.recurringPayments.find(row => row.id === 'rec-cutover-failure-1');
+      assert(cutoverRow.paymentProvider === 'stripe' && cutoverRow.stripeMigration.state === 'first_stripe_charge_pending', 'A failed first Stripe charge must keep the migration pending and must never pretend Clover is disabled.');
+      assert(!cutoverRow.stripeMigration.cloverDisabledAt && !cutoverRow.cloverDisabledAt, 'A failed first Stripe charge must not create Clover-disabled evidence.');
+      assert(cutoverRow.stripeMigration.firstStripeChargeFailureCount === attempt, 'The migration record must retain the exact first-charge failure count.');
+      assert(cutoverRow.stripeMigration.firstStripeChargeFailureIntentId === intent.id, 'The migration record must retain the latest failed PaymentIntent.');
+      assert(/Protected cutover decline/.test(cutoverRow.stripeMigration.firstStripeChargeFailureError), 'The migration record must retain provider failure evidence for owner review.');
+      assert(cutoverRow.nextRun === today, 'A failed first Stripe charge must leave the original billing date unpaid and unchanged.');
+    }
+    saved = await readSaved(dataDir);
+    const failedCutoverRow = saved.recurringPayments.find(row => row.id === 'rec-cutover-failure-1');
+    assert(failedCutoverRow.status === '2x failed - contact customer' && failedCutoverRow.retryCount === 2, 'Two protected first-charge declines must enter the contact-customer workflow without returning to Clover.');
+    assert(saved.payments.filter(row => row.recurringPaymentId === 'rec-cutover-failure-1' && /failed/i.test(row.status)).length === 2, 'Each distinct failed PaymentIntent must remain visible as one payment attempt.');
+
+    console.log('Stripe timeout reconciliation passed: timeout recovery, out-of-order events, duplicate protection, and failed first-cutover evidence remain provider-safe.');
   } finally {
     global.fetch = originalFetch;
     if (server && typeof server.close === 'function') server.close();

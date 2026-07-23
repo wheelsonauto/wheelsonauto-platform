@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-pilot-owner-review-323';
+const ASSET_VERSION = 'platform-20260723-cutover-failure-proof-324';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -17597,6 +17597,10 @@ function stripeMigrationRecordPatch(migration) {
     cloverStoppedConfirmedBy: migration.cloverStoppedConfirmedBy || '',
     firstStripeChargeAt: migration.firstStripeChargeAt || '',
     firstStripePaymentIntentId: migration.firstStripePaymentIntentId || '',
+    firstStripeChargeFailedAt: migration.firstStripeChargeFailedAt || '',
+    firstStripeChargeFailureCount: Number(migration.firstStripeChargeFailureCount || 0),
+    firstStripeChargeFailureIntentId: migration.firstStripeChargeFailureIntentId || '',
+    firstStripeChargeFailureError: migration.firstStripeChargeFailureError || '',
     cloverDisabledAt: migration.cloverDisabledAt || '',
     cloverDisabledBy: migration.cloverDisabledBy || '',
     lastBillingPeriodKey: migration.lastBillingPeriodKey || ''
@@ -18135,6 +18139,17 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     cloverIdempotencyKey: payment.cloverIdempotencyKey || '',
     recurringPaymentId: payment.recurringPaymentId
   });
+  const migration = stripeMigration.migrationRecord(row);
+  const firstStripeFailurePatch = paymentProvider === 'stripe' && stripeMigration.hasCloverSource(row) && migration.state === stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING
+    ? stripeMigrationRecordPatch(stripeMigration.transition(row, stripeMigration.STATES.FIRST_STRIPE_CHARGE_PENDING, {
+        at: stamp,
+        firstStripeChargeFailedAt: stamp,
+        firstStripeChargeFailureCount: attempts,
+        firstStripeChargeFailureIntentId: stripePaymentIntentId,
+        firstStripeChargeFailureError: message,
+        note: 'Protected first Stripe charge failed attempt ' + attempts + '. Clover remains recorded as stopped; Stripe cutover stays pending for retry or owner recovery.'
+      }))
+    : {};
   updateRecurringChargeState(data, row.id || row.cloverSubscriptionId, {
     status,
     tone: payment.tone,
@@ -18147,7 +18162,8 @@ function saveFailedChargeResult(data, row, payload = {}, err, options = {}) {
     lastPaymentResult: status,
     lastPaymentNote: payment.notes,
     ...(stripePaymentIntentId ? { lastStripePaymentIntentId: stripePaymentIntentId } : {}),
-    paymentAttempts
+    paymentAttempts,
+    ...firstStripeFailurePatch
   });
   return payment;
 }
