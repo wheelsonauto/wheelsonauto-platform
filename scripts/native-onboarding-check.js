@@ -412,6 +412,13 @@ async function main() {
     assert(firstWeekWebhook.status === 200 && firstWeekWebhook.json.hostedCheckout.approved, 'Signed first-week webhook should verify the second transaction.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(!saved.pickupAppointments.some(row => row.onboardingSessionId === onboardingId), 'Both payments must still leave pickup locked until the customer chooses a VIN-specific insurance path.');
+    const sameNameCustomer = { id: 'cus-same-name-other-person', name: 'Native Applicant', customer: 'Native Applicant', phone: '8565550198', email: 'different.native@example.com', status: 'History', immutableMarker: 'do-not-update' };
+    const sameNameContract = { id: 'contract-same-name-other-person', customer: 'Native Applicant', phone: '8565550198', email: 'different.native@example.com', status: 'Ended', immutableMarker: 'do-not-update' };
+    const sameNameAccount = { id: 'account-same-name-other-person', customer: 'Native Applicant', name: 'Native Applicant', phone: '8565550198', email: 'different.native@example.com', portalStage: 'History', immutableMarker: 'do-not-update' };
+    saved.customers.unshift(sameNameCustomer);
+    saved.contracts.unshift(sameNameContract);
+    saved.customerAccounts.unshift(sameNameAccount);
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
     const insurance = await request(server, 'POST', '/api/public/onboarding/' + token + '/insurance', { json: { insuranceOption: 'upload', insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100', insuranceVinConfirmed: true, documents: [{ kind: 'insurance', name: 'insurance.png', type: 'image/png', dataUrl: image }] } });
     assert(insurance.status === 201, 'After both payments, the customer should be able to upload insurance for the exact VIN and reserve pickup.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
@@ -425,13 +432,24 @@ async function main() {
     assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Pending pickup', 'Internal fleet car should move to pending pickup after onboarding payments and insurance selection.');
     const customerAccount = saved.customerAccounts.find(row => row.applicationId === applicationId);
     assert(customerAccount && /^pbkdf2\$/.test(customerAccount.passwordHash || '') && !customerAccount.password, 'Finalized customer account should inherit only the secure password hash.');
+    assert(saved.customers.find(row => row.id === sameNameCustomer.id).immutableMarker === 'do-not-update' && saved.customers.some(row => row.applicationId === applicationId && row.id !== sameNameCustomer.id), 'Finalization must never overwrite a different customer merely because the names match.');
+    assert(saved.contracts.find(row => row.id === sameNameContract.id).immutableMarker === 'do-not-update' && saved.customerAccounts.find(row => row.id === sameNameAccount.id).immutableMarker === 'do-not-update', 'Finalization must preserve unrelated same-name contracts and portal accounts.');
     assert(!JSON.stringify(saved).includes('NativeTest123'), 'Final customer data must still contain no plaintext password.');
+
+    saved.onboardingSessions.find(row => row.id === onboardingId).finalReviewStatus = 'Needs review';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const staleApprovalHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100' } });
+    assert(staleApprovalHandoff.status === 409 && /final staff approval/i.test(staleApprovalHandoff.json.error || ''), 'A pickup must stop if final approval or another readiness gate becomes stale after scheduling.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    saved.onboardingSessions.find(row => row.id === onboardingId).finalReviewStatus = 'Approved';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
     const handoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000, notes: 'License, keys, and active insurance checked in person.', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100' } });
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Only the staff insurance check and physical handoff should activate the rental and recurring card schedule.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     assert(finalRecurring.autoChargeEnabled === true && finalRecurring.nextRun === plusDays(pickupDate, 7), 'Handoff must activate weekly autopay without changing its pickup-day anchor.');
+    assert(saved.customers.find(row => row.id === sameNameCustomer.id).status === 'History' && saved.contracts.find(row => row.id === sameNameContract.id).status === 'Ended' && saved.customerAccounts.find(row => row.id === sameNameAccount.id).portalStage === 'History', 'Physical handoff must update only the application-owned customer, contract, and portal account when names collide.');
 
     await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });
     await signedWebhook({ Type: 'PAYMENT', Status: 'DECLINED', Data: 'checkout-native-first', Id: 'clover-payment-first-late-decline' });

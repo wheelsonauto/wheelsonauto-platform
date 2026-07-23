@@ -11299,6 +11299,33 @@ function assertStripeGeneralMoneyActionAllowed(data, label = 'this Stripe action
     409
   );
 }
+function onboardingOwnedRecord(rows, application, session, recurring = null, account = null) {
+  const records = Array.isArray(rows) ? rows : [];
+  const applicationId = String(application && application.id || '').trim();
+  const sessionId = String(session && session.id || '').trim();
+  const recurringId = String(recurring && recurring.id || '').trim();
+  const accountId = String(account && account.id || application && application.customerAccountId || '').trim();
+  const exact = records.find(row => applicationId && String(row.applicationId || '').trim() === applicationId
+    || sessionId && String(row.onboardingSessionId || '').trim() === sessionId
+    || recurringId && String(row.recurringPaymentId || '').trim() === recurringId
+    || accountId && String(row.customerAccountId || '').trim() === accountId);
+  if (exact) return exact;
+
+  const applicationPhone = phoneKey(application && application.phone);
+  const applicationEmail = emailKey(application && application.email);
+  if (!applicationPhone && !applicationEmail) return null;
+  const contactMatches = records.filter(row => {
+    const rowPhone = phoneKey(row.phone);
+    const rowEmail = emailKey(row.email || row.username);
+    const phoneMatches = applicationPhone && rowPhone === applicationPhone;
+    const emailMatches = applicationEmail && rowEmail === applicationEmail;
+    if (!phoneMatches && !emailMatches) return false;
+    if (applicationPhone && rowPhone && rowPhone !== applicationPhone) return false;
+    if (applicationEmail && rowEmail && rowEmail !== applicationEmail) return false;
+    return true;
+  });
+  return contactMatches.length === 1 ? contactMatches[0] : null;
+}
 function finalizeNativePickup(data, session, application, vehicle, actor = { name: 'WheelsonAuto system', role: 'System' }) {
   onboarding.ensureCollections(data);
   const existing = data.pickupAppointments.find(row => row.onboardingSessionId === session.id && !/cancel/i.test(String(row.status || '')));
@@ -11436,7 +11463,7 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
     vehicleId: linkedVehicle.id || vehicle.platformVehicleId || ''
   });
   data.customers = Array.isArray(data.customers) ? data.customers : [];
-  let customer = data.customers.find(row => normKey(row.name || row.customer) === normKey(application.name));
+  let customer = onboardingOwnedRecord(data.customers, application, session, gate.recurring, account);
   const customerPatch = {
     name: application.name || '',
     customer: application.name || '',
@@ -11500,6 +11527,8 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (!pickupSession || !pickupApplication) throw new Error('The connected onboarding and application records are required before pickup.');
   const pickupGate = nativeOnboardingReadyForPickup(data, pickupSession, pickupApplication);
   if (!pickupGate.paymentsReady) throw new Error('The verified down payment and first weekly payment must both be complete before this car can be marked Rented.');
+  if (!pickupGate.recurring) throw new Error('The exact recurring payment record is missing. Do not release the vehicle until it is restored.');
+  if (!pickupGate.ready) throw new Error('Final staff approval, identity verification, saved card, verified payments, and the insurance path must all remain complete at physical pickup.');
   const pickupOnlineVehicle = onboarding.findPublicVehicle(data, appointment.onlineVehicleId || pickupApplication.onlineVehicleId);
   if (!pickupOnlineVehicle || !onlineVehicleAvailableForApplicationPayment(pickupOnlineVehicle, pickupApplication)) throw new Error('This vehicle is not claimed by this paid customer. Do not release it.');
   const pickupClaimRequest = Number(pickupApplication.pricingSnapshot && pickupApplication.pricingSnapshot.downPayment || 0) > 0 ? pickupGate.deposit : pickupGate.firstWeek;
@@ -11516,18 +11545,13 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   const mileage = Number(payload.mileage);
   if (!Number.isFinite(mileage) || mileage < 0) throw new Error('Enter the vehicle mileage shown at physical pickup.');
   const now = new Date().toISOString();
-  const customerKey = normKey(appointment.customer);
   const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId) || null;
-  const recurring = (data.recurringPayments || []).find(row => row.pickupAppointmentId === appointment.id || appointment.onboardingSessionId && row.onboardingSessionId === appointment.onboardingSessionId || appointment.applicationId && row.applicationId === appointment.applicationId)
-    || (data.recurringPayments || []).find(row => normKey(row.customer) === customerKey && (!appointment.vehicleId || row.vehicleId === appointment.vehicleId)) || null;
+  const recurring = pickupGate.recurring;
   const application = pickupApplication;
   const session = pickupSession;
-  const customer = (data.customers || []).find(row => row.applicationId === appointment.applicationId || recurring && row.recurringPaymentId === recurring.id)
-    || (data.customers || []).find(row => normKey(row.name || row.customer) === customerKey) || null;
-  const contract = (data.contracts || []).find(row => row.applicationId === appointment.applicationId || row.onboardingSessionId === appointment.onboardingSessionId)
-    || (data.contracts || []).find(row => normKey(row.customer || row.name) === customerKey && (!appointment.vehicleId || row.vehicleId === appointment.vehicleId)) || null;
-  const account = (data.customerAccounts || []).find(row => row.applicationId === appointment.applicationId || recurring && row.recurringPaymentId === recurring.id)
-    || (data.customerAccounts || []).find(row => normKey(row.customer || row.name) === customerKey) || null;
+  const account = onboardingOwnedRecord(data.customerAccounts, application, session, recurring);
+  const customer = onboardingOwnedRecord(data.customers, application, session, recurring, account);
+  const contract = onboardingOwnedRecord(data.contracts, application, session, recurring, account);
   const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
   Object.assign(appointment, {
     status: 'Picked up',
