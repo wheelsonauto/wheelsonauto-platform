@@ -111,8 +111,21 @@ function createFakeStripe() {
     state,
     baseUrl: 'https://api.stripe.test/v1',
     fetch: async (url, options = {}) => {
+      const pathname = new URL(String(url)).pathname;
       const body = String(options.body || '');
-      state.requests.push({ method: options.method || 'GET', url: String(url).replace('https://api.stripe.test', ''), body, headers: options.headers || {} });
+      state.requests.push({ method: options.method || 'GET', url: pathname, body, headers: options.headers || {} });
+      if (pathname === '/v1/customers') {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'cus_test_identity', object: 'customer' }) };
+      }
+      if (pathname === '/v1/checkout/sessions') {
+        return { ok: true, status: 200, text: async () => JSON.stringify({
+          id: 'cs_test_identity_card_setup',
+          object: 'checkout.session',
+          mode: 'setup',
+          status: 'open',
+          url: 'https://checkout.stripe.test/c/pay/cs_test_identity_card_setup'
+        }) };
+      }
       const response = {
         id: 'vs_test_wheelsonauto_identity',
         object: 'identity.verification_session',
@@ -196,7 +209,11 @@ async function main() {
     const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Identity Test Customer', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
     assert(signature.status === 201, 'The customer should sign before the combined review.');
     const card = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
-    assert(card.status === 201 && /\/setup-card\//.test(card.json.redirectUrl || ''), 'The customer should save a card without a charge before final review.');
+    assert(card.status === 201 && /^https:\/\/checkout\.stripe\.test\//.test(card.json.redirectUrl || ''), 'The customer should go directly to Stripe-hosted card fields and save a card without a charge before final review.');
+    const cardCheckoutRequest = fakeStripe.state.requests.find(row => row.method === 'POST' && row.url === '/v1/checkout/sessions');
+    const cardCheckoutForm = new URLSearchParams(cardCheckoutRequest && cardCheckoutRequest.body || '');
+    assert(cardCheckoutForm.get('mode') === 'setup' && cardCheckoutForm.get('currency') === 'usd' && cardCheckoutForm.get('payment_method_types[0]') === 'card', 'The pre-review card step must create a USD, card-only Stripe setup session.');
+    assert(!cardCheckoutForm.has('setup_intent_data[usage]'), 'The Stripe card step must not send the unsupported setup_intent_data[usage] parameter.');
     let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     let session = saved.onboardingSessions.find(row => row.id === onboardingId);
     const recurring = saved.recurringPayments.find(row => row.onboardingSessionId === onboardingId);
