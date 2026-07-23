@@ -8096,3 +8096,12 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
     padding-bottom:0!important;
   }
 }
+.application-live-state{display:inline-flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;white-space:nowrap}
+.application-live-state .live-dot{width:7px;height:7px;border-radius:50%;background:#68d391;box-shadow:0 0 0 4px rgba(104,211,145,.1)}
+.native-application-card.paid-priority{border-color:rgba(104,211,145,.34);box-shadow:inset 3px 0 0 rgba(104,211,145,.7),0 12px 28px rgba(0,0,0,.16)}
+.native-application-next{display:grid;grid-template-columns:minmax(72px,auto) 1fr;gap:10px;align-items:start;padding:10px 0;border-top:1px solid rgba(255,255,255,.07);color:var(--muted);font-size:13px;line-height:1.35}
+.native-application-next b{color:var(--text);font-size:12px;text-transform:uppercase}
+.native-application-next.good b{color:#8ee3ad}
+.native-cleanup-link{display:block;margin:18px auto 0;border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;text-decoration:underline;text-underline-offset:4px;cursor:pointer}
+.native-cleanup-link:hover{color:#f3b7b7}
+@media(max-width:700px){.application-live-state{font-size:12px}.native-application-next{grid-template-columns:1fr;gap:4px}}

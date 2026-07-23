@@ -377,6 +377,8 @@ async function main() {
     const providerNeutralDepositPayment = saved.payments.find(row => row.paymentRequestId === 'plink-native-deposit');
     assert(providerNeutralDepositRequest.paymentProvider === 'clover' && providerNeutralDepositRequest.providerCheckoutSessionId === 'checkout-native-deposit' && providerNeutralDepositRequest.providerPaymentId === 'clover-payment-deposit', 'Legacy Clover request IDs should be mirrored into provider-neutral checkout/payment fields.');
     assert(providerNeutralDepositPayment.paymentProvider === 'clover' && providerNeutralDepositPayment.providerPaymentId === 'clover-payment-deposit', 'Verified payment history should retain provider-neutral identity for a future Stripe adapter.');
+    const liveFeed = await request(server, 'GET', '/api/applications/live-feed', { cookie: ownerCookie });
+    assert(liveFeed.status === 200 && liveFeed.json.items[0].id === applicationId && liveFeed.json.items[0].paid === true && liveFeed.json.counts.scheduledPickup >= 1, 'The live application feed must put a verified paid applicant first in Scheduled Pickup without requiring a dashboard refresh.');
 
     const redirectOnly = await request(server, 'GET', '/pay/plink-native-first/success?session_id=checkout-native-first');
     assert(redirectOnly.status === 200 && /waiting for the signed provider confirmation/i.test(redirectOnly.text), 'Provider success redirect alone must not be treated as payment proof.');
@@ -416,7 +418,13 @@ async function main() {
     assert(idempotent.documents.filter(row => row.paymentRequestId === 'plink-native-first' && row.kind === 'Receipt').length === 1, 'Repeated Clover webhook must not duplicate receipts.');
     assert(/paid/i.test(idempotent.paymentRequests.find(row => row.id === 'plink-native-first').status), 'A late duplicate decline must never downgrade an already-verified paid request.');
 
-    console.log('Native onboarding check passed: automatic setup, live selfie screening, one final review, no-charge card setup, delayed VIN-specific insurance, signed Clover reconciliation, separate receipts, handoff, and pickup-anchored weekly autopay are connected.');
+    const cleanup = await request(server, 'POST', '/api/applications/cleanup-unpaid-tests', { cookie: ownerCookie, json: { confirmed: true } });
+    assert(cleanup.status === 200 && cleanup.json.archived >= 1 && cleanup.json.protected >= 1, 'Owner cleanup should archive old unpaid tests while protecting every paid or active file.');
+    const cleaned = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    assert(!cleaned.applications.find(row => row.id === applicationId).cleanupArchivedAt, 'The paid application must never be archived by the unpaid-test cleanup.');
+    assert(cleaned.applications.some(row => row.id !== applicationId && row.cleanupArchivedAt), 'At least one unpaid test file should be removed from the active application workspace.');
+
+    console.log('Native onboarding check passed: automatic setup, live selfie screening, verified-payment inventory claim, live paid-priority queue, safe unpaid-test cleanup, separate receipts, handoff, and pickup-anchored weekly autopay are connected.');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

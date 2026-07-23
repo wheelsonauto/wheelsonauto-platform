@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-stripe-pilot-repair-319';
+const ASSET_VERSION = 'platform-20260723-application-priority-320';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -7662,6 +7662,7 @@ function enrichLinkedProfiles(data) {
       row.vehicleLinkStatus = 'Needs vehicle match';
     }
   });
+  const paymentClaimSync = reconcileVerifiedApplicationPayments(data);
   const assignmentSync = syncVehicleAssignmentsFromActiveRecords(data);
   const onlineInventorySync = syncOnlineInventoryFromFleetAssignments(data);
   const profiles = [];
@@ -7724,12 +7725,13 @@ function enrichLinkedProfiles(data) {
     const match = bestMatch(row);
     if (match) contractFilled += fillBlank(row, match, ['phone', 'email', 'vehicleId', 'vin', 'licensePlate', 'plate', 'tempTag', 'tracker', 'cloverCustomerId']);
   });
-  if (recurringFilled || customerFilled || contractFilled || assignmentSync.vehicleAssignmentsSynced || assignmentSync.linkedRowsSynced || assignmentSync.serviceRowsSynced || assignmentSync.assignmentConflicts || onlineInventorySync.onlineInventoryLinked || onlineInventorySync.onlineInventoryUnavailable || onlineInventorySync.onlineInventoryRestored || !data.integrations.profileEnrichment) {
+  if (recurringFilled || customerFilled || contractFilled || paymentClaimSync.changed || assignmentSync.vehicleAssignmentsSynced || assignmentSync.linkedRowsSynced || assignmentSync.serviceRowsSynced || assignmentSync.assignmentConflicts || onlineInventorySync.onlineInventoryLinked || onlineInventorySync.onlineInventoryUnavailable || onlineInventorySync.onlineInventoryRestored || !data.integrations.profileEnrichment) {
     data.integrations.profileEnrichment = {
       updatedAt: new Date().toISOString(),
       recurringFieldsFilled: recurringFilled,
       customerFieldsFilled: customerFilled,
       contractFieldsFilled: contractFilled,
+      verifiedPaymentClaimsReconciled: paymentClaimSync.repaired.length,
       ...assignmentSync,
       ...onlineInventorySync
     };
@@ -10599,6 +10601,11 @@ function claimOnlineVehicleAfterVerifiedPayment(data, request, details = {}) {
     });
     return { allowed: false, claimed: false, conflict: true, vehicle, session, application };
   }
+  const completedPickup = (data.pickupAppointments || []).find(row => row.applicationId === application.id && /picked up|completed/i.test(String(row.status || '')));
+  if (claimedApplicationId === application.id && completedPickup) {
+    vehicle.published = false;
+    return { allowed: true, claimed: true, firstClaim: false, vehicle, linkedVehicle: (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || null, session, application, completedPickup };
+  }
   const now = details.paidAt || request.paidAt || new Date().toISOString();
   const firstClaim = !vehicle.paymentClaimedAt;
   if (firstClaim) {
@@ -10641,6 +10648,84 @@ function claimOnlineVehicleAfterVerifiedPayment(data, request, details = {}) {
     updatedAt: now
   });
   return { allowed: true, claimed: true, firstClaim, vehicle, linkedVehicle, session, application };
+}
+function verifiedOnboardingPaymentRequest(request = {}) {
+  if (!request.onboardingSessionId || !request.applicationId || !nativePaymentPaid(request)) return false;
+  const status = String(request.status || '').trim().toLowerCase();
+  return !!(
+    request.webhookVerifiedAt
+    || status.startsWith('paid through verified ')
+    || request.stripeLivemode === true && request.stripePaymentIntentId && request.paidAt
+  );
+}
+function reconcileVerifiedApplicationPayments(data = {}) {
+  onboarding.ensureCollections(data);
+  const snapshot = () => JSON.stringify([
+    data.onlineVehicles || [],
+    data.vehicles || [],
+    data.applications || [],
+    data.onboardingSessions || [],
+    data.pickupAppointments || []
+  ]);
+  const before = snapshot();
+  const repaired = [];
+  (data.paymentRequests || []).filter(verifiedOnboardingPaymentRequest).sort((a, b) => {
+    const rank = row => row.paymentType === 'Nonrefundable down payment' ? 0 : row.paymentType === 'First weekly payment' ? 1 : 2;
+    return rank(a) - rank(b) || String(a.paidAt || '').localeCompare(String(b.paidAt || ''));
+  }).forEach(request => {
+    const claim = claimOnlineVehicleAfterVerifiedPayment(data, request, { paidAt: request.paidAt || request.webhookVerifiedAt });
+    if (!claim.allowed || !claim.application || !claim.session || !claim.vehicle) return;
+    finalizeNativePickup(data, claim.session, claim.application, claim.vehicle);
+    repaired.push(request.id);
+  });
+  return { changed: before !== snapshot(), repaired };
+}
+function applicationLatestActivityAt(data = {}, application = {}) {
+  const applicationId = String(application.id || '');
+  const sessionIds = new Set((data.onboardingSessions || []).filter(row => row.applicationId === applicationId).map(row => String(row.id || '')));
+  const values = [application.updatedAt, application.submittedAt, application.createdAt, application.date];
+  const collect = rows => (rows || []).forEach(row => {
+    if (String(row.applicationId || '') !== applicationId && !sessionIds.has(String(row.onboardingSessionId || ''))) return;
+    values.push(row.updatedAt, row.paidAt, row.submittedAt, row.createdAt, row.signedAt, row.reviewedAt, row.completedAt, row.date);
+  });
+  collect(data.onboardingSessions);
+  collect(data.paymentRequests);
+  collect(data.cardSetupRequests);
+  collect(data.eSignatures);
+  collect(data.documents);
+  collect(data.pickupAppointments);
+  const times = values.filter(Boolean).map(value => Date.parse(value)).filter(Number.isFinite);
+  return times.length ? new Date(Math.max(...times)).toISOString() : String(application.submittedAt || application.createdAt || '');
+}
+function applicationHasVerifiedPayment(data = {}, applicationId = '') {
+  return (data.paymentRequests || []).some(row => String(row.applicationId || '') === String(applicationId || '') && verifiedOnboardingPaymentRequest(row));
+}
+function staffApplicationFeed(data = {}, user = {}) {
+  const items = (data.applications || []).filter(application => !application.cleanupArchivedAt && rowVisibleToUserOrganization(application, user)).map(application => {
+    const session = (data.onboardingSessions || []).find(row => row.applicationId === application.id && !/replaced|cancelled|expired/i.test(String(row.status || ''))) || null;
+    const pickup = (data.pickupAppointments || []).find(row => row.applicationId === application.id && !/cancel/i.test(String(row.status || ''))) || null;
+    const paid = applicationHasVerifiedPayment(data, application.id);
+    return {
+      id: application.id,
+      name: application.name || application.customer || 'Applicant',
+      vehicle: application.vehicle || '',
+      status: String(session && session.status || application.status || application.stage || 'New'),
+      paid,
+      scheduledPickup: !!pickup,
+      pickupDate: pickup && pickup.date || '',
+      pickupTime: pickup && pickup.time || '',
+      lastActivityAt: applicationLatestActivityAt(data, application)
+    };
+  }).sort((a, b) => Number(b.paid) - Number(a.paid) || String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || '')));
+  return {
+    revision: crypto.createHash('sha256').update(JSON.stringify(items)).digest('hex').slice(0, 24),
+    items,
+    counts: {
+      review: items.filter(row => !row.paid && !/denied|removed|cancelled|completed|pickup confirmed/i.test(row.status)).length,
+      scheduledPickup: items.filter(row => row.paid && !/denied|removed|cancelled/i.test(row.status)).length,
+      history: items.filter(row => /denied|removed|cancelled|completed|pickup confirmed/i.test(row.status)).length
+    }
+  };
 }
 function controlledStripePilotVinReady(value) {
   const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -24170,6 +24255,59 @@ const server = http.createServer(async (req, res) => {
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
       return json(res, 200, { ok: true, publicSite: data.publicSite });
+    }
+    if (url.pathname === '/api/applications/live-feed' && req.method === 'GET') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can open the live application queue.' });
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      const repaired = reconcileVerifiedApplicationPayments(data);
+      if (repaired.changed) {
+        appendAuditLog(data, { name: 'WheelsonAuto system', role: 'System' }, 'Verified application payment reconciled', [repaired.repaired.length + ' verified payment request(s)', 'Online inventory and pickup priority refreshed']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      }
+      return json(res, 200, { ok: true, ...staffApplicationFeed(data, user), repaired: repaired.changed });
+    }
+    if (url.pathname === '/api/applications/cleanup-unpaid-tests' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can reset unpaid application tests.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (payload.confirmed !== true) return json(res, 400, { ok: false, error: 'Confirm the unpaid application cleanup first.' });
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      reconcileVerifiedApplicationPayments(data);
+      const now = new Date().toISOString();
+      const protectedIds = new Set();
+      (data.applications || []).forEach(application => {
+        const hasPayment = applicationHasVerifiedPayment(data, application.id);
+        const activeCustomer = (data.customers || []).some(row => row.applicationId === application.id && /active/i.test(String(row.status || row.stage || '')));
+        const completedPickup = (data.pickupAppointments || []).some(row => row.applicationId === application.id && /picked up|completed/i.test(String(row.status || '')));
+        if (hasPayment || activeCustomer || completedPickup) protectedIds.add(String(application.id || ''));
+      });
+      let archived = 0;
+      const archivedIds = [];
+      (data.applications || []).forEach(application => {
+        if (protectedIds.has(String(application.id || '')) || application.cleanupArchivedAt) return;
+        Object.assign(application, { stage: 'Removed', status: 'Removed - owner test reset', cleanupArchivedAt: now, cleanupArchivedBy: user.name || user.username || 'Owner', updatedAt: now });
+        archived += 1;
+        archivedIds.push(String(application.id || ''));
+      });
+      const archivedSet = new Set(archivedIds);
+      (data.onboardingSessions || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - owner test reset', cancelledAt: now, updatedAt: now }));
+      (data.paymentRequests || []).filter(row => archivedSet.has(String(row.applicationId || '')) && !verifiedOnboardingPaymentRequest(row)).forEach(row => Object.assign(row, { status: 'Cancelled - owner test reset', closedAt: now, updatedAt: now }));
+      (data.cardSetupRequests || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - owner test reset', closedAt: now, updatedAt: now }));
+      (data.customerAccounts || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Disabled', portalStage: 'Application removed', disabledAt: now, updatedAt: now }));
+      (data.websiteLeads || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Removed', updatedAt: now }));
+      (data.onlineVehicles || []).forEach(vehicle => {
+        if (!archivedSet.has(String(vehicle.heldApplicationId || '')) || onlineVehiclePaymentClaimApplicationId(vehicle)) return;
+        Object.assign(vehicle, { published: typeof vehicle.holdPreviousPublished === 'boolean' ? vehicle.holdPreviousPublished : true, availability: vehicle.holdPreviousAvailability || 'Available', heldFor: '', heldApplicationId: '', heldUntil: '', holdPreviousPublished: '', holdPreviousAvailability: '', updatedAt: now });
+      });
+      data.publicSite = data.publicSite || {};
+      data.publicSite.applicationResetCompletedAt = now;
+      data.publicSite.applicationResetProtectedCount = protectedIds.size;
+      appendAuditLog(data, user, 'Unpaid application tests archived', [archived + ' unpaid file(s) removed from the workspace', protectedIds.size + ' paid/active file(s) protected']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, { ok: true, archived, protected: protectedIds.size, feed: staffApplicationFeed(data, user) });
     }
     if (url.pathname === '/api/applications/review' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can review an application.' });
