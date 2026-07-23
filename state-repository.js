@@ -863,6 +863,10 @@ function activeAssignmentCandidate(row = {}, source = '') {
   // Clover recurring rows mirror payment plans. Profile enrichment may attach a
   // likely vehicle, but that provider mirror is never rental-assignment authority.
   if (/^clover[_\s-]*recurring$/.test(sourceKey)) return null;
+  // A saved card or an in-progress native onboarding schedule is not a rental.
+  // Verified payments claim online inventory, while only the recorded physical
+  // pickup makes an onboarding recurring row authoritative for fleet assignment.
+  if (/recurring[_\s-]*payment|wheelsonauto autopay/.test(sourceKey) && row.onboardingSessionId && !row.pickupCompletedAt) return null;
   const profileOnlySource = sourceKey === 'customer' || sourceKey === 'customer_file';
   if (profileOnlySource) {
     const explicitLifecycle = String([row.status, row.stage, row.state, row.contractStatus].filter(Boolean).join(' '));

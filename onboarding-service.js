@@ -161,12 +161,25 @@ function findSession(data, publicToken) {
   if (!session) return null;
   const application = applicationForSession(data, session);
   if (applicationBlocksOnboarding(application)) return null;
-  if (Date.parse(session.expiresAt || '') < Date.now()) {
+  if (Date.parse(session.expiresAt || '') < Date.now() && !sessionHasVerifiedPayment(data, session)) {
     session.status = 'Expired';
     return null;
   }
   Object.defineProperty(session, 'publicToken', { value: String(publicToken || ''), enumerable: false, configurable: true });
   return session;
+}
+
+function paymentRequestIsPaid(request = {}) {
+  const status = String(request.status || '').trim().toLowerCase();
+  if (!status || /unpaid|not paid|failed|declined|cancel|incomplete|awaiting|pending/.test(status)) return false;
+  return status === 'paid' || status.startsWith('paid through verified ') || /success|succeeded|completed/.test(status);
+}
+
+function sessionHasVerifiedPayment(data, session) {
+  return (data.paymentRequests || []).some(request =>
+    (request.onboardingSessionId === session.id || request.applicationId === session.applicationId)
+    && paymentRequestIsPaid(request)
+  );
 }
 
 function releaseExpiredHolds(data, nowValue = Date.now()) {
@@ -176,7 +189,7 @@ function releaseExpiredHolds(data, nowValue = Date.now()) {
   const expired = [];
   data.onboardingSessions.forEach(session => {
     const expiresAt = Date.parse(session.expiresAt || '');
-    if (!terminal.test(String(session.status || '')) && Number.isFinite(expiresAt) && expiresAt < now) {
+    if (!terminal.test(String(session.status || '')) && Number.isFinite(expiresAt) && expiresAt < now && !sessionHasVerifiedPayment(data, session)) {
       session.status = 'Expired';
       session.expiredAt = new Date(now).toISOString();
       expired.push(session);
@@ -184,8 +197,6 @@ function releaseExpiredHolds(data, nowValue = Date.now()) {
   });
   let released = 0;
   expired.forEach(session => {
-    const otherActive = data.onboardingSessions.some(candidate => candidate.id !== session.id && candidate.onlineVehicleId === session.onlineVehicleId && !terminal.test(String(candidate.status || '')) && (!candidate.expiresAt || Date.parse(candidate.expiresAt) >= now));
-    if (otherActive) return;
     const application = applicationForSession(data, session);
     if (application) {
       application.status = 'Onboarding expired - reapprove if still interested';
@@ -194,7 +205,9 @@ function releaseExpiredHolds(data, nowValue = Date.now()) {
       application.updatedAt = new Date(now).toISOString();
     }
     const vehicle = findPublicVehicle(data, session.onlineVehicleId);
-    if (!vehicle || vehicle.heldApplicationId && vehicle.heldApplicationId !== session.applicationId) return;
+    // Multiple unpaid applicants can remain open for one public vehicle. Only
+    // release a legacy hold when this expired application actually owns it.
+    if (!vehicle || vehicle.heldApplicationId !== session.applicationId) return;
     vehicle.published = vehicle.holdPreviousPublished === undefined || vehicle.holdPreviousPublished === '' ? true : !!vehicle.holdPreviousPublished;
     vehicle.availability = vehicle.holdPreviousAvailability || 'Available';
     vehicle.heldFor = '';

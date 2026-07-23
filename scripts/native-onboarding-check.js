@@ -169,10 +169,10 @@ async function main() {
       { applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', documentKind: 'insurance' }
     ],
     recurringPayments: [{ applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', paymentProvider: 'stripe', cloverPaymentSource: 'clv_should_not_unlock_stripe', status: 'Active' }],
-    paymentRequests: []
+    paymentRequests: [{ applicationId: 'app-stripe-state', onboardingSessionId: 'session-stripe-state', paymentProvider: 'stripe', paymentType: 'First weekly payment', status: 'Unpaid - Stripe checkout ready' }]
   };
   const stripeStateWithoutStripeCard = nativeSite.onboardingStatus(stripeStatusFixture, { id: 'session-stripe-state', paymentProvider: 'stripe', documentReviewStatus: 'Waiting on staff' }, { id: 'app-stripe-state', pricingSnapshot: {} });
-  assert(stripeStateWithoutStripeCard.documents && !stripeStateWithoutStripeCard.card && stripeStateWithoutStripeCard.paymentProvider === 'stripe', 'Stripe onboarding must require the selfie and must not accept a Clover card source as Stripe-ready.');
+  assert(stripeStateWithoutStripeCard.documents && !stripeStateWithoutStripeCard.card && !stripeStateWithoutStripeCard.firstWeek && stripeStateWithoutStripeCard.paymentProvider === 'stripe', 'Stripe onboarding must require the selfie, reject Clover-only card state, and never treat an Unpaid request as paid.');
   stripeStatusFixture.recurringPayments[0].stripeCustomerId = 'cus_stripe_state';
   stripeStatusFixture.recurringPayments[0].stripePaymentMethodId = 'pm_stripe_state';
   stripeStatusFixture.recurringPayments[0].stripeLivemode = true;
@@ -240,20 +240,19 @@ async function main() {
     assert(/submit\.disabled = !!names\.length/.test(nativeSiteClient) && /submit\.setAttribute\('aria-disabled'/.test(nativeSiteClient), 'The profile save control must stay disabled until license, pickup, expiration, and autopay-consent checks are complete.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(savedSession && savedSession.tokenHash && !savedSession.publicToken, 'Onboarding session should persist only a token hash.');
-    assert(saved.onlineVehicles[0].published === false && saved.onlineVehicles[0].heldApplicationId === applicationId, 'Application submission should immediately unpublish and hold the selected car.');
-    assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Pending customer setup' && saved.vehicles.find(row => row.id === 'veh-native-1').heldApplicationId === applicationId, 'Application submission should immediately remove the selected internal car from ready fleet inventory.');
+    assert(saved.onlineVehicles[0].published === true && !saved.onlineVehicles[0].heldApplicationId, 'Application submission must keep the selected car published until a required payment is verified.');
+    assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Ready' && !saved.vehicles.find(row => row.id === 'veh-native-1').heldApplicationId, 'Application submission must keep the internal fleet car Ready until a required payment is verified.');
 
-    saved.applications.unshift({ id: 'app-competing', organizationId: 'org-wheelsonauto', name: 'Second Applicant', onlineVehicleId: 'online-native-1', vehicle: '2016 Ford Focus', status: 'New' });
-    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
-    const competing = await request(server, 'POST', '/api/onboarding/links', { cookie: ownerCookie, json: { applicationId: 'app-competing' } });
-    assert(competing.status === 409, 'A second applicant must not receive an active onboarding hold for the same car.');
-    const unavailableApplication = await request(server, 'POST', '/api/public/applications', { json: { ...applicationPayload, email: 'second@example.com' } });
-    assert(unavailableApplication.status === 409, 'Held/unpublished vehicle must stop accepting new public applications.');
+    const secondApplicationPayload = { ...applicationPayload, firstName: 'Second', lastName: 'Applicant', phone: '8565550108', email: 'second.applicant@example.com', password: 'SecondNative123' };
+    const competing = await request(server, 'POST', '/api/public/applications', { json: secondApplicationPayload });
+    assert(competing.status === 201 && competing.json.application.id !== applicationId, 'Another customer may apply and complete screening while the car is still unpaid and available.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    assert(saved.onlineVehicles[0].published === true && saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Ready', 'Multiple unpaid applications must not hide or reserve the car.');
 
     const expiredHold = JSON.parse(JSON.stringify(saved));
     expiredHold.onboardingSessions.find(row => row.id === onboardingId).expiresAt = new Date(Date.now() - 60000).toISOString();
     const expiredResult = onboardingService.releaseExpiredHolds(expiredHold, Date.now());
-    assert(expiredResult.released === 1 && expiredHold.onlineVehicles[0].published === true && expiredHold.vehicles[0].status === 'Ready', 'Expired seven-day onboarding holds should automatically return the car to ready published inventory.');
+    assert(expiredResult.released === 0 && expiredHold.onlineVehicles[0].published === true && expiredHold.vehicles[0].status === 'Ready', 'An expired unpaid setup link must not change inventory because unpaid applications never hold the car.');
 
     const sundayProfile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: nextSunday(), requestedPickupTime: '1:00 PM', pickupAutopayConsent: true } });
     assert(sundayProfile.status === 400 && /Sunday/i.test(sundayProfile.json.error), 'Sunday pickup should be rejected server-side.');
@@ -326,6 +325,7 @@ async function main() {
     const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'One combined screening review passed before payment.' } });
     assert(finalReview.status === 200 && finalReview.json.finalReviewStatus === 'Approved', 'Owner should give one final decision only after the screening files, agreement, exact vehicle/VIN, and saved card are ready.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    assert(saved.onlineVehicles.find(row => row.id === 'online-native-1').published === true && saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Ready', 'Approval, documents, signature, identity review, and a saved card must still leave the unpaid vehicle online and Ready.');
     const approvedSession = saved.onboardingSessions.find(row => row.id === onboardingId);
     const approvedRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     const paymentBase = { recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, onlineVehicleId: 'online-native-1', organizationId: 'org-wheelsonauto', customer: 'Native Applicant', phone: '8565550107', email: 'native.applicant@example.com', vehicleId: 'veh-native-1', vehicle: '2016 Ford Focus', vin: '1FADP3K24GL123456', licensePlate: 'A19-WWM', method: 'Clover Hosted Checkout', source: 'WheelsonAuto native onboarding', checkoutCreatedAt: new Date().toISOString(), onboardingReturnUrl: 'http://127.0.0.1:4181/onboard/' + token };
@@ -333,6 +333,13 @@ async function main() {
       { ...paymentBase, id: 'plink-native-first', amount: 229, frequency: 'First week', paymentType: 'First weekly payment', reason: 'First weekly payment', status: 'Unpaid - Clover checkout ready', checkoutSessionId: 'checkout-native-first', checkoutHref: 'https://checkout.clover.test/first', createdAt: new Date().toISOString() },
       { ...paymentBase, id: 'plink-native-deposit', amount: 485, frequency: 'One time', paymentType: 'Nonrefundable down payment', reason: 'Nonrefundable down payment', status: 'Clover checkout ready', checkoutSessionId: 'checkout-native-deposit', checkoutHref: 'https://checkout.clover.test/deposit', createdAt: new Date().toISOString() }
     );
+    saved.pickupAppointments.unshift({ id: 'pickup-stale-unpaid', applicationId, onboardingSessionId: onboardingId, onlineVehicleId: 'online-native-1', vehicleId: 'veh-native-1', customer: 'Native Applicant', vehicle: '2016 Ford Focus', vin: '1FADP3K24GL123456', date: pickupDate, time: '1:00 PM', status: 'Confirmed' });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+
+    const unpaidHandoff = await request(server, 'POST', '/api/pickups/pickup-stale-unpaid/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Test Full Coverage', insurancePolicyNumber: 'POLICY-100' } });
+    assert(unpaidHandoff.status === 409 && /down payment and first weekly payment/i.test(unpaidHandoff.json.error || ''), 'A stale or forged pickup record must never mark an unpaid vehicle Rented.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    saved.pickupAppointments = saved.pickupAppointments.filter(row => row.id !== 'pickup-stale-unpaid');
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
     const invalidWebhook = await request(server, 'POST', '/api/webhooks/clover', { raw: JSON.stringify({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-deposit', Id: 'clover-payment-deposit' }), headers: { 'content-type': 'application/json', 'clover-signature': 't=1,v1=invalid' } });
@@ -352,6 +359,8 @@ async function main() {
     assert(depositWebhook.status === 200 && depositWebhook.json.hostedCheckout.approved, 'Signed Clover deposit webhook should verify the first transaction.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(saved.pickupAppointments.filter(row => row.onboardingSessionId === onboardingId).length === 0, 'Deposit alone must not confirm this customer pickup before the first weekly payment.');
+    assert(saved.onlineVehicles.find(row => row.id === 'online-native-1').published === false && saved.onlineVehicles.find(row => row.id === 'online-native-1').paymentClaimApplicationId === applicationId, 'The first verified required payment must claim and remove the car from public inventory for the paying application.');
+    assert(/deposit paid/i.test(saved.vehicles.find(row => row.id === 'veh-native-1').status), 'The fleet car must show a paid-pending state after the deposit, not Ready and not Rented.');
     assert(saved.payments.filter(row => row.onboardingSessionId === onboardingId).length === 1, 'Deposit should create exactly one payment record.');
     assert(saved.documents.filter(row => row.onboardingSessionId === onboardingId && row.kind === 'Receipt').length === 1, 'Deposit should create its own receipt.');
     const providerNeutralDepositRequest = saved.paymentRequests.find(row => row.id === 'plink-native-deposit');

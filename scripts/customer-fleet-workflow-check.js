@@ -5,6 +5,7 @@ const root = path.resolve(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const stateRepository = fs.readFileSync(path.join(root, 'state-repository.js'), 'utf8');
+const stateRepositoryRuntime = require('../state-repository');
 
 function fail(message) {
   throw new Error(message);
@@ -208,5 +209,8 @@ requireText('Autopay removal should refresh linked truth layer before save', rem
 requireText('Server assignment truth must use the shared transactional rule', activeAssignmentRecord, 'stateRepository.activeAssignmentCandidate');
 requireText('Pending intake rows must not claim a live assignment', activeAssignmentCandidate, 'INACTIVE_ASSIGNMENT_PATTERN');
 requireText('The shared assignment rule must exclude pending intake', stateRepository, 'pending application');
+requireText('Saved-card onboarding rows must not claim a fleet vehicle before handoff', activeAssignmentCandidate, 'row.onboardingSessionId && !row.pickupCompletedAt');
+if (stateRepositoryRuntime.activeAssignmentCandidate({ customer: 'Test Applicant', vehicleId: 'veh-test', status: 'Card linked', onboardingSessionId: 'onboard-test' }, 'recurringPayments') !== null) fail('A card-linked unpaid onboarding row claimed a fleet assignment.');
+if (!stateRepositoryRuntime.activeAssignmentCandidate({ customer: 'Active Customer', vehicleId: 'veh-live', status: 'Active' }, 'recurringPayments')) fail('A normal active recurring customer should remain valid assignment evidence.');
 
 console.log('Customer/fleet workflow check passed: searchable vehicle pickers, reassignment, return/end customer, and backend autopay assignment truth layer are wired.');

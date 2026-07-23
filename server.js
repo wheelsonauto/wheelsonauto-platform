@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-controlled-dollar-lifecycle-313';
+const ASSET_VERSION = 'platform-20260723-paid-inventory-314';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -6732,6 +6732,24 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     // it have been ended, returned, or moved back to pending intake.
     if (!list.length) {
       if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
+      const prematureOnboardingAssignment = !vehicle.pickupCompletedAt && String(vehicle.currentCustomer || '').trim() && data.recurringPayments.find(row =>
+        String(row.vehicleId || '') === String(vehicle.id || '')
+        && row.onboardingSessionId
+        && !row.pickupCompletedAt
+        && sameCustomer(row.customer || row.name, vehicle.currentCustomer)
+      );
+      if (prematureOnboardingAssignment) {
+        vehicle.previousCustomer = vehicle.currentCustomer || vehicle.previousCustomer || '';
+        vehicle.currentCustomer = '';
+        vehicle.status = 'Ready';
+        vehicle.reservedFor = '';
+        vehicle.pendingApplicant = '';
+        vehicle.pendingApplicationId = '';
+        vehicle.pickupAppointmentId = '';
+        vehicle.assignmentRepair = 'Removed premature onboarding assignment before verified payment and physical pickup.';
+        vehicle.assignmentRepairedAt = new Date().toISOString();
+        vehicleAssignmentsSynced += 1;
+      }
       return;
     }
     const identityGroups = [];
@@ -6912,7 +6930,7 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
 function fleetPublicListingState(vehicle = {}) {
   const customer = String(vehicle.currentCustomer || vehicle.customer || vehicle.assignedTo || '').trim();
   const status = String(vehicle.status || '').trim().toLowerCase();
-  if (/pending application|pending pickup|held/.test(status)) return { state: 'unavailable', availability: 'Held', customer };
+  if (/pending application|pending pickup|held|payment received|deposit paid/.test(status)) return { state: 'unavailable', availability: 'Payment received', customer };
   if (customer || /rented|active contract|assigned/.test(status)) return { state: 'unavailable', availability: 'Rented', customer };
   if (/sold|removed|retired|archived|unavailable/.test(status)) return { state: 'unavailable', availability: 'Unavailable', customer: '' };
   if (/^(?:ready|available|in lot|fleet ready)$/.test(status)) return { state: 'available', availability: 'Available', customer: '' };
@@ -6984,8 +7002,23 @@ function syncOnlineInventoryFromFleetAssignments(data = {}) {
       onlineVehicle.fleetPreviousPublished = '';
       onlineVehicle.fleetPreviousAvailability = '';
       onlineVehicle.fleetCustomer = '';
+      onlineVehicle.heldFor = '';
+      onlineVehicle.heldApplicationId = '';
+      onlineVehicle.heldUntil = '';
+      onlineVehicle.paymentClaimApplicationId = '';
+      onlineVehicle.paymentClaimOnboardingSessionId = '';
+      onlineVehicle.paymentClaimRequestId = '';
+      onlineVehicle.paymentClaimedAt = '';
+      onlineVehicle.paymentClaimedFor = '';
       onlineVehicle.fleetAvailabilitySyncedAt = now;
       onlineVehicle.updatedAt = now;
+      vehicle.heldFor = '';
+      vehicle.heldApplicationId = '';
+      vehicle.heldUntil = '';
+      vehicle.paymentClaimApplicationId = '';
+      vehicle.paymentClaimedAt = '';
+      vehicle.holdPreviousStatus = '';
+      vehicle.updatedAt = now;
       restored += 1;
     } else if (changed) {
       onlineVehicle.updatedAt = now;
@@ -10521,6 +10554,85 @@ function nativeOnboardingReadyForPickup(data, session, application, options = {}
     firstWeek
   };
 }
+function onlineVehiclePaymentClaimApplicationId(vehicle = {}) {
+  return String(vehicle.paymentClaimApplicationId || vehicle.heldApplicationId || '').trim();
+}
+function onlineVehicleAvailableForApplicationPayment(vehicle, application) {
+  const claimedApplicationId = onlineVehiclePaymentClaimApplicationId(vehicle);
+  return !claimedApplicationId || claimedApplicationId === String(application && application.id || '');
+}
+function claimOnlineVehicleAfterVerifiedPayment(data, request, details = {}) {
+  if (!request || !request.onboardingSessionId) return { allowed: true, claimed: false };
+  const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId) || null;
+  const application = (data.applications || []).find(row => row.id === request.applicationId || session && row.id === session.applicationId) || null;
+  const vehicle = application && onboarding.findPublicVehicle(data, request.onlineVehicleId || application.onlineVehicleId) || null;
+  if (!session || !application || !vehicle) return { allowed: true, claimed: false };
+  const claimedApplicationId = onlineVehiclePaymentClaimApplicationId(vehicle);
+  if (claimedApplicationId && claimedApplicationId !== application.id) {
+    const conflictAt = new Date().toISOString();
+    Object.assign(request, {
+      vehicleClaimStatus: 'Conflict - refund required',
+      vehicleClaimConflictAt: conflictAt,
+      vehicleClaimedByApplicationId: claimedApplicationId,
+      ownerReviewRequired: true
+    });
+    Object.assign(session, {
+      status: 'Payment received after vehicle became unavailable - refund required',
+      vehicleClaimStatus: 'Conflict - refund required',
+      ownerReviewRequired: true,
+      updatedAt: conflictAt
+    });
+    Object.assign(application, {
+      status: 'Payment conflict - refund required',
+      stage: 'Owner review',
+      ownerReviewRequired: true,
+      updatedAt: conflictAt
+    });
+    return { allowed: false, claimed: false, conflict: true, vehicle, session, application };
+  }
+  const now = details.paidAt || request.paidAt || new Date().toISOString();
+  const firstClaim = !vehicle.paymentClaimedAt;
+  if (firstClaim) {
+    vehicle.holdPreviousPublished = typeof vehicle.holdPreviousPublished === 'boolean' ? vehicle.holdPreviousPublished : !!vehicle.published;
+    vehicle.holdPreviousAvailability = vehicle.holdPreviousAvailability || vehicle.availability || 'Available';
+    vehicle.fleetPreviousPublished = typeof vehicle.fleetPreviousPublished === 'boolean' ? vehicle.fleetPreviousPublished : !!vehicle.published;
+    vehicle.fleetPreviousAvailability = vehicle.fleetPreviousAvailability || vehicle.availability || 'Available';
+    vehicle.fleetAvailabilityManaged = true;
+  }
+  Object.assign(vehicle, {
+    published: false,
+    availability: request.paymentType === 'Nonrefundable down payment' ? 'Deposit paid - pending completion' : 'Payment received - pending pickup',
+    heldFor: application.name || '',
+    heldApplicationId: application.id,
+    paymentClaimApplicationId: application.id,
+    paymentClaimOnboardingSessionId: session.id,
+    paymentClaimRequestId: vehicle.paymentClaimRequestId || request.id,
+    paymentClaimedAt: vehicle.paymentClaimedAt || now,
+    paymentClaimedFor: application.name || '',
+    updatedAt: now
+  });
+  const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId) || null;
+  if (linkedVehicle) {
+    if (firstClaim) linkedVehicle.holdPreviousStatus = linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready';
+    Object.assign(linkedVehicle, {
+      status: request.paymentType === 'Nonrefundable down payment' ? 'Deposit paid - pending completion' : 'Payment received - pending pickup',
+      heldFor: application.name || '',
+      heldApplicationId: application.id,
+      paymentClaimApplicationId: application.id,
+      paymentClaimedAt: linkedVehicle.paymentClaimedAt || now,
+      updatedAt: now
+    });
+  }
+  Object.assign(request, { vehicleClaimStatus: 'Claimed after verified payment', vehicleClaimedAt: now });
+  Object.assign(session, { vehicleClaimStatus: 'Claimed after verified payment', vehicleClaimedAt: session.vehicleClaimedAt || now, updatedAt: now });
+  Object.assign(application, {
+    status: request.paymentType === 'Nonrefundable down payment' ? 'Deposit paid - completing onboarding' : 'Payment received - completing onboarding',
+    stage: 'Paid onboarding',
+    vehicleClaimedAt: application.vehicleClaimedAt || now,
+    updatedAt: now
+  });
+  return { allowed: true, claimed: true, firstClaim, vehicle, linkedVehicle, session, application };
+}
 function controlledStripePilotVinReady(value) {
   const normalized = String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(normalized)) return false;
@@ -11011,6 +11123,13 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
   if (existing) return existing;
   const gate = nativeOnboardingReadyForPickup(data, session, application);
   if (!gate.ready || !gate.recurring) return null;
+  const claimRequest = Number(application.pricingSnapshot && application.pricingSnapshot.downPayment || 0) > 0 ? gate.deposit : gate.firstWeek;
+  const claim = claimOnlineVehicleAfterVerifiedPayment(data, claimRequest || gate.firstWeek || gate.deposit || {});
+  if (!claim.allowed || onlineVehiclePaymentClaimApplicationId(vehicle) !== String(application.id || '')) {
+    session.pickupStatus = 'Vehicle payment claim needs owner review';
+    session.pickupError = 'This vehicle is not claimed by this paid application. Do not schedule or release it.';
+    return null;
+  }
   const settings = nativeSite.publicSettings(data);
   const dateCheck = onboarding.pickupWindow(settings, session.requestedPickupDate);
   if (!dateCheck.ok) {
@@ -11196,6 +11315,14 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (/picked up|completed/i.test(String(appointment.status || ''))) return { appointment, alreadyCompleted: true };
   const pickupSession = (data.onboardingSessions || []).find(row => row.id === appointment.onboardingSessionId) || null;
   const pickupApplication = (data.applications || []).find(row => row.id === appointment.applicationId) || null;
+  if (!pickupSession || !pickupApplication) throw new Error('The connected onboarding and application records are required before pickup.');
+  const pickupGate = nativeOnboardingReadyForPickup(data, pickupSession, pickupApplication);
+  if (!pickupGate.paymentsReady) throw new Error('The verified down payment and first weekly payment must both be complete before this car can be marked Rented.');
+  const pickupOnlineVehicle = onboarding.findPublicVehicle(data, appointment.onlineVehicleId || pickupApplication.onlineVehicleId);
+  if (!pickupOnlineVehicle || !onlineVehicleAvailableForApplicationPayment(pickupOnlineVehicle, pickupApplication)) throw new Error('This vehicle is not claimed by this paid customer. Do not release it.');
+  const pickupClaimRequest = Number(pickupApplication.pricingSnapshot && pickupApplication.pricingSnapshot.downPayment || 0) > 0 ? pickupGate.deposit : pickupGate.firstWeek;
+  const pickupClaim = claimOnlineVehicleAfterVerifiedPayment(data, pickupClaimRequest || pickupGate.firstWeek || pickupGate.deposit || {});
+  if (!pickupClaim.allowed || onlineVehiclePaymentClaimApplicationId(pickupOnlineVehicle) !== String(pickupApplication.id || '')) throw new Error('This vehicle payment claim needs owner review before release.');
   const insuranceDocument = (data.documents || []).find(row => row.onboardingSessionId === appointment.onboardingSessionId && row.documentKind === 'insurance' && !/correction/i.test(String(row.status || '')));
   const insuranceProvider = onboarding.text(payload.insuranceProvider || pickupApplication && pickupApplication.insuranceProvider, 160);
   const insurancePolicyNumber = onboarding.text(payload.insurancePolicyNumber || pickupApplication && pickupApplication.insurancePolicyNumber, 120);
@@ -18789,8 +18916,17 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
     const session = (data.onboardingSessions || []).find(row => row.id === request.onboardingSessionId);
     const application = (data.applications || []).find(row => row.id === request.applicationId);
     const vehicle = application && onboarding.findPublicVehicle(data, request.onlineVehicleId || application.onlineVehicleId);
-    if (session) session.status = (request.paymentType || 'Payment') + ' paid';
-    if (session && application && vehicle) finalizeNativePickup(data, session, application, vehicle);
+    const claim = claimOnlineVehicleAfterVerifiedPayment(data, request, { paidAt });
+    if (!claim.allowed) {
+      payment.status = 'Paid - vehicle conflict / refund required';
+      payment.tone = 'bad';
+      payment.ownerReviewRequired = true;
+      payment.notes = [payment.notes, 'The vehicle was already claimed by another verified payment. Refund review is required.'].filter(Boolean).join('\n');
+      if (recurring) Object.assign(recurring, { status: 'Payment conflict - refund required', tone: 'bad', autoChargeEnabled: false, ownerReviewRequired: true });
+    } else {
+      if (session) session.status = (request.paymentType || 'Payment') + ' paid';
+      if (session && application && vehicle) finalizeNativePickup(data, session, application, vehicle);
+    }
   }
   return request;
 }
@@ -21033,26 +21169,9 @@ const server = http.createServer(async (req, res) => {
       const onboardingProvider = normalizedPaymentProvider(WOA_ONBOARDING_PAYMENT_PROVIDER) === 'stripe' ? 'stripe' : 'clover';
       const onboardingIdentityProvider = IDENTITY_PROVIDER === 'stripe' ? 'stripe' : 'manual';
       const session = onboarding.createSession(data, app, { name: app.name || 'Website applicant', role: 'Customer' }, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
-      const linkedVehicle = (data.vehicles || []).find(row => row.id === selectedVehicle.platformVehicleId);
       Object.assign(app, { stage: 'Onboarding', status: 'Customer setup in progress', onboardingStatus: 'Secure setup ready', pricingSnapshot: app.pricingSnapshot || pricing, updatedAt: submittedAt });
-      Object.assign(selectedVehicle, {
-        holdPreviousPublished: typeof selectedVehicle.holdPreviousPublished === 'boolean' ? selectedVehicle.holdPreviousPublished : !!selectedVehicle.published,
-        holdPreviousAvailability: selectedVehicle.holdPreviousAvailability || selectedVehicle.availability || 'Available',
-        published: false,
-        availability: 'Held for customer setup',
-        heldFor: app.name || '',
-        heldApplicationId: app.id,
-        heldUntil: session.expiresAt,
-        updatedAt: submittedAt
-      });
-      if (linkedVehicle) Object.assign(linkedVehicle, {
-        holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready',
-        status: 'Pending customer setup',
-        heldFor: app.name || '',
-        heldApplicationId: app.id,
-        heldUntil: session.expiresAt,
-        updatedAt: submittedAt
-      });
+      // Applications, document review, signatures, and card setup do not reserve inventory.
+      // The first verified required payment claims and unpublishes the vehicle.
       if (smsConsentGranted) {
         messagingConsent.recordConsent(data, {
           phone,
@@ -21083,6 +21202,8 @@ const server = http.createServer(async (req, res) => {
           session.publicUrl,
           '',
           'You can complete the pickup request, private license/selfie screening, exact agreement, and no-charge card setup before WheelsonAuto makes one final decision.',
+          '',
+          'The vehicle remains available online until a required payment is successfully verified. Applying, signing, and saving a card do not reserve it.',
           '',
           'Important: active full-coverage insurance for this exact vehicle and VIN must be verified before the vehicle can be released. You can upload proof near the end or request help at pickup.',
           '',
@@ -21500,6 +21621,7 @@ const server = http.createServer(async (req, res) => {
         if (!cardReady) return json(res, 409, { ok: false, error: 'Complete ' + providerName + ' card setup before making the required payments.' });
         const kind = payload.paymentType === 'deposit' ? 'deposit' : payload.paymentType === 'first_week' ? 'first_week' : '';
         if (!kind) return json(res, 400, { ok: false, error: 'Choose the deposit or first weekly payment.' });
+        if (!onlineVehicleAvailableForApplicationPayment(vehicle, application)) return json(res, 409, { ok: false, error: 'Another customer already paid toward this vehicle, so it is no longer available. No checkout was opened and no charge was made.' });
         const pricing = application.pricingSnapshot || onboarding.pricingSnapshot(vehicle);
         const requests = nativeOnboardingPaymentRequests(data, session, application, paymentProvider);
         const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
@@ -24001,8 +24123,7 @@ const server = http.createServer(async (req, res) => {
       if (onboarding.applicationBlocksOnboarding(application)) return json(res, 409, { ok: false, error: 'Denied or archived applications cannot create onboarding links.' });
       const vehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
       if (!vehicle) return json(res, 409, { ok: false, error: 'The application is not connected to a native online vehicle.' });
-      const competingSession = data.onboardingSessions.find(row => row.onlineVehicleId === vehicle.id && row.applicationId !== application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
-      if (competingSession || vehicle.heldApplicationId && vehicle.heldApplicationId !== application.id) return json(res, 409, { ok: false, error: 'This vehicle is already held in another active onboarding file. Resolve that file before approving a second customer.' });
+      if (!onlineVehicleAvailableForApplicationPayment(vehicle, application)) return json(res, 409, { ok: false, error: 'This vehicle was already claimed by another customer payment.' });
       const onboardingProvider = normalizedPaymentProvider(payload.paymentProvider || WOA_ONBOARDING_PAYMENT_PROVIDER);
       if (!['clover', 'stripe'].includes(onboardingProvider)) return json(res, 400, { ok: false, error: 'Choose Clover or Stripe for this onboarding payment path.' });
       if (onboardingProvider === 'stripe') {
@@ -24017,10 +24138,9 @@ const server = http.createServer(async (req, res) => {
         try { assertStripeIdentityPreparationReady(); } catch (error) { return json(res, Number(error.statusCode || 503), { ok: false, code: error.code, error: error.message, missing: error.missing || [] }); }
       }
       const session = onboarding.createSession(data, application, user, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
-      const linkedVehicle = (data.vehicles || []).find(row => row.id === vehicle.platformVehicleId);
       Object.assign(application, { stage: 'Approved', status: 'Approved - onboarding sent', approvedAt: new Date().toISOString(), approvedBy: user.name || user.username || user.role, pricingSnapshot: application.pricingSnapshot || onboarding.pricingSnapshot(vehicle) });
-      Object.assign(vehicle, { holdPreviousPublished: typeof vehicle.holdPreviousPublished === 'boolean' ? vehicle.holdPreviousPublished : !!vehicle.published, holdPreviousAvailability: vehicle.holdPreviousAvailability || vehicle.availability || 'Available', published: false, availability: 'Held for onboarding', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
-      if (linkedVehicle) Object.assign(linkedVehicle, { holdPreviousStatus: linkedVehicle.holdPreviousStatus || linkedVehicle.status || 'Ready', status: 'Pending application', heldFor: application.name || '', heldApplicationId: application.id, heldUntil: session.expiresAt, updatedAt: new Date().toISOString() });
+      // Staff approval prepares this customer's file but does not reserve the car.
+      // Inventory remains public until a required payment is verified.
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       data.messages.unshift({ id: 'msg-onboarding-' + crypto.randomBytes(7).toString('hex'), applicationId: application.id, customer: application.name || '', phone: application.phone || '', email: application.email || '', direction: 'Draft', channel: 'SMS', template: 'Application approved', subject: 'Application approved', status: 'Ready to send', tone: 'blue', body: 'Hi ' + (application.firstName || application.name || 'there') + ', your WheelsonAuto application for the ' + nativeSite.vehicleTitle(vehicle) + ' was approved. Complete your secure onboarding within seven days: ' + session.publicUrl, createdAt: new Date().toISOString(), source: 'Native onboarding' });
       appendAuditLog(data, user, 'Application approved and onboarding created', [application.name || 'Applicant', nativeSite.vehicleTitle(vehicle), paymentProviderLabel(onboardingProvider), session.id]);

@@ -164,12 +164,12 @@ async function main() {
     const savedApplication = (applicationState.json.applications || []).find(app => app.id === publicApplication.json.application.id);
     const savedPortal = (applicationState.json.customerAccounts || []).find(account => account.applicationId === savedApplication.id);
     const savedSession = (applicationState.json.onboardingSessions || []).find(session => session.applicationId === savedApplication.id);
-    const heldOnlineVehicle = (applicationState.json.onlineVehicles || []).find(vehicle => vehicle.id === onlineVehicle.json.vehicle.id);
-    const heldFleetVehicle = (applicationState.json.vehicles || []).find(vehicle => vehicle.id === duplicateSmokeVehicles[0].id);
+    const availableOnlineVehicle = (applicationState.json.onlineVehicles || []).find(vehicle => vehicle.id === onlineVehicle.json.vehicle.id);
+    const availableFleetVehicle = (applicationState.json.vehicles || []).find(vehicle => vehicle.id === duplicateSmokeVehicles[0].id);
     assert(savedApplication && savedApplication.stage === 'Onboarding' && savedApplication.onlineVehicleId === onlineVehicle.json.vehicle.id, 'Native public application is missing its selected online vehicle and automatic setup state in admin data.');
     assert(savedApplication.vehicleId === duplicateSmokeVehicles[0].id && savedPortal, 'Native application must connect the fleet car and customer portal draft immediately.');
     assert(savedSession && /\/onboard\//.test(String(publicApplication.json.onboardingUrl || '')), 'Native application must create and return one secure onboarding session immediately.');
-    assert(heldOnlineVehicle && heldOnlineVehicle.published === false && /held for customer setup/i.test(String(heldOnlineVehicle.availability || '')) && heldFleetVehicle && /pending customer setup/i.test(String(heldFleetVehicle.status || '')), 'The selected online and internal fleet records must be held together during customer setup.');
+    assert(availableOnlineVehicle && availableOnlineVehicle.published === true && /available/i.test(String(availableOnlineVehicle.availability || '')) && !availableOnlineVehicle.heldApplicationId && availableFleetVehicle && /^ready$/i.test(String(availableFleetVehicle.status || '')) && !availableFleetVehicle.heldApplicationId, 'Applying, signing, or saving a card must not hold or hide a vehicle before a required payment is verified.');
 
     const mechanic = await request(base, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
