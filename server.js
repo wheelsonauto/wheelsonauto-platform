@@ -11999,6 +11999,94 @@ function stripeWebhookDestinationEvidence(data = {}) {
     error
   };
 }
+async function refreshStripeLaunchReadiness(user = { name: 'WheelsonAuto production audit', role: 'Owner' }) {
+  const data = await readData();
+  data.integrations = data.integrations || {};
+  data.integrations.stripe = data.integrations.stripe || {};
+  const checkedAt = new Date().toISOString();
+  const [accountResult, destinationResult] = await Promise.allSettled([
+    stripe.retrieveAccount(),
+    stripe.listWebhookEndpoints({ limit: 100 })
+  ]);
+  if (accountResult.status === 'fulfilled') {
+    const account = accountResult.value;
+    const requirements = account && account.requirements || {};
+    const capabilities = account && account.capabilities || {};
+    Object.assign(data.integrations.stripe, {
+      lastAccountHealthAt: checkedAt,
+      lastAccountHealthSuccess: true,
+      lastAccountHealthKeyMode: STRIPE_KEY_MODE,
+      lastAccountId: String(account && account.id || ''),
+      lastAccountCountry: String(account && account.country || ''),
+      lastAccountChargesEnabled: account && account.charges_enabled === true,
+      lastAccountPayoutsEnabled: account && account.payouts_enabled === true,
+      lastAccountDetailsSubmitted: account && account.details_submitted === true,
+      lastAccountCardPaymentsCapability: String(capabilities.card_payments || ''),
+      lastAccountTransfersCapability: String(capabilities.transfers || ''),
+      lastAccountRequirementsCurrentlyDueCount: Array.isArray(requirements.currently_due) ? requirements.currently_due.length : 0,
+      lastAccountRequirementsPastDueCount: Array.isArray(requirements.past_due) ? requirements.past_due.length : 0,
+      lastAccountRequirementsPendingVerificationCount: Array.isArray(requirements.pending_verification) ? requirements.pending_verification.length : 0,
+      lastAccountRequirementsEventuallyDueCount: Array.isArray(requirements.eventually_due) ? requirements.eventually_due.length : 0,
+      lastAccountDisabledReason: String(requirements.disabled_reason || ''),
+      lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
+      lastAccountHealthError: ''
+    });
+  } else {
+    const error = String(accountResult.reason && accountResult.reason.message || accountResult.reason || 'Stripe account check failed.').slice(0, 500);
+    Object.assign(data.integrations.stripe, {
+      lastAccountHealthAt: checkedAt,
+      lastAccountHealthSuccess: false,
+      lastAccountHealthKeyMode: STRIPE_KEY_MODE,
+      lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
+      lastAccountHealthError: error
+    });
+  }
+  if (destinationResult.status === 'fulfilled') {
+    const endpoints = Array.isArray(destinationResult.value && destinationResult.value.data) ? destinationResult.value.data : [];
+    const expectedUrl = normalizedStripeWebhookUrl(stripeWebhookContract().endpoint);
+    const destination = endpoints
+      .filter(item => normalizedStripeWebhookUrl(item && item.url) === expectedUrl)
+      .sort((left, right) => Number(String(right && right.status || '').toLowerCase() === 'enabled') - Number(String(left && left.status || '').toLowerCase() === 'enabled'))[0] || null;
+    Object.assign(data.integrations.stripe, {
+      lastWebhookDestinationCheckAt: checkedAt,
+      lastWebhookDestinationCheckSuccess: true,
+      lastWebhookDestinationKeyMode: STRIPE_KEY_MODE,
+      lastWebhookDestinationId: String(destination && destination.id || ''),
+      lastWebhookDestinationUrl: String(destination && destination.url || ''),
+      lastWebhookDestinationStatus: String(destination && destination.status || ''),
+      lastWebhookDestinationEnabledEvents: Array.isArray(destination && destination.enabled_events) ? destination.enabled_events.map(value => String(value || '')) : [],
+      lastWebhookDestinationApiVersion: String(destination && destination.api_version || ''),
+      lastWebhookDestinationConfigurationFingerprint: stripeWebhookConfigurationFingerprint(),
+      lastWebhookDestinationError: destination ? '' : 'Stripe returned no webhook destination for the exact WheelsonAuto production endpoint.'
+    });
+  } else {
+    const error = String(destinationResult.reason && destinationResult.reason.message || destinationResult.reason || 'Stripe webhook destination check failed.').slice(0, 500);
+    Object.assign(data.integrations.stripe, {
+      lastWebhookDestinationCheckAt: checkedAt,
+      lastWebhookDestinationCheckSuccess: false,
+      lastWebhookDestinationKeyMode: STRIPE_KEY_MODE,
+      lastWebhookDestinationConfigurationFingerprint: stripeWebhookConfigurationFingerprint(),
+      lastWebhookDestinationError: error
+    });
+  }
+  const stripeAccount = stripeAccountLiveEvidence(data);
+  const stripeWebhookDestination = stripeWebhookDestinationEvidence(data);
+  const accountError = accountResult.status === 'rejected' ? String(accountResult.reason && accountResult.reason.message || accountResult.reason || 'Stripe account check failed.').slice(0, 500) : '';
+  appendAuditLog(data, user, accountResult.status === 'fulfilled' ? 'Stripe account readiness checked' : 'Stripe account readiness failed', [stripeAccount.accountId || STRIPE_KEY_MODE, stripeAccount.live ? 'Account ready' : stripeAccount.error, stripeWebhookDestination.live ? 'Webhook destination ready' : stripeWebhookDestination.error]);
+  await protectConcurrentLocalWrites(data, { preferIncoming: true });
+  await writeData(data);
+  return {
+    statusCode: accountResult.status === 'fulfilled' ? 200 : Number(accountResult.reason && accountResult.reason.statusCode || 502),
+    body: {
+      ok: accountResult.status === 'fulfilled',
+      ...(accountError ? { error: accountError } : {}),
+      stripeAccount,
+      stripeWebhookDestination,
+      webhookContract: stripeWebhookContract(),
+      message: [stripeAccount.summary, stripeWebhookDestination.summary].filter(Boolean).join(' ')
+    }
+  };
+}
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
   const expectedFingerprint = stripeWebhookConfigurationFingerprint();
@@ -24976,89 +25064,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/integrations/stripe/readiness' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can verify Stripe account activation.' });
-      const data = await readData();
-      data.integrations = data.integrations || {};
-      data.integrations.stripe = data.integrations.stripe || {};
-      const checkedAt = new Date().toISOString();
-      const [accountResult, destinationResult] = await Promise.allSettled([
-        stripe.retrieveAccount(),
-        stripe.listWebhookEndpoints({ limit: 100 })
-      ]);
-      if (accountResult.status === 'fulfilled') {
-        const account = accountResult.value;
-        const requirements = account && account.requirements || {};
-        const capabilities = account && account.capabilities || {};
-        Object.assign(data.integrations.stripe, {
-          lastAccountHealthAt: checkedAt,
-          lastAccountHealthSuccess: true,
-          lastAccountHealthKeyMode: STRIPE_KEY_MODE,
-          lastAccountId: String(account && account.id || ''),
-          lastAccountCountry: String(account && account.country || ''),
-          lastAccountChargesEnabled: account && account.charges_enabled === true,
-          lastAccountPayoutsEnabled: account && account.payouts_enabled === true,
-          lastAccountDetailsSubmitted: account && account.details_submitted === true,
-          lastAccountCardPaymentsCapability: String(capabilities.card_payments || ''),
-          lastAccountTransfersCapability: String(capabilities.transfers || ''),
-          lastAccountRequirementsCurrentlyDueCount: Array.isArray(requirements.currently_due) ? requirements.currently_due.length : 0,
-          lastAccountRequirementsPastDueCount: Array.isArray(requirements.past_due) ? requirements.past_due.length : 0,
-          lastAccountRequirementsPendingVerificationCount: Array.isArray(requirements.pending_verification) ? requirements.pending_verification.length : 0,
-          lastAccountRequirementsEventuallyDueCount: Array.isArray(requirements.eventually_due) ? requirements.eventually_due.length : 0,
-          lastAccountDisabledReason: String(requirements.disabled_reason || ''),
-          lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
-          lastAccountHealthError: ''
-        });
-      } else {
-        const error = String(accountResult.reason && accountResult.reason.message || accountResult.reason || 'Stripe account check failed.').slice(0, 500);
-        Object.assign(data.integrations.stripe, {
-          lastAccountHealthAt: checkedAt,
-          lastAccountHealthSuccess: false,
-          lastAccountHealthKeyMode: STRIPE_KEY_MODE,
-          lastAccountHealthConfigurationFingerprint: stripeAccountConfigurationFingerprint(),
-          lastAccountHealthError: error
-        });
-      }
-      if (destinationResult.status === 'fulfilled') {
-        const endpoints = Array.isArray(destinationResult.value && destinationResult.value.data) ? destinationResult.value.data : [];
-        const expectedUrl = normalizedStripeWebhookUrl(stripeWebhookContract().endpoint);
-        const destination = endpoints
-          .filter(item => normalizedStripeWebhookUrl(item && item.url) === expectedUrl)
-          .sort((left, right) => Number(String(right && right.status || '').toLowerCase() === 'enabled') - Number(String(left && left.status || '').toLowerCase() === 'enabled'))[0] || null;
-        Object.assign(data.integrations.stripe, {
-          lastWebhookDestinationCheckAt: checkedAt,
-          lastWebhookDestinationCheckSuccess: true,
-          lastWebhookDestinationKeyMode: STRIPE_KEY_MODE,
-          lastWebhookDestinationId: String(destination && destination.id || ''),
-          lastWebhookDestinationUrl: String(destination && destination.url || ''),
-          lastWebhookDestinationStatus: String(destination && destination.status || ''),
-          lastWebhookDestinationEnabledEvents: Array.isArray(destination && destination.enabled_events) ? destination.enabled_events.map(value => String(value || '')) : [],
-          lastWebhookDestinationApiVersion: String(destination && destination.api_version || ''),
-          lastWebhookDestinationConfigurationFingerprint: stripeWebhookConfigurationFingerprint(),
-          lastWebhookDestinationError: destination ? '' : 'Stripe returned no webhook destination for the exact WheelsonAuto production endpoint.'
-        });
-      } else {
-        const error = String(destinationResult.reason && destinationResult.reason.message || destinationResult.reason || 'Stripe webhook destination check failed.').slice(0, 500);
-        Object.assign(data.integrations.stripe, {
-          lastWebhookDestinationCheckAt: checkedAt,
-          lastWebhookDestinationCheckSuccess: false,
-          lastWebhookDestinationKeyMode: STRIPE_KEY_MODE,
-          lastWebhookDestinationConfigurationFingerprint: stripeWebhookConfigurationFingerprint(),
-          lastWebhookDestinationError: error
-        });
-      }
-      const stripeAccount = stripeAccountLiveEvidence(data);
-      const stripeWebhookDestination = stripeWebhookDestinationEvidence(data);
-      const accountError = accountResult.status === 'rejected' ? String(accountResult.reason && accountResult.reason.message || accountResult.reason || 'Stripe account check failed.').slice(0, 500) : '';
-      appendAuditLog(data, user, accountResult.status === 'fulfilled' ? 'Stripe account readiness checked' : 'Stripe account readiness failed', [stripeAccount.accountId || STRIPE_KEY_MODE, stripeAccount.live ? 'Account ready' : stripeAccount.error, stripeWebhookDestination.live ? 'Webhook destination ready' : stripeWebhookDestination.error]);
-      await protectConcurrentLocalWrites(data, { preferIncoming: true });
-      await writeData(data);
-      return json(res, accountResult.status === 'fulfilled' ? 200 : Number(accountResult.reason && accountResult.reason.statusCode || 502), {
-        ok: accountResult.status === 'fulfilled',
-        ...(accountError ? { error: accountError } : {}),
-        stripeAccount,
-        stripeWebhookDestination,
-        webhookContract: stripeWebhookContract(),
-        message: [stripeAccount.summary, stripeWebhookDestination.summary].filter(Boolean).join(' ')
-      });
+      const result = await refreshStripeLaunchReadiness(user);
+      return json(res, result.statusCode, result.body);
     }
     if (url.pathname === '/api/integrations/twilio/configure' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can connect the Twilio inbox.' });
@@ -27442,6 +27449,7 @@ module.exports = {
   recordStripeWebhookProof,
   processedStripeSetupEventMatches,
   stripeWebhookDestinationEvidence,
+  refreshStripeLaunchReadiness,
   stripeIdentityLiveWebhookEvidence,
   stripeWebhookContract,
   STRIPE_REQUIRED_WEBHOOK_EVENTS,
