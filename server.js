@@ -20739,7 +20739,7 @@ const server = http.createServer(async (req, res) => {
       if (parts[2] === 'stripe-success') {
         try {
           await completeStripeCardSetup(data, request, String(url.searchParams.get('session_id') || ''));
-          if (request.onboardingReturnUrl) return send(res, 302, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
+          if (request.onboardingReturnUrl) return send(res, 303, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
           return send(res, 200, paymentResultHtml('Card saved securely', 'Stripe confirmed the card setup. If Clover was already active, WheelsonAuto will keep it active until the owner confirms the provider switch.', '/customer', 'Back to my account'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         } catch (err) {
           const customerMessage = recordPublicCardSetupFailure(request, err, 'stripe');
@@ -20751,6 +20751,7 @@ const server = http.createServer(async (req, res) => {
         if (normalizedPaymentProvider(request.paymentProvider || 'clover') === 'stripe' && request.stripeLivemode !== true && !stripeMigration.isolatedProviderTestMode(process.env)) {
           return send(res, 409, stripeSetupCardHtml(request, 'This Stripe card has no verified live-mode proof. WheelsonAuto must send a fresh live setup link before it can be used.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
         }
+        if (request.onboardingReturnUrl) return send(res, 303, '', 'text/plain', { Location: request.onboardingReturnUrl, ...PUBLIC_LINK_RESPONSE_HEADERS });
         return send(res, 200, paymentResultHtml('Card already saved', 'This WheelsonAuto card setup link has already been completed.'), 'text/html; charset=utf-8', PUBLIC_LINK_RESPONSE_HEADERS);
       }
       if (markPublicLinkExpired(request)) await writeData(data);

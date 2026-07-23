@@ -406,6 +406,7 @@ async function main() {
     const setupCheckoutRequest = fakeStripe.state.requests.filter(row => row.method === 'POST' && row.pathname === '/v1/checkout/sessions').at(-1);
     const setupCheckoutForm = new URLSearchParams(setupCheckoutRequest && setupCheckoutRequest.body || '');
     assert(setupCheckoutForm.get('mode') === 'setup' && setupCheckoutForm.get('currency') === 'usd' && setupCheckoutForm.get('payment_method_types[0]') === 'card', 'Stripe card setup must create a USD, card-only hosted setup session.');
+    assert(setupCheckoutForm.get('success_url') === 'http://127.0.0.1:4183/setup-card/' + cardRequest.id + '/stripe-success?session_id={CHECKOUT_SESSION_ID}', 'Stripe card setup must return through the exact verified WheelsonAuto completion route.');
     assert(!setupCheckoutForm.has('setup_intent_data[usage]'), 'Stripe Checkout setup must not send the unsupported setup_intent_data[usage] parameter that prevents hosted card fields from rendering.');
     saved = await readSaved(dataDir);
     const openedCardRequest = saved.cardSetupRequests.find(row => row.id === cardRequest.id);
@@ -443,6 +444,8 @@ async function main() {
     assert(cardReadyRecurring.paymentProvider === 'stripe' && cardReadyRecurring.stripeCustomerId === 'cus_test_lifecycle' && cardReadyRecurring.stripePaymentMethodId === 'pm_test_lifecycle' && cardReadyRecurring.stripeCardLast4 === '4242', 'WheelsonAuto must retain only Stripe customer/payment-method references and safe card display data.');
     assert(cardReadyRecurring.stripeCardSetupStatus === 'Saved' && !cardReadyRecurring.stripeCardSetupError && !cardReadyRecurring.stripeCardSetupCustomerMessage && !cardReadyRecurring.stripeCardSetupFailedAt, 'A successful retry must clear every prior Stripe setup failure marker and customer retry message.');
     assert(!cardReadyRequest.cardSetupCustomerMessage && !cardReadyRequest.stripeCardSetupCustomerMessage && !cardReadyRequest.lastError, 'A successful card retry must also clear the public-link failure state and private setup error.');
+    const completedCardReturn = await request(server, 'GET', '/setup-card/' + cardRequest.id);
+    assert(completedCardReturn.status === 303 && completedCardReturn.location === 'http://127.0.0.1:4183/onboard/' + token, 'An already-completed onboarding card link must return directly to the exact onboarding file instead of stranding the customer on a terminal setup page.');
     assert(!JSON.stringify(saved).includes('4242424242424242'), 'WheelsonAuto must never store a full card number.');
     assert(saved.integrations.stripe.lastLaunchWebhookType === 'setup_intent.succeeded' && saved.integrations.stripe.lastLaunchWebhookEventId === setupEvent.id, 'An exact signed SetupIntent must count as current launch webhook evidence.');
     const firstSetupCompletedAt = saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt;
