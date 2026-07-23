@@ -192,11 +192,11 @@ async function main() {
     assert(profile.status === 200, 'Profile and pickup must save before identity files.');
     const image = pngDataUrl();
     const screeningPage = await request(server, 'GET', '/onboard/' + token);
-    assert(/data-selfie-capture/.test(screeningPage.text) && /Hold your physical driver license just below your chin/.test(screeningPage.text), 'The preliminary selfie step must use the guided live-camera capture and clear license-below-chin instructions.');
+    assert((screeningPage.text.match(/data-live-document-capture/g) || []).length === 3 && /hold your physical driver license directly below your chin/i.test(screeningPage.text), 'The preliminary license and selfie steps must all use guided live-camera capture with clear license-below-chin instructions.');
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
-      { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
-      { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
-      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image }
+      { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'environment' },
+      { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'environment' },
+      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'user' }
     ] } });
     assert(documents.status === 201 && documents.json.documents.length === 3, 'The low-cost WheelsonAuto screening must store the two license sides and live selfie before Stripe Identity starts.');
     const pageBefore = await request(server, 'GET', '/onboard/' + token);
@@ -227,9 +227,9 @@ async function main() {
     const correction = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'request_correction', correctionKinds: ['identity_selfie'], notes: 'Retake the live selfie with the physical license below the chin.' } });
     assert(correction.status === 200, 'The combined review must be able to request only the specific screening file that needs correction.');
     const correctionPage = await request(server, 'GET', '/onboard/' + token);
-    assert(/Correction requested for Identity selfie/i.test(correctionPage.text) && /data-selfie-capture/.test(correctionPage.text) && !/name="driver_license_front"/.test(correctionPage.text), 'A selfie correction must reopen only the guided live-camera capture.');
+    assert(/Correction requested for Identity selfie/i.test(correctionPage.text) && /data-selfie-capture/.test(correctionPage.text) && !/data-document-kind="driver_license_front"/.test(correctionPage.text), 'A selfie correction must reopen only the guided live-camera capture.');
     const correctedSelfie = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
-      { kind: 'identity_selfie', name: 'live-selfie-with-license-corrected.png', type: 'image/png', dataUrl: image }
+      { kind: 'identity_selfie', name: 'live-selfie-with-license-corrected.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'user' }
     ] } });
     assert(correctedSelfie.status === 201 && correctedSelfie.json.documents.length === 1, 'A requested selfie correction must replace only that private file.');
     const finalApproval = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Preliminary file, signature, VIN, and saved card all reviewed.' } });

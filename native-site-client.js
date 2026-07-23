@@ -183,20 +183,22 @@
     if(clear) clear.addEventListener('click', function(){ context.clearRect(0,0,canvas.width,canvas.height); canvas.dataset.signed=''; var hidden=one('[data-signature-data]',canvas.closest('form')); if(hidden) hidden.value=''; });
   });
 
-  all('[data-selfie-capture]').forEach(function(shell){
-    var video = one('[data-selfie-video]', shell), canvas = one('[data-selfie-canvas]', shell), preview = one('[data-selfie-preview]', shell), placeholder = one('[data-selfie-placeholder]', shell), hidden = one('[data-live-selfie]', shell), openButton = one('[data-selfie-open]', shell), takeButton = one('[data-selfie-take]', shell), retakeButton = one('[data-selfie-retake]', shell), errorBox = one('[data-selfie-error]', shell), browserHelp = one('[data-selfie-browser-help]', shell), shareButton = one('[data-selfie-share]', shell), copyButton = one('[data-selfie-copy]', shell), stream = null;
-    function stopCamera(){ if(stream) stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
+  var activeCameraStop = null;
+  all('[data-live-document-capture]').forEach(function(shell){
+    var video = one('[data-camera-video]', shell), canvas = one('[data-camera-canvas]', shell), preview = one('[data-camera-preview]', shell), placeholder = one('[data-camera-placeholder]', shell), hidden = one('[data-live-document]', shell), openButton = one('[data-camera-open]', shell), takeButton = one('[data-camera-take]', shell), retakeButton = one('[data-camera-retake]', shell), errorBox = one('[data-camera-error]', shell), statusBox = one('[data-camera-status]', shell), browserHelp = one('[data-camera-browser-help]', shell), shareButton = one('[data-camera-share]', shell), copyButton = one('[data-camera-copy]', shell), documentKind = String(shell.getAttribute('data-document-kind') || ''), facingMode = String(shell.getAttribute('data-camera-facing') || 'environment'), stream = null, analysisTimer = null, analysisBusy = false, stableFrames = 0;
+    function setStatus(text, ready){ if(statusBox){ statusBox.textContent = text || ''; statusBox.classList.toggle('ready', !!ready); } }
+    function stopCamera(){ if(analysisTimer) window.clearInterval(analysisTimer); analysisTimer = null; if(stream) stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; analysisBusy = false; stableFrames = 0; if(activeCameraStop === stopCamera) activeCameraStop = null; }
     function showError(text, offerBrowserHelp){ errorBox.textContent = text; errorBox.hidden = !text; if(browserHelp) browserHelp.hidden = !offerBrowserHelp; }
     function cameraErrorMessage(error){
       var name = String(error && error.name || '');
       if(name === 'NotAllowedError' || name === 'SecurityError') return 'Camera access is blocked in this browser. Open this saved setup in Safari, Chrome, or Edge and allow camera access.';
-      if(name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No camera was found on this device. Continue this saved setup on a phone or computer with a front camera.';
+      if(name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No camera was found on this device. Continue this saved setup on a phone or computer with a camera.';
       if(name === 'NotReadableError' || name === 'TrackStartError') return 'The camera is busy or unavailable. Close other apps using the camera, then try again.';
       if(name === 'AbortError') return 'Camera startup was interrupted. Try again, or continue this saved setup in Safari, Chrome, or Edge.';
       return 'This browser could not start the secure live camera. Continue this saved setup in Safari, Chrome, or Edge.';
     }
     async function cameraStream(){
-      try{ return await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1080}, height:{ideal:1440} }, audio:false }); }
+      try{ return await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ideal:facingMode}, width:{ideal:1080}, height:{ideal:1440} }, audio:false }); }
       catch(error){
         var name = String(error && error.name || '');
         if(name !== 'OverconstrainedError' && name !== 'ConstraintNotSatisfiedError') throw error;
@@ -221,19 +223,51 @@
       showError('', false);
       if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ showError('This browser does not expose a secure live camera. Continue this saved setup in Safari, Chrome, or Edge.', true); return; }
       try{
+        if(activeCameraStop && activeCameraStop !== stopCamera) activeCameraStop();
         stopCamera();
         stream = await cameraStream();
         video.srcObject = stream; await video.play();
         video.hidden = false; placeholder.hidden = true; preview.hidden = true; openButton.hidden = true; takeButton.hidden = false; retakeButton.hidden = true;
+        activeCameraStop = stopCamera;
+        setStatus(documentKind === 'identity_selfie' ? 'Center your face and hold the license directly below your chin.' : 'Fit all four license corners inside the guide. Hold still.', false);
+        analysisTimer = window.setInterval(analyzeFrame, 450);
       }catch(error){ stopCamera(); showError(cameraErrorMessage(error), true); }
     }
-    function takePhoto(){
+    function frameQuality(){
+      var width = 180, height = Math.max(120, Math.round(width * video.videoHeight / video.videoWidth)), qualityCanvas = document.createElement('canvas');
+      qualityCanvas.width = width; qualityCanvas.height = height;
+      var context = qualityCanvas.getContext('2d', {willReadFrequently:true});
+      context.drawImage(video, 0, 0, width, height);
+      var pixels = context.getImageData(0, 0, width, height).data, light = 0, edge = 0, samples = 0;
+      for(var y=4;y<height-4;y+=4){ for(var x=4;x<width-4;x+=4){ var index=(y*width+x)*4, previous=(y*width+x-4)*4, value=(pixels[index]*.299+pixels[index+1]*.587+pixels[index+2]*.114), old=(pixels[previous]*.299+pixels[previous+1]*.587+pixels[previous+2]*.114); light+=value; edge+=Math.abs(value-old); samples+=1; } }
+      return { light:samples?light/samples:0, edge:samples?edge/samples:0 };
+    }
+    async function visibleFaceReady(){
+      if(documentKind !== 'identity_selfie' || typeof window.FaceDetector !== 'function') return true;
+      try{ var faces = await new window.FaceDetector({fastMode:true,maxDetectedFaces:2}).detect(video); if(faces.length !== 1) return false; var box=faces[0].boundingBox; return box.width >= video.videoWidth*.2 && box.height >= video.videoHeight*.2; }
+      catch(error){ return true; }
+    }
+    async function analyzeFrame(){
+      if(analysisBusy || !stream || hidden.value || !video.videoWidth) return;
+      analysisBusy = true;
+      try{
+        var quality = frameQuality(), faceReady = await visibleFaceReady(), clear = quality.light >= 45 && quality.light <= 225 && quality.edge >= 5 && faceReady;
+        stableFrames = clear ? stableFrames + 1 : 0;
+        if(!faceReady) setStatus('Keep one face centered inside the oval.', false);
+        else if(quality.light < 45) setStatus('Move to brighter, even lighting.', false);
+        else if(quality.light > 225) setStatus('Reduce glare and direct light on the license.', false);
+        else if(quality.edge < 5) setStatus('Move closer and hold the camera steady so the details are sharp.', false);
+        else if(stableFrames < 4) setStatus('Good position. Hold still ' + (4-stableFrames) + '...', true);
+        if(stableFrames >= 4) takePhoto(true);
+      } finally { analysisBusy = false; }
+    }
+    function takePhoto(automatic){
       if(!stream || !video.videoWidth || !video.videoHeight){ showError('The camera is not ready yet. Hold still and try again.'); return; }
       var width = Math.min(1080, video.videoWidth), height = Math.round(width * video.videoHeight / video.videoWidth);
       canvas.width = width; canvas.height = height; canvas.getContext('2d').drawImage(video, 0, 0, width, height);
-      hidden.value = canvas.toDataURL('image/jpeg', 0.9); preview.src = hidden.value; preview.hidden = false; video.hidden = true; takeButton.hidden = true; retakeButton.hidden = false; stopCamera();
+      hidden.value = canvas.toDataURL('image/jpeg', 0.92); hidden.dataset.capturedAt = new Date().toISOString(); hidden.dataset.cameraFacingMode = facingMode; preview.src = hidden.value; preview.hidden = false; video.hidden = true; takeButton.hidden = true; retakeButton.hidden = false; setStatus(automatic ? 'Captured automatically. Review the photo before submitting.' : 'Photo captured. Review it before submitting.', true); stopCamera();
     }
-    openButton.addEventListener('click', openCamera); takeButton.addEventListener('click', takePhoto); retakeButton.addEventListener('click', function(){ hidden.value = ''; openCamera(); });
+    openButton.addEventListener('click', openCamera); takeButton.addEventListener('click', function(){ takePhoto(false); }); retakeButton.addEventListener('click', function(){ hidden.value = ''; hidden.dataset.capturedAt=''; openCamera(); });
     if(shareButton) shareButton.addEventListener('click', shareSecureLink);
     if(copyButton) copyButton.addEventListener('click', copySecureLink);
     window.addEventListener('pagehide', stopCamera, {once:true});
@@ -252,15 +286,13 @@
       try{
         if(kind === 'profile' && !validateProfile(form, true)) throw new Error('Correct the highlighted profile fields before continuing.');
         if(kind === 'documents'){
-          var documentInputs = all('input[type="file"]', form);
-          payload.documents = await Promise.all(documentInputs.map(async function(input){
-            var document = await filePayload(input && input.files && input.files[0]); document.kind = input.name; return document;
-          }));
-          var liveSelfie = one('[data-live-selfie]', form);
-          if(liveSelfie){
-            if(!liveSelfie.value) throw new Error('Take the live selfie while holding your license below your chin.');
-            payload.documents.push({ name:'live-selfie-with-license.jpg', type:'image/jpeg', dataUrl:liveSelfie.value, kind:'identity_selfie' });
-          }
+          var liveDocuments = all('[data-live-document]', form);
+          payload.documents = liveDocuments.map(function(input){
+            var documentKind = String(input.getAttribute('data-document-kind') || input.name || '');
+            if(!input.value) throw new Error(documentKind === 'identity_selfie' ? 'Take the live selfie while holding your license below your chin.' : 'Take a live photo of the ' + (documentKind === 'driver_license_front' ? 'front' : 'back') + ' of your license.');
+            delete payload[documentKind];
+            return { name:documentKind + '-live.jpg', type:'image/jpeg', dataUrl:input.value, kind:documentKind, captureSource:'live_camera', capturedAt:input.dataset.capturedAt || new Date().toISOString(), cameraFacingMode:input.dataset.cameraFacingMode || (documentKind === 'identity_selfie' ? 'user' : 'environment') };
+          });
         }
         if(kind === 'insurance' && payload.insuranceOption === 'upload'){
           var insuranceInput = one('input[name="insurance"]', form);

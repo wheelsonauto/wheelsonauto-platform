@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-existing-customer-316';
+const ASSET_VERSION = 'platform-20260723-onboarding-camera-317';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10560,7 +10560,11 @@ function nativeOnboardingReadyForPickup(data, session, application, options = {}
   };
 }
 function onlineVehiclePaymentClaimApplicationId(vehicle = {}) {
-  return String(vehicle.paymentClaimApplicationId || vehicle.heldApplicationId || '').trim();
+  const verifiedClaim = String(vehicle.paymentClaimApplicationId || '').trim();
+  if (verifiedClaim) return verifiedClaim;
+  const legacyHold = String(vehicle.heldApplicationId || '').trim();
+  const paidState = /deposit paid|payment received|pickup scheduled|pending pickup|rented|assigned/i.test(String(vehicle.availability || vehicle.status || ''));
+  return legacyHold && (vehicle.paymentClaimedAt || paidState) ? legacyHold : '';
 }
 function onlineVehicleAvailableForApplicationPayment(vehicle, application) {
   const claimedApplicationId = onlineVehiclePaymentClaimApplicationId(vehicle);
@@ -10915,10 +10919,7 @@ function controlledStripePilotSelection(data) {
     const linkedVehicle = platformVehicleId ? (data.vehicles || []).find(row => String(row.id || '') === platformVehicleId) || null : null;
     const applicationSessions = sessions.filter(row => String(row.applicationId || '') === applicationId);
     const session = applicationSessions[0] || null;
-    const competingSession = publicVehicle && sessions.find(row =>
-      String(row.onlineVehicleId || '') === String(publicVehicle.id || '')
-      && String(row.applicationId || '') !== applicationId
-    ) || null;
+    const paymentClaimApplicationId = publicVehicle ? onlineVehiclePaymentClaimApplicationId(publicVehicle) : '';
     const pricing = application.pricingSnapshot || {};
     const weeklyPayment = Number(pricing.weeklyPayment !== undefined ? pricing.weeklyPayment : application.weekly);
     const downPayment = Number(pricing.downPayment !== undefined ? pricing.downPayment : application.down);
@@ -10943,8 +10944,7 @@ function controlledStripePilotSelection(data) {
     if (!Number.isFinite(downPayment) || downPayment < 0) blockers.push('Locked nonrefundable deposit is missing.');
     if (controlledTest && !controlledTestPricing.ready) blockers.push('Controlled Stripe test pricing must be $0-$5 down, $0.01-$5 weekly, and no more than $10 total.');
     if (applicationSessions.length > 1) blockers.push('More than one active onboarding session exists for this application.');
-    if (competingSession) blockers.push('This vehicle is already in another active onboarding file.');
-    if (publicVehicle && publicVehicle.heldApplicationId && String(publicVehicle.heldApplicationId) !== applicationId) blockers.push('This vehicle is held for another application.');
+    if (paymentClaimApplicationId && paymentClaimApplicationId !== applicationId) blockers.push('This vehicle has a verified payment claim from another application.');
     if (!session && publicVehicle && (publicVehicle.published === false || /held|assigned|rented|sold|service/i.test(String(publicVehicle.availability || '')))) blockers.push('This online vehicle is not currently available for a new onboarding file.');
     const eligible = blockers.length === 0;
     const nextActions = controlledStripePilotNextActions(data, application, session);
@@ -21342,6 +21342,13 @@ const server = http.createServer(async (req, res) => {
         const requiredKinds = session.documentReviewStatus === 'Correction requested' && screeningCorrectionKinds.length
           ? screeningCorrectionKinds
           : screeningKinds;
+        const submittedDocuments = Array.isArray(payload.documents) ? payload.documents : [];
+        for (const requiredKind of requiredKinds) {
+          const document = submittedDocuments.find(row => row && row.kind === requiredKind);
+          if (!document || document.captureSource !== 'live_camera' || !/^image\/(?:jpeg|png)$/i.test(String(document.type || '')) || !/^data:image\/(?:jpeg|png);base64,/i.test(String(document.dataUrl || ''))) {
+            return json(res, 400, { ok: false, error: 'Use the live camera to capture the license front, license back, and selfie. Gallery uploads and PDFs are not accepted for identity screening.' });
+          }
+        }
         const saved = await onboarding.saveDocuments(data, session, application, payload.documents, DATA_DIR, PRIVATE_DOCUMENT_STORE, { requiredKinds });
         try {
           const identityFilesReplaced = saved.some(document => ['driver_license_front', 'driver_license_back', 'identity_selfie'].includes(document.documentKind));
@@ -21581,6 +21588,17 @@ const server = http.createServer(async (req, res) => {
         if (recurringCardReadyForProvider(existingRecurring, paymentProvider)) return json(res, 200, { ok: true, message: providerName + ' card is already linked. Continue to the required payments.' });
         const openSetup = (data.cardSetupRequests || []).find(row => row.onboardingSessionId === session.id && normalizedPaymentProvider(row.paymentProvider || 'clover') === paymentProvider && isOpenCardSetupRequest(row));
         if (openSetup) {
+          const returnPathChanged = openSetup.onboardingReturnUrl !== returnUrl || !openSetup.applicationId || !openSetup.onboardingSessionId;
+          Object.assign(openSetup, {
+            applicationId: openSetup.applicationId || application.id,
+            onboardingSessionId: openSetup.onboardingSessionId || session.id,
+            onboardingReturnUrl: returnUrl,
+            updatedAt: new Date().toISOString()
+          });
+          if (returnPathChanged) {
+            await protectConcurrentLocalWrites(data, { preferIncoming: true });
+            await writeData(data);
+          }
           if (paymentProvider === 'stripe') {
             try {
               const checkout = await attachStripeCardSetupCheckout(data, openSetup, req);
@@ -24107,10 +24125,10 @@ const server = http.createServer(async (req, res) => {
         const vehicleVin = String(publicVehicle && publicVehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
         const vehiclePlate = String(publicVehicle && publicVehicle.plate || linkedVehicle && (linkedVehicle.plate || linkedVehicle.stock) || '').trim();
         const activeSessions = (data.onboardingSessions || []).filter(row => row.applicationId === application.id && !/completed|cancelled|expired|replaced|picked up/i.test(String(row.status || '')));
-        const competingSession = publicVehicle && (data.onboardingSessions || []).find(row => String(row.onlineVehicleId || '') === String(publicVehicle.id || '') && row.applicationId !== application.id && !/completed|cancelled|expired|replaced|picked up/i.test(String(row.status || '')));
+        const paymentClaimApplicationId = publicVehicle ? onlineVehiclePaymentClaimApplicationId(publicVehicle) : '';
         if (!publicVehicle || !linkedVehicle || !vehicleVin || !vehiclePlate) return json(res, 409, { ok: false, error: 'Restore is blocked until the exact online vehicle, internal fleet record, VIN, and tag are linked.' });
         if (activeSessions.length) return json(res, 409, { ok: false, error: 'This application already has an active onboarding file. Continue that file instead of restoring it.' });
-        if (competingSession || publicVehicle.heldApplicationId && String(publicVehicle.heldApplicationId) !== String(application.id)) return json(res, 409, { ok: false, error: 'This vehicle is already held for another active onboarding file.' });
+        if (paymentClaimApplicationId && paymentClaimApplicationId !== String(application.id)) return json(res, 409, { ok: false, error: 'This vehicle already has a verified payment claim from another application.' });
         if (publicVehicle.published !== true || !/^available$/i.test(String(publicVehicle.availability || ''))) return json(res, 409, { ok: false, error: 'Restore is blocked until the exact vehicle is published and available.' });
         if (/rented|assigned|sold|service|pending application|held/i.test(String(linkedVehicle.status || ''))) return json(res, 409, { ok: false, error: 'Restore is blocked because the linked fleet vehicle is not ready for a new application.' });
         Object.assign(application, {

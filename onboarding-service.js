@@ -390,6 +390,9 @@ async function saveDocuments(data, session, application, files, dataDir, documen
         contentType: stored.contentType,
         size: stored.size,
         sha256: stored.sha256,
+        captureSource: text(file.captureSource, 40),
+        capturedAt: text(file.capturedAt, 60),
+        cameraFacingMode: text(file.cameraFacingMode, 40),
         storagePath: stored.storagePath,
         storageKey: stored.storageKey || '',
         storageProvider: stored.storageProvider || 'legacy-local',
@@ -561,6 +564,21 @@ function validatePickupTime(value, settings = {}) {
   return nativeSite.pickupTimeSlots(settings).includes(String(value || ''));
 }
 
+function onboardingPaymentPaid(row = {}) {
+  const status = String(row.status || '').trim().toLowerCase();
+  if (!status || /unpaid|not paid|failed|declined|cancel|incomplete|awaiting|pending/.test(status)) return false;
+  return status === 'paid' || status.startsWith('paid through verified ') || /success|succeeded|settled|completed/.test(status) || !!row.paidAt;
+}
+
+function onboardingSessionPaymentsPaid(data = {}, session = {}) {
+  const application = (data.applications || []).find(row => row.id === session.applicationId) || {};
+  const pricing = application.pricingSnapshot || {};
+  const requests = (data.paymentRequests || []).filter(row => row.onboardingSessionId === session.id || row.applicationId === application.id);
+  const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment' && onboardingPaymentPaid(row));
+  const firstWeek = requests.find(row => row.paymentType === 'First weekly payment' && onboardingPaymentPaid(row));
+  return (Number(pricing.downPayment || application.down || 0) <= 0 || !!deposit) && !!firstWeek;
+}
+
 function pickupSlotOccupancy(data = {}, requestedDate, requestedTime, options = {}) {
   ensureCollections(data);
   const date = String(requestedDate || '').slice(0, 10);
@@ -570,11 +588,16 @@ function pickupSlotOccupancy(data = {}, requestedDate, requestedTime, options = 
   data.pickupAppointments.forEach(appointment => {
     if (!appointment || appointment.date !== date || appointment.time !== time || /cancel|removed/i.test(String(appointment.status || ''))) return;
     if (excludedSessionId && appointment.onboardingSessionId === excludedSessionId) return;
+    if (appointment.onboardingSessionId) {
+      const session = data.onboardingSessions.find(row => row.id === appointment.onboardingSessionId);
+      if (!session || !onboardingSessionPaymentsPaid(data, session)) return;
+    }
     occupied.add(appointment.onboardingSessionId ? 'session:' + appointment.onboardingSessionId : 'appointment:' + appointment.id);
   });
   data.onboardingSessions.forEach(session => {
     if (!session || !session.profileCompletedAt || session.requestedPickupDate !== date || session.requestedPickupTime !== time || /replaced|cancelled|expired|rejected/i.test(String(session.status || ''))) return;
     if (excludedSessionId && session.id === excludedSessionId) return;
+    if (!onboardingSessionPaymentsPaid(data, session)) return;
     occupied.add('session:' + session.id);
   });
   return occupied.size;

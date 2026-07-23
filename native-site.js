@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const LOGO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=240';
 const HERO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/clean-luxury-car-hero-banner.png?v=1772796803&width=3840';
 const CONTRACT_MONTHS = 19;
-const NATIVE_SITE_ASSET_VERSION = 'native-16-existing-customer';
+const NATIVE_SITE_ASSET_VERSION = 'native-17-live-id-capture';
 
 function esc(value) {
   return String(value === undefined || value === null ? '' : value).replace(/[&<>\"]/g, character => ({
@@ -284,26 +284,34 @@ function onboardingHtml(data, session, application, vehicle, template, renderedC
   const paymentProviderLabel = state.paymentProviderLabel;
   const allPaid = state.card && state.deposit && state.firstWeek;
   const stripeIdentity = state.identityProvider === 'stripe';
-  const documentIntro = 'Upload clear private images of the license front, license back, and a current selfie. WheelsonAuto reviews these before paying for the final Stripe Identity check.';
+  const documentIntro = 'Take three live private photos: the license front, license back, and a current selfie holding the license below your chin. Gallery uploads are not accepted. WheelsonAuto reviews these before paying for the final Stripe Identity check.';
   const documentLabels = {
-    driver_license_front: ['License front', 'image/jpeg,image/png,application/pdf', ''],
-    driver_license_back: ['License back', 'image/jpeg,image/png,application/pdf', ''],
-    identity_selfie: ['Identity selfie', 'image/jpeg,image/png', ' capture="user"'],
+    driver_license_front: ['License front'],
+    driver_license_back: ['License back'],
+    identity_selfie: ['Identity selfie'],
     insurance: ['Insurance proof', 'image/jpeg,image/png,application/pdf', '']
   };
+  function liveDocumentCapture(kind) {
+    const selfie = kind === 'identity_selfie';
+    const front = kind === 'driver_license_front';
+    const label = selfie ? 'Live selfie with license' : front ? 'Live license front' : 'Live license back';
+    const facing = selfie ? 'user' : 'environment';
+    const instructions = selfie
+      ? '<li>Use the front camera and hold your physical driver license directly below your chin.</li><li>Center your face inside the oval and the full license inside the lower rectangle.</li><li>Keep your mouth, chin, and all four license corners visible.</li><li>Remove hats, sunglasses, masks, and filters. Use bright, even light.</li><li>Hold still. The camera captures automatically when your face and license are clear.</li>'
+      : '<li>Use the rear camera and place the physical license on a plain, dark surface.</li><li>Fit all four corners inside the rectangular guide. Do not crop any edge.</li><li>Avoid glare, shadows, fingers, and blur. The printed details must be readable.</li><li>Hold still. The camera captures automatically when the image is bright and sharp.</li>';
+    return '<div class="wide selfie-capture '+(selfie?'selfie-document-capture':'license-document-capture')+'" data-live-document-capture data-document-kind="'+esc(kind)+'" data-camera-facing="'+facing+'"'+(selfie?' data-selfie-capture':'')+'><span class="field-label">'+label+'</span><div class="selfie-guidance"><strong>'+ (selfie ? 'How to take an acceptable selfie' : 'How to capture this side of your license') +'</strong><ul>'+instructions+'</ul></div><div class="selfie-camera-stage '+(selfie?'selfie-camera-mode':'license-camera-mode')+'"><video data-camera-video playsinline muted hidden></video><div class="selfie-camera-placeholder" data-camera-placeholder><strong>Live camera required</strong><span>WheelsonAuto does not accept a gallery upload for this screening photo.</span></div>'+(selfie?'<div class="selfie-face-frame" aria-hidden="true"></div><div class="selfie-license-frame" aria-hidden="true"><span>License below chin</span></div>':'<div class="document-license-frame" aria-hidden="true"><span>'+ (front ? 'License front' : 'License back') +'</span></div>')+'<img class="selfie-preview" data-camera-preview alt="Captured '+label.toLowerCase()+' preview" hidden></div><input type="hidden" name="'+esc(kind)+'" data-live-document data-document-kind="'+esc(kind)+'" required><canvas data-camera-canvas hidden></canvas><div class="selfie-camera-actions"><button class="button primary" type="button" data-camera-open>Open live camera</button><button class="button secondary" type="button" data-camera-take hidden>Capture now</button><button class="button secondary" type="button" data-camera-retake hidden>Retake</button></div><div class="camera-quality-status" data-camera-status>Open the live camera, line up the guides, and hold still for automatic capture.</div><div class="step-alert" data-camera-error hidden></div><div class="selfie-browser-help" data-camera-browser-help hidden><strong>Continue securely in a camera-enabled browser</strong><span>Your application and pickup request are already saved. Open this same private link in Safari, Chrome, or Edge and allow camera access. Do not send your license or selfie by text or email.</span><div><button class="button secondary" type="button" data-camera-share>Share secure link</button><button class="button secondary" type="button" data-camera-copy>Copy secure link</button></div></div></div>';
+  }
   const uploadKinds = state.documentCorrections.length ? state.documentCorrections : state.requiredDocumentKinds;
   const documentInputs = uploadKinds.map(kind => {
     const field = documentLabels[kind];
     if (!field) return '';
-    if (kind === 'identity_selfie') {
-      return '<div class="wide selfie-capture" data-selfie-capture><span class="field-label">Live selfie with license</span><div class="selfie-guidance"><strong>How to take an acceptable selfie</strong><ul><li>Hold your physical driver license just below your chin so your full face and the license appear together.</li><li>Keep your face inside the oval and the license inside the lower guide.</li><li>Do not cover your mouth, chin, or any part of your face.</li><li>Use bright, even lighting with no heavy shadows or filters.</li><li>Remove hats, sunglasses, masks, and anything covering your face.</li><li>Make sure the photo is sharp, the license is readable, and nobody else appears.</li></ul></div><div class="selfie-camera-stage"><video data-selfie-video playsinline muted hidden></video><div class="selfie-camera-placeholder" data-selfie-placeholder><strong>Live camera required</strong><span>WheelsonAuto does not accept a gallery upload for this screening selfie.</span></div><div class="selfie-face-frame" aria-hidden="true"></div><div class="selfie-license-frame" aria-hidden="true"><span>Hold license here</span></div><img class="selfie-preview" data-selfie-preview alt="Captured selfie preview" hidden></div><input type="hidden" name="identity_selfie" data-live-selfie required><canvas data-selfie-canvas hidden></canvas><div class="selfie-camera-actions"><button class="button primary" type="button" data-selfie-open>Open live camera</button><button class="button primary" type="button" data-selfie-take hidden>Take photo</button><button class="button secondary" type="button" data-selfie-retake hidden>Retake</button></div><div class="step-alert" data-selfie-error hidden></div><div class="selfie-browser-help" data-selfie-browser-help hidden><strong>Continue securely in a camera-enabled browser</strong><span>Your application and pickup request are already saved. Open this same private link in Safari, Chrome, or Edge and allow camera access. Do not send your license or selfie by text or email.</span><div><button class="button secondary" type="button" data-selfie-share>Share secure link</button><button class="button secondary" type="button" data-selfie-copy>Copy secure link</button></div></div></div>';
-    }
+    if (kind !== 'insurance') return liveDocumentCapture(kind);
     return '<label><span>' + esc(field[0]) + '</span><input name="' + esc(kind) + '" type="file" accept="' + esc(field[1]) + '"' + field[2] + ' required></label>';
   }).join('');
   const correctionNotice = state.documentCorrections.length
     ? '<div class="step-alert">Correction requested for ' + esc(state.documentCorrections.map(kind => documentLabels[kind] && documentLabels[kind][0] || kind).join(', ')) + '.</div>'
     : '';
-  const documentForm = '<form class="native-form compact" data-onboarding-form="documents">' + correctionNotice + documentInputs + '<button class="button primary wide" type="submit">' + (state.documentCorrections.length ? 'Upload corrected file' : 'Upload license and selfie') + '</button></form>';
+  const documentForm = '<form class="native-form compact" data-onboarding-form="documents">' + correctionNotice + documentInputs + '<button class="button primary wide" type="submit">' + (state.documentCorrections.length ? 'Submit corrected live photo' : 'Submit live license and selfie photos') + '</button></form>';
   const identityStep = state.identityVerified
     ? '<div class="step-success">Identity verified: Stripe confirmed the live driver license, matching selfie, and application legal name</div>'
     : state.identityNameMatch === false

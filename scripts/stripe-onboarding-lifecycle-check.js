@@ -392,9 +392,9 @@ async function main() {
     assert(profile.status === 200, 'Profile, pickup date, and pickup-anchored autopay consent must save without forcing insurance before approval.');
     const image = pngDataUrl();
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
-      { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
-      { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
-      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image }
+      { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'environment' },
+      { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'environment' },
+      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'user' }
     ] } });
     assert(documents.status === 201 && documents.json.documents.length === 3, 'Stripe onboarding must keep the preliminary license and live-selfie screening private before any paid Identity session is created.');
 
@@ -412,8 +412,13 @@ async function main() {
     assert(setupCheckoutForm.get('mode') === 'setup' && setupCheckoutForm.get('currency') === 'usd' && setupCheckoutForm.get('payment_method_types[0]') === 'card', 'Stripe card setup must create a USD, card-only hosted setup session.');
     assert(setupCheckoutForm.get('success_url') === 'http://127.0.0.1:4183/setup-card/' + cardRequest.id + '/stripe-success?session_id={CHECKOUT_SESSION_ID}', 'Stripe card setup must return through the exact verified WheelsonAuto completion route.');
     assert(!setupCheckoutForm.has('setup_intent_data[usage]'), 'Stripe Checkout setup must not send the unsupported setup_intent_data[usage] parameter that prevents hosted card fields from rendering.');
+    cardRequest.onboardingReturnUrl = '';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const repairedCardReturn = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
+    assert(repairedCardReturn.status === 200 && repairedCardReturn.json.redirectUrl === card.json.redirectUrl, 'Reopening an existing card setup must reuse its hosted checkout instead of creating a duplicate.');
     saved = await readSaved(dataDir);
     const openedCardRequest = saved.cardSetupRequests.find(row => row.id === cardRequest.id);
+    assert(openedCardRequest.onboardingReturnUrl === 'http://127.0.0.1:4183/onboard/' + token, 'Reopening an older card setup must repair its return path so Stripe sends the customer back to the exact application.');
     const setupMetadata = { wheelsonauto: 'true', flow: 'card_setup', cardSetupRequestId: cardRequest.id, recurringPaymentId: recurring.id, applicationId, onboardingSessionId: onboardingId, customerName: 'Stripe Lifecycle', vehicleId: 'veh-stripe-life-1', vin: '1HGCV1F30JA123456', licensePlate: 'WOA-918' };
     const wrongCustomerSetupEvent = { id: 'evt_test_setup_wrong_customer', type: 'setup_intent.succeeded', livemode: false, data: { object: { id: 'seti_test_lifecycle', object: 'setup_intent', status: 'succeeded', livemode: false, customer: 'cus_wrong_customer', payment_method: 'pm_test_lifecycle', metadata: setupMetadata } } };
     const wrongCustomerSetupRaw = JSON.stringify(wrongCustomerSetupEvent);
@@ -470,10 +475,14 @@ async function main() {
     assert(saved.integrations.stripe.lastLaunchWebhookEventId === setupEvent.id && saved.integrations.stripe.lastLaunchWebhookType === 'setup_intent.succeeded', 'Recovered processed-event proof must become visible to the live launch preflight.');
     assert(saved.cardSetupRequests.find(row => row.id === cardRequest.id).completedAt === firstSetupCompletedAt, 'Recovering launch proof must not re-complete or mutate the saved-card request.');
 
-    const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Application, preliminary files, agreement, signature, VIN, and saved card reviewed together.' } });
+    saved.applications.push({ id: 'app-unpaid-competing', name: 'Unpaid Competing Applicant', email: 'unpaid@example.com', phone: '8565550199', onlineVehicleId: 'online-stripe-life-1', vehicle: '2018 Honda Accord', pricingSnapshot: { downPayment: 485, weeklyPayment: 229 }, submittedAt: '2020-01-01T00:00:00.000Z', status: 'Screening in progress' });
+    saved.onboardingSessions.push({ id: 'onboard-unpaid-competing', applicationId: 'app-unpaid-competing', onlineVehicleId: 'online-stripe-life-1', organizationId: 'org-wheelsonauto', paymentProvider: 'stripe', identityProvider: 'stripe', profileCompletedAt: new Date().toISOString(), requestedPickupDate: pickupDate, requestedPickupTime: '1:00 PM', status: 'Profile complete', finalReviewStatus: 'Waiting on customer' });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+
+    const finalReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, controlledStripePilotCandidate: true, notes: 'Application, preliminary files, agreement, signature, VIN, and saved card reviewed together.' } });
     assert(finalReview.status === 200 && finalReview.json.finalReviewStatus === 'Approved', 'Staff must give one combined approval only after the preliminary file and saved card are complete.');
     saved = await readSaved(dataDir);
-    assert(saved.integrations.stripe.controlledPilotCandidateApplicationId === applicationId && saved.integrations.stripe.controlledPilotCandidateOnboardingSessionId === onboardingId, 'Owner final review must durably lock the sole exact eligible application and onboarding file even after the browser loses its temporary pilot selection.');
+    assert(saved.integrations.stripe.controlledPilotCandidateApplicationId === applicationId && saved.integrations.stripe.controlledPilotCandidateOnboardingSessionId === onboardingId, 'Owner final review must durably lock the exact selected application and onboarding file even while another unpaid customer is applying for the same car.');
     fakeStripe.state.failNextIdentitySession = true;
     const failedIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
     assert(failedIdentity.status === 502 && /No verification decision was recorded/i.test(failedIdentity.json.error || '') && !/Provider secret diagnostic/i.test(failedIdentity.text), 'A Stripe Identity transport failure must return a safe retry message without exposing provider diagnostics.');
@@ -509,7 +518,7 @@ async function main() {
 
     fakeStripe.state.failNextPaymentCheckout = true;
     const failedDepositCheckout = await request(server, 'POST', '/api/public/onboarding/' + token + '/payment', { json: { paymentType: 'deposit' } });
-    assert(failedDepositCheckout.status === 500 && /No payment was recorded/i.test(failedDepositCheckout.json.error || '') && !/Provider secret diagnostic/i.test(failedDepositCheckout.text), 'A temporary Stripe checkout failure must return only a customer-safe no-charge message.');
+    assert(failedDepositCheckout.status === 500 && /No payment was recorded/i.test(failedDepositCheckout.json.error || '') && !/Provider secret diagnostic/i.test(failedDepositCheckout.text), 'A temporary Stripe checkout failure must return only a customer-safe no-charge message, while another unpaid applicant for the same car remains nonblocking.');
     saved = await readSaved(dataDir);
     const failedDepositRequests = saved.paymentRequests.filter(row => row.onboardingSessionId === onboardingId && row.paymentType === 'Nonrefundable down payment');
     assert(failedDepositRequests.length === 1 && /Provider secret diagnostic/i.test(failedDepositRequests[0].lastError || '') && /No payment was recorded/i.test(failedDepositRequests[0].checkoutCustomerMessage || ''), 'The exact failed checkout request must retain its private staff diagnostic and customer-safe message for retry.');

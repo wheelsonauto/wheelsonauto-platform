@@ -276,16 +276,26 @@ async function main() {
     const profile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: pickupDate, requestedPickupTime: '1:00 PM', pickupAutopayConsent: true } });
     assert(profile.status === 200, 'Valid next-day-to-seven-day pickup profile should save.');
     const documentStepPage = await request(server, 'GET', '/onboard/' + token);
-    assert(documentStepPage.status === 200 && /data-selfie-browser-help/.test(documentStepPage.text) && /data-selfie-share/.test(documentStepPage.text) && /data-selfie-copy/.test(documentStepPage.text), 'The unlocked live-selfie step must provide secure camera-browser recovery controls.');
-    assert(!/name="identity_selfie"[^>]+type="file"/.test(documentStepPage.text), 'Camera recovery must not weaken the live-selfie requirement into a gallery file upload.');
+    assert(documentStepPage.status === 200 && (documentStepPage.text.match(/data-live-document-capture/g) || []).length === 3 && /data-camera-browser-help/.test(documentStepPage.text) && /data-camera-share/.test(documentStepPage.text) && /data-camera-copy/.test(documentStepPage.text), 'All three identity screening photos must use guided live-camera capture with secure camera-browser recovery controls.');
+    assert(!/name="(?:driver_license_front|driver_license_back|identity_selfie)"[^>]+type="file"/.test(documentStepPage.text), 'Camera recovery must not weaken any identity screening photo into a gallery file upload.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    saved.applications.unshift({ id: 'unpaid-slot-app', pricingSnapshot: { downPayment: 1, weeklyPayment: 1 } });
+    saved.onboardingSessions.unshift({ id: 'unpaid-slot-session', applicationId: 'unpaid-slot-app', profileCompletedAt: new Date().toISOString(), requestedPickupDate: pickupDate, requestedPickupTime: '1:00 PM', status: 'Profile complete' });
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
     const reservedAvailability = await request(server, 'GET', '/api/public/onboarding/' + token + '/pickup-availability?date=' + pickupDate);
-    assert(reservedAvailability.status === 200 && reservedAvailability.json.slots.find(slot => slot.time === '1:00 PM').available === true, 'A customer revisiting their own onboarding link must not be blocked by their own reserved slot.');
+    assert(reservedAvailability.status === 200 && reservedAvailability.json.slots.find(slot => slot.time === '1:00 PM').available === true, 'An unpaid application pickup preference must not consume capacity or block another customer.');
 
     const image = pngDataUrl();
+    const forgedGalleryDocuments = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
+      { kind: 'driver_license_front', name: 'gallery-front.png', type: 'image/png', dataUrl: image },
+      { kind: 'driver_license_back', name: 'gallery-back.png', type: 'image/png', dataUrl: image },
+      { kind: 'identity_selfie', name: 'gallery-selfie.png', type: 'image/png', dataUrl: image }
+    ] } });
+    assert(forgedGalleryDocuments.status === 400 && /live camera/i.test(forgedGalleryDocuments.json.error), 'The server must reject gallery-style identity submissions even when a client forges the document request directly.');
     const documents = await request(server, 'POST', '/api/public/onboarding/' + token + '/documents', { json: { documents: [
-      { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image },
-      { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image },
-      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image }
+      { kind: 'driver_license_front', name: 'license-front.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'environment' },
+      { kind: 'driver_license_back', name: 'license-back.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'environment' },
+      { kind: 'identity_selfie', name: 'live-selfie-with-license.png', type: 'image/png', dataUrl: image, captureSource: 'live_camera', capturedAt: new Date().toISOString(), cameraFacingMode: 'user' }
     ] } });
     assert(documents.status === 201 && documents.json.documents.length === 3, 'License front/back and the live selfie with license should save as the preliminary private screening files.');
     const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Native Applicant', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
