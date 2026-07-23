@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-account-first-322';
+const ASSET_VERSION = 'platform-20260723-pilot-owner-review-323';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -11606,8 +11606,68 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     };
     Object.assign(appointment, pilotAuditPatch);
     Object.assign(session, pilotAuditPatch);
+    syncStripePilotOwnerReviewTask(data, pilotAudit, session, application, appointment, now);
   }
   return { appointment, vehicle, recurring, customer, contract, application, session, account, onlineVehicle, alreadyCompleted: false };
+}
+
+function stripePilotOwnerReviewTaskId(sessionId) {
+  return 'task-stripe-pilot-review-' + crypto.createHash('sha256').update(String(sessionId || '')).digest('hex').slice(0, 24);
+}
+
+function syncStripePilotOwnerReviewTask(data, evidence, session, application, appointment, now = new Date().toISOString()) {
+  data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+  const taskId = stripePilotOwnerReviewTaskId(session && session.id);
+  let task = data.tasks.find(row => String(row.id || '') === taskId);
+  const ready = evidence && evidence.ready === true;
+  const patch = {
+    id: taskId,
+    title: ready ? 'Review sealed Stripe pilot evidence' : 'Resolve Stripe pilot evidence gaps',
+    type: 'Stripe pilot approval',
+    customer: evidence && evidence.customer || application && application.name || appointment && appointment.customer || '',
+    vehicle: evidence && evidence.vehicle || appointment && appointment.vehicle || '',
+    due: localDateKey(),
+    status: ready ? 'Owner review' : 'Needs review',
+    owner: 'Owner',
+    notes: [
+      ready ? 'Physical pickup is complete and the evidence packet is sealed for owner approval.' : 'Physical pickup is complete, but the pilot evidence still has review gaps.',
+      'Open the existing controlled Stripe launch preflight and review this exact file.',
+      'Session: ' + String(session && session.id || ''),
+      'Application: ' + String(application && application.id || ''),
+      'Evidence hash: ' + String(evidence && evidence.evidenceHash || ''),
+      evidence && evidence.missing && evidence.missing.length ? 'Missing: ' + evidence.missing.join(', ') : 'Missing: none',
+      'This task never charges, migrates, or disables Clover. Only the owner approval gate can unlock controlled cutovers.'
+    ].join('\n'),
+    onboardingSessionId: String(session && session.id || ''),
+    applicationId: String(application && application.id || ''),
+    pickupAppointmentId: String(appointment && appointment.id || ''),
+    evidenceHash: String(evidence && evidence.evidenceHash || ''),
+    updatedAt: now,
+    createdAt: task && task.createdAt || now
+  };
+  if (task) Object.assign(task, patch);
+  else {
+    task = patch;
+    data.tasks.unshift(task);
+  }
+  return task;
+}
+
+function closeStripePilotOwnerReviewTask(data, sessionId, evidenceHash, actor, now = new Date().toISOString()) {
+  const task = (data.tasks || []).find(row => String(row.id || '') === stripePilotOwnerReviewTaskId(sessionId));
+  if (!task) return false;
+  const alreadyClosed = /done|closed|complete|approved/i.test(String(task.status || ''))
+    && String(task.evidenceHash || '') === String(evidenceHash || '');
+  if (alreadyClosed) return false;
+  Object.assign(task, {
+    status: 'Done',
+    doneAt: now,
+    approvedAt: now,
+    approvedBy: String(actor && (actor.name || actor.username) || 'Owner'),
+    evidenceHash: String(evidenceHash || task.evidenceHash || ''),
+    updatedAt: now
+  });
+  return true;
 }
 async function appHtml({ publicMode = false, user = null } = {}) {
   const data = await readData();
@@ -25882,6 +25942,7 @@ const server = http.createServer(async (req, res) => {
         && stripeState.controlledPilotEvidenceHash === evidence.evidenceHash
         && Number(stripeState.controlledPilotEvidenceVersion || 0) === CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION
         && stripeState.controlledPilotApprovedLivemode === !STRIPE_ISOLATED_PROVIDER_TEST_MODE;
+      let stateChanged = closeStripePilotOwnerReviewTask(data, sessionId, evidence.evidenceHash, user);
       if (!alreadyApproved) {
         Object.assign(stripeState, {
           controlledPilotOnboardingSessionId: sessionId,
@@ -25892,6 +25953,9 @@ const server = http.createServer(async (req, res) => {
           controlledPilotApprovedLivemode: !STRIPE_ISOLATED_PROVIDER_TEST_MODE
         });
         appendAuditLog(data, user, evidence.controlledTest ? 'Controlled low-dollar live Stripe pilot approved' : STRIPE_ISOLATED_PROVIDER_TEST_MODE ? 'Stripe onboarding test pilot approved' : 'Live Stripe onboarding pilot approved', [evidence.customer, evidence.vehicle, evidence.vin, evidence.plate, sessionId]);
+        stateChanged = true;
+      }
+      if (stateChanged) {
         await protectConcurrentLocalWrites(data, { preferIncoming: true });
         await writeData(data);
       }

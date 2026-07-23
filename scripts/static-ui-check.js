@@ -451,6 +451,7 @@ if (/native-(?:restore|deny)-application[^\n]{0,500}window\.confirm/.test(app)) 
 assertIncludes('Auto refresh modal guard', app, ["if(modal&&modal.style.display==='grid')return"]);
 assertIncludes('Post-save refresh wrapper', app, ['var __wheelsonBaseSave=save', 'reconcileFleetCustomerLinks()', 'if(ok)await refreshData(true)']);
 assertIncludes('Provider-specific API handoff guidance', app, ['apiProviderGuidancePanel', 'Proof before connected', '10DLC approval', 'OpenAI API key and usable API credit', 'signed payment event', 'apiProviderStatusControl(p)', 'Calculated from live credentials']);
+assertIncludes('Stripe pilot owner review task UI', app, ['openStripePilotReviewTasks', 'Stripe pilot approval', 'review-stripe-pilot-task', '/api/system/infrastructure/preflight', 'liveLaunchPreflightModal(result)', 'Review evidence']);
 
 const criticalActionRequirements = [
   ['Vehicle save flow', 'save-vehicle', ['clearVehicleFromCustomerRecords', 'syncVehicleCustomerAssignment', 'await save()', 'closeModal()', "view='Operations'"]],

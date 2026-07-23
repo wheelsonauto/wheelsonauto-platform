@@ -3312,6 +3312,67 @@ Operations=function(){
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
 
+function openStripePilotReviewTasks(){
+  return (db.tasks||[]).filter(function(task){
+    return String(task.type||'').toLowerCase()==='stripe pilot approval'&&!/done|closed|complete|approved/i.test(String(task.status||''));
+  });
+}
+var __woaPilotOwnerQueueBase=operationsQueue;
+operationsQueue=function(){
+  var queue=__woaPilotOwnerQueueBase();
+  openStripePilotReviewTasks().forEach(function(task){
+    queue.unshift({
+      priority:1,
+      tone:String(task.status||'').toLowerCase()==='owner review'?'warn':'bad',
+      kind:'Owner approval',
+      title:task.customer||'Stripe pilot evidence',
+      detail:[task.title,task.vehicle].filter(Boolean).join(' | '),
+      view:'Dashboard',
+      action:'Review',
+      actionHtml:'<button class="btn gold" data-action="review-stripe-pilot-task" data-id="'+esc(task.id||'')+'">Review evidence</button>'
+    });
+  });
+  return queue.sort(function(a,b){return Number(a.priority||9)-Number(b.priority||9)||String(a.title||'').localeCompare(String(b.title||''))}).slice(0,8);
+};
+queueList=function(){
+  var queue=operationsQueue();
+  if(!queue.length)return'<div class="item">No urgent work in the queue right now.</div>';
+  return queue.map(function(item){
+    var action=item.actionHtml||'<button class="btn" data-view="'+esc(item.view||'Dashboard')+'" '+(item.tab?'data-tab="'+esc(item.tab)+'"':'')+'>'+esc(item.action||'Open')+'</button>';
+    return '<div class="ops-item"><div><div class="item-row"><strong>'+esc(item.title)+'</strong>'+badge(item.kind,item.tone)+'</div><div class="muted">'+esc(item.detail)+'</div></div>'+action+'</div>';
+  }).join('');
+};
+var __woaPilotTaskFormBase=taskForm;
+taskForm=function(task){
+  task=task||{};
+  var html=__woaPilotTaskFormBase(task),pilot=String(task.type||'').toLowerCase()==='stripe pilot approval';
+  if(!pilot)return html;
+  if(html.indexOf('>Stripe pilot approval</option>')<0)html=html.replace('<option '+(String(task.type||'')==='Other'?'selected':'')+'>Other</option>','<option selected>Stripe pilot approval</option><option>Other</option>');
+  return '<section class="notice warn"><strong>Sealed Stripe pilot evidence</strong><div>This is the existing owner launch gate. Review the exact customer, vehicle, payments, signed agreement, pickup, autopay anchor, dispute packet, and Clover exclusion before approval.</div><div class="actions" style="margin-top:10px"><button class="btn gold" data-action="review-stripe-pilot-task" data-id="'+esc(task.id||'')+'">Review evidence</button></div></section>'+html;
+};
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('button[data-action="review-stripe-pilot-task"]');
+  if(!button)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.stopPropagation();
+  if(roleName()!=='owner'){notify('Only the owner can review and approve the Stripe pilot');return}
+  button.disabled=true;
+  button.classList.add('is-loading');
+  openModal('Controlled Stripe launch preflight',liveLaunchPreflightLoading());
+  try{
+    var response=await fetch('/api/system/infrastructure/preflight',{headers:{Accept:'application/json'},cache:'no-store'}),result=await response.json().catch(function(){return{}});
+    if(!response.ok||result.ok===false&&result.error)throw new Error(result.error||'Live launch preflight failed');
+    window.__woaLastLaunchPreflight=result;
+    openModal('Controlled Stripe launch preflight',liveLaunchPreflightModal(result));
+  }catch(error){
+    openModal('Controlled Stripe launch preflight','<div class="notice bad"><strong>Launch check unavailable</strong><div>'+esc(error&&error.message||'The server could not answer the readiness check.')+'</div></div><div class="actions"><button class="btn" onclick="closeModal()">Close</button></div>');
+  }finally{
+    button.disabled=false;
+    button.classList.remove('is-loading');
+  }
+},true);
+
 var applicationFeedRevision='';
 var applicationFeedRows={};
 async function pollApplicationFeed(){

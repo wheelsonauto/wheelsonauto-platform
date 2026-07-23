@@ -554,9 +554,13 @@ async function main() {
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Physical handoff must activate the vehicle, customer file, contract, and Stripe autopay together.');
     const postHandoffAuditState = await readSaved(dataDir);
     const postHandoffAuditSession = postHandoffAuditState.onboardingSessions.find(row => row.id === onboardingId);
+    const postHandoffPilotTasks = postHandoffAuditState.tasks.filter(row => row.type === 'Stripe pilot approval' && row.onboardingSessionId === onboardingId);
     assert(postHandoffAuditSession.stripePilotAuditStatus === 'Ready for owner approval' && /^[a-f0-9]{64}$/.test(postHandoffAuditSession.stripePilotEvidenceHash || '') && postHandoffAuditSession.stripePilotAuditMissing.length === 0, 'The exact physical handoff must automatically seal a complete pilot evidence audit for owner review.');
+    assert(postHandoffPilotTasks.length === 1 && postHandoffPilotTasks[0].status === 'Owner review' && postHandoffPilotTasks[0].evidenceHash === postHandoffAuditSession.stripePilotEvidenceHash, 'Physical handoff must create exactly one durable owner task linked to the sealed pilot evidence hash.');
     const duplicateHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 68510 } });
     assert(duplicateHandoff.status === 200 && duplicateHandoff.json.alreadyCompleted === true, 'Repeated pickup confirmation must be idempotent.');
+    const postDuplicateHandoffState = await readSaved(dataDir);
+    assert(postDuplicateHandoffState.tasks.filter(row => row.type === 'Stripe pilot approval' && row.onboardingSessionId === onboardingId).length === 1, 'Repeated pickup confirmation must not duplicate the owner pilot-review task.');
 
     const amountMatchedPreflight = await request(server, 'GET', '/api/system/infrastructure/preflight', { cookie: ownerCookie });
     const amountMatchedPilot = amountMatchedPreflight.json && amountMatchedPreflight.json.controlledStripePilot && amountMatchedPreflight.json.controlledStripePilot.candidate;
@@ -587,6 +591,8 @@ async function main() {
     assert(approvedPilot.status === 200 && approvedPilot.json.controlledStripePilot.approved === true, 'The exact completed Stripe onboarding file must unlock the isolated pilot only after owner approval: ' + JSON.stringify(approvedPilot.json));
     saved = await readSaved(dataDir);
     assert(saved.integrations.stripe.controlledPilotEvidenceVersion === 3, 'Pilot approval must record the current evidence contract version so older weaker approvals cannot remain valid.');
+    const completedPilotReviewTask = saved.tasks.find(row => row.type === 'Stripe pilot approval' && row.onboardingSessionId === onboardingId);
+    assert(completedPilotReviewTask && completedPilotReviewTask.status === 'Done' && completedPilotReviewTask.evidenceHash === saved.integrations.stripe.controlledPilotEvidenceHash, 'Owner pilot approval must close the exact durable review task without changing its sealed evidence hash.');
     const duplicatePilotApproval = await request(server, 'POST', '/api/system/stripe-pilot/approve', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, confirmationPhrase: 'APPROVE FIRST LIVE STRIPE PILOT', confirmed: true } });
     assert(duplicatePilotApproval.status === 200 && duplicatePilotApproval.json.alreadyApproved === true, 'Repeated approval of the same unchanged pilot evidence must be idempotent.');
     const browserState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
