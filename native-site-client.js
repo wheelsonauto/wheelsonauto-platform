@@ -12,7 +12,7 @@
     try{
       var response = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'}, body:JSON.stringify(payload || {}) });
       var data = await response.json().catch(function(){ return {}; });
-      if(!response.ok || data.ok === false) throw new Error(data.error || 'That step could not be saved.');
+      if(!response.ok || data.ok === false){ var error = new Error(data.error || 'That step could not be saved.'); error.data = data; throw error; }
       return data;
     } finally { document.body.classList.remove('busy'); }
   }
@@ -152,15 +152,18 @@
       payload.applicationConsent = !!payload.applicationConsent;
       payload.smsConsent = !!payload.smsConsent;
       if(payload.phone.length !== 10){ message('Enter a valid 10-digit mobile phone number.', true); return; }
-      if(payload.password !== payload.confirmPassword){ message('The two passwords do not match.', true); return; }
-      if(!passwordValid(payload.password)){ message('Password must contain at least eight characters, including a letter and number.', true); return; }
+      if(payload.accountMode !== 'existing' && payload.password !== payload.confirmPassword){ message('The two passwords do not match.', true); return; }
+      if(payload.accountMode !== 'existing' && !passwordValid(payload.password)){ message('Password must contain at least eight characters, including a letter and number.', true); return; }
       delete payload.confirmPassword;
       try{
         var result = await request('/api/public/applications', payload);
         var onboardingUrl = String(result.onboardingUrl || '').replace(/[<>\"]/g,'');
         applicationForm.innerHTML = '<div class="form-title"><span>Application received</span><h2>Thank you, ' + String(payload.firstName || '').replace(/[<>]/g,'') + '.</h2><p>Your secure setup is ready. Continue with the pickup request, private screening files, agreement, and no-charge card setup. WheelsonAuto reviews the complete file once. No payment has been charged.</p></div>' + (onboardingUrl ? '<a class="button primary wide" href="' + onboardingUrl + '">Continue secure setup</a>' : '') + '<a class="button secondary wide" href="' + String(result.loginUrl || '/customer/login').replace(/[<>\"]/g,'') + '">Open customer portal</a>';
         window.scrollTo({top:applicationForm.offsetTop - 90, behavior:'smooth'});
-      }catch(error){ message(error.message, true); }
+      }catch(error){
+        if(error.data && /customer_login_required/.test(String(error.data.code || '')) && error.data.loginUrl){ window.location.href = error.data.loginUrl; return; }
+        message(error.message, true);
+      }
     });
   }
 

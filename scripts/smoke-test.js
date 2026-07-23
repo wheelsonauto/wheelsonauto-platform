@@ -171,6 +171,63 @@ async function main() {
     assert(savedSession && /\/onboard\//.test(String(publicApplication.json.onboardingUrl || '')), 'Native application must create and return one secure onboarding session immediately.');
     assert(availableOnlineVehicle && availableOnlineVehicle.published === true && /available/i.test(String(availableOnlineVehicle.availability || '')) && !availableOnlineVehicle.heldApplicationId && availableFleetVehicle && /^ready$/i.test(String(availableFleetVehicle.status || '')) && !availableFleetVehicle.heldApplicationId, 'Applying, signing, or saving a card must not hold or hide a vehicle before a required payment is verified.');
 
+    const existingAccountPasswordHash = savedPortal.passwordHash;
+    const existingAccountCount = (applicationState.json.customerAccounts || []).length;
+    const existingCustomerVehicle = await request(base, 'POST', '/api/online-vehicles', {
+      cookie: ownerCookie,
+      json: {
+        id: 'online-smoke-existing-customer',
+        platformVehicleId: duplicateSmokeVehicles[1].id,
+        title: 'Smoke Existing Customer Vehicle',
+        weeklyPayment: 239,
+        downPayment: 495,
+        availability: 'Available',
+        published: true
+      }
+    });
+    assert(existingCustomerVehicle.status === 201 && existingCustomerVehicle.json.ok, 'Owner could not publish the existing-customer smoke vehicle.');
+    const existingApplicationPayload = {
+      onlineVehicleId: existingCustomerVehicle.json.vehicle.id,
+      firstName: 'Smoke',
+      lastName: 'Applicant',
+      phone: '3135550111',
+      email: 'smoke-applicant@example.com',
+      password: 'AttemptedReplacement123!',
+      confirmPassword: 'AttemptedReplacement123!',
+      address: '5150 NJ-42',
+      city: 'Blackwood',
+      state: 'NJ',
+      postalCode: '08012',
+      dateOfBirth: '1990-01-15',
+      driverLicenseId: 'D12345678901234',
+      driverLicenseExpires: '2030-01-15',
+      employer: 'Smoke Test Employer',
+      income: 4500,
+      applicationConsent: true,
+      insurancePickupConsent: true
+    };
+    const unauthenticatedExistingApplication = await request(base, 'POST', '/api/public/applications', { json: existingApplicationPayload });
+    assert(unauthenticatedExistingApplication.status === 409 && unauthenticatedExistingApplication.json.code === 'existing_customer_login_required', 'An existing customer must be sent to login instead of creating a replacement portal password.');
+    const existingApplyPath = '/apply/smoke-existing-customer-vehicle-stomer';
+    const customerLogin = await request(base, 'POST', '/customer/login', {
+      form: { username: 'smoke-applicant@example.com', password: 'SmokeApplicant123!', next: existingApplyPath }
+    });
+    assert(customerLogin.status === 302 && customerLogin.location === existingApplyPath && customerLogin.cookie.includes('woa_customer_session='), 'Existing customer login must return to the selected vehicle application.');
+    const customerCookie = customerLogin.cookie.split(';')[0];
+    const authenticatedApplyPage = await request(base, 'GET', existingApplyPath, { cookie: customerCookie });
+    assert(authenticatedApplyPage.status === 200 && authenticatedApplyPage.text.includes('Apply with your account') && !authenticatedApplyPage.text.includes('name="password"'), 'Authenticated application must reuse the customer account without showing password creation fields.');
+    const existingCustomerApplication = await request(base, 'POST', '/api/public/applications', {
+      cookie: customerCookie,
+      json: { ...existingApplicationPayload, accountMode: 'existing', password: undefined, confirmPassword: undefined }
+    });
+    assert(existingCustomerApplication.status === 201 && existingCustomerApplication.json.ok, 'An existing customer without an active vehicle must be able to apply after login.');
+    const existingCustomerState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });
+    const reusedPortal = (existingCustomerState.json.customerAccounts || []).find(account => account.id === savedPortal.id);
+    const linkedExistingApplication = (existingCustomerState.json.applications || []).find(application => application.id === existingCustomerApplication.json.application.id);
+    assert((existingCustomerState.json.customerAccounts || []).length === existingAccountCount, 'Existing-customer application must not create a duplicate portal account.');
+    assert(reusedPortal && reusedPortal.passwordHash === existingAccountPasswordHash, 'Existing-customer application must never replace the current password.');
+    assert(linkedExistingApplication && linkedExistingApplication.customerAccountId === savedPortal.id && linkedExistingApplication.existingCustomerApplication === true, 'Existing-customer application must link to the authenticated customer account.');
+
     const mechanic = await request(base, 'POST', '/api/staff-accounts', {
       cookie: ownerCookie,
       json: {

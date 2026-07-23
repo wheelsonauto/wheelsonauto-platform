@@ -170,6 +170,9 @@ button,a,input,select,textarea{transition:border-color .18s ease,background-colo
 .profile-review.invalid{border-color:rgba(255,111,111,.4);background:rgba(255,111,111,.08)}
 .profile-review.invalid strong{color:#ffd0d0}
 .native-form .wide{grid-column:1/-1}
+.application-account-note{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border:1px solid rgba(214,184,112,.24);background:rgba(255,255,255,.035);border-radius:8px}
+.application-account-note span{display:grid;gap:4px}.application-account-note small{color:var(--muted);line-height:1.45}.application-account-note>a:not(.button){color:var(--gold);white-space:nowrap;font-weight:700}.application-account-note.signed-in{border-color:rgba(88,196,138,.3)}
+@media(max-width:680px){.application-account-note{align-items:stretch;flex-direction:column}.application-account-note .button{width:100%}}
 .form-title{grid-column:1/-1;margin-bottom:6px}
 .form-title span{color:var(--gold-2);font-size:12px;font-weight:900}
 .form-title h2{margin:4px 0;font-family:Georgia,"Times New Roman",serif;font-size:30px}
