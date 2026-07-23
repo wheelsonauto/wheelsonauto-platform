@@ -778,7 +778,7 @@ function ownerSmoke() {
     ['Settings', 'Settings', undefined, ['Settings'], false],
     ['Website overview', 'Website', 'Overview', ['Website', 'Native WheelsonAuto website', 'Published fleet'], false],
     ['Website inventory', 'Website', 'Inventory', ['Website', 'Online fleet', 'native-inventory-board'], false],
-    ['Website applications', 'Website', 'Applications', ['Website', 'Onboarding', 'Scheduled Pickup', 'History', 'native-applications-board'], false],
+    ['Website applications', 'Website', 'Applications', ['Website', 'Onboarding', 'Scheduled Pickup', 'History', 'native-applications-board', 'data-application-queue-tab'], false],
     ['Website performance', 'Website', 'Performance', ['Website', 'Website performance', 'Application to onboarding'], false],
     ['Dashboard overview', 'Dashboard', 'Overview', ['Dashboard', 'Business overview', 'Money today'], false],
     ['Dashboard closeout', 'Dashboard', 'Closeout', ['Dashboard', 'Daily closeout', 'Expected today'], false],
