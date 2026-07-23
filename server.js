@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-denied-onboarding-revocation-305';
+const ASSET_VERSION = 'platform-20260722-closed-onboarding-guard-306';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -23788,7 +23788,7 @@ const server = http.createServer(async (req, res) => {
       onboarding.releaseExpiredHolds(data);
       const application = (data.applications || []).find(row => row.id === String(payload.applicationId || ''));
       if (!application || !rowVisibleToUserOrganization(application, user)) return json(res, 404, { ok: false, error: 'Application not found.' });
-      if (/denied|removed|cancelled/i.test(String(application.status || application.stage || ''))) return json(res, 409, { ok: false, error: 'Denied or archived applications cannot create onboarding links.' });
+      if (onboarding.applicationBlocksOnboarding(application)) return json(res, 409, { ok: false, error: 'Denied or archived applications cannot create onboarding links.' });
       const vehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
       if (!vehicle) return json(res, 409, { ok: false, error: 'The application is not connected to a native online vehicle.' });
       const competingSession = data.onboardingSessions.find(row => row.onlineVehicleId === vehicle.id && row.applicationId !== application.id && !/completed|cancelled|expired|replaced/i.test(String(row.status || '')));
@@ -23826,6 +23826,7 @@ const server = http.createServer(async (req, res) => {
       const session = data.onboardingSessions.find(row => row.id === String(payload.onboardingSessionId || ''));
       if (!session || !rowVisibleToUserOrganization(session, user)) return json(res, 404, { ok: false, error: 'Onboarding file not found.' });
       const application = onboarding.applicationForSession(data, session);
+      if (onboarding.applicationBlocksOnboarding(application) || /cancelled|expired|replaced/i.test(String(session.status || ''))) return json(res, 409, { ok: false, error: 'This onboarding file is closed. Restore the application and create a fresh secure link before reviewing it again.' });
       const decision = payload.decision === 'approve' ? 'approve' : payload.decision === 'request_correction' ? 'request_correction' : '';
       if (!decision) return json(res, 400, { ok: false, error: 'Choose approve or request correction.' });
       const reviewedAt = new Date().toISOString();

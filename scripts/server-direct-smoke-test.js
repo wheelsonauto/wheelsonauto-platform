@@ -1402,6 +1402,8 @@ async function main() {
     const deniedApplicationSession = deniedApplicationState.json.onboardingSessions.find(row => row.applicationId === isolatedApplication.json.application.id);
     const releasedApplicationVehicle = deniedApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
     assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Disabled' && deniedApplicationSession && deniedApplicationSession.status === 'Cancelled', 'Denied application, onboarding link, and pending login should move to archived/cancelled/disabled state together.');
+    const deniedStaffReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: deniedApplicationSession.id, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true } });
+    assert(deniedStaffReview.status === 409 && /closed.*fresh secure link/i.test(deniedStaffReview.json.error || ''), 'Staff review must not revive a cancelled onboarding session or its denied application by internal ID.');
     assert(releasedApplicationVehicle && releasedApplicationVehicle.published === true && releasedApplicationVehicle.availability === 'Available', 'Denying an application should leave its unused online vehicle available for another applicant.');
     deniedApplicationSession.status = 'Open';
     deniedApplicationSession.cancelledAt = '';

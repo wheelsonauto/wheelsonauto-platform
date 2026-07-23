@@ -127,6 +127,9 @@ async function main() {
   const nativeCss = await fs.readFile(path.join(__dirname, '..', 'native-site.css'), 'utf8');
   const nativeSiteClient = await fs.readFile(path.join(__dirname, '..', 'native-site-client.js'), 'utf8');
   assert(nativeCss.includes('[hidden]{display:none!important}'), 'Hidden selfie preview and camera controls must stay invisible until the live-camera flow reveals them.');
+  assert(onboardingService.applicationBlocksOnboarding({ status: 'Denied - archived', stage: 'Denied' }), 'Denied applications must block every onboarding surface.');
+  assert(onboardingService.applicationBlocksOnboarding({ status: 'Archived', stage: 'History' }), 'Archived applications must require a fresh approval and secure link.');
+  assert(!onboardingService.applicationBlocksOnboarding({ status: 'Customer setup in progress', stage: 'Onboarding' }), 'An active approved onboarding application must remain available.');
   assert(/@media\(max-width:980px\)[^{]*\{[^}]*[\s\S]*?\.onboarding-progress\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/.test(nativeCss), 'Tablet and phone onboarding milestones must use a compact grid instead of a horizontal scroller.');
   const webhookSecret = 'native-onboarding-hco-secret';
   process.env.TZ = 'America/New_York';
