@@ -259,7 +259,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260722-stripe-proof-recovery-310';
+const ASSET_VERSION = 'platform-20260722-signed-contract-proof-311';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -9678,13 +9678,20 @@ function customerPortalDocuments(scopedData = {}, identity = {}, payments = []) 
     if (row.customerVisible === true || row.portalVisible === true) return true;
     const visibility = String(row.visibility || '').toLowerCase();
     return visibility === 'customer' || visibility === 'customer portal' || visibility === 'customer visible';
-  }).map(row => stripPrivateCustomerFields({
-    ...row,
-    kind: row.kind || 'Document',
-    date: row.date || row.createdAt || row.expires || row.due || '',
-    title: row.title || row.type || 'Document',
-    portalDownloadUrl: privateDocumentAvailable(row) && row.customerAccountId ? '/customer/documents/' + encodeURIComponent(row.id) : ''
-  }));
+  }).map(row => {
+    const signature = String(row.documentKind || '').toLowerCase() === 'signed_contract'
+      ? (scopedData.eSignatures || []).find(item => item.contractDocumentId === row.id || item.id === row.eSignatureId)
+      : null;
+    return stripPrivateCustomerFields({
+      ...row,
+      kind: row.kind || 'Document',
+      date: row.date || row.createdAt || row.expires || row.due || '',
+      title: row.title || row.type || 'Document',
+      portalDownloadUrl: signature && signature.id
+        ? '/customer/contracts/' + encodeURIComponent(signature.id)
+        : (privateDocumentAvailable(row) && row.customerAccountId ? '/customer/documents/' + encodeURIComponent(row.id) : '')
+    });
+  });
   const receipts = (payments || []).filter(row => {
     const status = String(row.status || '').toLowerCase();
     return (status === 'paid' || status.indexOf('paid outside app') >= 0)
@@ -13805,6 +13812,25 @@ function tollReceiptHtml(claim = {}) {
   const amount = moneyText(claim.amount || tollImportMoney(evidence.amountText));
   const row = (label, value) => '<div class="receipt-row"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value || 'Not provided') + '</strong></div>';
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto toll reimbursement proof</title><style>:root{color-scheme:dark;--bg:#0b0b0c;--panel:#151517;--line:#3a3221;--gold:#d6ad5c;--muted:#aaa49a;--text:#f7f3ea;--good:#70d49b}*{box-sizing:border-box}body{margin:0;background:#080809;color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}.wrap{width:min(760px,calc(100% - 28px));margin:32px auto}.brand{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand b{font-size:22px;color:var(--gold)}.brand span{color:var(--muted);font-size:12px;text-transform:uppercase}.receipt{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.35)}.hero{padding:28px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.hero h1{font-size:25px;line-height:1.2;margin:4px 0 8px}.eyebrow{color:var(--gold);font-weight:800;text-transform:uppercase;font-size:11px}.amount{text-align:right}.amount span{display:block;color:var(--muted);font-size:12px}.amount strong{font-size:30px;color:var(--gold)}.grid{padding:8px 28px 24px}.receipt-row{display:grid;grid-template-columns:160px 1fr;gap:18px;padding:12px 0;border-bottom:1px solid rgba(214,173,92,.12)}.receipt-row span{color:var(--muted)}.receipt-row strong{text-align:right;overflow-wrap:anywhere}.proof{margin:0;padding:20px 28px;background:#111112;color:var(--muted);font-size:12px}.actions{display:flex;justify-content:flex-end;margin-top:16px}.actions button{border:1px solid var(--gold);background:var(--gold);color:#13100a;border-radius:7px;padding:12px 18px;font-weight:800;cursor:pointer}@media(max-width:560px){.wrap{margin:14px auto}.hero{padding:20px;display:block}.amount{text-align:left;margin-top:18px}.grid{padding:6px 20px 20px}.receipt-row{grid-template-columns:1fr;gap:3px}.receipt-row strong{text-align:left}.brand{align-items:flex-start}}@media print{body{background:#fff;color:#111}.wrap{width:100%;margin:0}.receipt{box-shadow:none;background:#fff;border-color:#bbb}.proof{background:#f5f5f5;color:#333}.actions{display:none}.brand b,.eyebrow,.amount strong{color:#8a651d}.receipt-row span{color:#555}}</style></head><body><main class="wrap"><header class="brand"><b>WheelsonAuto</b><span>Customer reimbursement record</span></header><article class="receipt"><section class="hero"><div><div class="eyebrow">E-ZPass transaction proof</div><h1>Toll reimbursement receipt</h1><div>' + escapeHtml(customer) + '</div></div><div class="amount"><span>Amount to reimburse</span><strong>' + escapeHtml(amount) + '</strong></div></section><section class="grid">' + row('Status', status) + row('Transaction date', transactionDate) + row('Posted date', postingDate) + row('Tag / plate', plate) + row('Vehicle', vehicle) + row('VIN', claim.vin || 'Not provided') + row('Agency', agency) + row('Description', evidence.description || claim.type || 'TOLL') + row('Entry', entry) + row('Exit', exit) + row('Vehicle type code', evidence.vehicleTypeCode || 'Not provided') + row('Plan / rate', evidence.planRate || 'Not provided') + row('Fare type', evidence.fareType || 'Not provided') + row('Reference', reference) + '</section><p class="proof">Generated by WheelsonAuto from the imported E-ZPass NJ transaction report. The transaction fields above are preserved from the source row. The private E-ZPass account number and account balance are intentionally excluded.</p></article><div class="actions"><button type="button" onclick="window.print()">Print receipt</button></div></main></body></html>';
+}
+function signedAgreementHtml(signature = {}, signatureImage = Buffer.alloc(0)) {
+  const values = signature.contractValues || {};
+  const signedDate = Number.isFinite(Date.parse(signature.signedAt || ''))
+    ? new Date(signature.signedAt).toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short', timeZone: 'America/New_York' }) + ' ET'
+    : String(signature.signedAt || 'Not recorded');
+  const vehicle = [values.VEHICLE_YEAR, values.VEHICLE_MAKE, values.VEHICLE_MODEL].filter(Boolean).join(' ') || 'Vehicle recorded in agreement';
+  const imageType = String(signature.signatureImageContentType || 'image/png').split(';')[0];
+  const signatureDataUrl = signatureImage.length ? 'data:' + imageType + ';base64,' + signatureImage.toString('base64') : '';
+  const contractBody = String(signature.contractBody || '');
+  const renderedAgreementHash = contractBody ? crypto.createHash('sha256').update(contractBody).digest('hex') : '';
+  const renderedSignatureHash = signatureImage.length ? crypto.createHash('sha256').update(signatureImage).digest('hex') : '';
+  const agreementHashMatches = !!renderedAgreementHash && renderedAgreementHash === String(signature.documentHash || '').toLowerCase();
+  const signatureHashMatches = !!renderedSignatureHash && renderedSignatureHash === String(signature.signatureImageHash || '').toLowerCase();
+  const proofVerified = agreementHashMatches && signatureHashMatches && signature.electronicConsent === true && signature.signatureMatchConsent === true;
+  const displayBody = contractBody.replace(/^LONG-TERM VEHICLE RENTAL WITH OPTIONAL PURCHASE AGREEMENT\s*/i, '').trim();
+  const agreement = escapeHtml(displayBody || 'The immutable agreement text is not available in this legacy record.');
+  const certificateRow = (label, value) => '<div><dt>' + escapeHtml(label) + '</dt><dd>' + escapeHtml(value || 'Not recorded') + '</dd></div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Signed WheelsonAuto agreement</title><style>:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#25282b;color:#171717;font:14px/1.55 Georgia,"Times New Roman",serif}.toolbar{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px max(16px,calc((100vw - 850px)/2));background:#17191b;color:#f2f2f2;border-bottom:1px solid #46494c;font-family:Inter,system-ui,sans-serif}.toolbar div{display:grid;gap:1px}.toolbar strong{font-size:14px}.toolbar span{color:#b8bdc1;font-size:11px}.toolbar button{border:1px solid #d7b86b;border-radius:6px;background:#d7b86b;color:#17140d;padding:9px 14px;font-weight:800;cursor:pointer}.paper{width:min(850px,calc(100% - 26px));margin:24px auto;background:#fff;box-shadow:0 20px 60px rgba(0,0,0,.35)}.contract{padding:64px 68px}.contract-heading{text-align:center;margin-bottom:34px;padding-bottom:22px;border-bottom:2px solid #222}.contract-heading h1{max-width:660px;margin:0 auto 8px;font-size:22px;line-height:1.25;letter-spacing:.02em}.contract-heading p{margin:0;color:#555}.agreement-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.62 Georgia,"Times New Roman",serif}.signature-section{break-inside:avoid;margin-top:42px;padding-top:24px;border-top:2px solid #222}.signature-section h2,.certificate h2{margin:0 0 18px;font-size:17px}.signature-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px}.signature-line{min-height:126px;padding:12px 0 8px;border-bottom:1px solid #222}.signature-line img{display:block;width:100%;height:92px;object-fit:contain;object-position:left center}.signature-line .missing{display:grid;place-items:center;height:92px;color:#777;font-family:Inter,system-ui,sans-serif;font-size:11px}.signature-meta{display:grid;gap:4px;margin-top:8px}.signature-meta strong{font-size:15px}.signature-meta span{color:#444;font-size:12px}.consent{display:grid;gap:7px;margin-top:20px;padding:14px 16px;border:1px solid #bbb;background:#f7f7f7;font-family:Inter,system-ui,sans-serif;font-size:11px}.consent span:before{content:"✓";display:inline-grid;place-items:center;width:17px;height:17px;margin-right:7px;border-radius:50%;background:#255c34;color:#fff;font-weight:900}.certificate{break-before:page;margin-top:42px;padding:36px 68px 52px;border-top:8px solid #242628;background:#f4f4f2}.certificate-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.certificate-header p{max-width:560px;margin:0 0 20px;color:#4b4b4b;font-family:Inter,system-ui,sans-serif;font-size:11px}.seal{flex:0 0 auto;padding:6px 9px;border:1px solid #2d653c;border-radius:999px;color:#2d653c;font:800 10px Inter,system-ui,sans-serif;text-transform:uppercase}.seal.bad{border-color:#9b2828;color:#9b2828}.certificate dl{display:grid;gap:0;margin:0;border:1px solid #bbb;background:#fff}.certificate dl>div{display:grid;grid-template-columns:180px minmax(0,1fr);border-bottom:1px solid #ddd}.certificate dl>div:last-child{border-bottom:0}.certificate dt,.certificate dd{margin:0;padding:9px 11px}.certificate dt{background:#ededeb;color:#444;font:800 10px Inter,system-ui,sans-serif;text-transform:uppercase}.certificate dd{font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.certificate-note{margin:16px 0 0;color:#555;font:10px/1.5 Inter,system-ui,sans-serif}@media(max-width:620px){.toolbar{padding:10px 13px}.paper{width:100%;margin:0;box-shadow:none}.contract{padding:34px 24px}.contract-heading h1{font-size:18px}.signature-grid{grid-template-columns:1fr}.certificate{padding:30px 24px 40px}.certificate-header{display:block}.seal{display:inline-block;margin-bottom:12px}.certificate dl>div{grid-template-columns:1fr}.certificate dt,.certificate dd{padding:8px 9px}}@media print{@page{size:letter;margin:.55in}body{background:#fff}.toolbar{display:none}.paper{width:100%;margin:0;box-shadow:none}.contract{padding:0}.certificate{padding:28px 0 0;background:#fff;border-top:2px solid #222}.certificate dl{break-inside:avoid}.agreement-text{font-size:11px}}</style></head><body><div class="toolbar"><div><strong>Signed WheelsonAuto agreement</strong><span>Immutable electronic-signature record</span></div><button type="button" onclick="window.print()">Print / save PDF</button></div><main class="paper"><article class="contract"><header class="contract-heading"><h1>LONG-TERM VEHICLE RENTAL WITH OPTIONAL PURCHASE AGREEMENT</h1><p>State of New Jersey | Electronically signed</p></header><pre class="agreement-text">' + agreement + '</pre><section class="signature-section"><h2>Electronic signatures</h2><div class="signature-grid"><div><div class="signature-line">' + (signatureDataUrl ? '<img src="' + signatureDataUrl + '" alt="Customer drawn signature">' : '<div class="missing">Signature image unavailable</div>') + '</div><div class="signature-meta"><strong>' + escapeHtml(signature.typedName || signature.customer || 'Customer') + '</strong><span>Renter electronic signature</span><span>Signed ' + escapeHtml(signedDate) + '</span></div></div><div><div class="signature-line"></div><div class="signature-meta"><strong>Wheels On Auto INC.</strong><span>Owner / rental company</span><span>Agreement accepted through the WheelsonAuto platform</span></div></div></div><div class="consent"><span>Electronic records and signature consent confirmed</span><span>Customer confirmed the drawn signature is consistent with the driver-license signature</span></div></section></article><section class="certificate"><div class="certificate-header"><div><h2>Electronic signature certificate</h2><p>This certificate identifies the exact locked agreement and drawn signature stored together by WheelsonAuto. Stripe Identity and staff comparison are separate identity checks.</p></div><span class="seal '+(proofVerified?'':'bad')+'">'+(proofVerified?'Proof verified':'Proof check failed')+'</span></div><dl>' + certificateRow('Verification result', proofVerified ? 'Agreement and signature hashes verified' : 'Stored proof does not match the signed record') + certificateRow('Certificate ID', signature.id) + certificateRow('Signed by', signature.typedName || signature.customer) + certificateRow('Signed at', signature.signedAt) + certificateRow('Vehicle', vehicle) + certificateRow('VIN', values.VEHICLE_VIN) + certificateRow('Tag / plate', values.VEHICLE_PLATE) + certificateRow('Agreement version', String(signature.contractVersion || '')) + certificateRow('Template ID', signature.templateId) + certificateRow('Template SHA-256', signature.templateHash) + certificateRow('Agreement SHA-256', signature.documentHash) + certificateRow('Signature image SHA-256', signature.signatureImageHash) + certificateRow('Stored artifact SHA-256', signature.contractArtifactHash) + certificateRow('Signing IP', signature.signedIp) + certificateRow('Device record', signature.signedUserAgent) + '</dl><p class="certificate-note">Any change to the locked agreement or signature image changes its SHA-256 fingerprint. The original encrypted files remain private and access-controlled.</p></section></main></body></html>';
 }
 async function sendTollReceipt(data, claim, channel, user, deliveryId = '') {
   const selectedChannel = String(channel || (claim.email ? 'Email' : 'SMS')).toLowerCase() === 'sms' ? 'SMS' : 'Email';
@@ -22787,6 +22813,22 @@ const server = http.createServer(async (req, res) => {
         return send(res, Number(error && error.statusCode || 404), 'Document could not be opened', 'text/plain; charset=utf-8');
       }
     }
+    if (url.pathname.startsWith('/customer/contracts/') && req.method === 'GET') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { 'Cache-Control': 'no-store', Location: '/customer/login' });
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { 'Cache-Control': 'no-store', 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
+      const signature = (data.eSignatures || []).find(row => row.id === id && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
+      const document = signature && (data.documents || []).find(row => row.id === signature.contractDocumentId && row.customerAccountId === account.id && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
+      if (!signature || !document || !privateDocumentAvailable(signature)) return send(res, 404, 'Signed agreement not found', 'text/plain; charset=utf-8');
+      try {
+        return send(res, 200, signedAgreementHtml(signature, await readPrivateDocumentBytes(signature)), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="wheelsonauto-signed-agreement.html"', 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'no-referrer' });
+      } catch (error) {
+        return send(res, Number(error && error.statusCode || 404), 'Signed agreement could not be opened', 'text/plain; charset=utf-8');
+      }
+    }
     if (url.pathname === '/customer/card-change' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
@@ -24078,6 +24120,18 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, body, document.contentType || 'application/octet-stream', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="' + String(document.originalName || document.id).replace(/["\r\n]/g, '') + '"', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
       } catch (error) {
         return send(res, Number(error && error.statusCode || 404), 'Document could not be opened', 'text/plain; charset=utf-8');
+      }
+    }
+    if (url.pathname.startsWith('/api/onboarding/contracts/') && req.method === 'GET') {
+      if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can view signed agreements.' });
+      const id = decodeURIComponent(url.pathname.split('/').filter(Boolean)[3] || '');
+      const data = await readData();
+      const signature = (data.eSignatures || []).find(row => row.id === id);
+      if (!signature || !rowVisibleToUserOrganization(signature, user) || !privateDocumentAvailable(signature)) return send(res, 404, 'Signed agreement not found', 'text/plain; charset=utf-8');
+      try {
+        return send(res, 200, signedAgreementHtml(signature, await readPrivateDocumentBytes(signature)), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="wheelsonauto-signed-agreement.html"', 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'no-referrer' });
+      } catch (error) {
+        return send(res, Number(error && error.statusCode || 404), 'Signed agreement could not be opened', 'text/plain; charset=utf-8');
       }
     }
     if (url.pathname.startsWith('/api/onboarding/signatures/') && req.method === 'GET') {
