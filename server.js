@@ -10601,10 +10601,10 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     ['application', 'Approved application for one online vehicle', !!(application && vehicle && application.onlineVehicleId && exactCustomer)],
     ['vehicle_identity', 'Real vehicle title, complete 17-character VIN, and tag/plate', !!(exactVehicleId && controlledStripePilotVehicleTitleReady(exactVehicleTitle) && controlledStripePilotVinReady(exactVin) && controlledStripePilotPlateReady(exactPlate))],
     ['profile_pickup_consent', 'Profile, pickup date, and autopay consent', !!(session && session.profileCompletedAt && session.requestedPickupDate && session.pickupAutopayConsentAt)],
-    ['final_review', 'One final WheelsonAuto screening approval before paid identity verification', !!(session && session.finalReviewStatus === 'Approved' && session.finalReviewedAt)],
+    ['final_review', 'Preliminary WheelsonAuto screening approval before paid identity verification', !!(session && session.finalReviewStatus === 'Approved' && session.finalReviewedAt)],
     ['stripe_identity', liveRequired ? 'Live Stripe Identity license and selfie verification with legal-name match' : 'Stripe Identity license and selfie verification with legal-name match', !!(session && session.identityProvider === 'stripe' && session.identityVerificationStatus === 'verified' && session.identityLegalNameMatch === true && (!liveRequired || session.identityVerificationLivemode === true))],
     ['insurance', 'Active full-coverage insurance verified for the exact VIN before release', insuranceVerified],
-    ['signature', 'E-signature included in the combined staff approval', !!(signature && signature.signedAt && session && session.signatureReviewStatus === 'Approved' && session.finalReviewStatus === 'Approved')],
+    ['signature', 'E-signature included in the preliminary staff screening', !!(signature && signature.signedAt && session && session.signatureReviewStatus === 'Approved' && session.finalReviewStatus === 'Approved')],
     ['stripe_card', liveRequired ? 'Live Stripe reusable card and autopay authorization' : 'Stripe reusable card and autopay authorization', !!(recurring && normalizedPaymentProvider(recurring.paymentProvider || recurring.provider) === 'stripe' && recurring.stripeCustomerId && recurring.stripePaymentMethodId && (recurring.autopayConsentAt || recurring.stripeCardSavedAt || recurring.cardSavedAt) && session && session.autopayConsentAt && (!liveRequired || recurring.stripeLivemode === true))],
     ['deposit', depositRequired ? 'Separate nonrefundable deposit paid through Stripe' : 'No deposit required by the locked vehicle price', !depositRequired || !!(depositRequest && depositPayment && (!liveRequired || depositPayment.stripeLivemode === true))],
     ['deposit_amount', depositRequired ? 'Deposit request and payment match the locked vehicle price' : 'Waived deposit matches the locked vehicle price', depositAmountMatches],
@@ -21110,7 +21110,7 @@ const server = http.createServer(async (req, res) => {
             session.identityLegalNameSource = '';
           }
           session.documentCorrectionKinds = [];
-          session.documentReviewStatus = 'Waiting on final review';
+          session.documentReviewStatus = 'Waiting on preliminary screening';
           session.signatureReviewStatus = 'Waiting on customer';
           session.finalReviewStatus = 'Waiting on customer';
           session.reviewStatus = 'Customer setup in progress';
@@ -21123,7 +21123,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'identity') {
         if (normalizedIdentityProvider(session.identityProvider) !== 'stripe') return json(res, 409, { ok: false, error: 'This onboarding file uses WheelsonAuto staff identity review.' });
-        if (session.finalReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must complete the combined final review before the paid Stripe Identity check starts.' });
+        if (session.finalReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto must approve the preliminary screening before the paid Stripe Identity check starts.' });
         const identityRecurring = nativeOnboardingRecurring(data, session, application);
         if (!recurringCardReadyForProvider(identityRecurring, nativeOnboardingProvider(session, identityRecurring))) return json(res, 409, { ok: false, error: 'Save the authorized card before starting Stripe Identity.' });
         try {
@@ -21397,7 +21397,7 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, redirectUrl: setup.request.url, message: 'Opening ' + providerName + ' secure card setup.' });
       }
       if (action === 'payment') {
-        if (session.finalReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto final approval is required before payment.' });
+        if (session.finalReviewStatus !== 'Approved') return json(res, 409, { ok: false, error: 'WheelsonAuto preliminary screening approval is required before payment.' });
         if (normalizedIdentityProvider(session.identityProvider) === 'stripe' && session.identityVerificationStatus !== 'verified') return json(res, 409, { ok: false, error: 'Complete the final Stripe Identity check before payment.' });
         if (normalizedIdentityProvider(session.identityProvider) === 'stripe' && session.identityLegalNameMatch !== true) return json(res, 409, { ok: false, error: 'The Stripe-verified legal name must match this application before payment.' });
         const recurring = nativeOnboardingRecurring(data, session, application);
@@ -21467,7 +21467,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (action === 'insurance') {
         const readiness = nativeOnboardingReadyForPickup(data, session, application, { allowInsurancePending: true });
-        if (!readiness.identityReady || !readiness.paymentsReady) return json(res, 409, { ok: false, error: 'Complete final approval, Stripe Identity, and both required payments before confirming insurance.' });
+        if (!readiness.identityReady || !readiness.paymentsReady) return json(res, 409, { ok: false, error: 'Complete preliminary screening, Stripe Identity verification, and both required payments before confirming insurance.' });
         const option = String(payload.insuranceOption || '').trim().toLowerCase();
         if (!['upload', 'help_at_pickup'].includes(option)) return json(res, 400, { ok: false, error: 'Choose insurance upload or help at pickup.' });
         const now = new Date().toISOString();
@@ -23977,24 +23977,25 @@ const server = http.createServer(async (req, res) => {
             signatureReviewStatus: 'Approved',
             signatureReviewedAt: reviewedAt,
             signatureReviewedBy: reviewer,
-            reviewStatus: 'Approved for Stripe Identity',
-            status: 'Approved - Stripe Identity ready'
+            reviewStatus: 'Preliminary screening approved for Stripe Identity',
+            status: 'Screening approved - Stripe Identity ready'
           });
           documents.filter(row => screeningKinds.includes(row.documentKind)).forEach(document => Object.assign(document, { status: 'Verified - preliminary staff screening', verifiedAt: reviewedAt, verifiedBy: reviewer, reviewNotes: onboarding.text(payload.notes, 1600) }));
           Object.assign(signature, { verificationStatus: 'Accepted - preliminary license comparison complete', verifiedAt: reviewedAt, verifiedBy: reviewer, signatureMatchConfirmed: true, verifiedDocumentHash: signature.documentHash, reviewNotes: onboarding.text(payload.notes, 1600), status: 'Signed and accepted' });
-          if (application) Object.assign(application, { stage: 'Approved', status: 'Approved - Stripe Identity ready', onboardingStatus: 'Final staff review approved', approvedAt: reviewedAt, approvedBy: reviewer, updatedAt: reviewedAt });
+          if (application) Object.assign(application, { stage: 'Review', status: 'Screening approved - Stripe Identity ready', onboardingStatus: 'Preliminary screening approved', approvedAt: reviewedAt, approvedBy: reviewer, updatedAt: reviewedAt });
           await queueEmailNotification(data, {
             event: 'customer_onboarding_approved',
             deliveryId: 'onboarding-approved-' + session.id,
             customer: application && application.name || 'Applicant',
             to: application && application.email || '',
-            subject: 'WheelsonAuto file approved - complete Stripe Identity',
-            template: 'Onboarding approved',
+            subject: 'WheelsonAuto screening complete - verify your identity',
+            template: 'Preliminary screening approved',
             body: [
               'Hi ' + (application && application.firstName || 'there') + ',',
               '',
-              'WheelsonAuto approved your completed file for the ' + nativeSite.vehicleTitle(vehicle) + '.',
+              'WheelsonAuto completed the preliminary screening for your ' + nativeSite.vehicleTitle(vehicle) + ' application.',
               'Return to your secure setup page from the original email and complete the one-time Stripe Identity check. After Stripe verifies your live license and selfie, the separate down payment and first weekly payment will unlock.',
+              'This screening is not final identity verification. Stripe must verify your live license, matching selfie, and legal name before any required payment opens.',
               '',
               'No payment was taken during card setup.',
               'Active full-coverage insurance for VIN ' + vin + ' must still be verified before the vehicle is released. You can upload proof later or request help at pickup.'

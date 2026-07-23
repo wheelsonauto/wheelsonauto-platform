@@ -200,16 +200,16 @@ async function main() {
     ] } });
     assert(documents.status === 201 && documents.json.documents.length === 3, 'The low-cost WheelsonAuto screening must store the two license sides and live selfie before Stripe Identity starts.');
     const pageBefore = await request(server, 'GET', '/onboard/' + token);
-    assert(/Final Stripe Identity check/.test(pageBefore.text) && /WheelsonAuto final approval and a saved card are required first/.test(pageBefore.text), 'Customer page should explain that paid Stripe Identity stays locked until the completed file is approved.');
+    assert(/Verify who submitted the application/.test(pageBefore.text) && /Identity is not verified yet/.test(pageBefore.text) && /preliminary screening approval and a saved card are required first/i.test(pageBefore.text), 'Customer page must clearly distinguish preliminary screening from paid identity verification.');
     assert(!/onboarding-uploads|data:image\//.test(pageBefore.text), 'Private ID file paths and contents must never render into the public onboarding page.');
 
     const identityCreatesBeforeApproval = fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions').length;
     const earlyIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
-    assert(earlyIdentity.status === 409 && fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions').length === identityCreatesBeforeApproval, 'Stripe Identity must not start or create a billable session before final WheelsonAuto approval.');
+    assert(earlyIdentity.status === 409 && fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions').length === identityCreatesBeforeApproval, 'Stripe Identity must not start or create a billable session before preliminary WheelsonAuto screening approval.');
     const signature = await request(server, 'POST', '/api/public/onboarding/' + token + '/signature', { json: { typedName: 'Identity Test Customer', electronicConsent: true, signatureMatchConsent: true, signatureData: image } });
     assert(signature.status === 201, 'The customer should sign before the combined review.');
     const card = await request(server, 'POST', '/api/public/onboarding/' + token + '/card', { json: { autopayConsent: true } });
-    assert(card.status === 201 && /^https:\/\/checkout\.stripe\.test\//.test(card.json.redirectUrl || ''), 'The customer should go directly to Stripe-hosted card fields and save a card without a charge before final review.');
+    assert(card.status === 201 && /^https:\/\/checkout\.stripe\.test\//.test(card.json.redirectUrl || ''), 'The customer should go directly to Stripe-hosted card fields and save a card without a charge before preliminary screening.');
     const cardCheckoutRequest = fakeStripe.state.requests.find(row => row.method === 'POST' && row.url === '/v1/checkout/sessions');
     const cardCheckoutForm = new URLSearchParams(cardCheckoutRequest && cardCheckoutRequest.body || '');
     assert(cardCheckoutForm.get('mode') === 'setup' && cardCheckoutForm.get('currency') === 'usd' && cardCheckoutForm.get('payment_method_types[0]') === 'card', 'The pre-review card step must create a USD, card-only Stripe setup session.');
@@ -234,6 +234,9 @@ async function main() {
     assert(correctedSelfie.status === 201 && correctedSelfie.json.documents.length === 1, 'A requested selfie correction must replace only that private file.');
     const finalApproval = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: onboardingId, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true, notes: 'Preliminary file, signature, VIN, and saved card all reviewed.' } });
     assert(finalApproval.status === 200 && finalApproval.json.finalReviewStatus === 'Approved', 'One combined staff approval must unlock the paid Stripe Identity step.');
+    const paymentCreatesBeforeIdentity = fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/checkout/sessions').length;
+    const paymentBeforeIdentity = await request(server, 'POST', '/api/public/onboarding/' + token + '/payment', { json: { paymentType: 'deposit' } });
+    assert(paymentBeforeIdentity.status === 409 && /Stripe Identity/i.test(paymentBeforeIdentity.json.error || '') && fakeStripe.state.requests.filter(row => row.method === 'POST' && row.url === '/v1/checkout/sessions').length === paymentCreatesBeforeIdentity, 'Preliminary staff screening must never unlock a real payment before Stripe verifies who submitted the application.');
     const identity = await request(server, 'POST', '/api/public/onboarding/' + token + '/identity', { json: {} });
     assert(identity.status === 201 && identity.json.redirectUrl === 'https://verify.stripe.test/vs_test_wheelsonauto_identity', 'Approved customer should receive the short-lived Stripe-hosted verification URL.');
     const createRequest = fakeStripe.state.requests.find(row => row.method === 'POST' && row.url === '/v1/identity/verification_sessions');
@@ -249,7 +252,7 @@ async function main() {
 
     fakeStripe.state.status = 'verified';
     const returned = await request(server, 'GET', '/onboard/' + token + '?identity=returned');
-    assert(returned.status === 200 && /Stripe verified the live driver license and matching selfie/.test(returned.text), 'Stripe return should reconcile the authoritative status before rendering.');
+    assert(returned.status === 200 && /Identity verified: Stripe confirmed the live driver license, matching selfie, and application legal name/.test(returned.text), 'Stripe return should reconcile and clearly display the authoritative identity proof before payment.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     session = saved.onboardingSessions.find(row => row.id === onboardingId);
     const verificationCase = saved.verificationCases.find(row => row.onboardingSessionId === onboardingId && row.provider === 'Stripe Identity');
