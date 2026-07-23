@@ -388,6 +388,16 @@ assertIncludes('Exact Clover subscription cutover confirmation', app + server, [
   'cutover_subscription_changed_after_schedule',
   'WheelsonAuto left Clover active and did not activate Stripe'
 ]);
+assertIncludes('Consolidated owner cutover evidence', app + stylesCss, [
+  'stripeMigrationSummary',
+  'Protected provider cutover',
+  'One plan, one billing date, one provider',
+  'firstStripeChargeFailureCount',
+  'firstStripeChargeFailureIntentId',
+  'Confirm Clover stopped',
+  'Recover to Clover',
+  '.migration-proof'
+]);
 assertIncludes('Core readiness is distinct from controlled Stripe launch readiness', app, [
   'clarifyCoreReadinessLanguage',
   'Core operational check for environment keys',
