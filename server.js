@@ -12238,13 +12238,20 @@ async function assertDataBackendTransition() {
 async function assertProductionInfrastructure() {
   if (!WOA_PRODUCTION_HARDENING_REQUIRED) return { skipped: true };
   const preflight = await productionInfrastructurePreflight(await readData());
-  if (!preflight.readyForLiveStripe) {
+  const startupMissing = preflight.providerProofCollection && Array.isArray(preflight.providerProofCollection.missing)
+    ? preflight.providerProofCollection.missing
+    : preflight.missing;
+  if (startupMissing.length) {
     const error = new Error('Production hardening is enabled, but launch safeguards are incomplete: ' + preflight.missing.join(', ') + '.');
     error.code = 'production_infrastructure_not_ready';
     error.preflight = preflight;
     throw error;
   }
-  return preflight;
+  return {
+    ...preflight,
+    runtimeReady: true,
+    stripeLaunchLocked: !preflight.readyForLiveStripe
+  };
 }
 async function assertStripeCutoverLaunchReady(data) {
   const isolatedTestMode = stripeMigration.isolatedProviderTestMode(process.env);

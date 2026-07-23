@@ -61,6 +61,9 @@ function cleanRuntimeEnvironment(dataDir) {
 }
 
 async function main() {
+  const serverSource = await fs.readFile(path.join(root, 'server.js'), 'utf8');
+  assert.match(serverSource, /const startupMissing = preflight\.providerProofCollection[\s\S]*?preflight\.providerProofCollection\.missing/, 'Runtime startup must be gated by durable foundation readiness, not expiring provider evidence.');
+  assert.match(serverSource, /stripeLaunchLocked:\s*!preflight\.readyForLiveStripe/, 'An available runtime must keep Stripe launch locked while provider or cutover evidence is incomplete.');
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-production-startup-gate-'));
   try {
     const result = spawnSync(process.execPath, ['server.js'], {
