@@ -146,11 +146,21 @@ function createSession(data, application, actor, baseUrl, options = {}) {
   return session;
 }
 
+function applicationBlocksOnboarding(application) {
+  if (!application) return true;
+  return /denied|rejected|cancelled|removed|archived/i.test([
+    application.status,
+    application.stage
+  ].filter(Boolean).join(' '));
+}
+
 function findSession(data, publicToken) {
   ensureCollections(data);
   const hash = tokenHash(publicToken);
-  const session = data.onboardingSessions.find(item => item.tokenHash === hash && !/replaced|cancelled/i.test(String(item.status || '')));
+  const session = data.onboardingSessions.find(item => item.tokenHash === hash && !/replaced|cancelled|expired/i.test(String(item.status || '')));
   if (!session) return null;
+  const application = applicationForSession(data, session);
+  if (applicationBlocksOnboarding(application)) return null;
   if (Date.parse(session.expiresAt || '') < Date.now()) {
     session.status = 'Expired';
     return null;
@@ -610,6 +620,7 @@ module.exports = {
   findPublicVehicle,
   pricingSnapshot,
   createSession,
+  applicationBlocksOnboarding,
   findSession,
   releaseExpiredHolds,
   sessionPublicUrl,

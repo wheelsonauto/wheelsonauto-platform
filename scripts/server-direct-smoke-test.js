@@ -1388,12 +1388,30 @@ async function main() {
     assert(deniedIsolatedApplication.status === 200 && deniedIsolatedApplication.json.ok && deniedIsolatedApplication.json.portalDisabled, 'Owner should be able to deny/archive an unapproved application and disable its pending portal login.');
     const deniedPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(isolatedPortalLogin.cookie) });
     assert(deniedPortalState.status === 401, 'A denied application must immediately lose customer portal access.');
+    const deniedOnboardingPath = new URL(isolatedApplication.json.onboardingUrl, 'http://127.0.0.1').pathname;
+    const deniedOnboardingToken = deniedOnboardingPath.split('/').filter(Boolean).pop();
+    const deniedOnboardingPage = await request(server, 'GET', deniedOnboardingPath);
+    assert(deniedOnboardingPage.status === 404 && !/Welcome, Isolated Applicant/i.test(deniedOnboardingPage.text), 'A denied application must immediately revoke its public onboarding page without exposing applicant details.');
+    const deniedOnboardingMutation = await request(server, 'POST', '/api/public/onboarding/' + deniedOnboardingToken + '/profile', {
+      json: { requestedPickupDate: futureDateKey(2), requestedPickupTime: '1:00 PM', pickupAutopayConsent: true }
+    });
+    assert(deniedOnboardingMutation.status === 404, 'A denied application onboarding token must reject every customer mutation before validation or provider work.');
     const deniedApplicationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const deniedApplicationRow = deniedApplicationState.json.applications.find(row => row.id === isolatedApplication.json.application.id);
     const deniedApplicationAccount = deniedApplicationState.json.customerAccounts.find(row => row.applicationId === isolatedApplication.json.application.id);
+    const deniedApplicationSession = deniedApplicationState.json.onboardingSessions.find(row => row.applicationId === isolatedApplication.json.application.id);
     const releasedApplicationVehicle = deniedApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
-    assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Disabled', 'Denied application and pending login should move to archived/disabled state together.');
+    assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Disabled' && deniedApplicationSession && deniedApplicationSession.status === 'Cancelled', 'Denied application, onboarding link, and pending login should move to archived/cancelled/disabled state together.');
     assert(releasedApplicationVehicle && releasedApplicationVehicle.published === true && releasedApplicationVehicle.availability === 'Available', 'Denying an application should leave its unused online vehicle available for another applicant.');
+    deniedApplicationSession.status = 'Open';
+    deniedApplicationSession.cancelledAt = '';
+    deniedApplicationSession.cancelledBy = '';
+    const staleDeniedSessionWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: deniedApplicationState.json });
+    assert(staleDeniedSessionWrite.status === 200 && staleDeniedSessionWrite.json.ok, 'Owner could not seed the stale denied-session fail-closed regression scenario.');
+    const staleDeniedOnboardingPage = await request(server, 'GET', deniedOnboardingPath);
+    assert(staleDeniedOnboardingPage.status === 404 && !/Isolated Applicant/i.test(staleDeniedOnboardingPage.text), 'A stale open session must remain unusable whenever its linked application is denied.');
+    const staleDeniedAvailability = await request(server, 'GET', '/api/public/onboarding/' + deniedOnboardingToken + '/pickup-availability?date=' + encodeURIComponent(futureDateKey(2)));
+    assert(staleDeniedAvailability.status === 404, 'A stale denied onboarding token must not expose pickup availability or any other public onboarding action.');
     const secondUnusedVehicleApplication = await request(server, 'POST', '/api/public/applications', {
       headers: { 'x-forwarded-for': '198.51.100.89' },
       json: nativePublicApplicationPayload({
@@ -1452,6 +1470,9 @@ async function main() {
     const restoredExactApplicationVehicle = restoredExactApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-001');
     assert(restoredExactApplicationRow && restoredExactApplicationRow.stage === 'New' && restoredExactApplicationAccount && restoredExactApplicationAccount.status === 'Active', 'Restore must reactivate only the exact pending application and its portal account.');
     assert(restoredExactApplicationVehicle && restoredExactApplicationVehicle.published === true && restoredExactApplicationVehicle.availability === 'Available' && !restoredExactApplicationVehicle.heldApplicationId, 'Restoring an archived application must not hold or unpublish its vehicle.');
+    const restoredOldOnboardingPath = new URL(publicApplication.json.onboardingUrl, 'http://127.0.0.1').pathname;
+    const restoredOldOnboardingPage = await request(server, 'GET', restoredOldOnboardingPath);
+    assert(restoredOldOnboardingPage.status === 404, 'Restoring an archived application must never reactivate its revoked onboarding token; staff must create a fresh secure link.');
     const repeatedRestoreExactApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: publicApplication.json.application.id, decision: 'restore' } });
     assert(repeatedRestoreExactApplication.status === 409, 'An active application must not be restorable again.');
     for (let i = 0; i < 8; i += 1) {
