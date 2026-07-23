@@ -14,7 +14,8 @@ const {
   cardSetupPlanReview,
   controlledStripePilotSelection,
   controlledStripePilotMoneyActionReview,
-  lockControlledStripePilotCandidate
+  lockControlledStripePilotCandidate,
+  repairControlledStripeTestPilotLock
 } = require('../server');
 const { runCliArgumentChecks } = require('./cli-argument-check');
 
@@ -94,7 +95,7 @@ async function main() {
     ],
     onboardingSessions: []
   });
-  assert.strictEqual(pilotSelection.eligibleCount, 1, 'The owner pilot chooser must expose only applications with exact customer, fleet identity, and locked pricing.');
+  assert.strictEqual(pilotSelection.eligibleCount, 2, 'The owner pilot chooser must expose exact real files plus a tightly capped legacy test listing with multiple explicit test identifiers.');
   assert.strictEqual(pilotSelection.candidates[0].applicationId, 'app-pilot-ready', 'Eligible pilot files must sort ahead of review-only files.');
   assert.deepStrictEqual(pilotSelection.candidates[0].blockers, [], 'An exact available applicant and vehicle must open without a false blocker.');
   assert.strictEqual(pilotSelection.candidates[0].paymentProvider, 'clover', 'The pilot chooser must expose the actual configured onboarding payment provider instead of guessing in the browser.');
@@ -102,8 +103,7 @@ async function main() {
   assert.strictEqual(pilotSelection.candidates[0].nextActions[0].owner, 'System', 'A legacy pilot candidate without its automatic setup must explain the responsible repair path without mutating the file.');
   assert.match(pilotSelection.candidates[0].nextActions[0].text, /without sending a charge/i, 'Automatic setup repair must state that it does not send a charge.');
   const placeholderPilot = pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-placeholder');
-  assert(placeholderPilot && placeholderPilot.eligible === false, 'A placeholder car must never qualify as the first live Stripe pilot.');
-  assert(placeholderPilot.blockers.some(reason => /17-character VIN/i.test(reason)) && placeholderPilot.blockers.some(reason => /test or placeholder/i.test(reason)) && placeholderPilot.blockers.some(reason => /year, make, and model/i.test(reason)), 'The owner must see every exact placeholder identity field that blocks the live pilot.');
+  assert(placeholderPilot && placeholderPilot.eligible === true && placeholderPilot.controlledTest === true, 'A $1 legacy listing with multiple explicit test identifiers must be isolated as a controlled pilot test instead of being confused with a real vehicle.');
   assert(pilotSelection.candidates.find(row => row.applicationId === 'app-pilot-blocked').blockers.some(reason => /VIN/.test(reason)), 'A pilot file without vehicle identity must fail closed instead of guessing.');
   const inProgressPilotSelection = controlledStripePilotSelection({
     applications: [{ id: 'app-pilot-progress', name: 'Progress Customer', email: 'progress@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: '66', driverLicenseExpires: '2035-01-01', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: '2020-01-01', requestedPickupTime: '11:00 AM', onlineVehicleId: 'online-pilot-progress', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T13:00:00.000Z' }],
@@ -138,6 +138,42 @@ async function main() {
   assert.strictEqual(cancelledPilotRefundReview.allowed, true, 'Cancelling the selected pilot must never trap its already-paid deposit or block an exact refund/dispute unwind.');
   const unrelatedCancelledRefundReview = controlledStripePilotMoneyActionReview(pilotMoneyState, { applicationId: 'another-application', onboardingSessionId: 'another-session', paymentType: 'Nonrefundable down payment' }, { isolatedTestMode: false, pilotApproved: false, allowPilotEvidenceAction: true });
   assert.strictEqual(unrelatedCancelledRefundReview.allowed, false, 'A cancelled pilot refund exception must remain bound to the exact locked application and onboarding file.');
+  const testPilotReplacementState = {
+    integrations: { stripe: {} },
+    applications: [
+      { id: 'app-old-unpaid-pilot', name: 'Old Pilot', email: 'old@example.com', onlineVehicleId: 'online-old-pilot', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T12:00:00.000Z' },
+      { id: 'app-current-dollar-test', name: 'Current Test', email: 'current@example.com', onlineVehicleId: 'online-dollar-test', pricingSnapshot: { weeklyPayment: 1, downPayment: 1 }, status: 'Screening approved - Stripe Identity ready', submittedAt: '2026-07-23T12:00:00.000Z' }
+    ],
+    onlineVehicles: [
+      { id: 'online-old-pilot', platformVehicleId: 'veh-old-pilot', title: '2019 Old Pilot', vin: '2C3CDXBG5KH123456', plate: 'OLD-001', weeklyPayment: 229, downPayment: 485, published: false, availability: 'Available' },
+      { id: 'online-dollar-test', platformVehicleId: 'veh-dollar-test', title: 'Online vehicle', make: 'test', model: 'test', vin: 'test', plate: 'test', weeklyPayment: 1, downPayment: 1, published: true, availability: 'Available' }
+    ],
+    vehicles: [
+      { id: 'veh-old-pilot', vin: '2C3CDXBG5KH123456', plate: 'OLD-001', status: 'Ready' },
+      { id: 'veh-dollar-test', vin: 'test', plate: 'test', status: 'Ready' }
+    ],
+    onboardingSessions: [
+      { id: 'onboard-old-unpaid-pilot', applicationId: 'app-old-unpaid-pilot', onlineVehicleId: 'online-old-pilot', status: 'Card linked', paymentProvider: 'stripe', identityProvider: 'stripe' },
+      { id: 'onboard-current-dollar-test', applicationId: 'app-current-dollar-test', onlineVehicleId: 'online-dollar-test', status: 'Screening approved - Stripe Identity ready', finalReviewStatus: 'Approved', identityVerificationStatus: 'verified', identityLegalNameMatch: true, paymentProvider: 'stripe', identityProvider: 'stripe' }
+    ],
+    recurringPayments: [{ id: 'rec-current-dollar-test', applicationId: 'app-current-dollar-test', onboardingSessionId: 'onboard-current-dollar-test', paymentProvider: 'stripe', status: 'Active' }],
+    paymentRequests: [],
+    payments: [],
+    auditLog: []
+  };
+  lockControlledStripePilotCandidate(testPilotReplacementState, testPilotReplacementState.applications[0], testPilotReplacementState.onboardingSessions[0], { name: 'Owner' });
+  const repairedPilot = repairControlledStripeTestPilotLock(testPilotReplacementState, testPilotReplacementState.applications[1], testPilotReplacementState.onboardingSessions[1], testPilotReplacementState.onlineVehicles[1], { name: 'System' });
+  assert.strictEqual(repairedPilot.changed, true, 'An approved capped test must repair an older unpaid pilot lock before its deposit checkout opens.');
+  assert.strictEqual(testPilotReplacementState.integrations.stripe.controlledPilotCandidateOnboardingSessionId, 'onboard-current-dollar-test', 'The repaired lock must stay tied to the exact current onboarding file.');
+  assert.strictEqual(testPilotReplacementState.recurringPayments[0].controlledStripePilotTest, true, 'Controlled test payment data must stay excluded from business revenue.');
+  const paidOldPilotState = JSON.parse(JSON.stringify(testPilotReplacementState));
+  Object.assign(paidOldPilotState.integrations.stripe, { controlledPilotCandidateApplicationId: 'app-old-unpaid-pilot', controlledPilotCandidateOnboardingSessionId: 'onboard-old-unpaid-pilot' });
+  paidOldPilotState.paymentRequests.push({ id: 'paid-old-deposit', applicationId: 'app-old-unpaid-pilot', onboardingSessionId: 'onboard-old-unpaid-pilot', paymentProvider: 'stripe', paymentType: 'Nonrefundable down payment', status: 'Paid' });
+  assert.throws(
+    () => repairControlledStripeTestPilotLock(paidOldPilotState, paidOldPilotState.applications[1], paidOldPilotState.onboardingSessions[1], paidOldPilotState.onlineVehicles[1], { name: 'System' }),
+    error => error && error.code === 'stripe_pilot_candidate_already_locked',
+    'A paid pilot lock must never be displaced by the automatic test repair.'
+  );
   const duplicateHoldState = {
     onboardingSessions: [
       { id: 'onboarding-one', applicationId: 'application-one', onlineVehicleId: 'online-shared', status: 'Identity pending' },

@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-document-detection-318';
+const ASSET_VERSION = 'platform-20260723-stripe-pilot-repair-319';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10658,8 +10658,17 @@ function controlledStripePilotVehicleTitleReady(value) {
   if (!title || /\b(?:test|testing|sample|placeholder)\b/i.test(title)) return false;
   return !/^(?:online\s+vehicle|wheelsonauto\s+vehicle|vehicle)$/i.test(title);
 }
-function controlledStripePilotTestVehicle(vehicle = {}) {
-  return vehicle && vehicle.stripePilotTestOnly === true;
+function controlledStripePilotTestVehicle(vehicle = {}, pricing = {}) {
+  vehicle = vehicle || {};
+  if (vehicle && vehicle.stripePilotTestOnly === true) return true;
+  const fields = [vehicle.title, vehicle.make, vehicle.model, vehicle.vin, vehicle.plate]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const explicitTestFields = fields.filter(value => /\b(?:test|testing)\b/i.test(value)).length;
+  return controlledStripePilotTestPricing(pricing).ready
+    && explicitTestFields >= 2
+    && !controlledStripePilotVinReady(vehicle.vin)
+    && !controlledStripePilotPlateReady(vehicle.plate);
 }
 function controlledStripePilotTestPricing(pricing = {}) {
   const weeklyCents = cents(pricing.weeklyPayment);
@@ -10701,7 +10710,7 @@ function controlledStripePilotSessionEvidence(data, session, options = {}) {
     && String(row.kind || '').toLowerCase() === 'receipt'
   ) : [];
   const pricing = application && application.pricingSnapshot || {};
-  const controlledTest = controlledStripePilotTestVehicle(vehicle);
+  const controlledTest = controlledStripePilotTestVehicle(vehicle, pricing);
   const controlledTestPricing = controlledStripePilotTestPricing(pricing);
   const expectedDepositCents = cents(pricing.downPayment);
   const expectedFirstWeekCents = cents(pricing.weeklyPayment);
@@ -10926,7 +10935,7 @@ function controlledStripePilotSelection(data) {
     const vin = String(publicVehicle && publicVehicle.vin || linkedVehicle && linkedVehicle.vin || '').trim();
     const plate = String(publicVehicle && publicVehicle.plate || linkedVehicle && (linkedVehicle.plate || linkedVehicle.stock) || '').trim();
     const vehicleTitle = publicVehicle ? nativeSite.vehicleTitle(publicVehicle) : String(application.vehicle || '').trim();
-    const controlledTest = controlledStripePilotTestVehicle(publicVehicle);
+    const controlledTest = controlledStripePilotTestVehicle(publicVehicle, { weeklyPayment, downPayment });
     const controlledTestPricing = controlledStripePilotTestPricing({ weeklyPayment, downPayment });
     const blockers = [];
     if (/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || ''))) blockers.push('Application is denied, removed, cancelled, or archived.');
@@ -10936,9 +10945,9 @@ function controlledStripePilotSelection(data) {
     if (publicVehicle && !platformVehicleId) blockers.push('Online vehicle is not linked to an internal fleet record.');
     if (publicVehicle && platformVehicleId && !linkedVehicle) blockers.push('Linked fleet vehicle record was not found.');
     if (!vin) blockers.push('Vehicle VIN is missing.');
-    else if (!controlledStripePilotVinReady(vin)) blockers.push('Vehicle VIN must be the complete real 17-character VIN before a live Stripe pilot.');
+    else if (!controlledTest && !controlledStripePilotVinReady(vin)) blockers.push('Vehicle VIN must be the complete real 17-character VIN before a live Stripe pilot.');
     if (!plate) blockers.push('Vehicle tag/plate is missing.');
-    else if (!controlledStripePilotPlateReady(plate)) blockers.push('Vehicle tag/plate must be a real assigned identifier, not a test or placeholder value.');
+    else if (!controlledTest && !controlledStripePilotPlateReady(plate)) blockers.push('Vehicle tag/plate must be a real assigned identifier, not a test or placeholder value.');
     if (publicVehicle && !controlledTest && !controlledStripePilotVehicleTitleReady(vehicleTitle)) blockers.push('Vehicle year, make, and model must identify a real online vehicle before a live Stripe pilot.');
     if (!Number.isFinite(weeklyPayment) || weeklyPayment <= 0) blockers.push('Locked weekly payment is missing.');
     if (!Number.isFinite(downPayment) || downPayment < 0) blockers.push('Locked nonrefundable deposit is missing.');
@@ -11042,7 +11051,22 @@ function controlledStripePilotCandidateIsActive(data, lock = controlledStripePil
     && !/completed|cancelled|expired|replaced/i.test(String(session.status || ''))
     && !/denied|removed|cancelled|archived/i.test(String(application.status || application.stage || '')));
 }
-function lockControlledStripePilotCandidate(data, application, session, user = {}) {
+function controlledStripePilotMoneyActivity(data, lock = {}) {
+  const paymentRequests = (data.paymentRequests || []).filter(row =>
+    String(row.onboardingSessionId || '') === String(lock.onboardingSessionId || '')
+    || String(row.applicationId || '') === String(lock.applicationId || '')
+  );
+  const payments = (data.payments || []).filter(row =>
+    normalizedPaymentProvider(row.paymentProvider || row.provider) === 'stripe'
+    && (String(row.onboardingSessionId || '') === String(lock.onboardingSessionId || '')
+      || String(row.applicationId || '') === String(lock.applicationId || ''))
+  );
+  return {
+    paid: paymentRequests.some(nativePaymentPaid) || payments.some(nativePaymentPaid),
+    activeCheckout: paymentRequests.some(row => !!activeHostedCheckoutHref(row))
+  };
+}
+function lockControlledStripePilotCandidate(data, application, session, user = {}, options = {}) {
   const applicationId = String(application && application.id || '').trim();
   const onboardingSessionId = String(session && session.id || '').trim();
   if (!applicationId || !onboardingSessionId || String(session.applicationId || '') !== applicationId) {
@@ -11054,7 +11078,14 @@ function lockControlledStripePilotCandidate(data, application, session, user = {
   }
   const current = controlledStripePilotCandidateLock(data);
   if (current.onboardingSessionId && current.onboardingSessionId !== onboardingSessionId && controlledStripePilotCandidateIsActive(data, current)) {
-    throw Object.assign(new Error('Another active onboarding file is already locked as the first Stripe pilot. Finish or cancel that exact file before choosing another pilot.'), { statusCode: 409, code: 'stripe_pilot_candidate_already_locked' });
+    const activity = controlledStripePilotMoneyActivity(data, current);
+    const replaceUnpaidControlledTest = options.replaceUnpaidControlledTest === true
+      && candidate.controlledTest === true
+      && !activity.paid
+      && !activity.activeCheckout;
+    if (!replaceUnpaidControlledTest) {
+      throw Object.assign(new Error('Another active onboarding file is already locked as the first Stripe pilot. Finish or cancel that exact file before choosing another pilot.'), { statusCode: 409, code: 'stripe_pilot_candidate_already_locked' });
+    }
   }
   const now = new Date().toISOString();
   data.integrations = data.integrations || {};
@@ -11066,6 +11097,30 @@ function lockControlledStripePilotCandidate(data, application, session, user = {
     controlledPilotCandidateLockedBy: String(user.name || user.username || 'Owner')
   });
   return controlledStripePilotCandidateLock(data);
+}
+function repairControlledStripeTestPilotLock(data, application, session, vehicle, user = {}) {
+  const pricing = application && (application.pricingSnapshot || onboarding.pricingSnapshot(vehicle)) || {};
+  if (!controlledStripePilotTestVehicle(vehicle, pricing)) return { changed: false, controlledTest: false };
+  const currentReview = controlledStripePilotMoneyActionReview(data, {
+    applicationId: application && application.id,
+    onboardingSessionId: session && session.id,
+    paymentType: 'Nonrefundable down payment'
+  });
+  if (currentReview.allowed) return { changed: false, controlledTest: true, lock: currentReview.lock || controlledStripePilotCandidateLock(data) };
+  const stripeState = data.integrations && data.integrations.stripe || {};
+  if (String(stripeState.controlledPilotOnboardingSessionId || '').trim()) return { changed: false, controlledTest: true };
+  const previous = controlledStripePilotCandidateLock(data);
+  const lock = lockControlledStripePilotCandidate(data, application, session, user, { replaceUnpaidControlledTest: true });
+  const changed = previous.onboardingSessionId !== lock.onboardingSessionId;
+  if (changed) {
+    const recurring = nativeOnboardingRecurring(data, session, application);
+    if (recurring) recurring.controlledStripePilotTest = true;
+    session.controlledStripePilotTest = true;
+    (data.paymentRequests || []).filter(row => row.onboardingSessionId === session.id || row.applicationId === application.id)
+      .forEach(row => { row.controlledStripePilotTest = true; });
+    appendAuditLog(data, user, 'Unpaid controlled Stripe test pilot lock repaired', [application.name || 'Test applicant', session.id, previous.onboardingSessionId || 'No previous pilot']);
+  }
+  return { changed, controlledTest: true, lock };
 }
 function controlledStripePilotMoneyActionReview(data, reference = {}, options = {}) {
   const isolatedTestMode = options.isolatedTestMode === undefined ? STRIPE_ISOLATED_PROVIDER_TEST_MODE : options.isolatedTestMode === true;
@@ -21639,7 +21694,7 @@ const server = http.createServer(async (req, res) => {
           onboardingReturnUrl: returnUrl,
           notes: 'Customer authorized card on file and weekly autopay anchored to pickup date ' + session.requestedPickupDate + '.'
         });
-        if (controlledStripePilotTestVehicle(vehicle)) {
+        if (controlledStripePilotTestVehicle(vehicle, application.pricingSnapshot || onboarding.pricingSnapshot(vehicle))) {
           Object.assign(setup.request, { controlledStripePilotTest: true });
           Object.assign(setup.autopay, { controlledStripePilotTest: true });
           Object.assign(session, { controlledStripePilotTest: true });
@@ -21683,6 +21738,22 @@ const server = http.createServer(async (req, res) => {
         if (!kind) return json(res, 400, { ok: false, error: 'Choose the deposit or first weekly payment.' });
         if (!onlineVehicleAvailableForApplicationPayment(vehicle, application)) return json(res, 409, { ok: false, error: 'Another customer already paid toward this vehicle, so it is no longer available. No checkout was opened and no charge was made.' });
         const pricing = application.pricingSnapshot || onboarding.pricingSnapshot(vehicle);
+        if (paymentProvider === 'stripe') {
+          try {
+            repairControlledStripeTestPilotLock(data, application, session, vehicle, { name: 'WheelsonAuto controlled test guard', role: 'System' });
+          } catch (error) {
+            const existingRequest = nativeOnboardingPaymentRequests(data, session, application, paymentProvider)
+              .find(row => row.paymentType === (kind === 'deposit' ? 'Nonrefundable down payment' : 'First weekly payment'));
+            if (existingRequest) {
+              existingRequest.status = 'Checkout setup failed';
+              const customerMessage = recordPublicCheckoutFailure(existingRequest, error, paymentProvider);
+              await protectConcurrentLocalWrites(data, { preferIncoming: true });
+              await writeData(data);
+              return json(res, Number(error && error.statusCode || 409), { ok: false, error: customerMessage });
+            }
+            throw error;
+          }
+        }
         const requests = nativeOnboardingPaymentRequests(data, session, application, paymentProvider);
         const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
         if (kind === 'first_week' && Number(pricing.downPayment || 0) > 0 && !nativePaymentPaid(deposit)) return json(res, 409, { ok: false, error: 'The nonrefundable down payment must complete before the first weekly payment.' });
@@ -21727,7 +21798,7 @@ const server = http.createServer(async (req, res) => {
           notes: label + ' for ' + application.name + ' - ' + nativeSite.vehicleTitle(vehicle),
           onboardingReturnUrl: returnUrl
         });
-        if (controlledStripePilotTestVehicle(vehicle)) request.controlledStripePilotTest = true;
+        if (controlledStripePilotTestVehicle(vehicle, pricing)) request.controlledStripePilotTest = true;
         data.paymentRequests.unshift(request);
         session.status = label + ' checkout opened';
         try {
@@ -27204,6 +27275,7 @@ module.exports = {
   controlledStripePilotCandidateLock,
   controlledStripePilotMoneyActionReview,
   lockControlledStripePilotCandidate,
+  repairControlledStripeTestPilotLock,
   assertControlledStripePilotApproved,
   assertStripeCardPaymentMethod,
   nativeOnboardingReadyForPickup,
