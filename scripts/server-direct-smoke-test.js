@@ -1414,6 +1414,14 @@ async function main() {
     assert(staleDeniedOnboardingPage.status === 404 && !/Isolated Applicant/i.test(staleDeniedOnboardingPage.text), 'A stale open session must remain unusable whenever its linked application is denied.');
     const staleDeniedAvailability = await request(server, 'GET', '/api/public/onboarding/' + deniedOnboardingToken + '/pickup-availability?date=' + encodeURIComponent(futureDateKey(2)));
     assert(staleDeniedAvailability.status === 404, 'A stale denied onboarding token must not expose pickup availability or any other public onboarding action.');
+    const staleDeniedCardSetupCount = deniedApplicationState.json.cardSetupRequests.length;
+    const staleDeniedPaymentRequestCount = deniedApplicationState.json.paymentRequests.length;
+    const staleDeniedCardSetup = await request(server, 'POST', '/api/card-setup-requests', { cookie: ownerCookie, json: { applicationId: isolatedApplication.json.application.id, onboardingSessionId: deniedApplicationSession.id, customer: 'Isolated Applicant', phone: '3135550147', email: 'isolated-applicant@example.com', amount: 229, frequency: 'Weekly', nextRun: futureDateKey(2), paymentProvider: 'clover', deferVehicleAssignment: true } });
+    assert(staleDeniedCardSetup.status === 409 && /onboarding file is closed/i.test(staleDeniedCardSetup.json.error || ''), 'A stale denied onboarding ID must not create a new card setup request.');
+    const staleDeniedPaymentLink = await request(server, 'POST', '/api/payment-links', { cookie: ownerCookie, json: { applicationId: isolatedApplication.json.application.id, onboardingSessionId: deniedApplicationSession.id, customer: 'Isolated Applicant', amount: 229, paymentProvider: 'clover', reason: 'Denied application regression' } });
+    assert(staleDeniedPaymentLink.status === 409 && /onboarding file is closed/i.test(staleDeniedPaymentLink.json.error || ''), 'A stale denied onboarding ID must not create a new payment link.');
+    const staleDeniedMoneyState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(staleDeniedMoneyState.json.cardSetupRequests.length === staleDeniedCardSetupCount && staleDeniedMoneyState.json.paymentRequests.length === staleDeniedPaymentRequestCount, 'Rejected closed-file card and payment actions must not leave partial money records.');
     const secondUnusedVehicleApplication = await request(server, 'POST', '/api/public/applications', {
       headers: { 'x-forwarded-for': '198.51.100.89' },
       json: nativePublicApplicationPayload({
