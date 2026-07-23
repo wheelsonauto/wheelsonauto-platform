@@ -7502,7 +7502,7 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   justify-self:stretch!important;
 }
 .admin-shell>.main{align-content:start!important}
-.admin-shell .view-website>:is(.website-overview-grid,.native-site-command,.native-inventory-board,.native-website-apps){
+.admin-shell .view-website>:is(.website-overview-grid,.native-site-command,.native-inventory-board,.native-website-apps,.native-applications-board,.integration-workspace){
   grid-column:1/-1!important;
   width:100%!important;
   min-width:0!important;
