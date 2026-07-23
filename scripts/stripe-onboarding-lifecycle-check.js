@@ -327,16 +327,18 @@ async function main() {
       driverLicenseExpires: '2032-02-15',
       employer: 'Lifecycle Test Employer',
       income: 5200,
-      password: 'StripeLife123',
       applicationConsent: true,
       insurancePickupConsent: true
     };
-    const applied = await request(server, 'POST', '/api/public/applications', { json: applicant });
-    assert(applied.status === 201 && applied.json.application.id && /\/onboard\//.test(applied.json.onboardingUrl || ''), 'A customer must be able to apply for the selected online vehicle and continue directly into secure setup.');
+    const customerPassword = 'StripeLife123';
+    const registration = await request(server, 'POST', '/customer/register', { form: { next: '/apply/2018-honda-accord', name: 'Stripe Lifecycle', phone: applicant.phone, email: applicant.email, password: customerPassword, confirmPassword: customerPassword } });
+    const customerCookie = String(registration.cookie).split(';')[0];
+    assert(registration.status === 303 && customerCookie.includes('woa_customer_session='), 'A customer must create a secure account before applying.');
+    const applied = await request(server, 'POST', '/api/public/applications', { json: applicant, cookie: customerCookie });
+    assert(applied.status === 201 && applied.json.application.id && /\/customer\/onboarding\//.test(applied.json.onboardingUrl || ''), 'A signed customer must be able to apply for the selected online vehicle and continue inside the account.');
     const applicationId = applied.json.application.id;
     const onboardingUrl = applied.json.onboardingUrl;
-    const customerLogin = await request(server, 'POST', '/customer/login', { form: { username: applicant.email, password: applicant.password } });
-    const customerCookie = String(customerLogin.cookie).split(';')[0];
+    const customerLogin = await request(server, 'POST', '/customer/login', { form: { username: applicant.email, password: customerPassword } });
     assert(customerLogin.status === 302 && customerCookie.includes('woa_customer_session='), 'The application must immediately create a secure customer login.');
 
     const ownerLogin = await request(server, 'POST', '/login', { form: { username: 'owner', password: 'StripeLifecycleOwner123!' } });
@@ -375,7 +377,10 @@ async function main() {
     const automaticSession = automaticallyStarted.onboardingSessions.find(row => row.applicationId === applicationId);
     assert(automaticSession && automaticSession.paymentProvider === 'stripe' && automaticSession.identityProvider === 'stripe', 'Application submission must automatically lock both Stripe payments and Stripe Identity without preliminary staff approval.');
     const onboardingId = automaticSession.id;
-    const token = onboardingUrl.split('/onboard/')[1];
+    const portalOnboarding = await request(server, 'GET', onboardingUrl, { cookie: customerCookie });
+    const tokenMatch = portalOnboarding.text.match(/data-onboarding-token="([a-f0-9]+)"/i);
+    const token = tokenMatch && tokenMatch[1];
+    assert(portalOnboarding.status === 200 && token, 'The customer account must reopen the exact onboarding file with a fresh short-lived secure token.');
     const pickupDate = nextPickupDate();
 
     const profile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: {

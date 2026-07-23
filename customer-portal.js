@@ -10,6 +10,7 @@
     var panels = Array.prototype.slice.call(portal.querySelectorAll('.customer-panel[id^="portal-"]'));
     var groups = {
       '#portal-overview': ['portal-vehicle', 'portal-card'],
+      '#portal-apply': ['portal-apply'],
       '#portal-payments': ['portal-payments', 'portal-payment-history'],
       '#portal-card': ['portal-card'],
       '#portal-service': ['portal-service'],

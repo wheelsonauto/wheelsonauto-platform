@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-application-priority-320';
+const ASSET_VERSION = 'platform-20260723-account-first-321';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -9544,11 +9544,16 @@ function customerSessionUser(req) {
 }
 function safeCustomerLoginReturn(value = '') {
   const next = String(value || '').trim();
-  return /^\/apply\/[a-z0-9_-]+$/i.test(next) ? next : '';
+  return /^\/(?:apply\/[a-z0-9_-]+|customer\/onboarding\/[a-z0-9_-]+)$/i.test(next) ? next : '';
 }
 function customerLoginPage(message = '', next = '') {
   const returnPath = safeCustomerLoginReturn(next);
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>' + (returnPath ? 'Sign in to apply for this vehicle with your existing account. Your password will not be changed.' : 'View your application, vehicle, payment schedule, service reminders, and account messages.') + '</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + (returnPath ? '<input type="hidden" name="next" value="' + escapeHtml(returnPath) + '">' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div class="login-pin">Both fields must match the same account. Five failed attempts require email recovery.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>' + (returnPath ? 'Sign in to continue securely in your account. Your password will not be changed.' : 'View your applications, vehicle, payment schedule, service reminders, and account messages.') + '</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + (returnPath ? '<input type="hidden" name="next" value="' + escapeHtml(returnPath) + '">' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div class="login-pin">Both fields must match the same account. Five failed attempts require email recovery.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/register' + (returnPath ? '?next=' + encodeURIComponent(returnPath) : '') + '" style="margin-top:10px;text-align:center">Create customer account</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
+}
+function customerRegisterPage(message = '', next = '', values = {}) {
+  const returnPath = safeCustomerLoginReturn(next);
+  const field = name => escapeHtml(values[name] || '');
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Create My WheelsonAuto Account</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card customer-register-card" method="POST" action="/customer/register"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer account</div><h1>Create My WheelsonAuto</h1><p>Create one secure account before applying. Your car choices, application, onboarding, payments, and final rental stay here.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + (returnPath ? '<input type="hidden" name="next" value="' + escapeHtml(returnPath) + '">' : '') + '<label>Full legal name<input name="name" autocomplete="name" value="' + field('name') + '" required autofocus></label><label>Mobile phone<input name="phone" inputmode="tel" autocomplete="tel" value="' + field('phone') + '" required></label><label>Email<input name="email" type="email" autocomplete="email" value="' + field('email') + '" required></label><label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label><label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required></label><button>Create secure account</button><div class="login-pin">Use this same account for every application. WheelsonAuto never replaces an existing password during an application.</div><a class="btn" href="/customer/login' + (returnPath ? '?next=' + encodeURIComponent(returnPath) : '') + '" style="margin-top:10px;text-align:center">Already have an account? Sign in</a></form></main></body></html>';
 }
 function customerForgotPage(message = '', username = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure recovery</div><h1>Reset customer password</h1><p>Enter the exact username, email, or phone used to sign in. A one-time code goes only to the email already saved on that account.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" required autofocus></label><button>Send recovery code</button><div class="login-pin">The code cannot open the account and expires after 15 minutes.</div><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Back to customer login</a></form></main></body></html>';
@@ -9878,15 +9883,21 @@ function pendingStarApprovalRows(data = {}) {
 function customerPortalState(data, account) {
   const scopedData = dataScopedToOrganization(data, account.organizationId || MAIN_ORG_ID);
   enrichLinkedProfiles(scopedData);
-  const application = (scopedData.applications || []).find(row => row.id === account.applicationId) || {};
-  const pendingApplication = customerPortalApplicationPending(account, application);
-  const context = application.id ? customerPortalApplicationContext(scopedData, account, application, pendingApplication) : aiFindCustomerContext(scopedData, {
+  const accountApplicationIds = new Set([account.applicationId, ...(Array.isArray(account.applicationIds) ? account.applicationIds : [])].filter(Boolean));
+  const applications = (scopedData.applications || [])
+    .filter(row => row.customerAccountId === account.id || accountApplicationIds.has(row.id))
+    .sort((a, b) => Date.parse(b.updatedAt || b.submittedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.submittedAt || a.createdAt || 0));
+  const application = applications.find(row => row.id === account.applicationId) || applications[0] || {};
+  const hasStrongOperationalLink = !!(account.customerId || account.contractId || account.recurringPaymentId || account.vehicleId || account.cloverCustomerId);
+  const unlinkedAccount = !application.id && !hasStrongOperationalLink;
+  const pendingApplication = unlinkedAccount || customerPortalApplicationPending(account, application);
+  const context = application.id ? customerPortalApplicationContext(scopedData, account, application, pendingApplication) : hasStrongOperationalLink ? aiFindCustomerContext(scopedData, {
     customer: account.customer || account.name,
     phone: account.phone,
     email: account.email,
     recurringPaymentId: account.recurringPaymentId,
     id: account.recurringPaymentId
-  });
+  }) : { contact: { name: account.name || account.customer || '', phone: account.phone || '', email: account.email || '' }, customerName: account.name || account.customer || '', phone: account.phone || '', email: account.email || '', recurring: null, customer: null, contract: null, vehicle: null, vehicleName: '', latestPayment: null, maintenance: [], claims: [], openClaims: [], documents: [], applications: [], tasks: [], portalAccount: account, paymentRequests: [], cardSetupRequests: [], latestMessages: [] };
   const identity = customerPortalIdentity(account, context, { pendingApplication });
   const vehicles = (scopedData.vehicles || []).filter(row => customerPortalRecordMatches(row, identity, 'vehicle'));
   const customers = (scopedData.customers || []).filter(row => customerPortalRecordMatches(row, identity, 'customer'));
@@ -9912,6 +9923,11 @@ function customerPortalState(data, account) {
   return {
     account: safeCustomerAccount(account),
     application: stripPrivateCustomerFields(application),
+    applications: applications.map(stripPrivateCustomerFields),
+    onboardingSessions: (scopedData.onboardingSessions || [])
+      .filter(row => applications.some(applicationRow => applicationRow.id === row.applicationId) && !/replaced|cancelled/i.test(String(row.status || '')))
+      .map(row => ({ id: row.id, applicationId: row.applicationId, status: row.status || 'Open', finalReviewStatus: row.finalReviewStatus || 'Waiting on customer', documentReviewStatus: row.documentReviewStatus || 'Waiting on customer', signatureReviewStatus: row.signatureReviewStatus || 'Waiting on customer', requestedPickupDate: row.requestedPickupDate || '', requestedPickupTime: row.requestedPickupTime || '', updatedAt: row.updatedAt || row.linkCreatedAt || row.createdAt || '', portalUrl: '/customer/onboarding/' + encodeURIComponent(row.id) })),
+    availableVehicles: nativeSite.publishedVehicles(scopedData).map(row => ({ id: row.id, slug: nativeSite.publicVehicleSlug(row), title: nativeSite.vehicleTitle(row), imageUrl: row.imageUrl || row.photoUrl || '', weeklyPayment: Number(row.weeklyPayment || 0), downPayment: Number(row.downPayment || 0), availability: row.availability || 'Available' })),
     summary,
     customer: stripPrivateCustomerFields(customers[0] || context.customer || {}),
     contract: stripPrivateCustomerFields(contracts[0] || context.contract || {}),
@@ -10086,6 +10102,27 @@ customerPortalHtml = function customerPortalHtmlWithConversation(account, state)
   html = html.replace('<meta name="viewport" content="width=device-width,initial-scale=1">', '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="manifest" href="/manifest.webmanifest">');
   html = html.replace('<a class="btn danger" href="/customer/logout">Log out</a>', '<div class="customer-account-actions"><button class="btn" type="button" data-install-customer-app hidden>Install app</button><a class="btn danger" href="/customer/logout">Log out</a></div>');
   html = html.replace('/customer-portal.js?v=focused-workspaces-3', '/customer-portal.js?v=' + ASSET_VERSION);
+  return html;
+};
+function customerPortalApplicationWorkspace(state = {}) {
+  const applications = Array.isArray(state.applications) ? state.applications : [];
+  const sessions = Array.isArray(state.onboardingSessions) ? state.onboardingSessions : [];
+  const vehicles = Array.isArray(state.availableVehicles) ? state.availableVehicles : [];
+  const applicationRows = applications.map(application => {
+    const session = sessions.find(row => row.applicationId === application.id);
+    const status = session && session.finalReviewStatus && session.finalReviewStatus !== 'Waiting on customer' ? session.finalReviewStatus : application.status || application.stage || session && session.status || 'Application received';
+    const updatedAt = application.updatedAt || application.submittedAt || application.createdAt || session && session.updatedAt || '';
+    return '<article class="customer-application-card"><div><span>Application</span><strong>' + escapeHtml(application.vehicle || 'Selected vehicle') + '</strong><small>' + escapeHtml(status) + (updatedAt ? ' | ' + escapeHtml(updatedAt) : '') + '</small></div>' + (session ? '<a class="btn primary" href="' + escapeHtml(session.portalUrl) + '">Continue setup</a>' : '<span class="customer-application-waiting">WheelsonAuto is preparing the next step</span>') + '</article>';
+  }).join('');
+  const vehicleRows = vehicles.map(vehicle => '<article class="customer-available-card">' + (vehicle.imageUrl ? '<img src="' + escapeHtml(vehicle.imageUrl) + '" alt="">' : '<div class="customer-available-placeholder">WOA</div>') + '<div><span>' + escapeHtml(vehicle.availability || 'Available') + '</span><strong>' + escapeHtml(vehicle.title || 'WheelsonAuto vehicle') + '</strong><small>' + moneyText(vehicle.weeklyPayment) + '/week' + (Number(vehicle.downPayment || 0) ? ' | ' + moneyText(vehicle.downPayment) + ' down' : ' | No down payment') + '</small></div><a class="btn primary" href="/apply/' + encodeURIComponent(vehicle.slug || vehicle.id) + '">Apply</a></article>').join('');
+  return '<section class="customer-grid customer-application-workspace"><article id="portal-apply" class="customer-panel"><div class="section-head"><div><h2>Cars & applications</h2><p>Choose a car and keep every application step inside this account.</p></div></div>' + (applicationRows ? '<div class="customer-application-list">' + applicationRows + '</div>' : '<div class="customer-application-empty"><strong>No application started</strong><span>Choose an available vehicle below. You will return here to continue every step.</span></div>') + '<div class="customer-available-list">' + (vehicleRows || '<div class="customer-application-empty"><strong>No vehicles are online right now</strong><span>WheelsonAuto will show newly available cars here automatically.</span></div>') + '</div></article></section>';
+}
+const __woaCustomerPortalApplicationsBase = customerPortalHtml;
+customerPortalHtml = function customerPortalHtmlWithApplications(account, state) {
+  let html = __woaCustomerPortalApplicationsBase(account, state);
+  const applicationCount = Array.isArray(state.applications) ? state.applications.length : 0;
+  html = html.replace('<a href="#portal-payments"><span>Payments</span>', '<a href="#portal-apply"><span>Cars</span><strong>' + escapeHtml(String(applicationCount)) + '</strong></a><a href="#portal-payments"><span>Payments</span>');
+  html = html.replace('<section class="customer-grid">', customerPortalApplicationWorkspace(state) + '<section class="customer-grid">');
   return html;
 };
 function requestBaseUrl(req) {
@@ -21048,7 +21085,9 @@ const server = http.createServer(async (req, res) => {
       const vehicle = onboarding.findPublicVehicle(data, decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || ''));
       if (!vehicle || !nativeSite.publishedVehicles(data).some(row => row.id === vehicle.id)) return send(res, 404, paymentResultHtml('Vehicle not available', 'This vehicle is not accepting online applications right now.'));
       const customerAccount = activeCustomerSessionAccount(data, customerSessionUser(req));
-      return send(res, 200, nativeSite.applicationHtml(data, vehicle, 'https://www.wheelsonauto.com', { ...nativeRenderOptions(req), customerAccount: customerAccount ? safeCustomerAccount(customerAccount) : null }), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+      const applyPath = '/apply/' + nativeSite.publicVehicleSlug(vehicle);
+      if (!customerAccount) return send(res, 303, '', 'text/plain', { Location: '/customer/register?next=' + encodeURIComponent(applyPath), 'Cache-Control': 'private, no-store' });
+      return send(res, 200, nativeSite.applicationHtml(data, vehicle, 'https://www.wheelsonauto.com', { ...nativeRenderOptions(req), customerAccount: safeCustomerAccount(customerAccount) }), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
     if (url.pathname.startsWith('/onboard/') && req.method === 'GET') {
       const publicToken = decodeURIComponent(url.pathname.split('/').filter(Boolean)[1] || '');
@@ -21205,41 +21244,30 @@ const server = http.createServer(async (req, res) => {
       const phone = String(payload.phone || '').replace(/\D/g, '').slice(-10);
       const email = onboarding.text(payload.email, 180).toLowerCase();
       const authenticatedAccount = activeCustomerSessionAccount(data, customerSessionUser(req));
-      const existingMode = payload.accountMode === 'existing';
-      const matchedPortalAccounts = (data.customerAccounts || []).filter(account => {
-        if (!staffStatusActive(account)) return false;
-        return emailKey(account.email || account.username) === emailKey(email) || phoneKey(account.phone || account.username) === phone;
-      });
-      const passwordError = authenticatedAccount ? '' : passwordPolicyError(payload.password, 'Customer password');
+      const applyPath = '/apply/' + nativeSite.publicVehicleSlug(selectedVehicle);
+      if (!authenticatedAccount) return json(res, 401, { ok: false, code: 'customer_login_required', error: 'Create or sign in to your WheelsonAuto account before applying.', loginUrl: '/customer/login?next=' + encodeURIComponent(applyPath), registerUrl: '/customer/register?next=' + encodeURIComponent(applyPath) });
       if (!name || phone.length !== 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { ok: false, error: 'Legal name, a valid 10-digit phone number, and a valid email are required.' });
       const duplicateCutoff = Date.now() - PUBLIC_APPLICATION_DUPLICATE_MS;
       const duplicateApplication = (data.applications || []).find(application => {
         const submittedAt = Date.parse(application.submittedAt || application.createdAt || '');
         return application.onlineVehicleId === selectedVehicle.id && emailKey(application.email) === emailKey(email) && phoneKey(application.phone) === phone && Number.isFinite(submittedAt) && submittedAt >= duplicateCutoff;
       });
-      if (existingMode && !authenticatedAccount) {
-        const applyPath = '/apply/' + nativeSite.publicVehicleSlug(selectedVehicle);
-        return json(res, 401, { ok: false, code: 'customer_login_required', error: 'Sign in to your existing customer account before applying. Your current password will not be changed.', loginUrl: '/customer/login?next=' + encodeURIComponent(applyPath) });
-      }
-      if (authenticatedAccount) {
-        const accountEmail = emailKey(authenticatedAccount.email || authenticatedAccount.username);
-        const accountPhone = phoneKey(authenticatedAccount.phone || authenticatedAccount.username);
-        if (accountEmail && accountEmail !== emailKey(email) || accountPhone && accountPhone !== phone) return json(res, 403, { ok: false, error: 'The application email and phone must match the customer account that is signed in.' });
-        const accountNames = [authenticatedAccount.customer, authenticatedAccount.name].filter(Boolean);
-        const assignedVehicle = (data.vehicles || []).find(vehicle => activeAssignmentClaimsForVehicle(data, vehicle.id).some(claim => accountNames.some(accountName => sameApprovedAssignmentCustomer(data, vehicle.id, claim.customer, accountName))));
-        if (assignedVehicle) return json(res, 409, { ok: false, code: 'active_vehicle_assignment', error: 'This customer account already has an active vehicle assignment. End or return that assignment before applying for another car.' });
-      } else if (matchedPortalAccounts.length && !duplicateApplication) {
-        const applyPath = '/apply/' + nativeSite.publicVehicleSlug(selectedVehicle);
-        return json(res, 409, { ok: false, code: 'existing_customer_login_required', error: matchedPortalAccounts.length > 1 ? 'More than one active customer file uses this email or phone. Contact WheelsonAuto so the correct existing account can be verified safely.' : 'An existing customer account uses this email or phone. Sign in first so this application connects to that account without changing its password.', loginUrl: '/customer/login?next=' + encodeURIComponent(applyPath) });
-      }
-      if (passwordError) return json(res, 400, { ok: false, error: passwordError });
+      const accountEmail = emailKey(authenticatedAccount.email || authenticatedAccount.username);
+      const accountPhone = phoneKey(authenticatedAccount.phone || authenticatedAccount.username);
+      if (accountEmail && accountEmail !== emailKey(email) || accountPhone && accountPhone !== phone) return json(res, 403, { ok: false, error: 'The application email and phone must match the customer account that is signed in.' });
+      const accountNames = [authenticatedAccount.customer, authenticatedAccount.name].filter(Boolean);
+      const hasStrongOperationalLink = !!(authenticatedAccount.customerId || authenticatedAccount.contractId || authenticatedAccount.recurringPaymentId || authenticatedAccount.vehicleId || authenticatedAccount.cloverCustomerId);
+      const assignedVehicle = hasStrongOperationalLink
+        ? (data.vehicles || []).find(vehicle => activeAssignmentClaimsForVehicle(data, vehicle.id).some(claim => accountNames.some(accountName => sameApprovedAssignmentCustomer(data, vehicle.id, claim.customer, accountName))))
+        : null;
+      if (assignedVehicle) return json(res, 409, { ok: false, code: 'active_vehicle_assignment', error: 'This customer account already has an active vehicle assignment. End or return that assignment before applying for another car.' });
       if (payload.applicationConsent !== true) return json(res, 400, { ok: false, error: 'Application authorization is required.' });
       if (payload.insurancePickupConsent !== true) return json(res, 400, { ok: false, error: 'Confirm that active full-coverage insurance is required before vehicle release.' });
       const smsConsentGranted = payload.smsConsent === true;
       const required = ['address', 'city', 'state', 'postalCode', 'dateOfBirth', 'driverLicenseId', 'driverLicenseExpires', 'employer'];
       if (required.some(field => !onboarding.text(payload[field], 300))) return json(res, 400, { ok: false, error: 'Complete every required application field.' });
       if (duplicateApplication) {
-        let duplicateAccount = authenticatedAccount || (data.customerAccounts || []).find(account => account.applicationId === duplicateApplication.id);
+        let duplicateAccount = authenticatedAccount;
         let duplicateChanged = false;
         if (authenticatedAccount && duplicateApplication.customerAccountId !== authenticatedAccount.id) {
           duplicateApplication.customerAccountId = authenticatedAccount.id;
@@ -21248,15 +21276,6 @@ const server = http.createServer(async (req, res) => {
           authenticatedAccount.onlineVehicleId = selectedVehicle.id;
           authenticatedAccount.portalStage = 'Secure setup in progress';
           authenticatedAccount.updatedAt = new Date().toISOString();
-          duplicateChanged = true;
-        }
-        if (!duplicateAccount) {
-          duplicateAccount = onboarding.createPendingCustomerAccount(data, duplicateApplication, {
-            vehicleId: duplicateApplication.vehicleId || selectedVehicle.platformVehicleId || '',
-            onlineVehicleId: selectedVehicle.id,
-            portalStage: 'Application under review',
-            status: 'Active'
-          });
           duplicateChanged = true;
         }
         if (smsConsentGranted) {
@@ -21278,11 +21297,11 @@ const server = http.createServer(async (req, res) => {
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }
-        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), loginUrl: '/customer/login' });
+        const duplicateSession = (data.onboardingSessions || []).find(row => row.applicationId === duplicateApplication.id && !/replaced|cancelled|expired/i.test(String(row.status || '')));
+        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), onboardingUrl: duplicateSession ? '/customer/onboarding/' + encodeURIComponent(duplicateSession.id) : '/customer#portal-apply', loginUrl: '/customer#portal-apply' });
       }
       if (!nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
       const pricing = onboarding.pricingSnapshot(selectedVehicle);
-      const password = authenticatedAccount ? null : createPasswordRecord(payload.password);
       const submittedAt = new Date().toISOString();
       const app = {
         id: 'app-native-' + crypto.randomBytes(8).toString('hex'),
@@ -21321,33 +21340,21 @@ const server = http.createServer(async (req, res) => {
         smsConsentStatus: smsConsentGranted ? messagingConsent.STATUS.OPTED_IN : messagingConsent.STATUS.UNKNOWN,
         smsConsentAt: smsConsentGranted ? submittedAt : '',
         smsConsentSource: smsConsentGranted ? 'website_application_checkbox' : '',
-        existingCustomerApplication: !!authenticatedAccount,
-        ...(password ? {
-          pendingPasswordHash: password.passwordHash,
-          pendingPasswordSalt: password.passwordSalt,
-          pendingPasswordUpdatedAt: password.passwordUpdatedAt
-        } : {})
+        existingCustomerApplication: true
       };
       app.score = scoreApplication(app);
       data.applications = Array.isArray(data.applications) ? data.applications : [];
       data.websiteLeads = Array.isArray(data.websiteLeads) ? data.websiteLeads : [];
       data.applications.unshift(app);
-      let customerAccount = authenticatedAccount;
-      if (customerAccount) {
-        customerAccount.applicationIds = [...new Set([...(Array.isArray(customerAccount.applicationIds) ? customerAccount.applicationIds : []), customerAccount.applicationId, app.id].filter(Boolean))];
-        customerAccount.applicationId = app.id;
-        customerAccount.onlineVehicleId = selectedVehicle.id;
-        customerAccount.portalStage = 'Secure setup in progress';
-        customerAccount.updatedAt = submittedAt;
-        app.customerAccountId = customerAccount.id;
-      } else {
-        customerAccount = onboarding.createPendingCustomerAccount(data, app, {
-          vehicleId: selectedVehicle.platformVehicleId || '',
-          onlineVehicleId: selectedVehicle.id,
-          portalStage: 'Secure setup in progress',
-          status: 'Active'
-        });
-      }
+      const customerAccount = authenticatedAccount;
+      customerAccount.applicationIds = [...new Set([...(Array.isArray(customerAccount.applicationIds) ? customerAccount.applicationIds : []), customerAccount.applicationId, app.id].filter(Boolean))];
+      customerAccount.applicationId = app.id;
+      customerAccount.onlineVehicleId = selectedVehicle.id;
+      customerAccount.name = app.name;
+      customerAccount.customer = app.name;
+      customerAccount.portalStage = 'Secure setup in progress';
+      customerAccount.updatedAt = submittedAt;
+      app.customerAccountId = customerAccount.id;
       const onboardingProvider = normalizedPaymentProvider(WOA_ONBOARDING_PAYMENT_PROVIDER) === 'stripe' ? 'stripe' : 'clover';
       const onboardingIdentityProvider = IDENTITY_PROVIDER === 'stripe' ? 'stripe' : 'manual';
       const session = onboarding.createSession(data, app, { name: app.name || 'Website applicant', role: 'Customer' }, requestBaseUrl(req), { paymentProvider: onboardingProvider, identityProvider: onboardingIdentityProvider });
@@ -21381,7 +21388,7 @@ const server = http.createServer(async (req, res) => {
           'Hi ' + (app.firstName || 'there') + ',',
           '',
           'Your WheelsonAuto application was received. Continue the secure setup for the ' + app.vehicle + ':',
-          session.publicUrl,
+          requestBaseUrl(req) + '/customer/onboarding/' + session.id,
           '',
           'You can complete the pickup request, private license/selfie screening, exact agreement, and no-charge card setup before WheelsonAuto makes one final decision.',
           '',
@@ -21408,7 +21415,7 @@ const server = http.createServer(async (req, res) => {
       });
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: session.publicUrl, loginUrl: '/customer/login' });
+      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: '/customer/onboarding/' + encodeURIComponent(session.id), loginUrl: '/customer#portal-apply' });
     }
     if (/^\/api\/public\/onboarding\/[^/]+\/pickup-availability$/.test(url.pathname) && req.method === 'GET') {
       const availabilityRate = await publicActionLimit(req, 'onboarding-availability', PUBLIC_SECURE_LINK_LIMIT * 2, PUBLIC_SECURE_LINK_WINDOW_MS);
@@ -22396,6 +22403,55 @@ const server = http.createServer(async (req, res) => {
         eventIds: results.map(result => result.event && result.event.id).filter(Boolean)
       });
     }
+    if (url.pathname === '/customer/register' && req.method === 'GET') {
+      const next = safeCustomerLoginReturn(url.searchParams.get('next') || '');
+      const data = await readData();
+      const signedInAccount = activeCustomerSessionAccount(data, customerSessionUser(req));
+      if (signedInAccount) return send(res, 302, '', 'text/plain', { Location: next || '/customer#portal-apply', 'Cache-Control': 'no-store' });
+      return send(res, 200, customerRegisterPage('', next), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer/register' && req.method === 'POST') {
+      const registrationRate = await publicActionLimit(req, 'customer-registration', PUBLIC_APPLICATION_LIMIT, PUBLIC_APPLICATION_WINDOW_MS);
+      if (!registrationRate.allowed) return send(res, 429, customerRegisterPage('Too many account attempts from this connection. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(registrationRate.retryAfterSeconds) });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const next = safeCustomerLoginReturn(form.get('next') || '');
+      const name = onboarding.text(form.get('name'), 160);
+      const phone = phoneKey(form.get('phone') || '');
+      const email = onboarding.text(form.get('email'), 180).toLowerCase();
+      const password = String(form.get('password') || '');
+      const confirmPassword = String(form.get('confirmPassword') || '');
+      const values = { name, phone: form.get('phone') || '', email };
+      if (!name || phone.length !== 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(res, 400, customerRegisterPage('Enter your full legal name, a valid 10-digit phone number, and a valid email.', next, values), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (password !== confirmPassword) return send(res, 400, customerRegisterPage('The two passwords do not match.', next, values), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const policyError = passwordPolicyError(password, 'Customer password');
+      if (policyError) return send(res, 400, customerRegisterPage(policyError, next, values), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const data = await readData();
+      onboarding.ensureCollections(data);
+      const existing = (data.customerAccounts || []).find(account => emailKey(account.email || account.username) === emailKey(email) || phoneKey(account.phone || account.username) === phone);
+      if (existing) return send(res, 409, customerRegisterPage('An account already uses this email or phone. Sign in or recover that exact account; a new application will never replace its password.', next, values), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const now = new Date().toISOString();
+      const account = {
+        id: 'customer-account-' + crypto.randomBytes(8).toString('hex'),
+        username: email,
+        name,
+        customer: name,
+        phone,
+        email,
+        organizationId: MAIN_ORG_ID,
+        status: 'Active',
+        source: 'Customer self-registration',
+        portalStage: 'Choose a vehicle',
+        applicationIds: [],
+        createdAt: now,
+        updatedAt: now,
+        ...createPasswordRecord(password)
+      };
+      data.customerAccounts.unshift(account);
+      appendAuditLog(data, customerLoginUser(account), 'Customer account created before application', [email, phone, next || 'Customer portal']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return send(res, 303, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: next || '/customer#portal-apply', 'Cache-Control': 'no-store' });
+    }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage('', url.searchParams.get('next') || ''), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
@@ -23336,6 +23392,35 @@ const server = http.createServer(async (req, res) => {
       appendCustomerPortalAudit(data, account, 'Customer portal card setup link opened', [customerName, moneyText(setup.request.amount || 0), setup.request.vehicle || setup.request.vin || 'No vehicle linked', setup.request.licensePlate ? 'Tag ' + setup.request.licensePlate : '', setup.request.id]);
       await writeData(data);
       return send(res, 302, '', 'text/plain', { Location: '/setup-card/' + encodeURIComponent(setup.request.id) });
+    }
+    if (/^\/customer\/onboarding\/[^/]+$/.test(url.pathname) && req.method === 'GET') {
+      const sessionId = decodeURIComponent(url.pathname.split('/').filter(Boolean)[2] || '');
+      const returnPath = '/customer/onboarding/' + sessionId;
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 303, '', 'text/plain', { Location: '/customer/login?next=' + encodeURIComponent(returnPath), 'Cache-Control': 'no-store' });
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 303, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login?next=' + encodeURIComponent(returnPath), 'Cache-Control': 'no-store' });
+      const session = (data.onboardingSessions || []).find(row => row.id === sessionId && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
+      const application = session && (data.applications || []).find(row => row.id === session.applicationId);
+      const accountApplicationIds = new Set([account.applicationId, ...(Array.isArray(account.applicationIds) ? account.applicationIds : [])].filter(Boolean));
+      if (!session || !application || onboarding.applicationBlocksOnboarding(application) || application.customerAccountId !== account.id && !accountApplicationIds.has(application.id)) return send(res, 404, paymentResultHtml('Application not found', 'This onboarding file is not attached to your customer account.', '/customer#portal-apply', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
+      const vehicle = onboarding.findPublicVehicle(data, session.onlineVehicleId || application.onlineVehicleId);
+      if (!vehicle) return send(res, 404, paymentResultHtml('Vehicle file not found', 'Contact WheelsonAuto so the selected vehicle can be restored to this application.', '/customer#portal-apply', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
+      const rawToken = crypto.randomBytes(28).toString('hex');
+      const now = new Date();
+      session.tokenHash = onboarding.tokenHash(rawToken);
+      session.linkCreatedAt = now.toISOString();
+      session.expiresAt = new Date(now.getTime() + 7 * 86400000).toISOString();
+      if (/expired/i.test(String(session.status || ''))) session.status = 'Open';
+      const template = await onboarding.activeContractTemplate(data, CONTRACT_TEMPLATE_FILE);
+      const contract = onboarding.buildContract(data, application, vehicle, session, template);
+      const renderSession = { ...session };
+      Object.defineProperty(renderSession, 'publicToken', { value: rawToken, enumerable: false, configurable: true });
+      appendCustomerPortalAudit(data, account, 'Customer opened onboarding from portal', [application.id, session.id, application.vehicle || nativeSite.vehicleTitle(vehicle)]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return send(res, 200, nativeSite.onboardingHtml(data, renderSession, application, vehicle, template, contract.body, requestBaseUrl(req), { ...nativeRenderOptions(req), homePath: '/customer#portal-apply' }), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'no-referrer' });
     }
     if (url.pathname === '/customer' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);

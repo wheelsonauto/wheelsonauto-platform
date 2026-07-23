@@ -193,39 +193,58 @@ async function main() {
     assert(preview.status === 200 && /2016 Ford Focus/.test(preview.text), 'Public preview should render only the native published vehicle.');
     assert(/<b>19 months<\/b>/.test(preview.text) && !/<b>18 months<\/b>/.test(preview.text), 'Public purchase-eligibility copy should use the canonical 19-month term even when an older vehicle record still says 18.');
     assert(/name="robots" content="noindex,nofollow"/.test(preview.text) && /class="site-brand" href="\/site-preview"/.test(preview.text), 'Render preview should stay out of search results and keep preview navigation inside the public preview.');
-    const applicationPage = await request(server, 'GET', '/apply/2016-ford-focus');
-    assert(applicationPage.status === 200 && /Insurance required before vehicle release/.test(applicationPage.text) && /name="insurancePickupConsent"/.test(applicationPage.text) && /active full-coverage insurance for the assigned vehicle and VIN/.test(applicationPage.text), 'Customers must see and acknowledge the full-coverage requirement before submitting an application.');
+    const anonymousApplicationPage = await request(server, 'GET', '/apply/2016-ford-focus');
+    assert(anonymousApplicationPage.status === 303 && /\/customer\/register\?next=/.test(anonymousApplicationPage.location), 'Applying must start with a customer account instead of a loose application link.');
+    const registrationPage = await request(server, 'GET', anonymousApplicationPage.location);
+    assert(registrationPage.status === 200 && /Create My WheelsonAuto/.test(registrationPage.text) && /one secure account before applying/i.test(registrationPage.text), 'The account-first registration page should explain where applications and rentals stay.');
+    const customerPassword = 'NativeTest123';
+    const registration = await request(server, 'POST', '/customer/register', { form: { next: '/apply/2016-ford-focus', name: 'Native Applicant', phone: '8565550107', email: 'native.applicant@example.com', password: customerPassword, confirmPassword: customerPassword } });
+    assert(registration.status === 303 && registration.location === '/apply/2016-ford-focus' && String(registration.cookie).includes('woa_customer_session='), 'Registration should sign in the new customer and return to the chosen car.');
+    const customerCookie = String(registration.cookie).split(';')[0];
+    const registrationState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    const originalAccount = registrationState.customerAccounts.find(row => row.email === 'native.applicant@example.com');
+    const originalPasswordHash = originalAccount && originalAccount.passwordHash;
+    const duplicateRegistration = await request(server, 'POST', '/customer/register', { form: { next: '/apply/2016-ford-focus', name: 'Wrong Replacement', phone: '8565550107', email: 'native.applicant@example.com', password: 'Replacement123', confirmPassword: 'Replacement123' } });
+    const afterDuplicateRegistration = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    assert(duplicateRegistration.status === 409 && afterDuplicateRegistration.customerAccounts.find(row => row.id === originalAccount.id).passwordHash === originalPasswordHash, 'Registering with an existing email or phone must never replace that customer password.');
+    const applicationPage = await request(server, 'GET', '/apply/2016-ford-focus', { cookie: customerCookie });
+    assert(applicationPage.status === 200 && /Insurance required before vehicle release/.test(applicationPage.text) && /name="insurancePickupConsent"/.test(applicationPage.text) && /active full-coverage insurance for the assigned vehicle and VIN/.test(applicationPage.text) && !/name="password"/.test(applicationPage.text), 'Signed-in customers should see the application without another password form.');
 
     const applicationPayload = {
-      onlineVehicleId: 'online-native-1', firstName: 'Native', lastName: 'Applicant', phone: '8565550107', email: 'native.applicant@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', dateOfBirth: '1990-04-20', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', employer: 'WheelsonAuto Test', income: 5000, password: 'NativeTest123', applicationConsent: true, insurancePickupConsent: true
+      onlineVehicleId: 'online-native-1', accountMode: 'existing', firstName: 'Native', lastName: 'Applicant', phone: '8565550107', email: 'native.applicant@example.com', address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', dateOfBirth: '1990-04-20', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', employer: 'WheelsonAuto Test', income: 5000, applicationConsent: true, insurancePickupConsent: true
     };
-    const applicationResponse = await request(server, 'POST', '/api/public/applications', { json: applicationPayload });
-    assert(applicationResponse.status === 201 && applicationResponse.json && applicationResponse.json.application.id && /\/onboard\//.test(applicationResponse.json.onboardingUrl || ''), 'Published vehicle application should be accepted and immediately create its secure setup.');
+    const unauthenticatedApplication = await request(server, 'POST', '/api/public/applications', { json: applicationPayload });
+    assert(unauthenticatedApplication.status === 401 && unauthenticatedApplication.json.code === 'customer_login_required', 'The application API must reject requests that are not bound to a signed customer account.');
+    const applicationResponse = await request(server, 'POST', '/api/public/applications', { json: applicationPayload, cookie: customerCookie });
+    assert(applicationResponse.status === 201 && applicationResponse.json && applicationResponse.json.application.id && /\/customer\/onboarding\//.test(applicationResponse.json.onboardingUrl || ''), 'Published vehicle application should be accepted inside the account and create a portal-owned setup.');
     const applicationId = applicationResponse.json.application.id;
     let saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const savedApplication = saved.applications.find(row => row.id === applicationId);
-    const pendingCustomerAccount = saved.customerAccounts.find(row => row.applicationId === applicationId);
+    const pendingCustomerAccount = saved.customerAccounts.find(row => row.id === applicationResponse.json.customerAccount.id);
     const savedSession = saved.onboardingSessions.find(row => row.applicationId === applicationId);
     const onboardingId = savedSession.id;
-    const token = applicationResponse.json.onboardingUrl.split('/onboard/')[1];
     savedApplication.requestedPickupDate = nextPickupDate();
     savedApplication.requestedPickupTime = '1:00 PM';
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
-    assert(savedApplication && pendingCustomerAccount && /^pbkdf2\$/.test(pendingCustomerAccount.passwordHash || '') && !savedApplication.pendingPasswordHash, 'A successful application should immediately create a PBKDF2-backed customer portal login without duplicating password secrets.');
-    assert(!JSON.stringify(saved).includes('NativeTest123'), 'Plaintext customer password must never be persisted.');
-    const customerEmailLogin = await request(server, 'POST', '/customer/login', { form: { username: applicationPayload.email, password: applicationPayload.password } });
-    assert(customerEmailLogin.status === 302 && String(customerEmailLogin.cookie).includes('woa_customer_session='), 'New applicant should be able to log in immediately with email and the application password.');
-    const customerPhoneLogin = await request(server, 'POST', '/customer/login', { form: { username: '(856) 555-0107', password: applicationPayload.password } });
-    assert(customerPhoneLogin.status === 302 && String(customerPhoneLogin.cookie).includes('woa_customer_session='), 'New applicant should be able to log in with a formatted application phone number.');
+    const portalOnboarding = await request(server, 'GET', applicationResponse.json.onboardingUrl, { cookie: customerCookie });
+    const tokenMatch = portalOnboarding.text.match(/data-onboarding-token="([a-f0-9]+)"/i);
+    const token = tokenMatch && tokenMatch[1];
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    assert(portalOnboarding.status === 200 && token && savedApplication && pendingCustomerAccount && savedApplication.customerAccountId === pendingCustomerAccount.id && /^pbkdf2\$/.test(pendingCustomerAccount.passwordHash || '') && !savedApplication.pendingPasswordHash, 'The portal should reopen the exact onboarding file without copying account password secrets into the application.');
+    assert(!JSON.stringify(saved).includes(customerPassword), 'Plaintext customer password must never be persisted.');
+    const customerEmailLogin = await request(server, 'POST', '/customer/login', { form: { username: applicationPayload.email, password: customerPassword } });
+    assert(customerEmailLogin.status === 302 && String(customerEmailLogin.cookie).includes('woa_customer_session='), 'Customer should be able to log in with the account email.');
+    const customerPhoneLogin = await request(server, 'POST', '/customer/login', { form: { username: '(856) 555-0107', password: customerPassword } });
+    assert(customerPhoneLogin.status === 302 && String(customerPhoneLogin.cookie).includes('woa_customer_session='), 'Customer should be able to log in with the account phone number.');
     const customerPortal = await request(server, 'GET', '/customer', { cookie: String(customerEmailLogin.cookie).split(';')[0] });
-    assert(customerPortal.status === 200 && /setup|onboarding/i.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text), 'Pending applicant portal should show the active setup status and selected vehicle.');
+    assert(customerPortal.status === 200 && /Cars &amp; applications|Cars & applications/.test(customerPortal.text) && /Continue setup/.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text), 'Pending applicant portal should keep the selected car and continuation step inside the account.');
 
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     saved.applications.unshift({
       id: 'app-legacy-pending-login', organizationId: 'org-wheelsonauto', name: 'Legacy Applicant', phone: '8565550199', email: 'legacy.applicant@example.com', onlineVehicleId: 'online-native-1', vehicleId: 'veh-native-1', vehicle: '2016 Ford Focus', status: 'New - staff review', stage: 'New', pendingPasswordHash: pendingCustomerAccount.passwordHash, pendingPasswordSalt: pendingCustomerAccount.passwordSalt, pendingPasswordUpdatedAt: pendingCustomerAccount.passwordUpdatedAt
     });
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
-    const legacyCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: '856-555-0199', password: applicationPayload.password } });
+    const legacyCustomerLogin = await request(server, 'POST', '/customer/login', { form: { username: '856-555-0199', password: customerPassword } });
     assert(legacyCustomerLogin.status === 302 && String(legacyCustomerLogin.cookie).includes('woa_customer_session='), 'Applications saved before immediate portal activation should self-repair on the first correct login.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(saved.customerAccounts.some(row => row.applicationId === 'app-legacy-pending-login') && !saved.applications.find(row => row.id === 'app-legacy-pending-login').pendingPasswordHash, 'Legacy pending login migration should move the password hash into one customer account and remove the application copy.');
@@ -243,8 +262,12 @@ async function main() {
     assert(saved.onlineVehicles[0].published === true && !saved.onlineVehicles[0].heldApplicationId, 'Application submission must keep the selected car published until a required payment is verified.');
     assert(saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Ready' && !saved.vehicles.find(row => row.id === 'veh-native-1').heldApplicationId, 'Application submission must keep the internal fleet car Ready until a required payment is verified.');
 
-    const secondApplicationPayload = { ...applicationPayload, firstName: 'Second', lastName: 'Applicant', phone: '8565550108', email: 'second.applicant@example.com', password: 'SecondNative123' };
-    const competing = await request(server, 'POST', '/api/public/applications', { json: secondApplicationPayload });
+    const secondRegistration = await request(server, 'POST', '/customer/register', { form: { next: '/apply/2016-ford-focus', name: 'Second Applicant', phone: '8565550108', email: 'second.applicant@example.com', password: 'SecondNative123', confirmPassword: 'SecondNative123' } });
+    const secondCustomerCookie = String(secondRegistration.cookie).split(';')[0];
+    const crossAccountOnboarding = await request(server, 'GET', applicationResponse.json.onboardingUrl, { cookie: secondCustomerCookie });
+    assert(crossAccountOnboarding.status === 404, 'A signed customer must not open another customer account\'s onboarding file.');
+    const secondApplicationPayload = { ...applicationPayload, firstName: 'Second', lastName: 'Applicant', phone: '8565550108', email: 'second.applicant@example.com' };
+    const competing = await request(server, 'POST', '/api/public/applications', { json: secondApplicationPayload, cookie: secondCustomerCookie });
     assert(competing.status === 201 && competing.json.application.id !== applicationId, 'Another customer may apply and complete screening while the car is still unpaid and available.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(saved.onlineVehicles[0].published === true && saved.vehicles.find(row => row.id === 'veh-native-1').status === 'Ready', 'Multiple unpaid applications must not hide or reserve the car.');

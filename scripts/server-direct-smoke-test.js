@@ -161,6 +161,23 @@ async function request(server, method, route, options = {}) {
   });
 }
 
+async function registerCustomer(server, payload, options = {}) {
+  const password = String(options.password || payload.password || 'DirectApplicant123!');
+  const registration = await request(server, 'POST', '/customer/register', {
+    headers: options.headers,
+    form: {
+      next: options.next || '/customer#portal-apply',
+      name: [payload.firstName, payload.lastName].filter(Boolean).join(' '),
+      phone: payload.phone,
+      email: payload.email,
+      password,
+      confirmPassword: password
+    }
+  });
+  assert(registration.status === 303 && String(registration.cookie).includes('woa_customer_session='), 'Customer registration failed for ' + payload.email + '.');
+  return cleanCookie(registration.cookie);
+}
+
 async function login(server, form) {
   const res = await request(server, 'POST', '/login', { form });
   assert(res.status === 302, 'Expected login redirect, got ' + res.status + ': ' + res.text.slice(0, 120));
@@ -1353,13 +1370,21 @@ async function main() {
       json: { id: 'online-direct-duplicate', platformVehicleId: 'veh-001', title: 'Duplicate Ford Focus', weeklyPayment: 229, downPayment: 500, availability: 'Available', published: true }
     });
     assert(duplicateOnlineVehicle.status === 409 && /already connected/i.test(duplicateOnlineVehicle.json.error || ''), 'One internal fleet car must not be linked to two online vehicle records.');
+    const publicPayload = nativePublicApplicationPayload();
+    const publicCustomerCookie = await registerCustomer(server, publicPayload);
     const publicApplication = await request(server, 'POST', '/api/public/applications', {
-      json: nativePublicApplicationPayload()
+      cookie: publicCustomerCookie,
+      json: publicPayload
     });
     assert(publicApplication.status === 201 && publicApplication.json.ok, 'Public application did not save.');
-    assert(/\/onboard\//.test(String(publicApplication.json.onboardingUrl || '')), 'A saved public application must immediately return its secure onboarding path.');
+    assert(/\/customer\/onboarding\//.test(String(publicApplication.json.onboardingUrl || '')), 'A saved customer application must return its permanent account-owned onboarding path.');
+    const publicPortalOnboarding = await request(server, 'GET', publicApplication.json.onboardingUrl, { cookie: publicCustomerCookie });
+    const publicOnboardingTokenMatch = publicPortalOnboarding.text.match(/data-onboarding-token="([a-f0-9]+)"/i);
+    const publicOnboardingToken = publicOnboardingTokenMatch && publicOnboardingTokenMatch[1];
+    assert(publicPortalOnboarding.status === 200 && publicOnboardingToken, 'The first customer account must reopen its exact onboarding file.');
     const repeatedPublicApplication = await request(server, 'POST', '/api/public/applications', {
-      json: nativePublicApplicationPayload()
+      cookie: publicCustomerCookie,
+      json: publicPayload
     });
     assert(repeatedPublicApplication.status === 200 && repeatedPublicApplication.json.duplicate === true && repeatedPublicApplication.json.application.id === publicApplication.json.application.id, 'A repeated same-person/same-car submission must return the existing application instead of creating a duplicate.');
     const sharedPhoneState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -1369,16 +1394,19 @@ async function main() {
     sharedPhoneState.json.payments.unshift({ id: 'pay-direct-shared-phone-old', organizationId: 'org-wheelsonauto', customer: 'Old Shared Phone Customer', phone: '3135550147', recurringPaymentId: 'rec-direct-shared-phone-old', vehicleId: 'veh-direct-shared-phone-old', vin: 'PRIVATEOLDVIN001', amount: 888, status: 'Paid', source: 'Private old payment' });
     const sharedPhoneWrite = await request(server, 'PUT', '/api/state', { cookie: ownerCookie, json: sharedPhoneState.json });
     assert(sharedPhoneWrite.status === 200 && sharedPhoneWrite.json.ok, 'Owner could not seed the shared-phone portal isolation scenario.');
+    const isolatedPayload = nativePublicApplicationPayload({
+      onlineVehicleId: 'online-direct-002',
+      firstName: 'Isolated',
+      lastName: 'Applicant',
+      phone: '3135550147',
+      email: 'isolated-applicant@example.com',
+      password: 'IsolatedApplicant123!'
+    });
+    const isolatedCustomerCookie = await registerCustomer(server, isolatedPayload, { headers: { 'x-forwarded-for': '198.51.100.88' } });
     const isolatedApplication = await request(server, 'POST', '/api/public/applications', {
+      cookie: isolatedCustomerCookie,
       headers: { 'x-forwarded-for': '198.51.100.88' },
-      json: nativePublicApplicationPayload({
-        onlineVehicleId: 'online-direct-002',
-        firstName: 'Isolated',
-        lastName: 'Applicant',
-        phone: '3135550147',
-        email: 'isolated-applicant@example.com',
-        password: 'IsolatedApplicant123!'
-      })
+      json: isolatedPayload
     });
     assert(isolatedApplication.status === 201 && isolatedApplication.json.ok, 'Shared-phone applicant should create a separate pending portal account.');
     const isolatedPortalLogin = await request(server, 'POST', '/customer/login', { form: { username: 'isolated-applicant@example.com', password: 'IsolatedApplicant123!' } });
@@ -1389,12 +1417,15 @@ async function main() {
     assert(isolatedPortalState.json.portal.application.id === isolatedApplication.json.application.id && /2017 Ford Fusion/i.test(isolatedPortalState.json.portal.summary.vehicle || ''), 'Pending applicant portal should show only its own application and selected public vehicle.');
     assert(!isolatedPortalText.includes('Old Shared Phone Customer') && !isolatedPortalText.includes('PRIVATEOLDVIN001') && !isolatedPortalText.includes('OLD-PRIVATE') && !isolatedPortalText.includes('9098') && !isolatedPortalText.includes('pay-direct-shared-phone-old'), 'A pending applicant must not inherit another customer file, vehicle, saved card, or payment through a shared phone.');
     assert(!isolatedPortalText.includes('systemHealth') && !isolatedPortalText.includes('platformModules'), 'Customer portal state must not expose internal platform health or module counts.');
+    const isolatedPortalOnboarding = await request(server, 'GET', isolatedApplication.json.onboardingUrl, { cookie: cleanCookie(isolatedPortalLogin.cookie) });
+    const isolatedTokenMatch = isolatedPortalOnboarding.text.match(/data-onboarding-token="([a-f0-9]+)"/i);
+    const deniedOnboardingToken = isolatedTokenMatch && isolatedTokenMatch[1];
+    const deniedOnboardingPath = '/onboard/' + deniedOnboardingToken;
+    assert(isolatedPortalOnboarding.status === 200 && deniedOnboardingToken, 'The exact signed customer must be able to open the account-owned onboarding file before staff review.');
     const deniedIsolatedApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: isolatedApplication.json.application.id, decision: 'deny', notes: 'Direct smoke applicant cleanup.' } });
     assert(deniedIsolatedApplication.status === 200 && deniedIsolatedApplication.json.ok && deniedIsolatedApplication.json.portalDisabled, 'Owner should be able to deny/archive an unapproved application and disable its pending portal login.');
     const deniedPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(isolatedPortalLogin.cookie) });
     assert(deniedPortalState.status === 401, 'A denied application must immediately lose customer portal access.');
-    const deniedOnboardingPath = new URL(isolatedApplication.json.onboardingUrl, 'http://127.0.0.1').pathname;
-    const deniedOnboardingToken = deniedOnboardingPath.split('/').filter(Boolean).pop();
     const deniedOnboardingPage = await request(server, 'GET', deniedOnboardingPath);
     assert(deniedOnboardingPage.status === 404 && !/Welcome, Isolated Applicant/i.test(deniedOnboardingPage.text), 'A denied application must immediately revoke its public onboarding page without exposing applicant details.');
     const deniedOnboardingMutation = await request(server, 'POST', '/api/public/onboarding/' + deniedOnboardingToken + '/profile', {
@@ -1427,16 +1458,19 @@ async function main() {
     assert(staleDeniedPaymentLink.status === 409 && /onboarding file is closed/i.test(staleDeniedPaymentLink.json.error || ''), 'A stale denied onboarding ID must not create a new payment link.');
     const staleDeniedMoneyState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(staleDeniedMoneyState.json.cardSetupRequests.length === staleDeniedCardSetupCount && staleDeniedMoneyState.json.paymentRequests.length === staleDeniedPaymentRequestCount, 'Rejected closed-file card and payment actions must not leave partial money records.');
+    const secondUnusedPayload = nativePublicApplicationPayload({
+      onlineVehicleId: 'online-direct-002',
+      firstName: 'Second',
+      lastName: 'Unused Applicant',
+      phone: '3135550148',
+      email: 'second-unused-applicant@example.com',
+      password: 'SecondUnusedApplicant123!'
+    });
+    const secondUnusedCookie = await registerCustomer(server, secondUnusedPayload, { headers: { 'x-forwarded-for': '198.51.100.89' } });
     const secondUnusedVehicleApplication = await request(server, 'POST', '/api/public/applications', {
+      cookie: secondUnusedCookie,
       headers: { 'x-forwarded-for': '198.51.100.89' },
-      json: nativePublicApplicationPayload({
-        onlineVehicleId: 'online-direct-002',
-        firstName: 'Second',
-        lastName: 'Unused Applicant',
-        phone: '3135550148',
-        email: 'second-unused-applicant@example.com',
-        password: 'SecondUnusedApplicant123!'
-      })
+      json: secondUnusedPayload
     });
     assert(secondUnusedVehicleApplication.status === 201 && secondUnusedVehicleApplication.json.ok, 'A second applicant should be able to apply for an available vehicle after an unused file is archived.');
     const deniedSecondUnusedVehicleApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: secondUnusedVehicleApplication.json.application.id, decision: 'deny', notes: 'Second unused direct smoke applicant cleanup.' } });
@@ -1445,16 +1479,19 @@ async function main() {
     const vehicleAfterSecondUnusedArchive = secondUnusedVehicleState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
     assert(vehicleAfterSecondUnusedArchive && vehicleAfterSecondUnusedArchive.published === true && vehicleAfterSecondUnusedArchive.availability === 'Available', 'Archiving repeated applications that never held a vehicle must not unpublish or reserve the inventory record.');
 
+    const heldVehiclePayload = nativePublicApplicationPayload({
+      onlineVehicleId: 'online-direct-002',
+      firstName: 'Held',
+      lastName: 'Vehicle Applicant',
+      phone: '3135550149',
+      email: 'held-vehicle-applicant@example.com',
+      password: 'HeldVehicleApplicant123!'
+    });
+    const heldVehicleCustomerCookie = await registerCustomer(server, heldVehiclePayload, { headers: { 'x-forwarded-for': '198.51.100.90' } });
     const heldVehicleApplication = await request(server, 'POST', '/api/public/applications', {
+      cookie: heldVehicleCustomerCookie,
       headers: { 'x-forwarded-for': '198.51.100.90' },
-      json: nativePublicApplicationPayload({
-        onlineVehicleId: 'online-direct-002',
-        firstName: 'Held',
-        lastName: 'Vehicle Applicant',
-        phone: '3135550149',
-        email: 'held-vehicle-applicant@example.com',
-        password: 'HeldVehicleApplicant123!'
-      })
+      json: heldVehiclePayload
     });
     assert(heldVehicleApplication.status === 201 && heldVehicleApplication.json.ok, 'Held-vehicle release regression application did not save.');
     const heldVehicleSeedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -1485,16 +1522,16 @@ async function main() {
     const restoredExactApplicationVehicle = restoredExactApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-001');
     assert(restoredExactApplicationRow && restoredExactApplicationRow.stage === 'New' && restoredExactApplicationAccount && restoredExactApplicationAccount.status === 'Active', 'Restore must reactivate only the exact pending application and its portal account.');
     assert(restoredExactApplicationVehicle && restoredExactApplicationVehicle.published === true && restoredExactApplicationVehicle.availability === 'Available' && !restoredExactApplicationVehicle.heldApplicationId, 'Restoring an archived application must not hold or unpublish its vehicle.');
-    const restoredOldOnboardingPath = new URL(publicApplication.json.onboardingUrl, 'http://127.0.0.1').pathname;
+    const restoredOldOnboardingPath = '/onboard/' + publicOnboardingToken;
     const restoredOldOnboardingPage = await request(server, 'GET', restoredOldOnboardingPath);
     assert(restoredOldOnboardingPage.status === 404, 'Restoring an archived application must never reactivate its revoked onboarding token; staff must create a fresh secure link.');
     const repeatedRestoreExactApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: publicApplication.json.application.id, decision: 'restore' } });
     assert(repeatedRestoreExactApplication.status === 409, 'An active application must not be restorable again.');
     for (let i = 0; i < 8; i += 1) {
-      const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
+      const limitedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { cookie: publicCustomerCookie, headers: { 'x-forwarded-for': '192.0.2.' + i + ', 198.51.100.77' }, json: {} });
       assert([400, 409].includes(limitedApplicationAttempt.status), 'Public application attempts should validate normally before the per-IP submission limit.');
     }
-    const blockedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { headers: { 'x-forwarded-for': '192.0.2.250, 198.51.100.77' }, json: {} });
+    const blockedApplicationAttempt = await request(server, 'POST', '/api/public/applications', { cookie: publicCustomerCookie, headers: { 'x-forwarded-for': '192.0.2.250, 198.51.100.77' }, json: {} });
     assert(blockedApplicationAttempt.status === 429 && String(blockedApplicationAttempt.headers['Retry-After'] || '').length, 'Public application flooding must return 429 with retry guidance despite spoofed forwarded prefixes.');
 
     const weakStaffPassword = await request(server, 'POST', '/api/staff-accounts', {
@@ -2719,7 +2756,9 @@ async function main() {
     const mechanicPrivacyRead = await request(server, 'GET', '/api/state', { cookie: mechanicCookie });
     assert(mechanicPrivacyRead.status === 200 && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-source-token') && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-payment-token') && !JSON.stringify(mechanicPrivacyRead.json).includes('secret-raw-value'), 'Mechanic state should not expose raw saved-card/source secrets.');
 
-    const publicApplyPage = await request(server, 'GET', '/apply/' + encodeURIComponent(onlineVehicleOne.json.vehicle.slug));
+    const anonymousApplyPage = await request(server, 'GET', '/apply/' + encodeURIComponent(onlineVehicleOne.json.vehicle.slug));
+    assert(anonymousApplyPage.status === 303 && /\/customer\/register\?next=/.test(anonymousApplyPage.location), 'A customer account must be required before the selected vehicle application opens.');
+    const publicApplyPage = await request(server, 'GET', '/apply/' + encodeURIComponent(onlineVehicleOne.json.vehicle.slug), { cookie: publicCustomerCookie });
     assert(publicApplyPage.status === 200 && publicApplyPage.text.includes('nativeApplicationForm'), 'Native vehicle application page should render its secure public form.');
     assert(publicApplyPage.text.includes('online-direct-001') && publicApplyPage.text.includes('2016 Ford Focus Hatch'), 'Native application page should be locked to the selected published online vehicle.');
     assert(!publicApplyPage.text.includes('secret-source-token') && !publicApplyPage.text.includes('secret-payment-token') && !publicApplyPage.text.includes('secret-raw-value'), 'Public application page should not expose private payment tokens.');
@@ -3183,8 +3222,11 @@ async function main() {
       json: { emailRecipients: ['notify@example.com'], emailEnabled: true, events: ['customer_message'] }
     });
     assert(filteredNotificationSettings.status === 200 && filteredNotificationSettings.json.notifications.events.length === 1 && filteredNotificationSettings.json.notifications.events[0] === 'customer_message', 'Notification event filters should save exactly.');
+    const filteredPayload = nativePublicApplicationPayload({ onlineVehicleId: 'online-direct-002', firstName: 'Direct Filtered', lastName: 'Applicant', phone: '3135550333', email: 'direct-filtered@example.com', password: 'DirectFiltered123!', income: 5100 });
+    const filteredCustomerCookie = await registerCustomer(server, filteredPayload);
     const filteredApplication = await request(server, 'POST', '/api/public/applications', {
-      json: nativePublicApplicationPayload({ onlineVehicleId: 'online-direct-002', firstName: 'Direct Filtered', lastName: 'Applicant', phone: '3135550333', email: 'direct-filtered@example.com', password: 'DirectFiltered123!', income: 5100 })
+      cookie: filteredCustomerCookie,
+      json: filteredPayload
     });
     assert(filteredApplication.status === 201 && filteredApplication.json.ok, 'Filtered public application path did not save.');
     const filteredNotificationState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
@@ -3197,8 +3239,11 @@ async function main() {
     });
     assert(restoredNotificationSettings.status === 200 && restoredNotificationSettings.json.notifications.events.includes('application_submitted'), 'Notification events should restore application alerts.');
 
+    const notifiedPayload = nativePublicApplicationPayload({ onlineVehicleId: 'online-direct-002', firstName: 'Direct Notified', lastName: 'Applicant', phone: '3135550222', email: 'direct-notified@example.com', password: 'DirectNotified123!', income: 5200 });
+    const notifiedCustomerCookie = await registerCustomer(server, notifiedPayload);
     const notifiedApplication = await request(server, 'POST', '/api/public/applications', {
-      json: nativePublicApplicationPayload({ onlineVehicleId: 'online-direct-002', firstName: 'Direct Notified', lastName: 'Applicant', phone: '3135550222', email: 'direct-notified@example.com', password: 'DirectNotified123!', income: 5200 })
+      cookie: notifiedCustomerCookie,
+      json: notifiedPayload
     });
     assert(notifiedApplication.status === 201 && notifiedApplication.json.ok, 'Public application notification path did not save.');
 
