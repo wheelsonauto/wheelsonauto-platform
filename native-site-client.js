@@ -239,8 +239,12 @@
       var context = qualityCanvas.getContext('2d', {willReadFrequently:true});
       context.drawImage(video, 0, 0, width, height);
       var pixels = context.getImageData(0, 0, width, height).data, light = 0, edge = 0, samples = 0;
+      function luminanceAt(x,y){ var index=(Math.max(0,Math.min(height-1,y))*width+Math.max(0,Math.min(width-1,x)))*4; return pixels[index]*.299+pixels[index+1]*.587+pixels[index+2]*.114; }
       for(var y=4;y<height-4;y+=4){ for(var x=4;x<width-4;x+=4){ var index=(y*width+x)*4, previous=(y*width+x-4)*4, value=(pixels[index]*.299+pixels[index+1]*.587+pixels[index+2]*.114), old=(pixels[previous]*.299+pixels[previous+1]*.587+pixels[previous+2]*.114); light+=value; edge+=Math.abs(value-old); samples+=1; } }
-      return { light:samples?light/samples:0, edge:samples?edge/samples:0 };
+      var guide = documentKind === 'identity_selfie' ? {left:.17,right:.83,top:.63,bottom:.91} : {left:.08,right:.92,top:.2,bottom:.8}, left=Math.round(width*guide.left), right=Math.round(width*guide.right), top=Math.round(height*guide.top), bottom=Math.round(height*guide.bottom), documentEdge=0, boundarySamples=0;
+      for(var boundaryY=top+4;boundaryY<bottom-4;boundaryY+=4){ documentEdge+=Math.abs(luminanceAt(left-3,boundaryY)-luminanceAt(left+3,boundaryY))+Math.abs(luminanceAt(right-3,boundaryY)-luminanceAt(right+3,boundaryY));boundarySamples+=2; }
+      for(var boundaryX=left+4;boundaryX<right-4;boundaryX+=4){ documentEdge+=Math.abs(luminanceAt(boundaryX,top-3)-luminanceAt(boundaryX,top+3))+Math.abs(luminanceAt(boundaryX,bottom-3)-luminanceAt(boundaryX,bottom+3));boundarySamples+=2; }
+      return { light:samples?light/samples:0, edge:samples?edge/samples:0, documentEdge:boundarySamples?documentEdge/boundarySamples:0 };
     }
     async function visibleFaceReady(){
       if(documentKind !== 'identity_selfie' || typeof window.FaceDetector !== 'function') return true;
@@ -251,12 +255,13 @@
       if(analysisBusy || !stream || hidden.value || !video.videoWidth) return;
       analysisBusy = true;
       try{
-        var quality = frameQuality(), faceReady = await visibleFaceReady(), clear = quality.light >= 45 && quality.light <= 225 && quality.edge >= 5 && faceReady;
+        var quality = frameQuality(), faceReady = await visibleFaceReady(), documentReady = quality.documentEdge >= 4, clear = quality.light >= 45 && quality.light <= 225 && quality.edge >= 5 && faceReady && documentReady;
         stableFrames = clear ? stableFrames + 1 : 0;
         if(!faceReady) setStatus('Keep one face centered inside the oval.', false);
         else if(quality.light < 45) setStatus('Move to brighter, even lighting.', false);
         else if(quality.light > 225) setStatus('Reduce glare and direct light on the license.', false);
         else if(quality.edge < 5) setStatus('Move closer and hold the camera steady so the details are sharp.', false);
+        else if(!documentReady) setStatus('Line up all four license edges inside the rectangular guide.', false);
         else if(stableFrames < 4) setStatus('Good position. Hold still ' + (4-stableFrames) + '...', true);
         if(stableFrames >= 4) takePhoto(true);
       } finally { analysisBusy = false; }

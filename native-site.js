@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const LOGO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=240';
 const HERO_URL = 'https://www.wheelsonauto.com/cdn/shop/files/clean-luxury-car-hero-banner.png?v=1772796803&width=3840';
 const CONTRACT_MONTHS = 19;
-const NATIVE_SITE_ASSET_VERSION = 'native-17-live-id-capture';
+const NATIVE_SITE_ASSET_VERSION = 'native-18-document-detection';
 
 function esc(value) {
   return String(value === undefined || value === null ? '' : value).replace(/[&<>\"]/g, character => ({
