@@ -127,6 +127,10 @@ async function main() {
   const nativeCss = await fs.readFile(path.join(__dirname, '..', 'native-site.css'), 'utf8');
   const nativeSiteClient = await fs.readFile(path.join(__dirname, '..', 'native-site-client.js'), 'utf8');
   assert(nativeCss.includes('[hidden]{display:none!important}'), 'Hidden selfie preview and camera controls must stay invisible until the live-camera flow reveals them.');
+  assert(nativeCss.includes('.selfie-browser-help') && nativeCss.includes('.selfie-browser-help>div'), 'Camera recovery guidance must remain compact and responsive.');
+  assert(nativeSiteClient.includes("name === 'NotAllowedError'") && nativeSiteClient.includes("name === 'NotFoundError'") && nativeSiteClient.includes("name === 'NotReadableError'"), 'Live-camera failures must distinguish permission, missing-device, and busy-camera errors.');
+  assert(nativeSiteClient.includes('navigator.share') && nativeSiteClient.includes('navigator.clipboard.writeText(window.location.href)'), 'A blocked embedded browser must let the customer securely share or copy the same saved onboarding link.');
+  assert(nativeSiteClient.includes("name !== 'OverconstrainedError'") && nativeSiteClient.includes("getUserMedia({ video:true, audio:false })"), 'Unsupported ideal camera constraints must retry with a compatible secure camera request.');
   assert(onboardingService.applicationBlocksOnboarding({ status: 'Denied - archived', stage: 'Denied' }), 'Denied applications must block every onboarding surface.');
   assert(onboardingService.applicationBlocksOnboarding({ status: 'Archived', stage: 'History' }), 'Archived applications must require a fresh approval and secure link.');
   assert(!onboardingService.applicationBlocksOnboarding({ status: 'Customer setup in progress', stage: 'Onboarding' }), 'An active approved onboarding application must remain available.');
@@ -268,6 +272,9 @@ async function main() {
     assert(forgedTime.status === 400 && /business hours/i.test(forgedTime.json.error), 'A forged appointment start at closing time must be rejected server-side.');
     const profile = await request(server, 'POST', '/api/public/onboarding/' + token + '/profile', { json: { address: '100 Test Ave', city: 'Blackwood', state: 'NJ', postalCode: '08012', driverLicenseId: 'N12345678901234', driverLicenseExpires: '2030-04-20', insuranceProvider: 'Test Insurance', insurancePolicyNumber: 'POLICY-100', requestedPickupDate: pickupDate, requestedPickupTime: '1:00 PM', pickupAutopayConsent: true } });
     assert(profile.status === 200, 'Valid next-day-to-seven-day pickup profile should save.');
+    const documentStepPage = await request(server, 'GET', '/onboard/' + token);
+    assert(documentStepPage.status === 200 && /data-selfie-browser-help/.test(documentStepPage.text) && /data-selfie-share/.test(documentStepPage.text) && /data-selfie-copy/.test(documentStepPage.text), 'The unlocked live-selfie step must provide secure camera-browser recovery controls.');
+    assert(!/name="identity_selfie"[^>]+type="file"/.test(documentStepPage.text), 'Camera recovery must not weaken the live-selfie requirement into a gallery file upload.');
     const reservedAvailability = await request(server, 'GET', '/api/public/onboarding/' + token + '/pickup-availability?date=' + pickupDate);
     assert(reservedAvailability.status === 200 && reservedAvailability.json.slots.find(slot => slot.time === '1:00 PM').available === true, 'A customer revisiting their own onboarding link must not be blocked by their own reserved slot.');
 

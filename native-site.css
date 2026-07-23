@@ -155,6 +155,11 @@ button,a,input,select,textarea{transition:border-color .18s ease,background-colo
 .selfie-camera-actions{grid-column:2;display:grid;grid-template-columns:1fr 1fr;gap:8px;width:min(100%,420px);justify-self:center}
 .selfie-camera-actions .button:only-child{grid-column:1/-1}
 .selfie-capture>.step-alert{grid-column:1/-1;margin:0}
+.selfie-browser-help{grid-column:1/-1;display:grid;gap:8px;padding:12px;border:1px solid rgba(213,177,95,.35);border-radius:7px;background:rgba(213,177,95,.07);color:#d5d6d7}
+.selfie-browser-help strong{color:var(--gold-2);font-size:13px}
+.selfie-browser-help span{font-size:12px;line-height:1.45}
+.selfie-browser-help>div{display:flex;flex-wrap:wrap;gap:8px}
+.selfie-browser-help .button{min-width:150px}
 .insurance-choice-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(240px,.75fr);gap:10px;align-items:start}
 .insurance-choice-form,.insurance-help-form{min-width:0;padding:15px!important;border:1px solid var(--line)!important;border-radius:7px!important;background:#121416!important}
 .insurance-help-form{display:grid;gap:11px}

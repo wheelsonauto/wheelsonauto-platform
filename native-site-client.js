@@ -181,18 +181,48 @@
   });
 
   all('[data-selfie-capture]').forEach(function(shell){
-    var video = one('[data-selfie-video]', shell), canvas = one('[data-selfie-canvas]', shell), preview = one('[data-selfie-preview]', shell), placeholder = one('[data-selfie-placeholder]', shell), hidden = one('[data-live-selfie]', shell), openButton = one('[data-selfie-open]', shell), takeButton = one('[data-selfie-take]', shell), retakeButton = one('[data-selfie-retake]', shell), errorBox = one('[data-selfie-error]', shell), stream = null;
+    var video = one('[data-selfie-video]', shell), canvas = one('[data-selfie-canvas]', shell), preview = one('[data-selfie-preview]', shell), placeholder = one('[data-selfie-placeholder]', shell), hidden = one('[data-live-selfie]', shell), openButton = one('[data-selfie-open]', shell), takeButton = one('[data-selfie-take]', shell), retakeButton = one('[data-selfie-retake]', shell), errorBox = one('[data-selfie-error]', shell), browserHelp = one('[data-selfie-browser-help]', shell), shareButton = one('[data-selfie-share]', shell), copyButton = one('[data-selfie-copy]', shell), stream = null;
     function stopCamera(){ if(stream) stream.getTracks().forEach(function(track){ track.stop(); }); stream = null; }
-    function showError(text){ errorBox.textContent = text; errorBox.hidden = !text; }
+    function showError(text, offerBrowserHelp){ errorBox.textContent = text; errorBox.hidden = !text; if(browserHelp) browserHelp.hidden = !offerBrowserHelp; }
+    function cameraErrorMessage(error){
+      var name = String(error && error.name || '');
+      if(name === 'NotAllowedError' || name === 'SecurityError') return 'Camera access is blocked in this browser. Open this saved setup in Safari, Chrome, or Edge and allow camera access.';
+      if(name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'No camera was found on this device. Continue this saved setup on a phone or computer with a front camera.';
+      if(name === 'NotReadableError' || name === 'TrackStartError') return 'The camera is busy or unavailable. Close other apps using the camera, then try again.';
+      if(name === 'AbortError') return 'Camera startup was interrupted. Try again, or continue this saved setup in Safari, Chrome, or Edge.';
+      return 'This browser could not start the secure live camera. Continue this saved setup in Safari, Chrome, or Edge.';
+    }
+    async function cameraStream(){
+      try{ return await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1080}, height:{ideal:1440} }, audio:false }); }
+      catch(error){
+        var name = String(error && error.name || '');
+        if(name !== 'OverconstrainedError' && name !== 'ConstraintNotSatisfiedError') throw error;
+        return navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      }
+    }
+    async function copySecureLink(){
+      try{
+        if(!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Clipboard unavailable');
+        await navigator.clipboard.writeText(window.location.href);
+        showError('Secure link copied. Paste it into Safari, Chrome, or Edge on a camera-enabled device.', true);
+      }catch(error){ showError('Copy this page address from the browser and open it in Safari, Chrome, or Edge. Your progress is saved.', true); }
+    }
+    async function shareSecureLink(){
+      if(navigator.share){
+        try{ await navigator.share({ title:'Continue WheelsonAuto verification', url:window.location.href }); return; }
+        catch(error){ if(String(error && error.name || '') === 'AbortError') return; }
+      }
+      await copySecureLink();
+    }
     async function openCamera(){
-      showError('');
-      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ showError('This browser cannot open a secure live camera. Use a current Safari, Chrome, or Edge browser with camera permission enabled.'); return; }
+      showError('', false);
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ showError('This browser does not expose a secure live camera. Continue this saved setup in Safari, Chrome, or Edge.', true); return; }
       try{
         stopCamera();
-        stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1080}, height:{ideal:1440} }, audio:false });
+        stream = await cameraStream();
         video.srcObject = stream; await video.play();
         video.hidden = false; placeholder.hidden = true; preview.hidden = true; openButton.hidden = true; takeButton.hidden = false; retakeButton.hidden = true;
-      }catch(error){ showError('Camera permission is required for the live selfie. Allow camera access in your browser settings and try again.'); }
+      }catch(error){ stopCamera(); showError(cameraErrorMessage(error), true); }
     }
     function takePhoto(){
       if(!stream || !video.videoWidth || !video.videoHeight){ showError('The camera is not ready yet. Hold still and try again.'); return; }
@@ -201,6 +231,8 @@
       hidden.value = canvas.toDataURL('image/jpeg', 0.9); preview.src = hidden.value; preview.hidden = false; video.hidden = true; takeButton.hidden = true; retakeButton.hidden = false; stopCamera();
     }
     openButton.addEventListener('click', openCamera); takeButton.addEventListener('click', takePhoto); retakeButton.addEventListener('click', function(){ hidden.value = ''; openCamera(); });
+    if(shareButton) shareButton.addEventListener('click', shareSecureLink);
+    if(copyButton) copyButton.addEventListener('click', copySecureLink);
     window.addEventListener('pagehide', stopCamera, {once:true});
   });
 
