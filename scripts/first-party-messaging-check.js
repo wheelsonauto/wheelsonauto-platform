@@ -112,11 +112,13 @@ async function run() {
   assert(worker.includes("url.pathname === '/customer'"), 'Service worker must explicitly exclude authenticated customer HTML from caching.');
   assert(worker.includes("url.pathname.startsWith('/api/')"), 'Service worker must never cache private API responses.');
   assert(client.includes("fetch('/customer/message'"), 'Customer replies must submit in place without a full-page reload.');
+  assert(client.includes("id: 'customer-pending-' + Date.now()") && client.includes("status: 'Sending'") && client.includes("pending.status = 'Not sent'"), 'Customer replies must appear immediately and remain retryable when delivery fails.');
   assert(client.includes("fetch('/api/customer/portal-state'"), 'Customer conversation must poll its scoped portal state for replies.');
   assert(client.includes("}, 2500)"), 'Customer conversations must refresh quickly enough to behave like a live in-app thread.');
   assert(client.includes('function showLiveAlert(item)'), 'Customer app updates must appear inside the app without requiring device-notification permission.');
   assert(client.includes('window.setInterval(refresh, 5000)'), 'Customer payment, message, application, and service alerts must refresh automatically.');
   assert(client.includes('function setupMobileKeyboard()') && client.includes("document.body.classList.toggle('customer-keyboard-open'"), 'The customer app must move its bottom navigation out of the way when the phone keyboard opens.');
+  assert(client.includes("document.body.classList.toggle('customer-message-keyboard-open'") && !client.includes("target.scrollIntoView({ block: 'nearest'"), 'Opening the customer message keyboard must lock only the conversation viewport without forcing the whole page to scroll.');
   assert(client.includes('function setupSettingsNavigation()') && client.includes('data-customer-settings-back'), 'Customer Settings must use focused native-app screens with a Back control.');
   assert(client.includes("navigator.serviceWorker.register('/service-worker.js'"), 'Customer portal must register the installable app shell.');
   assert(staff.includes("preferred=portalReady?'Customer portal'"), 'Staff replies must prefer the secure customer app when the customer login is ready.');
@@ -136,6 +138,7 @@ async function run() {
   assert(staff.includes("fetch('/api/messages/feed?limit=800'"), 'The staff inbox must poll its dedicated live feed.');
   assert(staff.includes('focusedMessageDraftSnapshot()') && staff.includes('restoreFocusedMessageDraft(snapshot)'), 'Live staff refresh must preserve the reply being typed.');
   assert(staff.includes('upsertLiveMessageRecord(sent.message)') && !staff.includes('if(threadMode)pendingThreadReplyDraft=null;await refreshData(true);'), 'A successful staff send must render from the response instead of blocking on a full dashboard refresh.');
+  assert(staff.includes("source:'WheelsonAuto local pending'") && staff.includes('__woaMessageSendInFlight=messageDeliveryId') && staff.includes("insertAdjacentHTML('beforeend',messageFocusedBubble(optimisticMessage))"), 'Staff replies must appear optimistically while the durable server write completes.');
   assert(staffPwa.includes('window.setInterval(refreshNotifications, 5000)'), 'Staff app alerts must refresh without reopening the platform.');
   assert(styles.includes('.customer-chat-messages') && styles.includes('@media(max-width:760px)'), 'Conversation layout must include compact mobile styling.');
   assert(styles.includes('.customer-app-header{height:54px;grid-template-columns:minmax(0,1fr) 40px'), 'The customer phone header must reserve separate non-overlapping lanes for identity and alerts.');
@@ -143,6 +146,8 @@ async function run() {
   assert(styles.includes('.admin-shell .topbar.compact-title{') && styles.includes('backdrop-filter:blur(14px)'), 'The staff header must use the same compact glass surface language as the customer/login app.');
   assert(styles.includes('.view-messages:has(.message-inbox-shell.message-mobile-thread-open)>.message-focused-tabs{display:none!important}'), 'Message workspace tabs must hide while the phone is inside a conversation and return after Back.');
   assert(styles.includes('.message-inbox-shell.message-mobile-thread-open .message-recipient-details{display:none!important}'), 'Open mobile conversations must hide the optional delivery selector so the reply box stays compact.');
+  assert(styles.includes('.admin-shell>.main{padding-top:calc(8px + env(safe-area-inset-top))!important}'), 'Every staff phone screen must remain below the iPhone camera and status area.');
+  assert(styles.includes('body.customer-message-keyboard-open #portal-messages') && styles.includes('body.customer-message-keyboard-open .customer-chat{height:100%!important'), 'The customer conversation must fit the visible keyboard viewport without scrolling the entire portal.');
   assert(!source.includes("providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block provider proof collection.');
   assert(!source.includes("missing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block live Stripe readiness.');
   assert(source.includes('WOA_OPTIONAL_CARRIER_SMS_ENABLED') && source.includes("? 'wheelsonauto'"), 'Legacy Telnyx or Twilio environment values must not reactivate carrier SMS unless the owner explicitly enables it.');

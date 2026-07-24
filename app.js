@@ -442,11 +442,25 @@ document.addEventListener('click',async function(e){
       customer:val('messageCustomer'),phone:val('messagePhone'),email:val('messageEmail'),channel:val('messageChannel')||'Customer portal',body:val('payLinkMessage'),template:val('messageTemplate')||'Manual text',subject:val('messageTemplate')||'WheelsonAuto message',deliveryId:messageDeliveryId
     };
     if(!payload.body){delete b.dataset.deliveryId;notify('Type a message first');return}
+    var optimisticMessage=null,optimisticMessageId='';
     b.disabled=true;b.classList.add('is-loading');
+    if(threadMode){
+      optimisticMessageId='pending-'+messageDeliveryId;
+      optimisticMessage={id:optimisticMessageId,date:new Date().toLocaleString(),createdAt:new Date().toISOString(),customer:payload.customer||'Customer',phone:payload.phone||'',email:payload.email||'',direction:'Outbound',channel:payload.channel||'Customer portal',template:'Thread reply',subject:'WheelsonAuto reply',status:'Sending',tone:'blue',body:payload.body,provider:'wheelsonauto',providerIdempotencyKey:messageDeliveryId,source:'WheelsonAuto local pending',pending:true};
+      __woaMessageSendInFlight=messageDeliveryId;
+      upsertLiveMessageRecord(optimisticMessage);
+      var optimisticBody=document.getElementById('threadMessageBody'),optimisticBubbles=document.querySelector('.view-messages .message-bubbles');
+      if(optimisticBody)optimisticBody.value='';
+      if(optimisticBubbles){optimisticBubbles.insertAdjacentHTML('beforeend',messageFocusedBubble(optimisticMessage));optimisticBubbles.scrollTop=optimisticBubbles.scrollHeight}
+    }
     var sent=await post('/api/messages/send',payload);
+    if(threadMode){
+      db.messages=(db.messages||[]).filter(function(row){return String(row&&row.id||'')!==optimisticMessageId});
+      __woaMessageSendInFlight=''
+    }
     b.disabled=false;b.classList.remove('is-loading');
     if(sent.ok){
-      if(sent.confirmationPending){notify(sent.warning||'Message is waiting for provider confirmation. WheelsonAuto did not send another copy.');return}
+      if(sent.confirmationPending){if(sent.message)upsertLiveMessageRecord(sent.message);if(threadMode)renderFocusedMessagesDirect();notify(sent.warning||'Message is waiting for provider confirmation. WheelsonAuto did not send another copy.');return}
       delete b.dataset.deliveryId;
       if(threadMode)pendingThreadReplyDraft=null;
       if(sent.message)upsertLiveMessageRecord(sent.message);
@@ -457,7 +471,15 @@ document.addEventListener('click',async function(e){
       void refreshFocusedMessageFeed(true);
       void refreshData(true);
       notify(sent.sent?(payload.channel==='Customer portal'?'Delivered in customer app':payload.channel==='Email'?'Email sent':'Text sent'):(payload.channel==='Email'?'Email saved until connected':'Message saved'))
-    }else notify(sent.error||'Message did not send');
+    }else{
+      if(threadMode){
+        if(sent.message)upsertLiveMessageRecord(sent.message);
+        else if(optimisticMessage){optimisticMessage.pending=false;optimisticMessage.status='Not sent';optimisticMessage.tone='bad';optimisticMessage.error=sent.error||'Message did not send';upsertLiveMessageRecord(optimisticMessage)}
+        renderFocusedMessagesDirect();
+        requestAnimationFrame(function(){var failedBody=document.getElementById('threadMessageBody');if(failedBody&&!failedBody.value)failedBody.value=payload.body})
+      }
+      notify(sent.error||'Message did not send')
+    }
     return
   }
   if(a==='star-ai-custom'){
@@ -3186,6 +3208,7 @@ function renderFocusedMessagesDirect(){
 var __woaMessageFeedRevision='';
 var __woaMessageFeedReady=false;
 var __woaMessageFeedInFlight=null;
+var __woaMessageSendInFlight='';
 function upsertLiveMessageRecord(message){
   if(!message||!message.id)return;
   db.messages=(db.messages||[]).filter(function(row){return String(row&&row.id||'')!==String(message.id)});
@@ -3224,6 +3247,7 @@ function liveMessageIsInbound(message){
 }
 async function refreshFocusedMessageFeed(force){
   if(isPublic||roleName()==='mechanic')return null;
+  if(__woaMessageSendInFlight)return null;
   if(!force&&(view!=='Messages'||document.hidden))return null;
   if(__woaMessageFeedInFlight)return __woaMessageFeedInFlight;
   __woaMessageFeedInFlight=(async function(){

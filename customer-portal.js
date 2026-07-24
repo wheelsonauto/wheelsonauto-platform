@@ -141,6 +141,7 @@
     var textarea = form && form.querySelector('textarea[name="body"]');
     var connection = document.querySelector('[data-customer-connection-status]');
     var lastFingerprint = '';
+    var liveMessages = [];
     var pollTimer = null;
     if (!form || !list || !textarea) return;
 
@@ -165,6 +166,7 @@
         var result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || 'Conversation could not refresh.');
         var messages = result.portal && result.portal.messages || [];
+        liveMessages = messages.slice();
         var nextFingerprint = messageFingerprint(messages);
         if (nextFingerprint !== lastFingerprint) {
           renderConversation(list, messages, !!forceBottom);
@@ -182,8 +184,20 @@
       event.preventDefault();
       var body = textarea.value.trim();
       if (!body || button.disabled) return;
+      var pending = {
+        id: 'customer-pending-' + Date.now(),
+        createdAt: new Date().toISOString(),
+        direction: 'Inbound',
+        channel: 'Customer portal',
+        status: 'Sending',
+        body: body
+      };
       button.disabled = true;
       setStatus('Sending securely...');
+      textarea.value = '';
+      liveMessages = liveMessages.concat(pending);
+      lastFingerprint = messageFingerprint(liveMessages);
+      renderConversation(list, liveMessages, true);
       try {
         var response = await fetch('/customer/message', {
           method: 'POST',
@@ -196,16 +210,20 @@
           return;
         }
         if (!response.ok || !result.ok) throw new Error(result.error || 'Message could not be sent.');
-        textarea.value = '';
         var messages = result.portal && result.portal.messages || [];
+        liveMessages = messages.slice();
         lastFingerprint = messageFingerprint(messages);
         renderConversation(list, messages, true);
         setStatus('Delivered to WheelsonAuto.');
       } catch (error) {
+        pending.status = 'Not sent';
+        liveMessages = liveMessages.map(function (message) { return message.id === pending.id ? pending : message; });
+        lastFingerprint = messageFingerprint(liveMessages);
+        renderConversation(list, liveMessages, true);
+        textarea.value = body;
         setStatus(error.message || 'Message could not be sent.', true);
       } finally {
         button.disabled = false;
-        textarea.focus();
       }
     }
 
@@ -265,14 +283,21 @@
     function keyboardControl(target, opening) {
       if (!phone.matches || !target || !/INPUT|TEXTAREA|SELECT/.test(target.tagName)) return;
       document.body.classList.toggle('customer-keyboard-open', opening);
+      document.body.classList.toggle('customer-message-keyboard-open', opening && !!target.closest('[data-customer-message-form]'));
       syncViewport();
-      if (opening) window.setTimeout(function () { target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, 80);
+      if (opening && target.closest('[data-customer-message-form]')) window.requestAnimationFrame(function () {
+        var list = document.querySelector('[data-customer-message-list]');
+        if (list) list.scrollTop = list.scrollHeight;
+      });
     }
     document.addEventListener('focusin', function (event) { keyboardControl(event.target, true); });
     document.addEventListener('focusout', function () {
       window.setTimeout(function () {
         var active = document.activeElement;
-        if (!active || !/INPUT|TEXTAREA|SELECT/.test(active.tagName)) document.body.classList.remove('customer-keyboard-open');
+        if (!active || !/INPUT|TEXTAREA|SELECT/.test(active.tagName)) {
+          document.body.classList.remove('customer-keyboard-open');
+          document.body.classList.remove('customer-message-keyboard-open');
+        }
         syncViewport();
       }, 80);
     });

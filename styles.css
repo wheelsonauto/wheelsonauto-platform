@@ -8400,6 +8400,26 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .customer-live-alert{top:calc(8px + env(safe-area-inset-top));right:8px;width:calc(100vw - 16px)}
 }
 
+/* Phone chrome and keyboards must never cover the staff or customer composer. */
+@media(max-width:760px){
+  .admin-shell>.main{padding-top:calc(8px + env(safe-area-inset-top))!important}
+  .admin-shell .message-inbox-shell{height:calc(100dvh - 150px - env(safe-area-inset-top))!important}
+  .message-inbox-shell .message-reply-box{gap:3px;padding:4px 6px calc(4px + env(safe-area-inset-bottom))}
+  .message-compose-row{grid-template-columns:minmax(0,1fr) 64px;gap:5px;align-items:end}
+  .message-inbox-shell .message-reply-box textarea{min-height:38px;max-height:70px;padding:7px 8px}
+  .message-compose-actions{grid-template-columns:1fr;gap:3px}
+  .message-compose-actions .btn{min-height:28px;padding:4px 5px;font-size:9px}
+}
+@media(max-width:700px){
+  html:has(body.customer-message-keyboard-open),body.customer-message-keyboard-open{height:var(--customer-live-viewport-height,100dvh);overflow:hidden;overscroll-behavior:none}
+  body.customer-message-keyboard-open .customer-app-shell.customer-portal{height:var(--customer-live-viewport-height,100dvh);overflow:hidden}
+  body.customer-message-keyboard-open .customer-app-pages{height:calc(var(--customer-live-viewport-height,100dvh) - 54px);min-height:0;overflow:hidden}
+  body.customer-message-keyboard-open #portal-messages{box-sizing:border-box;display:flex!important;flex-direction:column;height:100%;min-height:0;padding:0;overflow:hidden}
+  body.customer-message-keyboard-open .customer-mobile-page-head{display:none}
+  body.customer-message-keyboard-open .customer-conversation-panel{flex:1 1 auto;min-height:0}
+  body.customer-message-keyboard-open .customer-chat{height:100%!important;min-height:0}
+}
+
 /* Match staff card surfaces to the customer app without changing action colors. */
 .admin-shell :is(.card,.item,.lead-card,.column,.mechanic-card,.company-card,.api-phase,.public-vehicle-card,.account-card,.file-summary>div,.health-card,.access-lane,.match-lane,.application-lane,.claim-lane,.message-lane,.timeline-item,.access-next-item,.claim-next-item,.match-next-item,.ops-item,.due-row,.mini-row,.payment-next-item,.service-next-item,.fleet-next-item,.accounting-next-item,.customer-pay-card,.today-focus-main,.today-metric,.payment-lane,.service-lane,.fleet-lane,.workflow-step,.readiness-card,.accounting-lane,.api-lane,.executive-card,.native-online-summary span,.native-file-grid>div,.native-application-card,.native-review-file,.local-result-card),
 .admin-shell :is(.native-inventory-board,.native-website-apps,.native-applications-board){
