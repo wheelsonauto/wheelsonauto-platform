@@ -102,6 +102,13 @@ async function run() {
 
   assert.strictEqual(manifest.scope, '/customer');
   assert.strictEqual(manifest.display, 'standalone');
+  assert.strictEqual(manifest.start_url, '/customer#portal-home', 'The installed customer app must open the current Home tab.');
+  assert.deepStrictEqual(manifest.shortcuts.map(item => item.url), [
+    '/customer#portal-messages',
+    '/customer#portal-payments',
+    '/customer#portal-vehicle',
+    '/customer#portal-settings'
+  ], 'Installed customer shortcuts must match the current five-tab account structure.');
   assert(worker.includes("url.pathname === '/customer'"), 'Service worker must explicitly exclude authenticated customer HTML from caching.');
   assert(worker.includes("url.pathname.startsWith('/api/')"), 'Service worker must never cache private API responses.');
   assert(client.includes("fetch('/customer/message'"), 'Customer replies must submit in place without a full-page reload.');
