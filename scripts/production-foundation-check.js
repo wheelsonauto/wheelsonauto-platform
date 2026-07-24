@@ -12,6 +12,7 @@ const stripeMigration = require('../stripe-migration');
 const {
   assignmentConflictPreflightClassification,
   cardSetupPlanReview,
+  controlledStripePilotEvidence,
   controlledStripePilotSelection,
   controlledStripePilotMoneyActionReview,
   lockControlledStripePilotCandidate,
@@ -115,6 +116,21 @@ async function main() {
   assert.match(inProgressActions, /complete driver license number/i, 'An in-progress pilot file must identify the incomplete license without showing its raw value.');
   assert.match(inProgressActions, /pickup date/i, 'An in-progress pilot file must identify a stale pickup request before the customer reaches a server rejection.');
   assert(!inProgressActions.includes('66'), 'Pilot guidance must never echo the raw driver-license value.');
+  const pilotEvidenceSelectionState = {
+    integrations: { stripe: {} },
+    applications: [
+      { id: 'app-removed-newer', name: 'Removed Applicant', email: 'removed@example.com', onlineVehicleId: 'online-shared-test', pricingSnapshot: { weeklyPayment: 1, downPayment: 1 }, status: 'Removed - owner test reset', submittedAt: '2026-07-23T15:00:00.000Z' },
+      { id: 'app-active-pilot', name: 'Active Pilot', email: 'active@example.com', onlineVehicleId: 'online-shared-test', pricingSnapshot: { weeklyPayment: 1, downPayment: 1 }, status: 'Payment received - completing onboarding', submittedAt: '2026-07-23T14:00:00.000Z' }
+    ],
+    onlineVehicles: [{ id: 'online-shared-test', platformVehicleId: 'veh-shared-test', title: 'Online vehicle', make: 'test', model: 'test', vin: 'test', plate: 'test', weeklyPayment: 1, downPayment: 1, published: false, availability: 'Paid - pending pickup' }],
+    vehicles: [{ id: 'veh-shared-test', vin: 'test', plate: 'test', status: 'Paid - pending pickup' }],
+    onboardingSessions: [
+      { id: 'onboard-removed-newer', applicationId: 'app-removed-newer', onlineVehicleId: 'online-shared-test', status: 'Open', paymentProvider: 'stripe', identityProvider: 'stripe', updatedAt: '2026-07-23T16:00:00.000Z' },
+      { id: 'onboard-active-pilot', applicationId: 'app-active-pilot', onlineVehicleId: 'online-shared-test', status: 'Pickup reserved - insurance verification required', paymentProvider: 'stripe', identityProvider: 'stripe', updatedAt: '2026-07-23T15:30:00.000Z' }
+    ]
+  };
+  const activePilotEvidence = controlledStripePilotEvidence(pilotEvidenceSelectionState, { liveRequired: true });
+  assert.strictEqual(activePilotEvidence.candidate.applicationId, 'app-active-pilot', 'A newer removed application must not replace the eligible active Stripe pilot on the production preflight.');
   const pilotMoneyState = {
     integrations: { stripe: {} },
     applications: [{ id: 'app-pilot-money', name: 'Pilot Money Customer', email: 'pilot-money@example.com', onlineVehicleId: 'online-pilot-money', vehicle: '2020 Pilot Money', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 }, status: 'Onboarding', submittedAt: '2026-07-21T14:00:00.000Z' }],

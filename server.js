@@ -11063,7 +11063,15 @@ function controlledStripePilotEvidence(data, options = {}) {
   const evidenceRows = sessions.map(session => controlledStripePilotSessionEvidence(data, session, { liveRequired }));
   const approvedEvidence = approvedSessionId ? evidenceRows.find(row => row.sessionId === approvedSessionId) || null : null;
   const requestedEvidence = requestedSessionId ? evidenceRows.find(row => row.sessionId === requestedSessionId) || null : null;
-  const candidate = requestedEvidence || approvedEvidence || evidenceRows.find(row => row.ready) || evidenceRows[0] || null;
+  const candidateLock = controlledStripePilotCandidateLock(data);
+  const lockedEvidence = controlledStripePilotCandidateIsActive(data, candidateLock)
+    ? evidenceRows.find(row => row.sessionId === candidateLock.onboardingSessionId) || null
+    : null;
+  const eligibleCandidate = controlledStripePilotSelection(data).candidates.find(row => row.eligible === true && row.onboardingSessionId) || null;
+  const eligibleEvidence = eligibleCandidate
+    ? evidenceRows.find(row => row.sessionId === eligibleCandidate.onboardingSessionId) || null
+    : null;
+  const candidate = requestedEvidence || approvedEvidence || lockedEvidence || eligibleEvidence || evidenceRows.find(row => row.ready) || evidenceRows[0] || null;
   const savedHash = String(stripeState.controlledPilotEvidenceHash || '').trim();
   const savedVersion = Number(stripeState.controlledPilotEvidenceVersion || 0);
   const approvedLivemode = stripeState.controlledPilotApprovedLivemode === true;
