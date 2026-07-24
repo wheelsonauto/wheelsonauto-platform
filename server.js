@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-access-recovery-334';
+const ASSET_VERSION = 'platform-20260723-access-tools-335';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -9616,6 +9616,15 @@ function staffRecoveryPage(username = '', message = '', requestId = '') {
 function customerSessionCookie(account) {
   return signedSessionCookie('customer', customerLoginUser(account));
 }
+function ownerAssistanceCustomerCookie(account, owner) {
+  return signedSessionCookie('customer', {
+    ...customerLoginUser(account),
+    assistedByOwner: true,
+    assistedByOwnerId: owner && owner.id || 'owner',
+    assistedByOwnerName: owner && (owner.name || owner.username) || 'Owner admin',
+    assistanceStartedAt: new Date().toISOString()
+  }, 15 * 60);
+}
 function customerSessionUser(req) {
   const raw = cookies(req).woa_customer_session || '';
   try {
@@ -10138,6 +10147,11 @@ function customerPortalHtml(account, state) {
     : '<div class="notice">Stripe card changes are locked until the live Stripe key and signed webhook are connected. Contact WheelsonAuto for a Clover card-update link.</div>';
   const cardChangeForm = currentCardChange + (currentCardProvider !== 'stripe' && stripePreparationReady ? '<form method="POST" action="/customer/card-change" class="customer-card-form"><input type="hidden" name="paymentProvider" value="stripe"><button class="btn" type="submit">Prepare Stripe card</button><small>Saves a live Stripe card without stopping Clover. The owner confirms the provider switch separately.</small></form>' : '');
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="customer-portal"><header class="customer-hero"><a class="customer-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><span>WheelsonAuto</span></a><div><div class="eyebrow">Customer portal</div><h1>Hi, ' + escapeHtml(customerName.split(/\s+/)[0] || customerName) + '</h1><p>Your vehicle, payments, service, documents, messages, and account status in one place.</p></div><a class="btn danger" href="/customer/logout">Log out</a></header><section class="customer-summary-grid"><article><span>Payment</span><strong>' + moneyText(amount) + '</strong><small>' + escapeHtml(recurring.frequency || summary.frequency || 'Schedule not set') + '</small></article><article><span>Status</span><strong>' + escapeHtml(paymentStatus) + '</strong><small>' + escapeHtml(recurring.paymentSetup || summary.paymentSetup || 'Card/account status') + '</small></article><article><span>Next charge</span><strong>' + escapeHtml(recurring.nextRun || summary.nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || summary.chargeTime || 'Time not set') + '</small></article><article><span>Vehicle</span><strong>' + escapeHtml(vehicleTitle) + '</strong><small>' + escapeHtml([tag, summary.vin || vehicle.vin || 'VIN not linked'].filter(Boolean).join(' | ')) + '</small></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Vehicle</h2></div><div class="customer-detail"><strong>' + escapeHtml(vehicleTitle) + '</strong><span>VIN: ' + escapeHtml(summary.vin || vehicle.vin || 'Not linked') + '</span><span>Tag/plate: ' + escapeHtml(tag || 'Not linked') + '</span><span>Tracker: ' + escapeHtml(summary.tracker || trackerName(vehicle) || 'Not linked') + '</span><span>Status: ' + escapeHtml(vehicle.status || 'Not set') + '</span></div></article><article class="customer-panel"><div class="section-head"><h2>Autopay</h2></div><div class="customer-detail"><strong>' + moneyText(amount) + ' ' + escapeHtml(recurring.frequency || '') + '</strong><span>Status: ' + escapeHtml(paymentStatus) + '</span><span>Next: ' + escapeHtml(recurring.nextRun || 'Not set') + '</span><span>Time: ' + escapeHtml(recurring.chargeTime || 'Not set') + '</span><span>Card: ' + escapeHtml(recurring.cardLabel || recurring.cardLast4 ? [recurring.cardLabel, recurring.cardLast4 && ('ending ' + recurring.cardLast4)].filter(Boolean).join(' ') : (recurring.paymentSetup || 'Ask office')) + '</span>' + cardChangeForm + '</div></article></section><section class="customer-grid"><article class="customer-panel customer-payment-requests"><div class="section-head"><h2>Open payment requests</h2></div><div class="customer-list">' + customerPortalList(state.paymentRequests, 'No open payment links are attached to this account right now.', r => customerPortalPaymentRequestRow(r)) + '</div></article><article class="customer-panel customer-next-actions"><div class="section-head"><h2>Account actions</h2></div><div class="customer-detail"><strong>Need help?</strong><span>Use the forms below to message the office, report outside payment, request service, send proof, request receipts/statements, or change card on file.</span><span>Star can help draft replies, but payment/card/account changes stay office-approved.</span></div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Recent payments</h2></div>' + portalPaidOutsideForm + '<div class="customer-list">' + customerPortalList(state.payments, 'No payment records are linked to this account yet.', p => customerPortalPaymentRow(p, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Documents & receipts</h2></div>' + portalReceiptForm + portalStatementForm + portalDocumentForm + '<div class="customer-list">' + customerPortalList(state.documents, 'No customer-visible documents or receipts are linked to this account yet.', d => customerPortalDocumentRow(d, vehicleTitle)) + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Service</h2></div>' + portalServiceForm + '<div class="customer-list">' + customerPortalList(state.maintenance, 'No service reminders are linked to this account yet.', m => customerPortalServiceRow(m, vehicleTitle, vehicle, summary)) + '</div></article><article class="customer-panel"><div class="section-head"><h2>Claims, tolls & issues</h2></div>' + portalIssueForm + '<div class="customer-list">' + customerPortalList(state.claims, 'No open tolls, claims, or issues are linked to this account.', c => '<div class="customer-row"><div><strong>' + escapeHtml(c.type || 'Issue') + '</strong><small>' + escapeHtml([c.status || 'Open', c.vehicle || vehicleTitle, c.provider || c.agency || ''].filter(Boolean).join(' - ')) + '</small></div><b>' + moneyText(c.amount || 0) + '</b></div>') + '</div></article></section><section class="customer-grid"><article class="customer-panel"><div class="section-head"><h2>Messages</h2></div>' + portalMessageForm + '<div class="customer-list">' + customerPortalList(state.messages, 'No messages are linked to this account yet.', m => '<div class="customer-row"><div><strong>' + escapeHtml(m.direction || m.status || 'Message') + '</strong><small>' + escapeHtml([m.channel || 'Message', m.date || m.createdAt || ''].filter(Boolean).join(' - ')) + '</small><p>' + escapeHtml(m.body || m.subject || '') + '</p></div></div>') + '</div></article></section></main><script src="/customer-portal.js?v=focused-workspaces-3"></script></body></html>';
+}
+function customerPortalAssistanceHtml(html, customerUser = {}) {
+  if (!customerUser.assistedByOwner) return html;
+  const banner = '<aside class="customer-assistance-banner" role="status"><div><strong>Owner assistance mode</strong><span>You are viewing ' + escapeHtml(customerUser.name || customerUser.customer || 'this customer') + '\'s portal for support. This session expires in 15 minutes and the access is audited.</span></div><a class="btn primary" href="/customer/assist/end">Return to admin</a></aside>';
+  return html.replace('<main class="customer-portal">', '<main class="customer-portal">' + banner);
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
 customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
@@ -13056,6 +13070,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/customer/forgot/code', 'Enter an account-bound customer recovery code'),
     route('POST', '/customer/forgot/verify', 'Verify customer recovery code and reset one account'),
     route('GET', '/customer', 'Customer self-service portal'),
+    route('POST', '/api/customer-accounts/assist', 'Open an audited owner-only customer assistance session'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
     route('POST', '/customer/receipt-request', 'Customer portal receipt request'),
     route('POST', '/customer/paid-outside', 'Customer portal paid-outside-app report'),
@@ -22929,9 +22944,13 @@ const server = http.createServer(async (req, res) => {
       await clearLoginFailure(loginThrottleKey(req, 'customer', username));
       return send(res, 200, customerLoginPage('Password reset complete. Sign in with the same username and your new password.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
+    if (url.pathname === '/customer/assist/end') {
+      return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/' });
+    }
     if (url.pathname === '/customer/logout') {
       const returnPath = safeCustomerLoginReturn(url.searchParams.get('next') || '');
-      return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: returnPath || '/customer/login' });
+      const assisted = !!(customerSessionUser(req) || {}).assistedByOwner;
+      return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: assisted ? '/' : (returnPath || '/customer/login') });
     }
     if (url.pathname === '/customer/message' && req.method === 'POST') {
       const wantsJson = /application\/json/i.test(String(req.headers['content-type'] || '')) || /application\/json/i.test(String(req.headers.accept || ''));
@@ -23809,7 +23828,8 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      return send(res, 200, customerPortalHtml(account, customerPortalState(data, account)), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      const portalHtml = customerPortalAssistanceHtml(customerPortalHtml(account, customerPortalState(data, account)), customerUser);
+      return send(res, 200, portalHtml, 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/api/customer/portal-state' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -26654,6 +26674,24 @@ const server = http.createServer(async (req, res) => {
       delete safeStaff.passwordSalt;
       delete safeStaff.loginSecurity;
       return json(res, 200, { ok: true, staff: safeStaff });
+    }
+    if (url.pathname === '/api/customer-accounts/assist' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can open a customer assistance session.' });
+      const payload = await readJsonBody(req);
+      const data = await readData();
+      const account = (data.customerAccounts || []).find(item => String(item.id || '') === String(payload.id || ''));
+      if (!account) return json(res, 404, { ok: false, error: 'That customer portal account was not found.' });
+      if (!staffStatusActive(account)) return json(res, 409, { ok: false, error: 'Activate this customer account before opening assistance mode.' });
+      if (!account.passwordHash || !account.passwordSalt) return json(res, 409, { ok: false, error: 'Set or reset this customer password first so the portal has a revocable credential.' });
+      appendAuditLog(data, user, 'Customer portal assistance started', [account.customer || account.name || account.username, account.id, '15 minute owner assistance session', 'Existing password was not exposed']);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true });
+      await writeData(data);
+      return json(res, 200, {
+        ok: true,
+        url: '/customer',
+        expiresInMinutes: 15,
+        account: safeCustomerAccount(account)
+      }, { 'Set-Cookie': sessionSetCookie('woa_customer_session', ownerAssistanceCustomerCookie(account, user), { maxAge: 15 * 60 }) });
     }
     if (url.pathname === '/api/customer-accounts' && req.method === 'POST') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner admin can manage customer logins.' });

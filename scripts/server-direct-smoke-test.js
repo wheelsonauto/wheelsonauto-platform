@@ -1688,6 +1688,25 @@ async function main() {
     assert(cleanPortalState.status === 200 && cleanPortalState.json.ok, 'Customer portal state should load immediately after login creation.');
     assert(String(cleanPortalState.json.portal.summary.vehicle || '').trim().toLowerCase() !== 'alicia brown', 'A missing vehicle must not inherit the customer name as a fake car title.');
 
+    const assistedCustomer = await request(server, 'POST', '/api/customer-accounts/assist', {
+      cookie: ownerCookie,
+      json: { id: 'direct-customer-login' }
+    });
+    assert(assistedCustomer.status === 200 && assistedCustomer.json.ok, 'Owner should be able to open customer assistance mode.');
+    assert(assistedCustomer.json.expiresInMinutes === 15 && assistedCustomer.json.url === '/customer', 'Customer assistance must be short-lived and return the customer portal destination.');
+    assert(!assistedCustomer.json.account.passwordHash && !assistedCustomer.json.account.passwordSalt, 'Customer assistance must never expose password material.');
+    assert(String(assistedCustomer.cookie).includes('woa_customer_session=v2.customer.'), 'Customer assistance should use a separate signed customer session.');
+    assertSecureCookie(assistedCustomer.cookie, 'Customer assistance');
+    assert(String(assistedCustomer.cookie).includes('Max-Age=900'), 'Customer assistance browser cookie should expire after 15 minutes.');
+    const assistanceCookie = cleanCookie(assistedCustomer.cookie);
+    const assistedPortal = await request(server, 'GET', '/customer', { cookie: assistanceCookie });
+    assert(assistedPortal.status === 200 && assistedPortal.text.includes('Owner assistance mode') && assistedPortal.text.includes('Return to admin') && assistedPortal.text.includes('Alicia'), 'Assistance mode should clearly identify the exact customer and provide a return action.');
+    const assistedState = await request(server, 'GET', '/api/customer/portal-state', { cookie: assistanceCookie });
+    assert(assistedState.status === 200 && assistedState.json.ok && assistedState.json.portal.account.id === 'direct-customer-login', 'Assistance mode must stay scoped to the selected customer account.');
+    const endAssistance = await request(server, 'GET', '/customer/assist/end', { cookie: assistanceCookie });
+    assert(endAssistance.status === 302 && endAssistance.location === '/', 'Ending customer assistance should return the owner to the admin platform.');
+    assertSecureCookie(endAssistance.cookie, 'Customer assistance end', { clear: true });
+
     const duplicateCustomerLogin = await request(server, 'POST', '/api/customer-accounts', {
       cookie: ownerCookie,
       json: {
@@ -1941,6 +1960,8 @@ async function main() {
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const managerCustomerAssistance = await request(server, 'POST', '/api/customer-accounts/assist', { cookie: managerCookie, json: { id: 'direct-customer-login' } });
+    assert(managerCustomerAssistance.status === 403, 'Manager must not be able to impersonate a customer account.');
     const managerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: managerCookie, json: {} });
     assert(managerStorageValidation.status === 403, 'Manager must not validate the private production document-storage provider.');
     const managerStateBackup = await request(server, 'POST', '/api/system/infrastructure/state-backup/create', { cookie: managerCookie, json: {} });

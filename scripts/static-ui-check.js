@@ -473,6 +473,8 @@ assertIncludes('Auto refresh modal guard', app, ["if(modal&&modal.style.display=
 assertIncludes('Post-save refresh wrapper', app, ['var __wheelsonBaseSave=save', 'reconcileFleetCustomerLinks()', 'if(ok)await refreshData(true)']);
 assertIncludes('Provider-specific API handoff guidance', app, ['apiProviderGuidancePanel', 'Proof before connected', '10DLC approval', 'OpenAI API key and usable API credit', 'signed payment event', 'apiProviderStatusControl(p)', 'Calculated from live credentials']);
 assertIncludes('Stripe pilot owner review task UI', app, ['openStripePilotReviewTasks', 'Stripe pilot approval', 'review-stripe-pilot-task', '/api/system/infrastructure/preflight', 'liveLaunchPreflightModal(result)', 'Review evidence']);
+assertIncludes('Owner customer account assistance UI', app, ['Customer accounts', 'assist-customer-login', '/api/customer-accounts/assist', 'Assist as customer', 'window.location.assign']);
+assertIncludes('Owner customer account assistance server', server, ['ownerAssistanceCustomerCookie', 'Customer portal assistance started', '/customer/assist/end', 'Only the owner admin can open a customer assistance session.', '15 * 60']);
 
 const criticalActionRequirements = [
   ['Vehicle save flow', 'save-vehicle', ['clearVehicleFromCustomerRecords', 'syncVehicleCustomerAssignment', 'await save()', 'closeModal()', "view='Operations'"]],
@@ -480,6 +482,7 @@ const criticalActionRequirements = [
   ['Message send flow', 'send-message-now', ['/api/messages/send', 'channel:val', 'await refreshData(true)', 'closeModal()', "view='Messages'"]],
   ['Thread reply send flow', 'send-thread-message', ['/api/messages/send', 'threadMessageBody', 'messageThreadKey', "tab='Inbox'", "view='Messages'"]],
   ['Customer portal login save flow', 'save-customer-login', ['/api/customer-accounts', 'customerLoginName', 'await refreshData(true)', 'closeModal()', 'Settings()']],
+  ['Customer portal assistance flow', 'assist-customer-login', ['/api/customer-accounts/assist', 'Only the owner can open customer assistance mode', 'window.location.assign']],
   ['Customer portal draft creation flow', 'create-missing-customer-logins', ['/api/customer-accounts/create-missing-drafts', 'await refreshData(true)', 'portal draft']],
   ['Company account save flow', 'save-org', ['/api/organizations', 'await refreshData(true)', 'closeModal()', 'Organizations()']],
   ['Company subscription save flow', 'save-company-subscription', ['/api/billing/subscriptions', 'organizationId:button.dataset.id', 'await refreshData(true)', 'closeModal()', 'Organizations()']],
