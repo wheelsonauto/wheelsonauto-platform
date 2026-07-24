@@ -189,6 +189,24 @@ function migrationRecord(row = {}) {
   return {
     state,
     history: Array.isArray(source.history) ? source.history.slice(-30) : [],
+    closedCutovers: Array.isArray(source.closedCutovers) ? source.closedCutovers.slice(-10).map(record => ({
+      state: text(record && record.state),
+      cutoverDate: validDateKey(record && record.cutoverDate),
+      scheduledCloverSubscriptionId: text(record && record.scheduledCloverSubscriptionId),
+      cloverStoppedConfirmedAt: text(record && record.cloverStoppedConfirmedAt),
+      cloverStoppedConfirmedBy: text(record && record.cloverStoppedConfirmedBy),
+      firstStripeChargeAt: text(record && record.firstStripeChargeAt),
+      firstStripePaymentIntentId: text(record && record.firstStripePaymentIntentId),
+      firstStripeChargeFailedAt: text(record && record.firstStripeChargeFailedAt),
+      firstStripeChargeFailureCount: Math.max(0, Number(record && record.firstStripeChargeFailureCount || 0) || 0),
+      firstStripeChargeFailureIntentId: text(record && record.firstStripeChargeFailureIntentId),
+      firstStripeChargeFailureError: text(record && record.firstStripeChargeFailureError).slice(0, 500),
+      cloverDisabledAt: text(record && record.cloverDisabledAt),
+      cloverDisabledBy: text(record && record.cloverDisabledBy),
+      stripeStoppedConfirmedAt: text(record && record.stripeStoppedConfirmedAt),
+      rolledBackAt: text(record && record.rolledBackAt),
+      rolledBackBy: text(record && record.rolledBackBy)
+    })) : [],
     setupSentAt: text(source.setupSentAt || row.stripeSetupSentAt),
     cardSavedAt: text(source.cardSavedAt || row.stripeCardSavedAt),
     cutoverDate: validDateKey(source.cutoverDate || row.stripeCutoverDate),
@@ -562,15 +580,53 @@ function rollbackToClover(row = {}, details = {}) {
     by: text(details.by),
     note: text(details.note || 'Protected Stripe cutover cancelled; Clover remains active.').slice(0, 500)
   };
+  const cutoverWasStarted = !!(
+    current.cutoverDate
+    || current.cutoverScheduledAt
+    || current.cloverStoppedConfirmedAt
+    || current.firstStripeChargeAt
+    || current.firstStripeChargeFailedAt
+    || current.cloverDisabledAt
+  );
+  const closedCutovers = current.closedCutovers.slice(-9);
+  if (cutoverWasStarted) {
+    closedCutovers.push({
+      state: current.state,
+      cutoverDate: current.cutoverDate,
+      scheduledCloverSubscriptionId: current.scheduledCloverSubscriptionId,
+      cloverStoppedConfirmedAt: current.cloverStoppedConfirmedAt,
+      cloverStoppedConfirmedBy: current.cloverStoppedConfirmedBy,
+      firstStripeChargeAt: current.firstStripeChargeAt,
+      firstStripePaymentIntentId: current.firstStripePaymentIntentId,
+      firstStripeChargeFailedAt: current.firstStripeChargeFailedAt,
+      firstStripeChargeFailureCount: current.firstStripeChargeFailureCount,
+      firstStripeChargeFailureIntentId: current.firstStripeChargeFailureIntentId,
+      firstStripeChargeFailureError: current.firstStripeChargeFailureError,
+      cloverDisabledAt: current.cloverDisabledAt,
+      cloverDisabledBy: current.cloverDisabledBy,
+      stripeStoppedConfirmedAt: text(details.stripeStoppedConfirmedAt),
+      rolledBackAt: now,
+      rolledBackBy: text(details.by)
+    });
+  }
   return {
     ...current,
     state,
     history: current.history.concat(entry).slice(-30),
+    closedCutovers,
     cutoverDate: '',
     cutoverScheduledAt: '',
     scheduledCloverSubscriptionId: '',
     cloverStoppedConfirmedAt: '',
     cloverStoppedConfirmedBy: '',
+    firstStripeChargeAt: '',
+    firstStripePaymentIntentId: '',
+    firstStripeChargeFailedAt: '',
+    firstStripeChargeFailureCount: 0,
+    firstStripeChargeFailureIntentId: '',
+    firstStripeChargeFailureError: '',
+    cloverDisabledAt: '',
+    cloverDisabledBy: '',
     updatedAt: now
   };
 }

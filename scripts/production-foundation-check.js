@@ -1240,6 +1240,15 @@ async function main() {
     });
     assert.strictEqual(rolledBack.state, stripeMigration.STATES.STRIPE_CARD_SAVED, 'A confirmed return to Clover must preserve the saved Stripe card without leaving an active cutover.');
     assert.strictEqual(rolledBack.cutoverDate, '', 'A confirmed return to Clover must clear the active cutover date.');
+    assert.strictEqual(rolledBack.firstStripeChargeAt, '', 'A confirmed return to Clover must not leave the prior first Stripe charge attached to a future cutover cycle.');
+    assert.strictEqual(rolledBack.firstStripePaymentIntentId, '', 'A confirmed return to Clover must clear the prior active-cycle PaymentIntent reference.');
+    assert.strictEqual(rolledBack.cloverDisabledAt, '', 'A confirmed return to Clover must not keep showing Clover as disabled in the active migration cycle.');
+    assert.strictEqual(rolledBack.closedCutovers.length, 1, 'A confirmed return to Clover must archive the completed cutover before clearing active fields.');
+    assert.strictEqual(rolledBack.closedCutovers[0].firstStripePaymentIntentId, 'pi-foundation-first-charge', 'The closed cutover audit must preserve its exact first Stripe PaymentIntent.');
+    assert.strictEqual(rolledBack.closedCutovers[0].scheduledCloverSubscriptionId, 'clover-sub-foundation', 'The closed cutover audit must preserve its exact Clover subscription binding.');
+    assert.strictEqual(rolledBack.closedCutovers[0].rolledBackBy, 'Foundation owner', 'The closed cutover audit must preserve the owner who confirmed the rollback.');
+    const restartedRollback = stripeMigration.migrationRecord({ ...recurring, paymentProvider: 'clover', stripeMigration: rolledBack });
+    assert.deepStrictEqual(restartedRollback.closedCutovers, rolledBack.closedCutovers, 'Closed cutover evidence must survive a server restart without reactivating stale migration fields.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { state: stripeMigration.STATES.CLOVER_ACTIVE } }, 'stripe', '2026-07-24'), false, 'An inconsistent Stripe-provider row that is still Clover-active must fail closed.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'clover', stripeMigration: { state: stripeMigration.STATES.CLOVER_DISABLED } }, 'clover', '2026-07-24'), false, 'An inconsistent Clover-provider row marked Clover-disabled must fail closed.');
     assert.strictEqual(stripeMigration.automaticChargeAllowed({ ...recurring, paymentProvider: 'stripe', stripeMigration: { state: stripeMigration.STATES.STRIPE_ACTIVE } }, 'stripe', '2026-07-24'), true, 'A consistent Stripe-active row may use Stripe autopay.');
