@@ -1684,9 +1684,31 @@ async function main() {
     assert(!customerLogin.json.account.passwordHash && !customerLogin.json.account.passwordSalt, 'Customer login API should not expose password secrets.');
     assert(customerLogin.json.account.contractId || customerLogin.json.account.customerId || customerLogin.json.account.vehicleId || customerLogin.json.account.recurringPaymentId, 'Customer login should auto-link to an existing customer file, vehicle, contract, or autopay record.');
     const cleanPortalLogin = await request(server, 'POST', '/customer/login', { form: { username: 'direct-customer', password: 'DirectCustomer123!' } });
-    const cleanPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(cleanPortalLogin.cookie) });
+    const cleanPortalCookie = cleanCookie(cleanPortalLogin.cookie);
+    const cleanPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanPortalCookie });
     assert(cleanPortalState.status === 200 && cleanPortalState.json.ok, 'Customer portal state should load immediately after login creation.');
     assert(String(cleanPortalState.json.portal.summary.vehicle || '').trim().toLowerCase() !== 'alicia brown', 'A missing vehicle must not inherit the customer name as a fake car title.');
+
+    const staffToCustomerNotice = await request(server, 'POST', '/api/messages/send', {
+      cookie: ownerCookie,
+      json: { channel: 'Customer portal', customerAccountId: 'direct-customer-login', customer: 'Alicia Brown', body: 'Your WheelsonAuto app notification test is ready.' }
+    });
+    assert(staffToCustomerNotice.status === 200 && staffToCustomerNotice.json.ok, 'Staff customer-app message should be delivered before notification checks.');
+    const customerNotifications = await request(server, 'GET', '/api/customer/notifications', { cookie: cleanPortalCookie });
+    assert(customerNotifications.status === 200 && customerNotifications.json.ok && customerNotifications.json.unreadCount >= 1, 'Customer app notification inbox should surface a new staff message.');
+    const customerMessageNotice = customerNotifications.json.notifications.find(row => row.type === 'message' && /WheelsonAuto/.test(row.title || ''));
+    assert(customerMessageNotice && customerMessageNotice.url === '/customer#portal-messages', 'Customer message notification should open the customer message workspace.');
+    const customerNoticeRead = await request(server, 'POST', '/api/customer/notifications/read', { cookie: cleanPortalCookie, json: { ids: [customerMessageNotice.id] } });
+    assert(customerNoticeRead.status === 200 && customerNoticeRead.json.notifications.find(row => row.id === customerMessageNotice.id && row.read === true), 'Customer should be able to mark only the selected app notification read.');
+    const customerToStaffNotice = await request(server, 'POST', '/customer/message', { cookie: cleanPortalCookie, json: { body: 'I am replying through the customer app notification test.' } });
+    assert(customerToStaffNotice.status === 201 && customerToStaffNotice.json.ok, 'Customer reply should be recorded before staff notification checks.');
+    const staffNotifications = await request(server, 'GET', '/api/app-notifications', { cookie: ownerCookie });
+    assert(staffNotifications.status === 200 && staffNotifications.json.ok && staffNotifications.json.notifications.some(row => row.type === 'message' && /Alicia/.test(row.title || '')), 'Owner app notification inbox should surface a new customer reply.');
+    const staffMessageNotice = staffNotifications.json.notifications.find(row => row.type === 'message' && /Alicia/.test(row.title || ''));
+    const staffNoticeRead = await request(server, 'POST', '/api/app-notifications/read', { cookie: ownerCookie, json: { ids: [staffMessageNotice.id] } });
+    assert(staffNoticeRead.status === 200 && staffNoticeRead.json.notifications.find(row => row.id === staffMessageNotice.id && row.read === true), 'Staff should be able to mark only the selected app notification read.');
+    const notificationSafeState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(notificationSafeState.status === 200 && !Object.prototype.hasOwnProperty.call(notificationSafeState.json, 'appNotificationReceipts'), 'Private app notification read receipts must not be exposed in general browser state.');
 
     const assistedCustomer = await request(server, 'POST', '/api/customer-accounts/assist', {
       cookie: ownerCookie,
@@ -1959,7 +1981,11 @@ async function main() {
     assert(franchiseReadiness.json.records.vehicles === 1 && franchiseReadiness.json.records.customerAccounts === 1, 'Franchise manager readiness should only count scoped franchise fleet and customer portal records.');
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
+    const mechanicNotifications = await request(server, 'GET', '/api/app-notifications', { cookie: mechanicCookie });
+    assert(mechanicNotifications.status === 200 && mechanicNotifications.json.ok && mechanicNotifications.json.notifications.every(row => row.type === 'service'), 'Mechanic app notifications must stay limited to service work.');
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const managerNotifications = await request(server, 'GET', '/api/app-notifications', { cookie: managerCookie });
+    assert(managerNotifications.status === 200 && managerNotifications.json.ok && managerNotifications.json.notifications.every(row => row.type !== 'payment'), 'Manager app notifications must not expose owner payment alerts.');
     const managerCustomerAssistance = await request(server, 'POST', '/api/customer-accounts/assist', { cookie: managerCookie, json: { id: 'direct-customer-login' } });
     assert(managerCustomerAssistance.status === 403, 'Manager must not be able to impersonate a customer account.');
     const managerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: managerCookie, json: {} });

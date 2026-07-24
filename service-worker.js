@@ -1,6 +1,6 @@
 'use strict';
 
-const SHELL_CACHE = 'wheelsonauto-customer-shell-v2';
+const SHELL_CACHE = 'wheelsonauto-customer-shell-v7';
 const SHELL_ASSETS = [
   '/styles.css',
   '/customer-portal.js',
@@ -45,4 +45,14 @@ self.addEventListener('fetch', event => {
       return cached || fresh;
     })
   );
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const target = new URL(event.notification.data && event.notification.data.url || '/customer', self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => {
+    const existing = windows.find(client => client.url.startsWith(self.location.origin + '/customer'));
+    if (existing) return existing.navigate(target).then(() => existing.focus());
+    return self.clients.openWindow(target);
+  }));
 });

@@ -1,6 +1,6 @@
 'use strict';
 
-const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v2';
+const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v7';
 const STAFF_SHELL_ASSETS = [
   '/styles.css',
   '/app.js',
@@ -36,4 +36,14 @@ self.addEventListener('fetch', event => {
       })
       .catch(() => caches.match(event.request))
   );
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const target = new URL(event.notification.data && event.notification.data.url || '/', self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => {
+    const existing = windows.find(client => client.url.startsWith(self.location.origin));
+    if (existing) return existing.navigate(target).then(() => existing.focus());
+    return self.clients.openWindow(target);
+  }));
 });

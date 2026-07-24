@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-access-tools-335';
+const ASSET_VERSION = 'platform-20260723-app-alerts-340';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -8769,6 +8769,7 @@ function stateForUserWrite(current, incoming, user) {
     ['subscriptions', 'billingInvoices', 'billingEvents'].forEach(key => {
       next[key] = Array.isArray(current[key]) ? current[key] : [];
     });
+    next.appNotificationReceipts = Array.isArray(current.appNotificationReceipts) ? current.appNotificationReceipts : [];
     next.documents = preserveRedactedDocumentMetadata(current.documents, next.documents);
     next.eSignatures = preserveRedactedDocumentMetadata(current.eSignatures, next.eSignatures);
     return inheritStateReadMeta(next, current);
@@ -9045,6 +9046,7 @@ function preserveServerOnlyIntegrationProofs(current, incoming) {
 }
 function redactStaffSecrets(data) {
   const safe = JSON.parse(JSON.stringify(compactLargeNotesForClient(data || {})));
+  delete safe.appNotificationReceipts;
   if (Array.isArray(safe.messages)) {
     safe.messages = safe.messages.map(record => {
       const clean = { ...(record || {}) };
@@ -10035,6 +10037,106 @@ function customerPortalState(data, account) {
     cardSetupRequests: cardSetupRequests.map(stripPrivateCustomerFields),
     generatedAt: new Date().toISOString()
   };
+}
+function appNotificationTime(row = {}) {
+  const raw = row.updatedAt || row.createdAt || row.submittedAt || row.paidAt || row.failedAt || row.completedAt || row.date || row.due || row.nextDue || '';
+  const value = Date.parse(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+function appNotificationId(type, row = {}, state = '') {
+  const source = [type, row.id || row.externalId || row.providerPaymentId || row.customer || row.name || '', state || row.status || row.stage || '', row.updatedAt || row.createdAt || row.date || row.due || ''].join('|');
+  return 'notice-' + crypto.createHash('sha256').update(source).digest('hex').slice(0, 22);
+}
+function appNotificationItem(type, row, title, body, options = {}) {
+  const time = Number(options.time || appNotificationTime(row) || 0);
+  return {
+    id: appNotificationId(type, row, options.state || ''),
+    type,
+    tone: options.tone || 'blue',
+    title: String(title || 'WheelsonAuto update').slice(0, 100),
+    body: String(body || '').replace(/\s+/g, ' ').trim().slice(0, 220),
+    at: time ? new Date(time).toISOString() : '',
+    view: options.view || '',
+    tab: options.tab || '',
+    url: options.url || '/'
+  };
+}
+function recentAppNotification(row, days = 30) {
+  const time = appNotificationTime(row);
+  return time > 0 && time >= Date.now() - Number(days || 30) * 86400000;
+}
+function appNotificationSortLimit(rows = [], limit = 60) {
+  const byId = new Map();
+  rows.filter(Boolean).forEach(row => { if (!byId.has(row.id)) byId.set(row.id, row); });
+  return Array.from(byId.values()).sort((a, b) => Date.parse(b.at || 0) - Date.parse(a.at || 0)).slice(0, limit);
+}
+function staffAppNotifications(data, user) {
+  const scoped = isOwnerUser(user) ? data : dataScopedToOrganization(data, userOrganizationId(user));
+  const role = String(user && user.role || '').toLowerCase();
+  const notices = [];
+  (scoped.maintenance || []).filter(row => recentAppNotification(row, 45) && !/complete|closed|fixed/i.test(String(row.status || ''))).forEach(row => {
+    notices.push(appNotificationItem('service', row, 'Service attention needed', [row.vehicle || 'Vehicle', row.issue || row.type || 'Maintenance', row.customer || ''].filter(Boolean).join(' - '), { tone: 'warn', view: 'Operations', tab: 'Service' }));
+  });
+  if (role === 'mechanic') return appNotificationSortLimit(notices);
+  (scoped.messages || []).filter(row => recentAppNotification(row, 30) && /inbound|customer action/i.test(String(row.direction || ''))).forEach(row => {
+    notices.push(appNotificationItem('message', row, 'New message from ' + (row.customer || 'customer'), row.body || row.subject || 'Open the conversation to reply.', { tone: 'blue', view: 'Messages', tab: 'Inbox' }));
+  });
+  (scoped.applications || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
+    const stage = row.stage || row.status || 'New';
+    notices.push(appNotificationItem('application', row, stage === 'New' ? 'New application' : 'Application updated', [row.name || 'Applicant', row.vehicle || 'No vehicle selected', stage].filter(Boolean).join(' - '), { tone: /paid|approved|scheduled/i.test(stage) ? 'good' : 'warn', view: 'Applications' }));
+  });
+  (scoped.claims || []).filter(row => recentAppNotification(row, 45) && !/closed|paid|resolved/i.test(String(row.status || ''))).forEach(row => {
+    notices.push(appNotificationItem('claim', row, 'Claim or issue needs review', [row.customer || 'Customer', row.type || 'Issue', row.status || 'Open'].join(' - '), { tone: 'warn', view: 'Operations', tab: 'Claims' }));
+  });
+  if (isOwnerUser(user)) {
+    (scoped.payments || []).filter(row => recentAppNotification(row, 21) && /paid|fail|declin|not found|pending/i.test(String(row.status || ''))).forEach(row => {
+      const paid = /paid|succeeded|complete/i.test(String(row.status || ''));
+      notices.push(appNotificationItem('payment', row, paid ? 'Payment received' : 'Payment needs attention', [row.customer || row.customerName || 'Customer', moneyText(row.amount || 0), row.status || 'Payment update'].join(' - '), { tone: paid ? 'good' : 'bad', view: 'Payments', tab: paid ? 'Transactions' : 'Today' }));
+    });
+  }
+  return appNotificationSortLimit(notices);
+}
+function customerAppNotifications(data, account) {
+  const portal = customerPortalState(data, account);
+  const notices = [];
+  (portal.messages || []).filter(row => recentAppNotification(row, 30) && /outbound|staff|wheelsonauto/i.test(String(row.direction || 'Outbound'))).forEach(row => {
+    notices.push(appNotificationItem('message', row, 'New message from WheelsonAuto', row.body || row.subject || 'Open your messages to read the update.', { tone: 'blue', url: '/customer#portal-messages' }));
+  });
+  (portal.payments || []).filter(row => recentAppNotification(row, 21) && /paid|fail|declin|not found|pending/i.test(String(row.status || ''))).forEach(row => {
+    const paid = /paid|succeeded|complete/i.test(String(row.status || ''));
+    notices.push(appNotificationItem('payment', row, paid ? 'Payment received' : 'Payment update', [moneyText(row.amount || 0), row.status || 'Updated'].join(' - '), { tone: paid ? 'good' : 'warn', url: '/customer#portal-payments' }));
+  });
+  (portal.applications || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
+    const stage = row.stage || row.status || 'Submitted';
+    notices.push(appNotificationItem('application', row, 'Application ' + String(stage).toLowerCase(), row.vehicle || 'Open your account for the latest application step.', { tone: /approved|paid|scheduled/i.test(stage) ? 'good' : 'warn', url: '/customer#portal-apply' }));
+  });
+  (portal.maintenance || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
+    notices.push(appNotificationItem('service', row, 'Service update', [row.vehicle || portal.summary && portal.summary.vehicle || 'Vehicle', row.issue || row.type || row.status || 'Maintenance'].join(' - '), { tone: /complete|fixed/i.test(String(row.status || '')) ? 'good' : 'warn', url: '/customer#portal-service' }));
+  });
+  return appNotificationSortLimit(notices);
+}
+function appNotificationPrincipal(type, account) {
+  return String(account && (account.id || account.username || account.email || account.name) || '').trim();
+}
+function appNotificationReadSet(data, principalType, principalId) {
+  return new Set((data.appNotificationReceipts || []).filter(row => row.principalType === principalType && row.principalId === principalId).map(row => row.notificationId));
+}
+function appNotificationEnvelope(data, principalType, principalId, notices) {
+  const read = appNotificationReadSet(data, principalType, principalId);
+  const notifications = notices.map(row => ({ ...row, read: read.has(row.id) }));
+  return { notifications, unreadCount: notifications.filter(row => !row.read).length, generatedAt: new Date().toISOString() };
+}
+function markAppNotificationsRead(data, principalType, principalId, ids = []) {
+  const cleanIds = Array.from(new Set((ids || []).map(value => String(value || '').trim()).filter(Boolean))).slice(0, 100);
+  data.appNotificationReceipts = Array.isArray(data.appNotificationReceipts) ? data.appNotificationReceipts : [];
+  const existing = appNotificationReadSet(data, principalType, principalId);
+  cleanIds.forEach(notificationId => {
+    if (existing.has(notificationId)) return;
+    data.appNotificationReceipts.push({ id: crypto.randomUUID(), principalType, principalId, notificationId, readAt: new Date().toISOString() });
+    existing.add(notificationId);
+  });
+  if (data.appNotificationReceipts.length > 5000) data.appNotificationReceipts = data.appNotificationReceipts.slice(-5000);
+  return cleanIds.length;
 }
 const __woaCustomerPortalHtmlBase = customerPortalHtml;
 customerPortalHtml = function customerPortalHtmlWithCardSetup(account, state) {
@@ -13079,6 +13181,10 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/customer/document-update', 'Customer portal document and verification update'),
     route('POST', '/customer/card-change', 'Customer portal card-on-file change request'),
     route('GET', '/api/customer/portal-state', 'Customer-only account state'),
+    route('GET', '/api/customer/notifications', 'Customer app notification inbox'),
+    route('POST', '/api/customer/notifications/read', 'Mark exact customer app notifications read'),
+    route('GET', '/api/app-notifications', 'Role-scoped staff app notification inbox'),
+    route('POST', '/api/app-notifications/read', 'Mark exact staff app notifications read'),
     route('POST', '/api/customer-accounts', 'Owner-managed customer logins'),
     route('POST', '/api/customer-accounts/create-missing-drafts', 'Owner-created draft customer portal logins'),
     route('POST', '/api/organizations', 'Owner-managed company/store/franchise accounts'),
@@ -23839,6 +23945,23 @@ const server = http.createServer(async (req, res) => {
       if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
       return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
     }
+    if ((url.pathname === '/api/customer/notifications' && req.method === 'GET') || (url.pathname === '/api/customer/notifications/read' && req.method === 'POST')) {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return json(res, 401, { ok: false, error: 'Customer login required.' });
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
+      const principalId = appNotificationPrincipal('customer', account);
+      const notices = customerAppNotifications(data, account);
+      if (req.method === 'POST') {
+        const payload = await readJsonBody(req);
+        const ids = payload.all === true ? notices.map(row => row.id) : payload.ids;
+        markAppNotificationsRead(data, 'customer', principalId, ids);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'mark customer app notifications read' });
+        await writeData(data);
+      }
+      return json(res, 200, { ok: true, ...appNotificationEnvelope(data, 'customer', principalId, notices) }, { 'Cache-Control': 'private, no-store' });
+    }
     if (url.pathname === '/forgot' && req.method === 'GET') {
       const username = String(url.searchParams.get('username') || '');
       const message = url.searchParams.get('locked') === '1' ? 'This account is locked after five failed attempts. Email recovery is required.' : '';
@@ -23970,6 +24093,19 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, loginPage('', await readData()));
     }
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
+    if ((url.pathname === '/api/app-notifications' && req.method === 'GET') || (url.pathname === '/api/app-notifications/read' && req.method === 'POST')) {
+      const data = await readData();
+      const principalId = appNotificationPrincipal('staff', user);
+      const notices = staffAppNotifications(data, user);
+      if (req.method === 'POST') {
+        const payload = await readJsonBody(req);
+        const ids = payload.all === true ? notices.map(row => row.id) : payload.ids;
+        markAppNotificationsRead(data, 'staff', principalId, ids);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'mark staff app notifications read' });
+        await writeData(data);
+      }
+      return json(res, 200, { ok: true, ...appNotificationEnvelope(data, 'staff', principalId, notices) }, { 'Cache-Control': 'private, no-store' });
+    }
     if (url.pathname === '/api/integrations/clover/reconciliation' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view Clover reconciliation controls.' });
       const data = await readData();

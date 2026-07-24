@@ -221,7 +221,7 @@
     var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
     var ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
     if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-      navigator.serviceWorker.register('/service-worker.js', { scope: '/customer' }).catch(function () {});
+      navigator.serviceWorker.register('/service-worker.js', { scope: '/customer', updateViaCache: 'none' }).catch(function () {});
     }
     if (!installButton || standalone) return;
     window.addEventListener('beforeinstallprompt', function (event) {
@@ -246,9 +246,108 @@
     window.addEventListener('appinstalled', function () { installButton.hidden = true; });
   }
 
+  function setupCustomerNotifications() {
+    var host = document.querySelector('.customer-account-actions') || document.querySelector('.customer-hero');
+    if (!host) return;
+    var rows = [];
+    var unread = 0;
+    var initialized = false;
+    var storageKey = 'woa-customer-device-notification-ids';
+    var center = document.createElement('div');
+    center.className = 'app-notification-center customer-notification-center';
+    center.innerHTML = '<button type="button" class="app-notification-bell" data-customer-notification-toggle aria-label="Open app notifications" aria-expanded="false"><span class="app-notification-bell-mark" aria-hidden="true"></span><span class="app-notification-bell-label">Alerts</span><b data-customer-notification-count hidden></b></button><aside class="app-notification-panel" data-customer-notification-panel hidden><header><div><strong>Notifications</strong><small>Messages, payments, application, and service updates</small></div><button type="button" class="app-notification-close" data-customer-notification-close>Close</button></header><div class="app-notification-tools"><button type="button" data-customer-notification-enable>Enable device alerts</button><button type="button" data-customer-notification-read-all>Mark all read</button></div><div class="app-notification-list" data-customer-notification-list></div></aside>';
+    host.prepend(center);
+
+    function html(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, function (character) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]; });
+    }
+    function time(value) {
+      var date = new Date(value || 0);
+      return isNaN(date.getTime()) ? '' : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+    function seen() {
+      try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch (error) { return []; }
+    }
+    function saveSeen(ids) {
+      try { localStorage.setItem(storageKey, JSON.stringify(Array.from(new Set(ids)).slice(-160))); } catch (error) {}
+    }
+    function render() {
+      var count = center.querySelector('[data-customer-notification-count]');
+      count.textContent = unread > 99 ? '99+' : String(unread || '');
+      count.hidden = unread < 1;
+      center.querySelector('[data-customer-notification-list]').innerHTML = rows.length ? rows.map(function (item) {
+        return '<button type="button" class="app-notification-item ' + (item.read ? 'read' : 'unread') + ' ' + html(item.tone || 'blue') + '" data-customer-notification-id="' + html(item.id) + '"><span class="app-notification-status"></span><span><strong>' + html(item.title) + '</strong><small>' + html(item.body) + '</small><time>' + html(time(item.at)) + '</time></span></button>';
+      }).join('') : '<div class="app-notification-empty">No app notifications right now.</div>';
+    }
+    async function showDeviceAlerts() {
+      if (!initialized || !('Notification' in window) || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+      var known = seen();
+      var knownSet = new Set(known);
+      var fresh = rows.filter(function (item) { return !item.read && !knownSet.has(item.id); }).slice(0, 4);
+      if (!fresh.length) return;
+      var registration = await navigator.serviceWorker.ready.catch(function () { return null; });
+      if (!registration) return;
+      fresh.forEach(function (item) {
+        registration.showNotification(item.title, { body: item.body, tag: item.id, renotify: false, icon: 'https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=192', badge: 'https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=192', data: { url: item.url || '/customer' } }).catch(function () {});
+        known.push(item.id);
+      });
+      saveSeen(known);
+    }
+    async function refresh() {
+      try {
+        var response = await fetch('/api/customer/notifications', { credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store' });
+        if (response.status === 401) return;
+        var result = await response.json();
+        if (!response.ok || !result.ok) return;
+        rows = result.notifications || [];
+        unread = Number(result.unreadCount || 0);
+        render();
+        if (!initialized) {
+          saveSeen(seen().concat(rows.map(function (item) { return item.id; })));
+          initialized = true;
+        } else await showDeviceAlerts();
+      } catch (error) {}
+    }
+    async function mark(ids, all) {
+      try {
+        var response = await fetch('/api/customer/notifications/read', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(all ? { all: true } : { ids: ids || [] }) });
+        var result = await response.json();
+        if (response.ok && result.ok) { rows = result.notifications || rows; unread = Number(result.unreadCount || 0); render(); }
+      } catch (error) {}
+    }
+    center.addEventListener('click', function (event) {
+      var panel = center.querySelector('[data-customer-notification-panel]');
+      if (event.target.closest('[data-customer-notification-toggle]')) {
+        panel.hidden = !panel.hidden;
+        center.querySelector('[data-customer-notification-toggle]').setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
+        return;
+      }
+      if (event.target.closest('[data-customer-notification-close]')) { panel.hidden = true; return; }
+      if (event.target.closest('[data-customer-notification-read-all]')) { mark([], true); return; }
+      if (event.target.closest('[data-customer-notification-enable]')) {
+        if (!('Notification' in window)) return;
+        Notification.requestPermission().then(function (permission) { event.target.textContent = permission === 'granted' ? 'Device alerts enabled' : 'Device alerts blocked'; });
+        return;
+      }
+      var itemButton = event.target.closest('[data-customer-notification-id]');
+      if (!itemButton) return;
+      var item = rows.find(function (row) { return row.id === itemButton.getAttribute('data-customer-notification-id'); });
+      if (!item) return;
+      mark([item.id], false);
+      panel.hidden = true;
+      var target = new URL(item.url || '/customer', window.location.origin);
+      if (target.hash) window.location.hash = target.hash;
+    });
+    document.addEventListener('click', function (event) { var panel = center.querySelector('[data-customer-notification-panel]'); if (!center.contains(event.target)) panel.hidden = true; });
+    refresh();
+    var timer = window.setInterval(refresh, 18000);
+    window.addEventListener('pagehide', function () { window.clearInterval(timer); }, { once: true });
+  }
+
   setupPortalNavigation();
   setupConversation();
   setupInstallableApp();
+  setupCustomerNotifications();
 
   var form = document.querySelector('[data-customer-document-upload]');
   if (form) {

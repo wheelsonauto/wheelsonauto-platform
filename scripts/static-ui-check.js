@@ -7,6 +7,10 @@ const indexHtml = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 const cardSetup = fs.readFileSync(path.join(root, 'card-setup.js'), 'utf8');
 const stylesCss = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+const staffPwa = fs.readFileSync(path.join(root, 'staff-pwa.js'), 'utf8');
+const customerPortal = fs.readFileSync(path.join(root, 'customer-portal.js'), 'utf8');
+const staffWorker = fs.readFileSync(path.join(root, 'staff-service-worker.js'), 'utf8');
+const customerWorker = fs.readFileSync(path.join(root, 'service-worker.js'), 'utf8');
 
 function fail(message) {
   throw new Error(message);
@@ -475,6 +479,12 @@ assertIncludes('Provider-specific API handoff guidance', app, ['apiProviderGuida
 assertIncludes('Stripe pilot owner review task UI', app, ['openStripePilotReviewTasks', 'Stripe pilot approval', 'review-stripe-pilot-task', '/api/system/infrastructure/preflight', 'liveLaunchPreflightModal(result)', 'Review evidence']);
 assertIncludes('Owner customer account assistance UI', app, ['Customer accounts', 'assist-customer-login', '/api/customer-accounts/assist', 'Assist as customer', 'window.location.assign']);
 assertIncludes('Owner customer account assistance server', server, ['ownerAssistanceCustomerCookie', 'Customer portal assistance started', '/customer/assist/end', 'Only the owner admin can open a customer assistance session.', '15 * 60']);
+assertIncludes('Role-scoped app notification server', server, ['staffAppNotifications', 'customerAppNotifications', 'appNotificationReceipts', '/api/app-notifications/read', '/api/customer/notifications/read', "role === 'mechanic'", 'delete safe.appNotificationReceipts']);
+assertIncludes('Staff app notification client', staffPwa, ['/api/app-notifications', '/api/app-notifications/read', 'Notification.requestPermission()', 'showNotification', 'data-app-notification-center', 'appNotice']);
+assertIncludes('Customer app notification client', customerPortal, ['/api/customer/notifications', '/api/customer/notifications/read', 'Notification.requestPermission()', 'showNotification', 'data-customer-notification-toggle']);
+assertIncludes('Staff notification service worker', staffWorker, ['notificationclick', 'event.notification.close()', 'clients.openWindow']);
+assertIncludes('Customer notification service worker', customerWorker, ['notificationclick', 'event.notification.close()', 'clients.openWindow']);
+assertIncludes('App notification responsive styling', stylesCss, ['.app-notification-center', '.app-notification-panel', '.app-notification-item', '.app-notification-bell', '.customer-notification-center']);
 
 const criticalActionRequirements = [
   ['Vehicle save flow', 'save-vehicle', ['clearVehicleFromCustomerRecords', 'syncVehicleCustomerAssignment', 'await save()', 'closeModal()', "view='Operations'"]],
