@@ -145,8 +145,15 @@ async function main() {
         accountId: 'staff:owner:owner',
         code: '483920'
       });
+      challenge.record.requestId = 'owner-recovery-request-483920';
       lockedState.security.ownerLogin.loginSecurity.passwordRecovery = challenge.record;
       await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(lockedState, null, 2));
+
+      const staffCodeScreen = await request(server, 'GET', '/forgot/code?username=secure-owner&request=owner-recovery-request-483920');
+      assert.strictEqual(staffCodeScreen.status, 200, 'A valid staff recovery request must open the six-digit code screen.');
+      assert(staffCodeScreen.text.includes('name="code"') && staffCodeScreen.text.includes('name="requestId" value="owner-recovery-request-483920"'), 'The staff code screen must retain its opaque account-bound request.');
+      const wrongStaffCodeScreen = await request(server, 'GET', '/forgot/code?username=secure-owner&request=wrong-request');
+      assert.strictEqual(wrongStaffCodeScreen.status, 410, 'A guessed staff recovery request must not open the reset form.');
 
       const wrongRecoveryUsername = await request(server, 'POST', '/forgot/verify', {
         username: 'someone-else',
@@ -159,6 +166,7 @@ async function main() {
       const recoveredPassword = process.env.WOA_ADMIN_PIN;
       const recoveryResult = await request(server, 'POST', '/forgot/verify', {
         username: 'secure-owner',
+        requestId: 'owner-recovery-request-483920',
         code: '483920',
         newPassword: recoveredPassword,
         confirmPassword: recoveredPassword
@@ -255,6 +263,7 @@ async function main() {
         accountId: 'customer:customer:recovery-customer-one',
         code: '619274'
       });
+      customerChallenge.record.requestId = 'customer-recovery-request-619274';
       firstCustomerRecord.loginSecurity.passwordRecovery = customerChallenge.record;
       Object.assign(firstCustomerRecord, {
         status: 'Disabled',
@@ -263,6 +272,12 @@ async function main() {
         disabledBy: 'Application review test'
       });
       await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(customerLockedState, null, 2));
+
+      const customerCodeScreen = await request(server, 'GET', '/customer/forgot/code?username=recovery-customer-one&request=customer-recovery-request-619274');
+      assert.strictEqual(customerCodeScreen.status, 200, 'A valid customer recovery request must open the six-digit code screen.');
+      assert(customerCodeScreen.text.includes('name="code"') && customerCodeScreen.text.includes('name="requestId" value="customer-recovery-request-619274"'), 'The customer code screen must retain its opaque account-bound request.');
+      const wrongCustomerCodeScreen = await request(server, 'GET', '/customer/forgot/code?username=recovery-customer-one&request=wrong-request');
+      assert.strictEqual(wrongCustomerCodeScreen.status, 410, 'A guessed customer recovery request must not open the reset form.');
 
       const crossAccountRecovery = await request(server, 'POST', '/customer/forgot/verify', {
         username: 'recovery-customer-two',
@@ -277,6 +292,7 @@ async function main() {
       const recoveredCustomerPassword = 'RecoveredCustomerPassword456!';
       const customerRecoveryResult = await request(server, 'POST', '/customer/forgot/verify', {
         username: 'recovery-customer-one',
+        requestId: 'customer-recovery-request-619274',
         code: '619274',
         newPassword: recoveredCustomerPassword,
         confirmPassword: recoveredCustomerPassword

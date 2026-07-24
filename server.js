@@ -9219,8 +9219,10 @@ function requestIp(req) {
   if (forwarded.length) return forwarded[forwarded.length - 1];
   return String(headers['x-real-ip'] || (req.socket && req.socket.remoteAddress) || 'local').trim() || 'local';
 }
-async function publicActionLimit(req, action, limit, windowMs) {
-  return STATE_REPOSITORY.consumeRateLimit('public-' + String(action || 'action'), requestIp(req), limit, windowMs);
+async function publicActionLimit(req, action, limit, windowMs, identity = '') {
+  const accountIdentity = String(identity || '').trim();
+  const key = accountIdentity ? [requestIp(req), accountIdentity].join('|') : requestIp(req);
+  return STATE_REPOSITORY.consumeRateLimit('public-' + String(action || 'action'), key, limit, windowMs);
 }
 function loginThrottleKey(req, realm, identity) {
   return [realm || 'login', normalizeLogin(identity || 'blank')].join('|');
@@ -9472,6 +9474,7 @@ async function sendAccountRecoveryCode(data, target) {
     accountId: recoveryAccountId(target),
     ttlMs: LOGIN_RECOVERY_CODE_TTL_MS
   });
+  challenge.record.requestId = crypto.randomBytes(24).toString('hex');
   let result;
   try {
     result = await sendProviderEmail(target.email, 'WheelsonAuto password recovery code', [
@@ -9508,7 +9511,25 @@ async function sendAccountRecoveryCode(data, target) {
   }, 'Password recovery code sent', [target.kind, maskEmail(target.email), '15 minute expiry', 'Account-bound one-time code']);
   await protectConcurrentLocalWrites(data, { preferIncoming: true });
   await writeData(data);
-  return { sent: true, maskedEmail: maskEmail(target.email) };
+  return { sent: true, maskedEmail: maskEmail(target.email), requestId: challenge.record.requestId };
+}
+function activeRecoveryChallenge(target, requestId = '', now = Date.now()) {
+  if (!target || !target.record) return null;
+  const record = loginSecurityRecord(target.record).passwordRecovery || {};
+  const expiresAt = Date.parse(record.expiresAt || '');
+  const attempts = Math.max(0, Number(record.attempts || 0));
+  const maxAttempts = Math.max(1, Number(record.maxAttempts || 5));
+  if (!record.codeHash || !record.requestId || record.accountId !== recoveryAccountId(target)) return null;
+  if (requestId && !secureCompare(record.requestId, requestId)) return null;
+  if (record.consumedAt || !Number.isFinite(expiresAt) || expiresAt <= now || attempts >= maxAttempts) return null;
+  return { requestId: record.requestId, expiresAt: new Date(expiresAt).toISOString(), maskedEmail: maskEmail(target.email) };
+}
+function recoveryCodeLocation(pathname, username, requestId) {
+  return pathname + '?username=' + encodeURIComponent(String(username || '').trim()) + '&request=' + encodeURIComponent(String(requestId || '').trim());
+}
+function recoveryWaitMessage(rate = {}) {
+  const minutes = Math.max(1, Math.ceil(Number(rate.retryAfterSeconds || 0) / 60));
+  return 'Too many new recovery emails were requested for this account. Try again in about ' + minutes + ' minute(s).';
 }
 async function completeAccountRecovery(data, target, code, newPassword) {
   if (!target || !target.record) return { ok: false, status: 400, error: 'Recovery request is invalid.' };
@@ -9589,8 +9610,8 @@ function loginPage(message = '', data = {}) {
 function staffForgotPage(message = '', username = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>WheelsonAuto Staff Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + STAFF_PWA_HEAD + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure recovery</div><h1>Reset staff password</h1><p>Enter the exact username. A one-time code is sent only to the email already saved on that account.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" required autofocus></label><button>Send recovery code</button><div class="login-pin">The code cannot sign in by itself and expires after 15 minutes.</div><a class="btn" href="/login" style="margin-top:10px;text-align:center">Back to staff login</a><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Customer recovery</a></form></main></body></html>';
 }
-function staffRecoveryPage(username = '', message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>WheelsonAuto Staff Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + STAFF_PWA_HEAD + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot/verify"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Email verification</div><h1>Choose a new password</h1><p>Enter the six-digit code from the saved account email. You will still sign in afterward with the exact username and new password.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" readonly required></label><label>Recovery code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" required></label><button>Reset password</button><a class="btn" href="/forgot" style="margin-top:10px;text-align:center">Send another code</a></form></main></body></html>';
+function staffRecoveryPage(username = '', message = '', requestId = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>WheelsonAuto Staff Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + STAFF_PWA_HEAD + '</head><body><main class="login-page"><form class="login-card" method="POST" action="/forgot/verify"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Email verification</div><h1>Choose a new password</h1><p>Enter the six-digit code from the saved account email. Keep this screen open while the email arrives.</p>' + (message ? '<p class="err" aria-live="polite">' + escapeHtml(message) + '</p>' : '') + '<input type="hidden" name="requestId" value="' + escapeHtml(requestId) + '"><label>Username<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" readonly required></label><label>Recovery code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" required></label><button>Reset password</button><a class="btn" href="/forgot?username=' + encodeURIComponent(String(username || '').trim()) + '" style="margin-top:10px;text-align:center">Send another code</a></form></main></body></html>';
 }
 function customerSessionCookie(account) {
   return signedSessionCookie('customer', customerLoginUser(account));
@@ -9620,8 +9641,8 @@ function customerRegisterPage(message = '', next = '', values = {}) {
 function customerForgotPage(message = '', username = '') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Secure recovery</div><h1>Reset customer password</h1><p>Enter the exact username, email, or phone used to sign in. A one-time code goes only to the email already saved on that account.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" required autofocus></label><button>Send recovery code</button><div class="login-pin">The code cannot open the account and expires after 15 minutes.</div><a class="btn" href="/customer/login" style="margin-top:10px;text-align:center">Back to customer login</a></form></main></body></html>';
 }
-function customerRecoveryPage(username = '', message = '') {
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot/verify"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Email verification</div><h1>Choose a new password</h1><p>The recovery code is tied to this one customer account. After resetting, sign in with the same username and the new password.</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" readonly required></label><label>Recovery code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" required></label><button>Reset password</button><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Send another code</a></form></main></body></html>';
+function customerRecoveryPage(username = '', message = '', requestId = '') {
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Recovery</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/forgot/verify"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Email verification</div><h1>Choose a new password</h1><p>The recovery code is tied to this one customer account. Keep this screen open while the email arrives.</p>' + (message ? '<p class="err" aria-live="polite">' + escapeHtml(message) + '</p>' : '') + '<input type="hidden" name="requestId" value="' + escapeHtml(requestId) + '"><label>Username, email, or phone<input name="username" autocomplete="username" value="' + escapeHtml(username) + '" readonly required></label><label>Recovery code<input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus></label><label>New password<input name="newPassword" type="password" autocomplete="new-password" required></label><label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" required></label><button>Reset password</button><a class="btn" href="/customer/forgot?username=' + encodeURIComponent(String(username || '').trim()) + '" style="margin-top:10px;text-align:center">Send another code</a></form></main></body></html>';
 }
 function findCustomerAccountByIdentity(data, identity) {
   const key = normalizeLogin(identity);
@@ -13027,10 +13048,12 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('PUT', '/api/state', 'Role-aware dashboard saves'),
     route('GET', '/forgot', 'Staff email password recovery page'),
     route('POST', '/forgot', 'Send account-bound staff recovery code'),
+    route('GET', '/forgot/code', 'Enter an account-bound staff recovery code'),
     route('POST', '/forgot/verify', 'Verify staff recovery code and reset one account'),
     route('GET', '/customer/login', 'Customer login page'),
     route('GET', '/customer/forgot', 'Customer email password recovery page'),
     route('POST', '/customer/forgot', 'Send account-bound customer recovery code'),
+    route('GET', '/customer/forgot/code', 'Enter an account-bound customer recovery code'),
     route('POST', '/customer/forgot/verify', 'Verify customer recovery code and reset one account'),
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
@@ -22858,34 +22881,51 @@ const server = http.createServer(async (req, res) => {
       const message = url.searchParams.get('locked') === '1' ? 'This account is locked after five failed attempts. Send an email recovery code to continue.' : '';
       return send(res, 200, customerForgotPage(message, username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
+    if (url.pathname === '/customer/forgot/code' && req.method === 'GET') {
+      const username = String(url.searchParams.get('username') || '').trim();
+      const requestId = String(url.searchParams.get('request') || '').trim();
+      const data = await readData();
+      const target = customerLoginTarget(data, username, { includeApplicationDisabled: true });
+      const challenge = activeRecoveryChallenge(target, requestId);
+      if (!challenge) return send(res, 410, customerForgotPage('That recovery screen expired or is no longer valid. Send a new code.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 200, customerRecoveryPage(username, 'A six-digit code was sent to ' + challenge.maskedEmail + '.', challenge.requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
     if (url.pathname === '/customer/forgot' && req.method === 'POST') {
-      const helpRate = await publicActionLimit(req, 'customer-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
-      if (!helpRate.allowed) return send(res, 429, customerForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = String(form.get('username') || '').trim();
       if (!username) return send(res, 400, customerForgotPage('Enter the exact username, email, or phone used to sign in.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
       const target = customerLoginTarget(data, username, { includeApplicationDisabled: true });
+      const rateIdentity = target ? recoveryAccountId(target) : 'unknown:' + normalizeLogin(username);
+      const helpRate = await publicActionLimit(req, 'customer-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS, rateIdentity);
+      if (!helpRate.allowed) {
+        const existing = activeRecoveryChallenge(target);
+        if (existing) return send(res, 303, '', 'text/plain', { Location: recoveryCodeLocation('/customer/forgot/code', username, existing.requestId), 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
+        return send(res, 429, customerForgotPage(recoveryWaitMessage(helpRate), username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
+      }
       const result = await sendAccountRecoveryCode(data, target);
       if (!result.sent) return send(res, 503, customerForgotPage('A recovery email could not be sent. Confirm the exact login and saved email, or contact WheelsonAuto.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
-      return send(res, 200, customerRecoveryPage(username, 'A six-digit code was sent to ' + result.maskedEmail + '.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 303, '', 'text/plain', { Location: recoveryCodeLocation('/customer/forgot/code', username, result.requestId), 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/forgot/verify' && req.method === 'POST') {
-      const verifyRate = await publicActionLimit(req, 'customer-password-verify', LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
-      if (!verifyRate.allowed) return send(res, 429, customerForgotPage('Too many recovery attempts. Send a new code after the wait.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(verifyRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = String(form.get('username') || '').trim();
+      const requestId = String(form.get('requestId') || '').trim();
       const code = String(form.get('code') || '').trim();
       const newPassword = String(form.get('newPassword') || '');
       const confirmPassword = String(form.get('confirmPassword') || '');
       const policyError = passwordPolicyError(newPassword, 'New password');
-      if (!username || !/^\d{6}$/.test(code)) return send(res, 400, customerRecoveryPage(username, 'Enter the account username and six-digit recovery code.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
-      if (policyError) return send(res, 400, customerRecoveryPage(username, policyError), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
-      if (newPassword !== confirmPassword) return send(res, 400, customerRecoveryPage(username, 'The new passwords do not match.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
       const target = customerLoginTarget(data, username, { includeApplicationDisabled: true });
+      const verifyIdentity = target ? recoveryAccountId(target) : 'unknown:' + normalizeLogin(username);
+      const verifyRate = await publicActionLimit(req, 'customer-password-verify', LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS, verifyIdentity);
+      if (!verifyRate.allowed) return send(res, 429, customerRecoveryPage(username, 'Too many code attempts. Try again in about ' + Math.max(1, Math.ceil(verifyRate.retryAfterSeconds / 60)) + ' minute(s), or send a new code.', requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(verifyRate.retryAfterSeconds) });
+      if (requestId && !activeRecoveryChallenge(target, requestId)) return send(res, 410, customerForgotPage('That recovery screen expired or is no longer valid. Send a new code.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (!username || !/^\d{6}$/.test(code)) return send(res, 400, customerRecoveryPage(username, 'Enter the account username and six-digit recovery code.', requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (policyError) return send(res, 400, customerRecoveryPage(username, policyError, requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (newPassword !== confirmPassword) return send(res, 400, customerRecoveryPage(username, 'The new passwords do not match.', requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const result = await completeAccountRecovery(data, target, code, newPassword);
-      if (!result.ok) return send(res, result.status || 400, customerRecoveryPage(username, result.error), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (!result.ok) return send(res, result.status || 400, customerRecoveryPage(username, result.error, requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       await clearLoginFailure(loginThrottleKey(req, 'customer', username));
       return send(res, 200, customerLoginPage('Password reset complete. Sign in with the same username and your new password.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
@@ -23784,34 +23824,51 @@ const server = http.createServer(async (req, res) => {
       const message = url.searchParams.get('locked') === '1' ? 'This account is locked after five failed attempts. Email recovery is required.' : '';
       return send(res, 200, staffForgotPage(message, username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
+    if (url.pathname === '/forgot/code' && req.method === 'GET') {
+      const username = String(url.searchParams.get('username') || '').trim();
+      const requestId = String(url.searchParams.get('request') || '').trim();
+      const data = await readData();
+      const target = staffLoginTarget(data, username);
+      const challenge = activeRecoveryChallenge(target, requestId);
+      if (!challenge) return send(res, 410, staffForgotPage('That recovery screen expired or is no longer valid. Send a new code.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 200, staffRecoveryPage(username, 'A six-digit code was sent to ' + challenge.maskedEmail + '.', challenge.requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
     if (url.pathname === '/forgot' && req.method === 'POST') {
-      const helpRate = await publicActionLimit(req, 'staff-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS);
-      if (!helpRate.allowed) return send(res, 429, staffForgotPage('Too many help requests. Wait before trying again.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = String(form.get('username') || '').trim();
       if (!username) return send(res, 400, staffForgotPage('Enter the exact username for the account.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
       const target = staffLoginTarget(data, username);
+      const rateIdentity = target ? recoveryAccountId(target) : 'unknown:' + normalizeLogin(username);
+      const helpRate = await publicActionLimit(req, 'staff-password-help', PUBLIC_HELP_LIMIT, PUBLIC_HELP_WINDOW_MS, rateIdentity);
+      if (!helpRate.allowed) {
+        const existing = activeRecoveryChallenge(target);
+        if (existing) return send(res, 303, '', 'text/plain', { Location: recoveryCodeLocation('/forgot/code', username, existing.requestId), 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
+        return send(res, 429, staffForgotPage(recoveryWaitMessage(helpRate), username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(helpRate.retryAfterSeconds) });
+      }
       const result = await sendAccountRecoveryCode(data, target);
       if (!result.sent) return send(res, 503, staffForgotPage('A recovery email could not be sent. Confirm the exact username and saved email, or contact the owner.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
-      return send(res, 200, staffRecoveryPage(username, 'A six-digit code was sent to ' + result.maskedEmail + '.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 303, '', 'text/plain', { Location: recoveryCodeLocation('/forgot/code', username, result.requestId), 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/forgot/verify' && req.method === 'POST') {
-      const verifyRate = await publicActionLimit(req, 'staff-password-verify', LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS);
-      if (!verifyRate.allowed) return send(res, 429, staffForgotPage('Too many recovery attempts. Send a new code after the wait.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(verifyRate.retryAfterSeconds) });
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const username = String(form.get('username') || '').trim();
+      const requestId = String(form.get('requestId') || '').trim();
       const code = String(form.get('code') || '').trim();
       const newPassword = String(form.get('newPassword') || '');
       const confirmPassword = String(form.get('confirmPassword') || '');
       const policyError = passwordPolicyError(newPassword, 'New password');
-      if (!username || !/^\d{6}$/.test(code)) return send(res, 400, staffRecoveryPage(username, 'Enter the account username and six-digit recovery code.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
-      if (policyError) return send(res, 400, staffRecoveryPage(username, policyError), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
-      if (newPassword !== confirmPassword) return send(res, 400, staffRecoveryPage(username, 'The new passwords do not match.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
       const target = staffLoginTarget(data, username);
+      const verifyIdentity = target ? recoveryAccountId(target) : 'unknown:' + normalizeLogin(username);
+      const verifyRate = await publicActionLimit(req, 'staff-password-verify', LOGIN_THROTTLE_LIMIT, LOGIN_THROTTLE_WINDOW_MS, verifyIdentity);
+      if (!verifyRate.allowed) return send(res, 429, staffRecoveryPage(username, 'Too many code attempts. Try again in about ' + Math.max(1, Math.ceil(verifyRate.retryAfterSeconds / 60)) + ' minute(s), or send a new code.', requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store', 'Retry-After': String(verifyRate.retryAfterSeconds) });
+      if (requestId && !activeRecoveryChallenge(target, requestId)) return send(res, 410, staffForgotPage('That recovery screen expired or is no longer valid. Send a new code.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (!username || !/^\d{6}$/.test(code)) return send(res, 400, staffRecoveryPage(username, 'Enter the account username and six-digit recovery code.', requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (policyError) return send(res, 400, staffRecoveryPage(username, policyError, requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (newPassword !== confirmPassword) return send(res, 400, staffRecoveryPage(username, 'The new passwords do not match.', requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const result = await completeAccountRecovery(data, target, code, newPassword);
-      if (!result.ok) return send(res, result.status || 400, staffRecoveryPage(username, result.error), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      if (!result.ok) return send(res, result.status || 400, staffRecoveryPage(username, result.error, requestId), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       await clearLoginFailure(loginThrottleKey(req, 'staff', username));
       return send(res, 200, loginPage('Password reset complete. Sign in with the same username and your new password.', data), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
