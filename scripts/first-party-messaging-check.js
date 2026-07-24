@@ -142,6 +142,7 @@ async function run() {
   assert(styles.includes('.customer-app-body.customer-keyboard-open .customer-app-tabs.customer-action-hub') && styles.includes('--customer-live-viewport-height'), 'The customer message composer must remain reachable above the phone keyboard and bottom navigation.');
   assert(styles.includes('.admin-shell .topbar.compact-title{') && styles.includes('backdrop-filter:blur(14px)'), 'The staff header must use the same compact glass surface language as the customer/login app.');
   assert(styles.includes('.view-messages:has(.message-inbox-shell.message-mobile-thread-open)>.message-focused-tabs{display:none!important}'), 'Message workspace tabs must hide while the phone is inside a conversation and return after Back.');
+  assert(styles.includes('.message-inbox-shell.message-mobile-thread-open .message-recipient-details{display:none!important}'), 'Open mobile conversations must hide the optional delivery selector so the reply box stays compact.');
   assert(!source.includes("providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block provider proof collection.');
   assert(!source.includes("missing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block live Stripe readiness.');
   assert(source.includes('WOA_OPTIONAL_CARRIER_SMS_ENABLED') && source.includes("? 'wheelsonauto'"), 'Legacy Telnyx or Twilio environment values must not reactivate carrier SMS unless the owner explicitly enables it.');

@@ -836,6 +836,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   .mobile-fleet-state.service{border-color:rgba(223,119,124,.28);color:#e9a0a4}
   .mobile-fleet-card .vehicle-card-name{max-width:50%;padding-right:4px}
   .mobile-fleet-grid .native-online-card{min-width:0}
+  .message-inbox-shell.message-mobile-thread-open .message-recipient-details{display:none!important}
 }
 
 /* First-party customer conversations replace carrier SMS as the launch path. */
