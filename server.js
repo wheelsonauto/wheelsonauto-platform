@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-layout-login-332';
+const ASSET_VERSION = 'platform-20260723-customer-recovery-333';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -8443,22 +8443,72 @@ function findCustomerAccountByLogin(data, username, password) {
   const account = findCustomerAccountByUsername(data, username);
   return account && password && verifyPasswordRecord(password, account) ? account : null;
 }
-function findCustomerAccountByUsername(data, username) {
-  const cleanUser = normalizeLogin(username);
-  const cleanPhone = phoneKey(username);
-  if (!cleanUser) return null;
-  const matches = (data.customerAccounts || []).filter(account => {
-    if (!staffStatusActive(account)) return false;
-    const names = [account.username, account.email, account.phone].map(normalizeLogin).filter(Boolean);
-    const phones = [account.phone, account.username].map(phoneKey).filter(Boolean);
-    return names.includes(cleanUser) || !!(cleanPhone && phones.includes(cleanPhone));
-  });
+function customerAccountDisabledByApplication(account = {}) {
+  return String(account.status || '').toLowerCase() === 'disabled'
+    && /\bapplication\b.*\b(denied|removed|archived|cancelled)\b/i.test(String(account.portalStage || ''));
+}
+function customerAccountMatchesLogin(account, cleanUser, cleanPhone) {
+  const names = [account.username, account.email, account.phone].map(normalizeLogin).filter(Boolean);
+  const phones = [account.phone, account.username].map(phoneKey).filter(Boolean);
+  return names.includes(cleanUser) || !!(cleanPhone && phones.includes(cleanPhone));
+}
+function selectCustomerAccountMatch(matches, cleanUser) {
   if (matches.length === 1) return matches[0];
+  const exactUsername = matches.filter(account => normalizeLogin(account.username) === cleanUser && account.passwordHash && account.passwordSalt);
+  if (exactUsername.length === 1) return exactUsername[0];
   // Old application drafts can share contact details with the real portal
   // account. Prefer it only when exactly one match owns a usable password;
   // multiple login-ready matches remain intentionally ambiguous.
   const loginReady = matches.filter(account => account.passwordHash && account.passwordSalt);
   return loginReady.length === 1 ? loginReady[0] : null;
+}
+function findCustomerAccountByUsername(data, username, options = {}) {
+  const cleanUser = normalizeLogin(username);
+  const cleanPhone = phoneKey(username);
+  if (!cleanUser) return null;
+  const matches = (data.customerAccounts || []).filter(account => {
+    const eligible = staffStatusActive(account) || options.includeApplicationDisabled && customerAccountDisabledByApplication(account);
+    return eligible && customerAccountMatchesLogin(account, cleanUser, cleanPhone);
+  });
+  return selectCustomerAccountMatch(matches, cleanUser);
+}
+function restoreApplicationDisabledCustomerAccount(account, actor = 'customer authentication') {
+  if (!customerAccountDisabledByApplication(account)) return false;
+  const now = new Date().toISOString();
+  Object.assign(account, {
+    status: 'Active',
+    portalStage: 'Choose a vehicle',
+    disabledAt: '',
+    disabledBy: '',
+    applicationAccessRestoredAt: now,
+    applicationAccessRestoredBy: actor,
+    updatedAt: now
+  });
+  return true;
+}
+function closeApplicationAccessWithoutClosingCustomerAccount(account, portalStage, actor, now = new Date().toISOString()) {
+  if (!account) return { retained: false, disabled: false };
+  const hasPassword = !!(account.passwordHash && account.passwordSalt);
+  if (hasPassword) {
+    Object.assign(account, {
+      status: 'Active',
+      portalStage: portalStage + ' - account retained',
+      disabledAt: '',
+      disabledBy: '',
+      applicationClosedAt: now,
+      applicationClosedBy: actor || 'WheelsonAuto',
+      updatedAt: now
+    });
+    return { retained: true, disabled: false };
+  }
+  Object.assign(account, {
+    status: 'Disabled',
+    portalStage,
+    disabledAt: now,
+    disabledBy: actor || 'WheelsonAuto',
+    updatedAt: now
+  });
+  return { retained: false, disabled: true };
 }
 function findPendingApplicationByLogin(data, username, password) {
   const application = findPendingApplicationByUsername(data, username);
@@ -9378,8 +9428,8 @@ function staffLoginTarget(data, username) {
     record: staff
   };
 }
-function customerLoginTarget(data, username) {
-  const account = findCustomerAccountByUsername(data, username);
+function customerLoginTarget(data, username, options = {}) {
+  const account = findCustomerAccountByUsername(data, username, options);
   if (account) {
     return {
       kind: 'customer',
@@ -9496,6 +9546,7 @@ async function completeAccountRecovery(data, target, code, newPassword) {
     });
   } else {
     Object.assign(target.record, record, { updatedAt: new Date().toISOString() });
+    restoreApplicationDisabledCustomerAccount(target.record, 'verified email recovery');
   }
   clearAccountLoginFailure(target.record);
   appendAuditLog(data, {
@@ -9510,7 +9561,7 @@ async function completeAccountRecovery(data, target, code, newPassword) {
   const savedData = await readData();
   const savedTarget = target.realm === 'staff'
     ? staffLoginTarget(savedData, target.username)
-    : customerLoginTarget(savedData, target.username);
+    : customerLoginTarget(savedData, target.username, { includeApplicationDisabled: true });
   const savedPasswordRecord = savedTarget && savedTarget.kind === 'application'
     ? {
         passwordHash: savedTarget.record.pendingPasswordHash,
@@ -22710,12 +22761,19 @@ const server = http.createServer(async (req, res) => {
       const throttleKey = loginThrottleKey(req, 'customer', username);
       const waitMs = await loginThrottleWaitMs(throttleKey);
       const data = await readData();
-      const target = customerLoginTarget(data, username);
+      const target = customerLoginTarget(data, username, { includeApplicationDisabled: true });
       if (target && loginRecordLocked(target.record)) {
         return send(res, 303, '', 'text/plain', { Location: '/customer/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store' });
       }
       if (waitMs) return send(res, 303, '', 'text/plain', { Location: '/customer/forgot?locked=1&username=' + encodeURIComponent(username), 'Cache-Control': 'no-store', 'Retry-After': String(Math.ceil(waitMs / 1000)) });
       let account = findCustomerAccountByLogin(data, username, password);
+      if (!account && target && target.kind === 'customer' && customerAccountDisabledByApplication(target.record) && verifyPasswordRecord(password, target.record)) {
+        restoreApplicationDisabledCustomerAccount(target.record, 'successful customer login');
+        account = target.record;
+        appendAuditLog(data, customerLoginUser(account), 'Customer account restored after application closure', [account.username || account.email || account.phone, 'Existing password verified', 'Application remains archived']);
+        await protectConcurrentLocalWrites(data, { preferIncoming: true });
+        await writeData(data);
+      }
       if (!account) {
         const application = findPendingApplicationByLogin(data, username, password);
         if (application) {
@@ -22772,7 +22830,7 @@ const server = http.createServer(async (req, res) => {
       const username = String(form.get('username') || '').trim();
       if (!username) return send(res, 400, customerForgotPage('Enter the exact username, email, or phone used to sign in.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
-      const target = customerLoginTarget(data, username);
+      const target = customerLoginTarget(data, username, { includeApplicationDisabled: true });
       const result = await sendAccountRecoveryCode(data, target);
       if (!result.sent) return send(res, 503, customerForgotPage('A recovery email could not be sent. Confirm the exact login and saved email, or contact WheelsonAuto.', username), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       return send(res, 200, customerRecoveryPage(username, 'A six-digit code was sent to ' + result.maskedEmail + '.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
@@ -22790,7 +22848,7 @@ const server = http.createServer(async (req, res) => {
       if (policyError) return send(res, 400, customerRecoveryPage(username, policyError), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       if (newPassword !== confirmPassword) return send(res, 400, customerRecoveryPage(username, 'The new passwords do not match.'), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       const data = await readData();
-      const target = customerLoginTarget(data, username);
+      const target = customerLoginTarget(data, username, { includeApplicationDisabled: true });
       const result = await completeAccountRecovery(data, target, code, newPassword);
       if (!result.ok) return send(res, result.status || 400, customerRecoveryPage(username, result.error), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
       await clearLoginFailure(loginThrottleKey(req, 'customer', username));
@@ -24628,7 +24686,9 @@ const server = http.createServer(async (req, res) => {
       (data.onboardingSessions || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - owner test reset', cancelledAt: now, updatedAt: now }));
       (data.paymentRequests || []).filter(row => archivedSet.has(String(row.applicationId || '')) && !verifiedOnboardingPaymentRequest(row)).forEach(row => Object.assign(row, { status: 'Cancelled - owner test reset', closedAt: now, updatedAt: now }));
       (data.cardSetupRequests || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - owner test reset', closedAt: now, updatedAt: now }));
-      (data.customerAccounts || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Disabled', portalStage: 'Application removed', disabledAt: now, updatedAt: now }));
+      (data.customerAccounts || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => {
+        closeApplicationAccessWithoutClosingCustomerAccount(row, 'Application removed', user.name || user.username || 'Owner', now);
+      });
       (data.websiteLeads || []).filter(row => archivedSet.has(String(row.applicationId || ''))).forEach(row => Object.assign(row, { status: 'Removed', updatedAt: now }));
       (data.onlineVehicles || []).forEach(vehicle => {
         if (!archivedSet.has(String(vehicle.heldApplicationId || '')) || onlineVehiclePaymentClaimApplicationId(vehicle)) return;
@@ -24698,7 +24758,7 @@ const server = http.createServer(async (req, res) => {
       (data.paymentRequests || []).filter(row => row.applicationId === application.id && isOpenCustomerPaymentRequest(row)).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', closedAt: reviewedAt, closeReason: notes || 'Application denied and archived.' }));
       (data.cardSetupRequests || []).filter(row => row.applicationId === application.id && isOpenCardSetupRequest(row)).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', closedAt: reviewedAt }));
       const account = (data.customerAccounts || []).find(row => row.applicationId === application.id);
-      if (account) Object.assign(account, { status: 'Disabled', portalStage: 'Application denied', disabledAt: reviewedAt, disabledBy: reviewer, updatedAt: reviewedAt });
+      const portalClosure = closeApplicationAccessWithoutClosingCustomerAccount(account, 'Application denied', reviewer, reviewedAt);
       (data.websiteLeads || []).filter(row => row.applicationId === application.id).forEach(row => Object.assign(row, { status: 'Denied', updatedAt: reviewedAt }));
       (data.messages || []).filter(row => row.applicationId === application.id && /draft|ready to send|needs approval/i.test(String(row.status || row.direction || ''))).forEach(row => Object.assign(row, { status: 'Cancelled - application denied', updatedAt: reviewedAt }));
       const publicVehicle = onboarding.findPublicVehicle(data, application.onlineVehicleId);
@@ -24716,7 +24776,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, user, 'Application denied and archived', [application.name || 'Applicant', application.vehicle || 'No vehicle linked', notes || 'No review note']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 200, { ok: true, application: publicApplicationSummary(application), portalDisabled: !!account, releasedSessions: sessions.length });
+      return json(res, 200, { ok: true, application: publicApplicationSummary(application), portalDisabled: portalClosure.disabled, portalRetained: portalClosure.retained, releasedSessions: sessions.length });
     }
     if (url.pathname === '/api/onboarding/links' && req.method === 'POST') {
       if (!isOwnerUser(user) && String(user.role || '').toLowerCase() !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can approve an application and create onboarding.' });

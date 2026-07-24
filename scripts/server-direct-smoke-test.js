@@ -1423,9 +1423,11 @@ async function main() {
     const deniedOnboardingPath = '/onboard/' + deniedOnboardingToken;
     assert(isolatedPortalOnboarding.status === 200 && deniedOnboardingToken, 'The exact signed customer must be able to open the account-owned onboarding file before staff review.');
     const deniedIsolatedApplication = await request(server, 'POST', '/api/applications/review', { cookie: ownerCookie, json: { applicationId: isolatedApplication.json.application.id, decision: 'deny', notes: 'Direct smoke applicant cleanup.' } });
-    assert(deniedIsolatedApplication.status === 200 && deniedIsolatedApplication.json.ok && deniedIsolatedApplication.json.portalDisabled, 'Owner should be able to deny/archive an unapproved application and disable its pending portal login.');
+    assert(deniedIsolatedApplication.status === 200 && deniedIsolatedApplication.json.ok && deniedIsolatedApplication.json.portalRetained === true && deniedIsolatedApplication.json.portalDisabled === false, 'Owner should be able to deny/archive an unapproved application without disabling its password-ready customer account.');
     const deniedPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: cleanCookie(isolatedPortalLogin.cookie) });
-    assert(deniedPortalState.status === 401, 'A denied application must immediately lose customer portal access.');
+    assert(deniedPortalState.status === 200 && deniedPortalState.json.ok, 'Denying one application must not remove access to the reusable customer account.');
+    const deniedCustomerRelogin = await request(server, 'POST', '/customer/login', { form: { username: 'isolated-applicant@example.com', password: 'IsolatedApplicant123!' } });
+    assert(deniedCustomerRelogin.status === 302, 'A customer must still be able to log in with the same account after one application is denied.');
     const deniedOnboardingPage = await request(server, 'GET', deniedOnboardingPath);
     assert(deniedOnboardingPage.status === 404 && !/Welcome, Isolated Applicant/i.test(deniedOnboardingPage.text), 'A denied application must immediately revoke its public onboarding page without exposing applicant details.');
     const deniedOnboardingMutation = await request(server, 'POST', '/api/public/onboarding/' + deniedOnboardingToken + '/profile', {
@@ -1437,7 +1439,7 @@ async function main() {
     const deniedApplicationAccount = deniedApplicationState.json.customerAccounts.find(row => row.applicationId === isolatedApplication.json.application.id);
     const deniedApplicationSession = deniedApplicationState.json.onboardingSessions.find(row => row.applicationId === isolatedApplication.json.application.id);
     const releasedApplicationVehicle = deniedApplicationState.json.onlineVehicles.find(row => row.id === 'online-direct-002');
-    assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Disabled' && deniedApplicationSession && deniedApplicationSession.status === 'Cancelled', 'Denied application, onboarding link, and pending login should move to archived/cancelled/disabled state together.');
+    assert(deniedApplicationRow && deniedApplicationRow.stage === 'Denied' && deniedApplicationAccount && deniedApplicationAccount.status === 'Active' && /account retained/i.test(deniedApplicationAccount.portalStage || '') && deniedApplicationSession && deniedApplicationSession.status === 'Cancelled', 'Denied application and onboarding link should close while the password-ready customer account stays active for future applications.');
     const deniedStaffReview = await request(server, 'POST', '/api/onboarding/review', { cookie: ownerCookie, json: { onboardingSessionId: deniedApplicationSession.id, stage: 'final', decision: 'approve', identityConfirmed: true, signatureMatchConfirmed: true, vehicleConfirmed: true, cardConfirmed: true } });
     assert(deniedStaffReview.status === 409 && /closed.*fresh secure link/i.test(deniedStaffReview.json.error || ''), 'Staff review must not revive a cancelled onboarding session or its denied application by internal ID.');
     assert(releasedApplicationVehicle && releasedApplicationVehicle.published === true && releasedApplicationVehicle.availability === 'Available', 'Denying an application should leave its unused online vehicle available for another applicant.');

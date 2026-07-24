@@ -197,8 +197,18 @@ async function main() {
         password: secondCustomerPassword,
         status: 'Active'
       }, { cookie: recoveredOwnerSession });
+      const ownerDisabledCustomer = await requestJson(server, 'POST', '/api/customer-accounts', {
+        id: 'owner-disabled-customer',
+        name: 'Owner Disabled Customer',
+        customer: 'Owner Disabled Customer',
+        username: 'owner-disabled-customer',
+        email: 'owner-disabled@example.com',
+        password: 'OwnerDisabledPassword123!',
+        status: 'Active'
+      }, { cookie: recoveredOwnerSession });
       assert.strictEqual(firstCustomer.status, 200, 'The first customer recovery fixture must be created.');
       assert.strictEqual(secondCustomer.status, 200, 'The second customer recovery fixture must be created.');
+      assert.strictEqual(ownerDisabledCustomer.status, 200, 'The explicitly disabled customer fixture must be created.');
 
       const draftDuplicateState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
       draftDuplicateState.customerAccounts.push({
@@ -210,9 +220,25 @@ async function main() {
         status: 'Active',
         source: 'Old application draft without a password'
       });
+      const firstCustomerBeforeApplicationClose = draftDuplicateState.customerAccounts.find(account => account.id === 'recovery-customer-one');
+      Object.assign(firstCustomerBeforeApplicationClose, {
+        status: 'Disabled',
+        portalStage: 'Application denied',
+        applicationId: 'application-recovery-customer-one',
+        disabledAt: new Date().toISOString(),
+        disabledBy: 'Application review test'
+      });
+      const ownerDisabledCustomerRecord = draftDuplicateState.customerAccounts.find(account => account.id === 'owner-disabled-customer');
+      Object.assign(ownerDisabledCustomerRecord, { status: 'Disabled', portalStage: 'Disabled by owner' });
       await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(draftDuplicateState, null, 2));
       const loginBesideOldDraft = await request(server, 'POST', '/customer/login', { username: 'recovery-one@example.com', password: firstCustomerPassword });
-      assert.strictEqual(loginBesideOldDraft.status, 302, 'One password-ready customer account must remain usable when an old passwordless draft shares its email.');
+      assert.strictEqual(loginBesideOldDraft.status, 302, 'One password-ready customer account disabled only by an old application must be restored when its exact password works beside a passwordless draft.');
+      const restoredApplicationAccountState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      const restoredApplicationAccount = restoredApplicationAccountState.customerAccounts.find(account => account.id === 'recovery-customer-one');
+      assert.strictEqual(restoredApplicationAccount.status, 'Active', 'Closing one application must not permanently disable the reusable customer account.');
+      assert.strictEqual(restoredApplicationAccount.portalStage, 'Choose a vehicle', 'A restored customer account must return to the reusable vehicle selection stage.');
+      const ownerDisabledLogin = await request(server, 'POST', '/customer/login', { username: 'owner-disabled-customer', password: 'OwnerDisabledPassword123!' });
+      assert.strictEqual(ownerDisabledLogin.status, 401, 'A deliberately owner-disabled customer account must never auto-reactivate from a correct password.');
 
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         const failed = await request(server, 'POST', '/customer/login', { username: 'recovery-customer-one', password: 'WrongCustomerPassword' + attempt + '!' });
@@ -230,6 +256,12 @@ async function main() {
         code: '619274'
       });
       firstCustomerRecord.loginSecurity.passwordRecovery = customerChallenge.record;
+      Object.assign(firstCustomerRecord, {
+        status: 'Disabled',
+        portalStage: 'Application denied',
+        disabledAt: new Date().toISOString(),
+        disabledBy: 'Application review test'
+      });
       await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(customerLockedState, null, 2));
 
       const crossAccountRecovery = await request(server, 'POST', '/customer/forgot/verify', {
@@ -258,6 +290,8 @@ async function main() {
       const customerFinalState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
       const customerFinalOne = customerFinalState.customerAccounts.find(account => account.id === 'recovery-customer-one');
       assert(!customerFinalOne.loginSecurity, 'Successful customer recovery must clear only that customer account lock and challenge.');
+      assert.strictEqual(customerFinalOne.status, 'Active', 'Verified email recovery must reactivate an account disabled only by its closed application.');
+      assert.strictEqual(customerFinalOne.portalStage, 'Choose a vehicle', 'Verified recovery must return the customer to the reusable portal instead of restoring the denied application.');
       assert(!JSON.stringify(customerFinalState).includes('619274'), 'The customer recovery code must never appear in saved state.');
     } finally {
       try { server.close(); } catch (_) {}
