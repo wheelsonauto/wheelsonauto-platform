@@ -7,6 +7,9 @@
     || window.location.hostname === '127.0.0.1';
   if (!secureOrigin) return;
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/staff-service-worker.js', { scope: '/' }).catch(function () {});
+    navigator.serviceWorker.register('/staff-service-worker.js', {
+      scope: '/',
+      updateViaCache: 'none'
+    }).catch(function () {});
   }, { once: true });
 })();

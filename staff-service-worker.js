@@ -1,6 +1,6 @@
 'use strict';
 
-const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v1';
+const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v2';
 const STAFF_SHELL_ASSETS = [
   '/styles.css',
   '/app.js',
@@ -29,12 +29,11 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (!isStaffShellAsset(url)) return;
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      const fresh = fetch(event.request).then(response => {
+    fetch(event.request)
+      .then(response => {
         if (response.ok) caches.open(STAFF_SHELL_CACHE).then(cache => cache.put(event.request, response.clone()));
         return response;
-      }).catch(() => cached);
-      return cached || fresh;
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });

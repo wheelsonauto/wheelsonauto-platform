@@ -394,6 +394,10 @@ assertIncludes('Consolidated owner cutover evidence', app + stylesCss, [
   'One plan, one billing date, one provider',
   'firstStripeChargeFailureCount',
   'firstStripeChargeFailureIntentId',
+  'Clover to Stripe migration progress',
+  'Next safe action',
+  'migration-steps',
+  'migration-next',
   'Confirm Clover stopped',
   'Recover to Clover',
   '.migration-proof'
