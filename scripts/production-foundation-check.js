@@ -362,6 +362,8 @@ async function main() {
     assert(serverSource.includes('Artifact format: wheelsonauto-payment-receipt-v1')
       && serverSource.includes('Artifact format: wheelsonauto-dispute-evidence-v1')
       && serverSource.includes('async function runPrivateArtifactBackfill')
+      && serverSource.includes('async function preparePrivateArtifactsForProductionStartup')
+      && serverSource.includes(".then(() => preparePrivateArtifactsForProductionStartup())")
       && serverSource.includes("reportBackgroundTaskFailure('private-artifact-storage'")
       && serverSource.includes("missing.push('encrypted payment receipt and dispute evidence artifact backfill')"), 'Paid transactions and owner-reviewed dispute packets must become encrypted immutable artifacts through a durable retry worker, and launch must fail closed while any required artifact is missing.');
     assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical records and active vehicle assignments into transactionally synchronized indexes.');
