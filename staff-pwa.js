@@ -93,7 +93,10 @@
       if (response.status === 401) return;
       var result = await response.json();
       if (!response.ok || !result.ok) return;
-      notifications = result.notifications || [];
+      var previousIds = new Set(notifications.map(function (item) { return item.id; }));
+      var nextNotifications = result.notifications || [];
+      var fresh = initialized ? nextNotifications.filter(function (item) { return !item.read && !previousIds.has(item.id); }) : [];
+      notifications = nextNotifications;
       unreadCount = Number(result.unreadCount || 0);
       attachCenter();
       renderCenter();
@@ -102,6 +105,7 @@
         saveSeenIds(baseline);
         initialized = true;
       } else {
+        if (fresh.length && typeof window.notify === 'function') window.notify(fresh[0].title + (fresh[0].body ? ': ' + fresh[0].body : ''));
         await deviceNotify(notifications);
       }
     } catch (error) {}
@@ -183,8 +187,10 @@
     attachCenter();
     refreshNotifications();
     openTargetFromUrl();
-    pollTimer = window.setInterval(refreshNotifications, 15000);
+    pollTimer = window.setInterval(refreshNotifications, 5000);
   }, { once: true });
   new MutationObserver(attachCenter).observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('focus', refreshNotifications);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshNotifications(); });
   window.addEventListener('pagehide', function () { if (pollTimer) window.clearInterval(pollTimer); }, { once: true });
 })();

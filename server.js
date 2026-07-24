@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-account-app-341';
+const ASSET_VERSION = 'platform-20260724-mobile-messages-342';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -954,6 +954,17 @@ async function writeDataNow(data) {
 }
 async function writeData(data) {
   const job = writeDataQueue.then(() => writeDataNow(data));
+  writeDataQueue = job.catch(() => {});
+  return job;
+}
+async function mutateLatestData(reason, mutator) {
+  const job = writeDataQueue.then(async () => {
+    const latest = await readData();
+    await mutator(latest);
+    const currentMeta = latest && latest[STATE_WRITE_META] || {};
+    Object.defineProperty(latest, STATE_WRITE_META, { value: { ...currentMeta, reason: reason || currentMeta.reason || 'serialized state mutation' }, configurable: true });
+    return writeDataNow(latest);
+  });
   writeDataQueue = job.catch(() => {});
   return job;
 }
@@ -3903,6 +3914,143 @@ async function queueOwnerEmailNotification(data, event, payload = {}) {
   if (settings.events.length && !settings.events.includes(event)) return null;
   return queueEmailNotification(data, { ...payload, event });
 }
+function scheduleCustomerPortalMessageFollowUp(messageId) {
+  setImmediate(() => {
+    void (async () => {
+      const data = await readData();
+      const message = (data.messages || []).find(row => String(row.id || '') === String(messageId || ''));
+      if (!message || message.portalFollowUpCompletedAt) return;
+      const queuedStarDraftId = String(message.portalQueuedStarDraftId || '');
+      const startedAt = new Date().toISOString();
+      await mutateLatestData('customer portal follow-up started', latest => {
+        const latestMessage = (latest.messages || []).find(row => String(row.id || '') === String(messageId || ''));
+        if (latestMessage) {
+          latestMessage.portalFollowUpStartedAt = startedAt;
+          latestMessage.portalFollowUpStage = 'Preparing Star reply';
+        }
+      });
+      const existingMessageIds = new Set((data.messages || []).map(row => String(row.id || '')));
+      const baseState = data && data[STATE_READ_META] && data[STATE_READ_META].baseState || {};
+      const settings = messageSettings(data);
+      if (settings.aiEnabled && settings.aiDrafts) {
+        try {
+          await createAiMessageDraft(data, {
+            messageId: message.id,
+            customer: message.customer,
+            phone: message.phone,
+            email: message.email,
+            channel: 'Customer portal',
+            body: message.body
+          }, { sourceMessageId: message.id, forceNew: true });
+        } catch (error) {
+          const queued = (data.messages || []).find(row => String(row.id || '') === queuedStarDraftId);
+          if (queued) {
+            queued.status = 'Human needed';
+            queued.direction = 'AI action';
+            queued.body = 'Star could not finish this draft. A staff member should review the customer message.';
+            queued.aiProviderError = String(error && error.message || error).slice(0, 400);
+          }
+        }
+      }
+      const starAdditions = (data.messages || []).filter(row => row && row.id && !existingMessageIds.has(String(row.id)));
+      const replaceQueuedStarDraft = starAdditions.length > 0;
+      const afterStarMessageIds = new Set((data.messages || []).map(row => String(row.id || '')));
+      const starCompletedAt = new Date().toISOString();
+      const messagingUpdate = data.integrations && data.integrations.messaging || {};
+      await mutateLatestData('customer portal Star follow-up', latest => {
+        latest.messages = Array.isArray(latest.messages) ? latest.messages : [];
+        const additionIds = new Set(starAdditions.map(row => String(row.id || '')));
+        latest.messages = starAdditions.concat(latest.messages.filter(row => !additionIds.has(String(row && row.id || '')) && (!replaceQueuedStarDraft || !queuedStarDraftId || String(row && row.id || '') !== queuedStarDraftId)));
+        const latestMessage = latest.messages.find(row => String(row.id || '') === String(messageId || ''));
+        if (latestMessage) {
+          if (replaceQueuedStarDraft) latestMessage.portalQueuedStarDraftId = '';
+          latestMessage.portalStarFollowUpCompletedAt = starCompletedAt;
+          latestMessage.portalFollowUpStage = 'Sending owner notification';
+        }
+        latest.integrations = latest.integrations || {};
+        latest.integrations.messaging = mergeConcurrentValue(baseState.integrations && baseState.integrations.messaging || {}, messagingUpdate, latest.integrations.messaging || {}, false);
+      });
+      await queueOwnerEmailNotification(data, 'customer_message', {
+        customer: message.customer,
+        subject: (message.subject || 'Customer message') + ' - ' + message.customer,
+        body: [
+          'A customer sent a message from the WheelsonAuto portal.',
+          'Customer: ' + message.customer,
+          'Phone: ' + (message.phone || 'Not saved'),
+          'Email: ' + (message.email || 'Not saved'),
+          'Intent: ' + (message.intent || 'General question'),
+          'Status: ' + (message.status || 'New'),
+          'Admin approval required: ' + (message.approvalRequired ? 'Yes' : 'No'),
+          message.vehicle ? 'Vehicle: ' + message.vehicle : '',
+          message.vin ? 'VIN: ' + message.vin : '',
+          message.plate ? 'Tag/plate: ' + message.plate : '',
+          message.amount ? 'Payment amount: ' + moneyText(message.amount) : '',
+          message.nextRun ? 'Next charge: ' + message.nextRun + (message.chargeTime ? ' ' + message.chargeTime : '') : '',
+          'Message: ' + (message.body || '')
+        ].filter(Boolean).join('\n')
+      });
+      const additions = (data.messages || []).filter(row => row && row.id && !afterStarMessageIds.has(String(row.id)));
+      const completedAt = new Date().toISOString();
+      const notificationUpdate = data.integrations && data.integrations.notifications || {};
+      await mutateLatestData('customer portal message background follow-up', latest => {
+        latest.messages = Array.isArray(latest.messages) ? latest.messages : [];
+        const additionIds = new Set(additions.map(row => String(row.id || '')));
+        latest.messages = additions.concat(latest.messages.filter(row => !additionIds.has(String(row && row.id || ''))));
+        const latestMessage = latest.messages.find(row => String(row.id || '') === String(messageId || ''));
+        if (latestMessage) {
+          latestMessage.portalFollowUpCompletedAt = completedAt;
+          latestMessage.portalFollowUpStage = 'Complete';
+        }
+        latest.integrations = latest.integrations || {};
+        latest.integrations.notifications = mergeConcurrentValue(baseState.integrations && baseState.integrations.notifications || {}, notificationUpdate, latest.integrations.notifications || {}, false);
+      });
+    })().catch(error => reportBackgroundTaskFailure('customer-portal-message-follow-up', error, { route: '/customer/message', eventId: messageId }, 'Customer portal message follow-up'));
+  });
+}
+function scheduleCustomerPortalEmailNotification(recordId) {
+  setImmediate(() => {
+    void (async () => {
+      const data = await readData();
+      const record = (data.messages || []).find(row => String(row.id || '') === String(recordId || ''));
+      if (!record || record.notificationEmailSent || record.notificationEmailStatus !== 'Queued') return;
+      const settings = messageSettings(data);
+      const notificationPatch = {};
+      if (!settings.emailEnabled || !record.email) {
+        notificationPatch.notificationEmailStatus = settings.emailEnabled ? 'Customer email missing' : 'Email notifications off';
+        notificationPatch.notificationEmailSent = false;
+        notificationPatch.notificationEmailError = '';
+      } else {
+        try {
+          const result = await sendProviderEmail(record.email, 'New WheelsonAuto message', [
+            'Hi ' + String(record.customer || 'there').split(/\s+/)[0] + ',',
+            '',
+            'You have a new secure message from WheelsonAuto:',
+            record.body || '',
+            '',
+            'Open your account: ' + PUBLIC_BASE_URL + '/customer#portal-messages'
+          ].join('\n'), {
+            customer: record.customer,
+            ownerCopy: false,
+            deliveryId: 'portal-notice-' + record.providerIdempotencyKey,
+            messagingSettings: settings
+          });
+          notificationPatch.notificationEmailStatus = result.status || (result.sent ? 'Sent' : 'Email notification failed');
+          notificationPatch.notificationEmailSent = !!result.sent;
+          notificationPatch.notificationEmailError = result.sent ? '' : String(result.message || '');
+        } catch (error) {
+          notificationPatch.notificationEmailStatus = 'Email notification failed';
+          notificationPatch.notificationEmailSent = false;
+          notificationPatch.notificationEmailError = String(error && error.message || error);
+        }
+      }
+      notificationPatch.notificationEmailUpdatedAt = new Date().toISOString();
+      await mutateLatestData('customer portal outbound email notification', latest => {
+        const latestRecord = (latest.messages || []).find(row => String(row.id || '') === String(recordId || ''));
+        if (latestRecord) Object.assign(latestRecord, notificationPatch);
+      });
+    })().catch(error => reportBackgroundTaskFailure('customer-portal-email-notification', error, { route: '/api/messages/send', eventId: recordId, provider: WOA_EMAIL_PROVIDER }, 'Customer portal email notification'));
+  });
+}
 function rememberOperationalErrorTimestamp(cache, key, timestamp, retentionMs) {
   cache.set(key, timestamp);
   if (cache.size <= WOA_OPERATIONAL_ERROR_CACHE_LIMIT) return;
@@ -6048,27 +6196,30 @@ function prepareAiSafeLink(data, plan, context) {
       plan.reply = 'Hi ' + aiCustomerFirstName(plan.customer || context.customerName) + ', I can help update your card on file. I am sending this to the office first so we send the correct secure setup link.';
       return plan;
     }
-    const setup = createCardSetupRequest(data, {
-      id: recurring.id || '',
-      recurringPaymentId: recurring.id || '',
-      reactivateExisting: !!recurring.id,
-      cardOnlyUpdate: !!recurring.id,
-      customer: context.customerName || plan.customer || '',
-      phone: context.phone || plan.phone || '',
-      email: context.email || '',
-      vehicle: context.vehicleName || '',
-      vehicleId: context.vehicle && context.vehicle.id || '',
-      vin: context.vehicle && context.vehicle.vin || '',
-      licensePlate: context.vehicle && (context.vehicle.plate || context.vehicle.licensePlate) || '',
-      tempTag: context.vehicle && context.vehicle.tempTag || '',
-      tracker: context.vehicle && trackerName(context.vehicle) || '',
-      amount,
-      frequency: recurring.frequency || 'Weekly',
-      nextRun: recurring.nextRun || localDateKey(),
-      chargeTime: recurring.chargeTime || recurring.paymentTime || '18:00',
-      reason: 'Star card setup request',
-      notes: 'Created by Star from a customer card-on-file message.'
-    });
+    const existingRequest = (context.cardSetupRequests || []).find(request => isOpenCardSetupRequest(request));
+    const setup = existingRequest
+      ? { request: existingRequest, autopay: recurring }
+      : createCardSetupRequest(data, {
+          id: recurring.id || '',
+          recurringPaymentId: recurring.id || '',
+          reactivateExisting: !!recurring.id,
+          cardOnlyUpdate: !!recurring.id,
+          customer: context.customerName || plan.customer || '',
+          phone: context.phone || plan.phone || '',
+          email: context.email || '',
+          vehicle: context.vehicleName || '',
+          vehicleId: context.vehicle && context.vehicle.id || '',
+          vin: context.vehicle && context.vehicle.vin || '',
+          licensePlate: context.vehicle && (context.vehicle.plate || context.vehicle.licensePlate) || '',
+          tempTag: context.vehicle && context.vehicle.tempTag || '',
+          tracker: context.vehicle && trackerName(context.vehicle) || '',
+          amount,
+          frequency: recurring.frequency || 'Weekly',
+          nextRun: recurring.nextRun || localDateKey(),
+          chargeTime: recurring.chargeTime || recurring.paymentTime || '18:00',
+          reason: 'Star card setup request',
+          notes: 'Created by Star from a customer card-on-file message.'
+        });
     plan.related = { ...(plan.related || {}), cardSetupRequestId: setup.request.id, cardSetupUrl: setup.request.url, recurringPaymentId: setup.autopay.id || plan.related && plan.related.recurringPaymentId || '' };
     plan.reply = appendLinkToReply(plan.reply, 'Secure card setup link', setup.request.url);
     plan.summary = 'Secure card setup link ready for ' + (plan.customer || context.customerName || 'customer');
@@ -9642,7 +9793,7 @@ function safeCustomerLoginReturn(value = '') {
 }
 function customerLoginPage(message = '', next = '') {
   const returnPath = safeCustomerLoginReturn(next);
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>' + (returnPath ? 'Sign in to continue securely in your account. Your password will not be changed.' : 'View your applications, vehicle, payment schedule, service reminders, and account messages.') + '</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + (returnPath ? '<input type="hidden" name="next" value="' + escapeHtml(returnPath) + '">' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div class="login-pin">Both fields must match the same account. Five failed attempts require email recovery.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/register' + (returnPath ? '?next=' + encodeURIComponent(returnPath) : '') + '" style="margin-top:10px;text-align:center">Create customer account</a><a class="btn" href="/login" style="margin-top:10px;text-align:center">Staff login</a></form></main></body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Customer Login</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><main class="login-page customer-login-page"><form class="login-card" method="POST" action="/customer/login"><a class="login-logo-link" href="https://www.wheelsonauto.com/"><img class="login-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"></a><div class="eyebrow">Customer access</div><h1>My WheelsonAuto</h1><p>' + (returnPath ? 'Sign in to continue securely in your account. Your password will not be changed.' : 'View your applications, vehicle, payment schedule, service reminders, and account messages.') + '</p>' + (message ? '<p class="err">' + escapeHtml(message) + '</p>' : '') + (returnPath ? '<input type="hidden" name="next" value="' + escapeHtml(returnPath) + '">' : '') + '<label>Username, email, or phone<input name="username" autocomplete="username" required autofocus></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button><div class="login-pin">Both fields must match the same account. Five failed attempts require email recovery.</div><a class="btn" href="/customer/forgot" style="margin-top:10px;text-align:center">Forgot password?</a><a class="btn" href="/customer/register' + (returnPath ? '?next=' + encodeURIComponent(returnPath) : '') + '" style="margin-top:10px;text-align:center">Create customer account</a></form></main></body></html>';
 }
 function customerRegisterPage(message = '', next = '', values = {}) {
   const returnPath = safeCustomerLoginReturn(next);
@@ -13259,6 +13410,7 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
+    route('GET', '/api/messages/feed', 'Fast role-scoped live message feed'),
     route('POST', '/api/messages/delivery-sync', 'Refresh final SMS carrier delivery results'),
     route('POST', '/api/messages/send', 'Deliver secure customer-app messages or send optional email/SMS'),
     route('POST', '/api/messages/delivery-review', 'Owner review for confirmation-pending SMS delivery'),
@@ -23453,7 +23605,7 @@ const server = http.createServer(async (req, res) => {
       const triage = customerPortalMessageTriage(body);
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       const message = {
-        id: 'msg-customer-portal-' + Date.now(),
+        id: 'msg-customer-portal-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
         date: new Date().toLocaleString('en-US'),
         createdAt: new Date().toISOString(),
         organizationId: account.organizationId || MAIN_ORG_ID,
@@ -23482,39 +23634,39 @@ const server = http.createServer(async (req, res) => {
         nextRun: recurring.nextRun || summary.nextRun || '',
         chargeTime: recurring.chargeTime || summary.chargeTime || ''
       };
-      data.messages.unshift(message);
-      const settings = messageSettings(data);
-      if (settings.aiEnabled && settings.aiDrafts) {
-        await createAiMessageDraft(data, {
-          messageId: message.id,
-          customer: message.customer,
-          phone: message.phone,
-          email: message.email,
-          channel: 'Customer portal',
-          body
-        }, { sourceMessageId: message.id });
-      }
-      await queueOwnerEmailNotification(data, 'customer_message', {
-        customer: message.customer,
-        subject: triage.subject + ' - ' + message.customer,
-        body: [
-          'A customer sent a message from the WheelsonAuto portal.',
-          'Customer: ' + message.customer,
-          'Phone: ' + (message.phone || 'Not saved'),
-          'Email: ' + (message.email || 'Not saved'),
-          'Intent: ' + triage.intent,
-          'Status: ' + triage.status,
-          'Admin approval required: ' + (triage.requiresAdminApproval ? 'Yes' : 'No'),
-          message.vehicle ? 'Vehicle: ' + message.vehicle : '',
-          message.vin ? 'VIN: ' + message.vin : '',
-          message.plate ? 'Tag/plate: ' + message.plate : '',
-          message.amount ? 'Payment amount: ' + moneyText(message.amount) : '',
-          message.nextRun ? 'Next charge: ' + message.nextRun + (message.chargeTime ? ' ' + message.chargeTime : '') : '',
-          'Message: ' + body
-        ].filter(Boolean).join('\n')
-      });
+	      const messageSettingsState = messageSettings(data);
+	      if (messageSettingsState.aiEnabled && messageSettingsState.aiDrafts) {
+	        const queuedStarDraft = {
+	          id: 'msg-ai-queued-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex'),
+	          date: new Date().toLocaleString('en-US'),
+	          createdAt: new Date().toISOString(),
+	          organizationId: message.organizationId,
+	          customer: message.customer,
+	          phone: message.phone,
+	          email: message.email,
+	          direction: 'AI draft',
+	          channel: 'Star AI',
+	          template: 'Preparing reply',
+	          subject: 'Star reply queued',
+	          status: 'Preparing',
+	          tone: 'blue',
+	          body: 'Star is preparing a reply for staff review.',
+	          aiSourceMessageId: message.id,
+	          source: 'WheelsonAuto Star AI',
+	          vehicleId: message.vehicleId,
+	          vehicle: message.vehicle,
+	          vin: message.vin,
+	          plate: message.plate,
+	          tracker: message.tracker,
+	          amount: message.amount
+	        };
+	        message.portalQueuedStarDraftId = queuedStarDraft.id;
+	        data.messages.unshift(queuedStarDraft);
+	      }
+	      data.messages.unshift(message);
 	      appendCustomerPortalAudit(data, account, 'Customer portal message received', [message.customer, triage.intent, triage.status, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '']);
 	      await writeData(data);
+	      scheduleCustomerPortalMessageFollowUp(message.id);
 	      if (wantsJson) return json(res, 201, { ok: true, message: stripCustomerPortalMessage(message), portal: customerPortalState(data, account) });
 	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
 	    }
@@ -25780,6 +25932,19 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
+    if (url.pathname === '/api/messages/feed' && req.method === 'GET') {
+      if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to customer messages.' });
+      const data = await readData();
+      const requestedLimit = Number(url.searchParams.get('limit') || 600);
+      const limit = Math.max(50, Math.min(800, Number.isFinite(requestedLimit) ? requestedLimit : 600));
+      const scoped = filterRowsForUserOrganization(data.messages || [], user)
+        .slice()
+        .sort((left, right) => new Date(right.createdAt || right.date || 0).getTime() - new Date(left.createdAt || left.date || 0).getTime())
+        .slice(0, limit);
+      const messages = (redactStaffSecrets({ messages: scoped }).messages || []);
+      const revision = crypto.createHash('sha256').update(messages.map(row => [row.id, row.createdAt || row.date, row.status, row.body, row.notificationEmailStatus].join('|')).join('\n')).digest('hex').slice(0, 20);
+      return json(res, 200, { ok: true, revision, messages }, { 'Cache-Control': 'private, no-store' });
+    }
     if (url.pathname === '/api/state' && req.method === 'PUT') {
       const incoming = await readJsonBody(req, 32 * 1024 * 1024);
       const current = await readData();
@@ -26346,30 +26511,15 @@ const server = http.createServer(async (req, res) => {
         const ownerMirror = channel === 'SMS' && result.sent && !result.duplicate ? await sendOwnerSmsMirror(data, { ...record, direction: 'Outbound', phone, body }, settings) : null;
         let customerEmailNotification = null;
         if (channel === 'Customer portal' && email && settings.emailEnabled) {
-          try {
-            customerEmailNotification = await sendProviderEmail(email, 'New WheelsonAuto message', [
-              'Hi ' + String(customer || 'there').split(/\s+/)[0] + ',',
-              '',
-              'You have a new secure message from WheelsonAuto:',
-              body,
-              '',
-              'Open your account: ' + PUBLIC_BASE_URL + '/customer#portal-messages'
-            ].join('\n'), {
-              customer,
-              ownerCopy: false,
-              deliveryId: 'portal-notice-' + record.providerIdempotencyKey,
-              messagingSettings: settings
-            });
-          } catch (notificationError) {
-            customerEmailNotification = { sent: false, status: 'Email notification failed', message: String(notificationError && notificationError.message || notificationError) };
-          }
-          record.notificationEmailStatus = customerEmailNotification.status || '';
-          record.notificationEmailSent = !!customerEmailNotification.sent;
-          record.notificationEmailError = customerEmailNotification.sent ? '' : String(customerEmailNotification.message || '');
+          record.notificationEmailStatus = 'Queued';
+          record.notificationEmailSent = false;
+          record.notificationEmailError = '';
+          customerEmailNotification = { sent: false, status: 'Queued', message: 'Customer email notification is sending in the background.' };
         }
         data.integrations.messaging = { ...(data.integrations.messaging || {}), ...publicMessagingStatus(data), lastOutboundAt: new Date().toISOString(), lastOutboundTo: channel === 'Customer portal' ? 'Customer app' : channel === 'Email' ? maskEmail(to) : maskPhone(to), lastError: ownerMirror && ownerMirror.error || '' };
         appendAuditLog(data, user, result.sent ? 'Customer message sent' : (result.inProgress ? 'Customer message confirmation pending' : 'Customer message drafted'), [customer, channel, record.status || 'Ready', record.vehicle || record.vin || 'No vehicle linked']);
         await writeData(data);
+        if (record.notificationEmailStatus === 'Queued') scheduleCustomerPortalEmailNotification(record.id);
         return json(res, result.sent ? 200 : 202, { ok: true, sent: !!result.sent, confirmationPending: !!result.inProgress, message: record, provider: result.provider, customerEmailNotification: customerEmailNotification ? { sent: !!customerEmailNotification.sent, status: customerEmailNotification.status || '', warning: customerEmailNotification.message || '' } : null, ownerMirror: ownerMirror ? { sent: !!ownerMirror.sent, status: ownerMirror.status, bridgeCode: ownerMirror.bridgeCode } : null, warning: result.message || '' });
       } catch (err) {
         const confirmationPending = err && err.code === 'sms_confirmation_pending';

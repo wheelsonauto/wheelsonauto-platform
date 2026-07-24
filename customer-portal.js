@@ -219,7 +219,8 @@
     document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshConversation(false); });
     updateConnection();
     list.scrollTop = list.scrollHeight;
-    pollTimer = window.setInterval(function () { refreshConversation(false); }, 8000);
+    window.addEventListener('focus', function () { refreshConversation(false); });
+    pollTimer = window.setInterval(function () { refreshConversation(false); }, 2500);
     window.addEventListener('pagehide', function () { if (pollTimer) window.clearInterval(pollTimer); }, { once: true });
     refreshConversation(true);
   }
@@ -255,6 +256,129 @@
     window.addEventListener('appinstalled', function () { installButton.hidden = true; });
   }
 
+  function setupMobileKeyboard() {
+    var phone = window.matchMedia('(max-width: 700px)');
+    function syncViewport() {
+      var height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      document.documentElement.style.setProperty('--customer-live-viewport-height', Math.max(280, Math.round(height)) + 'px');
+    }
+    function keyboardControl(target, opening) {
+      if (!phone.matches || !target || !/INPUT|TEXTAREA|SELECT/.test(target.tagName)) return;
+      document.body.classList.toggle('customer-keyboard-open', opening);
+      syncViewport();
+      if (opening) window.setTimeout(function () { target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, 80);
+    }
+    document.addEventListener('focusin', function (event) { keyboardControl(event.target, true); });
+    document.addEventListener('focusout', function () {
+      window.setTimeout(function () {
+        var active = document.activeElement;
+        if (!active || !/INPUT|TEXTAREA|SELECT/.test(active.tagName)) document.body.classList.remove('customer-keyboard-open');
+        syncViewport();
+      }, 80);
+    });
+    window.addEventListener('orientationchange', syncViewport);
+    window.addEventListener('resize', syncViewport);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncViewport);
+      window.visualViewport.addEventListener('scroll', syncViewport);
+    }
+    syncViewport();
+  }
+
+  function setupSettingsNavigation() {
+    var page = document.querySelector('#portal-settings');
+    var columns = page && page.querySelector('.customer-app-columns');
+    var surfaces = columns && Array.prototype.slice.call(columns.querySelectorAll(':scope > .customer-app-surface'));
+    if (!page || !columns || !surfaces || surfaces.length < 2) return;
+
+    var accountPanel = surfaces[0];
+    var mixedPanel = surfaces[1];
+    var feedbackForm = mixedPanel.querySelector('form[action="/customer/feedback"]');
+    var feedbackTitle = feedbackForm && feedbackForm.querySelector('.customer-section-title');
+    var documentForm = mixedPanel.querySelector('form[action="/customer/document-update"]');
+    var documentTitle = documentForm && documentForm.previousElementSibling && documentForm.previousElementSibling.classList.contains('customer-section-title') ? documentForm.previousElementSibling : null;
+    var documentList = mixedPanel.querySelector('.customer-app-list');
+    var policyLinks = mixedPanel.querySelector('.customer-policy-links');
+    var accountActions = accountPanel.querySelector('.customer-settings-actions');
+    var storageKey = 'woa-customer-settings-panel';
+
+    function makePanel(key, eyebrow, title) {
+      var panel = document.createElement('section');
+      panel.className = 'customer-app-surface customer-settings-panel';
+      panel.setAttribute('data-customer-settings-panel', key);
+      panel.hidden = true;
+      panel.innerHTML = '<button class="customer-settings-back" type="button" data-customer-settings-back><span aria-hidden="true">&#8249;</span> Settings</button><div class="customer-section-title customer-settings-generated-title"><div><small>' + eyebrow + '</small><h2>' + title + '</h2></div></div>';
+      return panel;
+    }
+
+    accountPanel.classList.add('customer-settings-panel');
+    accountPanel.setAttribute('data-customer-settings-panel', 'account');
+    accountPanel.hidden = true;
+    var accountBack = document.createElement('button');
+    accountBack.type = 'button';
+    accountBack.className = 'customer-settings-back';
+    accountBack.setAttribute('data-customer-settings-back', '');
+    accountBack.innerHTML = '<span aria-hidden="true">&#8249;</span> Settings';
+    accountPanel.prepend(accountBack);
+
+    var documentsPanel = makePanel('documents', 'Secure files', 'Documents');
+    var feedbackPanel = makePanel('feedback', 'WheelsonAuto support', 'Help and feedback');
+    var accessPanel = makePanel('access', 'Privacy and access', 'Account controls');
+    if (documentTitle) documentTitle.remove();
+    if (documentForm) documentsPanel.appendChild(documentForm);
+    if (documentList) documentsPanel.appendChild(documentList);
+    if (feedbackTitle) feedbackTitle.remove();
+    if (feedbackForm) feedbackPanel.appendChild(feedbackForm);
+    if (accountActions) accessPanel.appendChild(accountActions);
+    if (policyLinks) accessPanel.appendChild(policyLinks);
+    mixedPanel.remove();
+    columns.classList.add('customer-settings-workspace');
+    columns.appendChild(documentsPanel);
+    columns.appendChild(feedbackPanel);
+    columns.appendChild(accessPanel);
+
+    var menu = document.createElement('div');
+    menu.className = 'customer-settings-menu';
+    menu.setAttribute('data-customer-settings-menu', '');
+    menu.innerHTML = [
+      ['account', 'Account and login', 'Phone, email, username and password'],
+      ['documents', 'Documents', 'Insurance, license and private files'],
+      ['feedback', 'Help and feedback', 'Report a problem or request account help'],
+      ['access', 'Privacy and access', 'Policies, install, password reset and log out']
+    ].map(function (item) {
+      return '<button type="button" class="customer-settings-menu-row" data-customer-settings-target="' + item[0] + '"><span><strong>' + item[1] + '</strong><small>' + item[2] + '</small></span><b aria-hidden="true">&#8250;</b></button>';
+    }).join('');
+    columns.before(menu);
+
+    function remember(key) {
+      try {
+        if (key) window.sessionStorage.setItem(storageKey, key); else window.sessionStorage.removeItem(storageKey);
+      } catch (error) {}
+    }
+    function showPanel(key, scroll) {
+      var panels = Array.prototype.slice.call(columns.querySelectorAll('[data-customer-settings-panel]'));
+      var selected = key && panels.find(function (panel) { return panel.getAttribute('data-customer-settings-panel') === key; });
+      menu.hidden = !!selected;
+      columns.hidden = !selected;
+      page.classList.toggle('customer-settings-detail-open', !!selected);
+      panels.forEach(function (panel) { panel.hidden = panel !== selected; });
+      remember(selected ? key : '');
+      if (scroll) page.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+    menu.addEventListener('click', function (event) {
+      var target = event.target.closest('[data-customer-settings-target]');
+      if (target) showPanel(target.getAttribute('data-customer-settings-target'), true);
+    });
+    columns.addEventListener('click', function (event) {
+      if (event.target.closest('[data-customer-settings-back]')) showPanel('', true);
+    });
+    var settingsTab = document.querySelector('.customer-action-hub a[href="#portal-settings"]');
+    if (settingsTab) settingsTab.addEventListener('click', function () { showPanel('', false); });
+    var remembered = '';
+    try { remembered = window.sessionStorage.getItem(storageKey) || ''; } catch (error) {}
+    showPanel(remembered, false);
+  }
+
   function setupCustomerNotifications() {
     var host = document.querySelector('.customer-account-actions') || document.querySelector('.customer-hero');
     if (!host) return;
@@ -288,6 +412,29 @@
         return '<button type="button" class="app-notification-item ' + (item.read ? 'read' : 'unread') + ' ' + html(item.tone || 'blue') + '" data-customer-notification-id="' + html(item.id) + '"><span class="app-notification-status"></span><span><strong>' + html(item.title) + '</strong><small>' + html(item.body) + '</small><time>' + html(time(item.at)) + '</time></span></button>';
       }).join('') : '<div class="app-notification-empty">No app notifications right now.</div>';
     }
+    function showLiveAlert(item) {
+      if (!item) return;
+      var existing = document.querySelector('[data-customer-live-alert]');
+      if (existing) existing.remove();
+      var alert = document.createElement('button');
+      alert.type = 'button';
+      alert.className = 'customer-live-alert ' + String(item.tone || 'blue');
+      alert.setAttribute('data-customer-live-alert', '');
+      var title = document.createElement('strong');
+      var body = document.createElement('span');
+      title.textContent = item.title || 'New update';
+      body.textContent = item.body || 'Open notifications for details.';
+      alert.appendChild(title);
+      alert.appendChild(body);
+      alert.addEventListener('click', function () {
+        mark([item.id], false);
+        var target = new URL(item.url || '/customer', window.location.origin);
+        if (target.hash) window.location.hash = target.hash;
+        alert.remove();
+      });
+      document.body.appendChild(alert);
+      window.setTimeout(function () { if (alert.isConnected) alert.remove(); }, 6500);
+    }
     async function showDeviceAlerts() {
       if (!initialized || !('Notification' in window) || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
       var known = seen();
@@ -308,13 +455,19 @@
         if (response.status === 401) return;
         var result = await response.json();
         if (!response.ok || !result.ok) return;
-        rows = result.notifications || [];
+        var previousIds = new Set(rows.map(function (item) { return item.id; }));
+        var nextRows = result.notifications || [];
+        var fresh = initialized ? nextRows.filter(function (item) { return !item.read && !previousIds.has(item.id); }) : [];
+        rows = nextRows;
         unread = Number(result.unreadCount || 0);
         render();
         if (!initialized) {
           saveSeen(seen().concat(rows.map(function (item) { return item.id; })));
           initialized = true;
-        } else await showDeviceAlerts();
+        } else {
+          if (fresh.length) showLiveAlert(fresh[0]);
+          await showDeviceAlerts();
+        }
       } catch (error) {}
     }
     async function mark(ids, all) {
@@ -349,7 +502,9 @@
     });
     document.addEventListener('click', function (event) { var panel = center.querySelector('[data-customer-notification-panel]'); if (!center.contains(event.target)) panel.hidden = true; });
     refresh();
-    var timer = window.setInterval(refresh, 18000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+    var timer = window.setInterval(refresh, 5000);
     window.addEventListener('pagehide', function () { window.clearInterval(timer); }, { once: true });
   }
 
@@ -357,6 +512,8 @@
   setupPaymentDateFee();
   setupConversation();
   setupInstallableApp();
+  setupMobileKeyboard();
+  setupSettingsNavigation();
   setupCustomerNotifications();
 
   var form = document.querySelector('[data-customer-document-upload]');

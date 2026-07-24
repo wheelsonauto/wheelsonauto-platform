@@ -691,6 +691,153 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   }
 }
 
+/* Authentication alternatives stay quiet and dark; the primary sign-in is gold. */
+.login-card .btn{
+  box-sizing:border-box;
+  width:100%;
+  min-height:42px;
+  justify-content:center;
+  background:#121519!important;
+  border-color:rgba(203,210,218,.16)!important;
+  color:#d9dde0!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045)!important;
+}
+.login-card .btn:hover,
+.login-card .btn:focus-visible{
+  background:#181c20!important;
+  border-color:rgba(213,177,95,.34)!important;
+  color:#f0d993!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.065)!important;
+}
+
+/* Phone workspaces use one fitted tab rail and reveal neighboring views by swipe. */
+@media(max-width:760px){
+  .admin-shell .mobile-swipe-tabs{
+    box-sizing:border-box;
+    display:flex!important;
+    width:100%!important;
+    max-width:100%!important;
+    gap:5px!important;
+    margin:0 0 8px!important;
+    padding:0 0 4px!important;
+    overflow-x:auto!important;
+    overscroll-behavior-x:contain;
+    scroll-snap-type:x mandatory;
+    scrollbar-width:none;
+    touch-action:pan-y;
+  }
+  .admin-shell .mobile-swipe-tabs::-webkit-scrollbar{display:none}
+  .admin-shell .mobile-swipe-tabs>button{
+    box-sizing:border-box;
+    flex:1 0 calc((100% - 15px)/4)!important;
+    width:auto!important;
+    min-width:70px!important;
+    max-width:none!important;
+    min-height:40px!important;
+    padding:6px 4px!important;
+    justify-content:center!important;
+    scroll-snap-align:start;
+    font-size:10px!important;
+    line-height:1.15!important;
+    text-align:center!important;
+    white-space:normal!important;
+  }
+  .admin-shell .mobile-swipe-tabs.workspace-count-tabs>button>span{
+    width:100%;
+    display:flex!important;
+    align-items:center;
+    justify-content:center;
+    gap:4px;
+  }
+  .admin-shell .mobile-swipe-tabs.workspace-count-tabs>button small{
+    color:inherit!important;
+    font-size:9px!important;
+    line-height:1.1!important;
+  }
+  .admin-shell .mobile-swipe-tabs.workspace-count-tabs>button strong{
+    flex:0 0 auto;
+    font-size:10px!important;
+  }
+  .admin-shell .mobile-swipe-tabs .fleet-stat-icon{display:none!important}
+  .admin-shell .mobile-operations-tabs>button{flex-basis:calc((100% - 15px)/4)!important}
+
+  .mobile-unified-fleet>.section-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}
+  .mobile-unified-fleet>.section-head p{display:none}
+  .mobile-fleet-filter,
+  .mobile-verification-filter{
+    position:relative;
+    z-index:12;
+    margin:0 0 8px;
+    border:1px solid rgba(203,210,218,.14);
+    border-radius:7px;
+    background:#111418;
+  }
+  .mobile-fleet-filter>summary,
+  .mobile-verification-filter>summary{
+    min-height:42px;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:0 11px;
+    color:#aeb5bb;
+    font-size:10px;
+    font-weight:800;
+    list-style:none;
+    cursor:pointer;
+  }
+  .mobile-fleet-filter>summary::-webkit-details-marker,
+  .mobile-verification-filter>summary::-webkit-details-marker{display:none}
+  .mobile-fleet-filter>summary strong{color:#edf0f2;font-size:11px}
+  .mobile-fleet-filter>summary span{margin-left:auto;color:#d8bd78;font-size:11px}
+  .mobile-fleet-filter>div,
+  .mobile-verification-filter>div{display:grid;gap:0;padding:0 9px 8px}
+  .mobile-fleet-filter button{
+    min-height:39px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    padding:0 4px;
+    border:0;
+    border-top:1px solid rgba(203,210,218,.09);
+    border-radius:0;
+    background:transparent;
+    color:#c2c8cc;
+    font:inherit;
+    font-size:11px;
+    text-align:left;
+  }
+  .mobile-fleet-filter button.active{color:#f0d993}
+  .mobile-fleet-filter button b{font-size:10px}
+  .mobile-verification-filter .mobile-swipe-tabs{margin:0!important;padding:6px 0 0!important}
+  .mobile-verification-filter .mobile-swipe-tabs>button{flex-basis:44%!important}
+
+  .mobile-fleet-card{position:relative;min-width:0;height:100%;box-sizing:border-box}
+  .mobile-fleet-state{
+    position:absolute;
+    z-index:2;
+    top:9px;
+    right:9px;
+    max-width:46%;
+    padding:4px 6px;
+    border:1px solid rgba(203,210,218,.16);
+    border-radius:6px;
+    background:#171b1f;
+    color:#cdd2d6;
+    font-size:8px;
+    font-weight:850;
+    line-height:1.1;
+    text-align:right;
+  }
+  .mobile-fleet-state.online{border-color:rgba(106,172,238,.28);color:#9fc8ee}
+  .mobile-fleet-state.available{border-color:rgba(104,211,145,.25);color:#98ddb1}
+  .mobile-fleet-state.prep{border-color:rgba(213,177,95,.3);color:#e0c47c}
+  .mobile-fleet-state.assigned{border-color:rgba(203,210,218,.25);color:#e0e4e7}
+  .mobile-fleet-state.service{border-color:rgba(223,119,124,.28);color:#e9a0a4}
+  .mobile-fleet-card .vehicle-card-name{max-width:50%;padding-right:4px}
+  .mobile-fleet-grid .native-online-card{min-width:0}
+}
+
 /* First-party customer conversations replace carrier SMS as the launch path. */
 .customer-account-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
 .customer-conversation-panel{padding:0!important;overflow:hidden;background:#101214!important;border-color:rgba(207,183,125,.3)!important}
@@ -6348,8 +6495,8 @@ body.fast-tab-switch .admin-shell .section{
   position:relative;
   z-index:2;
   display:grid;
-  gap:8px;
-  padding:9px 12px 11px;
+  gap:5px;
+  padding:6px 9px 7px;
   border:0;
   border-top:1px solid rgba(240,184,58,.18);
   border-radius:0;
@@ -6368,9 +6515,9 @@ body.fast-tab-switch .admin-shell .section{
 .message-inbox-shell .message-reply-fields{grid-template-columns:90px minmax(130px,1fr) minmax(160px,1.2fr)}
 .message-inbox-shell .message-reply-fields input,.message-inbox-shell .message-reply-fields select{min-height:36px;padding:7px 9px;border-color:rgba(240,184,58,.18);background:#192129;color:#edf3f7;font-size:12px}
 .message-compose-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
-.message-inbox-shell .message-reply-box textarea{width:100%;min-height:58px;max-height:150px;padding:10px 11px;resize:vertical;border:1px solid rgba(240,184,58,.20);border-radius:8px;background:#192129;color:#f7fbff;font-size:16px;line-height:1.4}
+.message-inbox-shell .message-reply-box textarea{width:100%;min-height:42px;max-height:120px;padding:9px 10px;resize:vertical;border:1px solid rgba(240,184,58,.20);border-radius:8px;background:#192129;color:#f7fbff;font-size:16px;line-height:1.3}
 .message-compose-actions{display:grid;grid-template-columns:1fr;gap:6px}
-.message-compose-actions .btn{min-width:96px;min-height:36px;justify-content:center;padding:7px 10px;font-size:11px}
+.message-compose-actions .btn{min-width:78px;min-height:32px;justify-content:center;padding:6px 9px;font-size:10px}
 .message-composer-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#8f9ca7;font-size:9px;line-height:1.35}
 .message-composer-foot>span{min-width:0}
 .message-composer-foot .tag{margin-right:5px;padding:3px 6px;font-size:9px}
@@ -6442,6 +6589,7 @@ body.fast-tab-switch .admin-shell .section{
   .message-inbox-shell .message-conversation-panel{display:none}
   .message-inbox-shell.message-mobile-thread-open .message-thread-list{display:none}
   .message-inbox-shell.message-mobile-thread-open .message-conversation-panel{display:grid}
+  .view-messages:has(.message-inbox-shell.message-mobile-thread-open)>.message-focused-tabs{display:none!important}
   .message-mobile-back{display:inline-flex!important}
 }
 
@@ -6484,15 +6632,13 @@ body.fast-tab-switch .admin-shell .section{
   .message-conversation-identity .message-thread-avatar{display:none}
   .message-inbox-shell .message-conversation-head h2{font-size:14px}
   .message-inbox-shell .message-conversation-head p{max-width:160px;font-size:9px}
-  .message-context-strip{min-height:32px;padding:5px 9px}
-  .message-context-strip span{font-size:9px}
   .message-inbox-shell .message-bubbles{padding:12px 9px 16px!important}
   .message-inbox-shell .message-bubble{max-width:88%;padding:9px 10px}
   .message-inbox-shell .message-bubble-text{font-size:13px}
-  .message-inbox-shell .message-reply-box{padding:8px 8px calc(9px + env(safe-area-inset-bottom))}
+  .message-inbox-shell .message-reply-box{padding:5px 7px calc(6px + env(safe-area-inset-bottom))}
   .message-inbox-shell .message-reply-fields{grid-template-columns:1fr}
   .message-compose-row{grid-template-columns:1fr}
-  .message-inbox-shell .message-reply-box textarea{min-height:52px;max-height:104px}
+  .message-inbox-shell .message-reply-box textarea{min-height:42px;max-height:92px}
   .message-compose-actions{grid-template-columns:1fr 1fr}
   .message-compose-actions .btn{width:100%;min-width:0}
   .message-composer-foot{align-items:flex-start}
@@ -8194,17 +8340,118 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
 .customer-app-disclosure{margin-top:14px;border-top:1px solid rgba(203,210,218,.1)}.customer-app-disclosure summary{padding:14px 0 2px;color:#d4bd80;font-size:11px;font-weight:850;cursor:pointer}.customer-app-disclosure[open] summary{margin-bottom:14px}.customer-app-disclosure .customer-app-form+.customer-app-form{margin-top:14px;padding-top:14px;border-top:1px solid rgba(203,210,218,.08)}
 .customer-vehicle-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;margin-bottom:18px;border:1px solid rgba(203,210,218,.09);border-radius:7px;overflow:hidden;background:rgba(203,210,218,.07)}.customer-vehicle-facts span{min-width:0;display:grid;gap:6px;padding:12px;background:#0f1216;color:#7f8991;font-size:9px;text-transform:uppercase}.customer-vehicle-facts b{color:#dfe3e6;font-size:11px;text-transform:none;overflow-wrap:anywhere}.customer-vehicle-choices{display:grid;gap:7px}.customer-vehicle-choice{display:grid!important;grid-template-columns:auto 54px minmax(0,1fr);align-items:center;gap:10px;padding:8px;border:1px solid rgba(203,210,218,.11);border-radius:7px;background:#0f1215;cursor:pointer}.customer-vehicle-choice:has(input:checked){border-color:rgba(213,177,95,.4);background:rgba(213,177,95,.06)}.customer-vehicle-choice input{width:16px!important;height:16px;min-height:0!important}.customer-vehicle-choice-media{width:54px;height:40px;display:grid;place-items:center;overflow:hidden;border-radius:5px;background:#191d21}.customer-vehicle-choice-media img{width:100%;height:100%;object-fit:cover}.customer-vehicle-choice-media i{color:#8f979e;font-size:9px}.customer-vehicle-choice>span:last-child{min-width:0;display:grid;gap:3px}.customer-vehicle-choice strong{font-size:11px}.customer-vehicle-choice small{color:#848d95;font-size:9px}.customer-check{display:grid!important;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:9px!important}.customer-check input{width:17px!important;height:17px;min-height:0!important}.customer-check span{color:#adb4ba;font-size:10px;line-height:1.45}
 .customer-settings-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid rgba(203,210,218,.1)}.customer-policy-links{display:flex;gap:14px;flex-wrap:wrap;margin-top:16px;padding-top:13px;border-top:1px solid rgba(203,210,218,.1)}.customer-policy-links a{color:#aab2b8;font-size:10px;text-decoration:none}.customer-policy-links a:hover{color:#e1ca8b}
+.customer-settings-menu{width:min(760px,100%);margin:0 auto;overflow:hidden;border:1px solid rgba(203,210,218,.13);border-radius:8px;background:#121519;box-shadow:0 18px 38px rgba(0,0,0,.18)}
+.customer-settings-menu-row{width:100%;min-height:68px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:18px;border:0;border-bottom:1px solid rgba(203,210,218,.09);border-radius:0;background:transparent;color:#edf0f2;text-align:left;cursor:pointer;transition:background .16s ease,color .16s ease}.customer-settings-menu-row:last-child{border-bottom:0}.customer-settings-menu-row:hover,.customer-settings-menu-row:focus-visible{background:rgba(213,177,95,.07);color:#f0d99d;outline:none}.customer-settings-menu-row>span{display:grid;gap:4px;min-width:0}.customer-settings-menu-row strong{font-size:14px;line-height:1.2}.customer-settings-menu-row small{color:#929aa1;font-size:11px;line-height:1.35}.customer-settings-menu-row b{flex:0 0 auto;color:#9aa2a8;font-size:26px;font-weight:400;line-height:1}
+.customer-settings-workspace{width:min(800px,100%);margin:0 auto;display:block}.customer-settings-workspace[hidden],.customer-settings-menu[hidden],.customer-settings-panel[hidden]{display:none!important}.customer-settings-panel{width:100%;margin:0 auto}.customer-settings-back{display:inline-flex;align-items:center;gap:5px;min-height:36px;margin:-5px 0 14px -5px;padding:4px 8px;border:0;border-radius:6px;background:transparent;color:#d8bd7c;font-size:12px;font-weight:800;cursor:pointer}.customer-settings-back:hover,.customer-settings-back:focus-visible{background:rgba(213,177,95,.08);outline:none}.customer-settings-back span{font-size:25px;font-weight:400;line-height:.7}.customer-settings-generated-title{padding-bottom:12px;border-bottom:1px solid rgba(203,210,218,.09)}
 .customer-mobile-page-head{display:none}.customer-app-shell .customer-conversation-panel{padding:0;border:1px solid rgba(203,210,218,.12);border-radius:8px;overflow:hidden;background:#121519}.customer-app-shell .customer-chat{height:min(720px,calc(100dvh - 190px));min-height:520px;background:#101317}.customer-app-shell .customer-chat-header{background:#14181c}.customer-app-shell .customer-chat-composer{background:#111418}.customer-app-shell .customer-chat-composer .btn{justify-content:center}
 .customer-app-shell .customer-row{border-color:rgba(203,210,218,.09);color:#dfe3e6}.customer-app-shell .customer-row strong,.customer-app-shell .customer-row b{color:#e9ecee}.customer-app-shell .customer-row small,.customer-app-shell .customer-row p{color:#858e96}.customer-app-shell .customer-row .btn{min-height:34px;padding:7px 10px}
 .customer-app-shell .btn.primary{border:1px solid rgba(213,177,95,.38);background:rgba(213,177,95,.14);color:#f0d993;box-shadow:none}.customer-app-shell .btn.primary:hover{border-color:rgba(213,177,95,.58);background:rgba(213,177,95,.2);color:#f5e3af;box-shadow:none}
 @media(max-width:900px){.customer-app-shell.customer-portal{padding-inline:14px}.customer-app-columns{grid-template-columns:1fr}.customer-home-stats strong{font-size:21px}}
 @media(max-width:700px){
-  .customer-app-shell.customer-portal{padding:0 10px calc(82px + env(safe-area-inset-bottom))}.customer-app-header{height:58px;grid-template-columns:minmax(0,1fr) auto;padding:env(safe-area-inset-top) 2px 0}.customer-app-brand{display:none}.customer-app-welcome{text-align:left}.customer-app-welcome small{display:none}.customer-app-welcome strong{font-size:14px}.customer-app-header .customer-account-actions{grid-column:2;justify-self:end}
+  .customer-app-shell.customer-portal{padding:0 10px calc(82px + env(safe-area-inset-bottom))}.customer-app-header{height:54px;grid-template-columns:minmax(0,1fr) 40px;gap:7px;padding:env(safe-area-inset-top) 2px 0}.customer-app-brand{display:none}.customer-app-welcome{min-width:0;text-align:left;overflow:hidden}.customer-app-welcome small{display:none}.customer-app-welcome strong{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.customer-app-header .customer-account-actions{grid-column:2;justify-self:end;width:38px;min-width:38px;overflow:visible}.customer-app-header .customer-notification-center{width:38px}
   .customer-app-tabs.customer-action-hub{position:fixed;z-index:80;inset:auto 7px calc(7px + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px;width:auto;padding:6px;border:1px solid rgba(203,210,218,.15);border-radius:10px;background:#15181c;box-shadow:0 -16px 38px rgba(0,0,0,.42)}.customer-app-tabs.customer-action-hub a{min-width:0;min-height:48px;padding:5px 2px;display:grid;place-items:center;gap:2px;border-radius:7px;font-size:9px}.customer-app-tabs.customer-action-hub a:hover{border-color:transparent}.customer-app-tabs b{display:none}
   .customer-portal-page{padding:17px 0}.customer-page-heading{align-items:flex-start;margin-bottom:14px}.customer-page-heading h1{font-size:23px}.customer-page-heading small{font-size:9px}.customer-status{max-width:45%;padding:6px 8px;font-size:9px}
   .customer-home-stats,.customer-home-stats.payments{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:9px}.customer-home-stats article{padding:10px 8px;gap:4px;border-radius:7px}.customer-home-stats span{font-size:8px}.customer-home-stats strong{font-size:15px}.customer-home-stats small{font-size:8px}
   .customer-app-columns{gap:9px}.customer-app-surface{padding:13px;border-radius:7px}.customer-section-title{margin-bottom:11px}.customer-section-title h2{font-size:15px}.customer-vehicle-summary{grid-template-columns:1fr}.customer-vehicle-summary span{padding:9px;grid-template-columns:58px minmax(0,1fr);align-items:center}
+  #portal-settings.customer-settings-detail-open>.customer-page-heading{display:none}.customer-settings-menu{border-radius:7px}.customer-settings-menu-row{min-height:64px;padding:12px 13px}.customer-settings-menu-row strong{font-size:13px}.customer-settings-menu-row small{font-size:10px}.customer-settings-panel.customer-app-surface{padding-top:10px}.customer-settings-back{position:sticky;top:4px;z-index:4;margin:0 0 12px -4px;background:#121519}
   .customer-app-form,.customer-app-form.compact{grid-template-columns:1fr;gap:9px}.customer-app-form input,.customer-app-form select,.customer-app-form textarea{font-size:16px}.customer-app-form .btn{width:100%;justify-content:center}.customer-app-form.compact>small{grid-column:auto}.customer-app-row{padding:10px 0}.customer-vehicle-facts{grid-template-columns:1fr 1fr}.customer-settings-actions{display:grid;grid-template-columns:1fr;gap:4px}.customer-settings-actions .customer-app-link{min-height:38px}
-  .customer-mobile-page-head{display:flex;align-items:center;justify-content:space-between;padding:0 2px 9px}.customer-mobile-page-head a{color:#d8bd78;font-size:11px;text-decoration:none}.customer-mobile-page-head strong{font-size:12px}.customer-app-shell .customer-chat{height:calc(100dvh - 145px - env(safe-area-inset-bottom));min-height:390px}.customer-app-shell .customer-chat-header{display:none}.customer-app-shell .customer-chat-context{padding:6px 8px}.customer-app-shell .customer-chat-messages{padding:11px 8px}.customer-app-shell .customer-chat-composer{padding:8px}.customer-app-shell .customer-chat-composer textarea{font-size:16px}
+  .customer-mobile-page-head{display:flex;align-items:center;justify-content:space-between;padding:0 2px 9px}.customer-mobile-page-head a{color:#d8bd78;font-size:11px;text-decoration:none}.customer-mobile-page-head strong{font-size:12px}.customer-app-shell .customer-chat{height:calc(var(--customer-live-viewport-height,100dvh) - 145px - env(safe-area-inset-bottom));min-height:0}.customer-app-shell .customer-chat-header{display:none}.customer-app-shell .customer-chat-context{padding:6px 8px}.customer-app-shell .customer-chat-messages{padding:11px 8px}.customer-app-shell .customer-chat-composer{position:relative;z-index:2;padding:8px}.customer-app-shell .customer-chat-composer textarea{font-size:16px}
   .customer-notification-center .app-notification-panel{top:calc(58px + env(safe-area-inset-top));max-height:calc(100vh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}
+  .customer-app-body.customer-keyboard-open .customer-app-tabs.customer-action-hub{opacity:0;pointer-events:none;transform:translateY(110%)}
+  .customer-app-body.customer-keyboard-open .customer-app-shell.customer-portal{padding-bottom:8px}
+  .customer-app-body.customer-keyboard-open .customer-app-shell .customer-chat{height:calc(var(--customer-live-viewport-height,100dvh) - 112px);min-height:0}
+}
+
+/* Staff and customer app headers use the same restrained glass surface. */
+.admin-shell .topbar.compact-title{
+  min-height:54px;
+  margin:0 0 12px;
+  padding:10px 12px;
+  border:1px solid rgba(203,210,218,.14)!important;
+  border-radius:8px;
+  background:linear-gradient(145deg,rgba(231,235,238,.07),rgba(213,177,95,.035)),rgba(17,20,23,.94)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 12px 28px rgba(0,0,0,.18);
+  backdrop-filter:blur(14px) saturate(108%);
+}
+.admin-shell .topbar.compact-title h1{color:#eef0f2;font-size:22px}
+.customer-live-alert{
+  position:fixed;
+  z-index:120;
+  top:calc(12px + env(safe-area-inset-top));
+  right:12px;
+  display:grid;
+  gap:3px;
+  width:min(360px,calc(100vw - 24px));
+  padding:12px 14px;
+  border:1px solid rgba(203,210,218,.24);
+  border-radius:8px;
+  background:linear-gradient(145deg,rgba(231,235,238,.1),rgba(213,177,95,.06)),#171a1d;
+  color:#eef0f2;
+  box-shadow:0 20px 54px rgba(0,0,0,.46);
+  text-align:left;
+  font:inherit;
+  cursor:pointer;
+}
+.customer-live-alert strong{font-size:12px}.customer-live-alert span{color:#b9c0c6;font-size:11px;line-height:1.4}.customer-live-alert.good{border-color:rgba(104,211,145,.35)}.customer-live-alert.warn{border-color:rgba(213,177,95,.42)}.customer-live-alert.bad{border-color:rgba(223,119,124,.42)}
+@media(max-width:700px){
+  .admin-shell .topbar.compact-title{top:4px;min-height:48px;margin:0 0 8px;padding:8px 10px;border-radius:8px}
+  .admin-shell .topbar.compact-title h1{max-width:calc(100vw - 92px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:19px}
+  .customer-live-alert{top:calc(8px + env(safe-area-inset-top));right:8px;width:calc(100vw - 16px)}
+}
+
+/* Match staff card surfaces to the customer app without changing action colors. */
+.admin-shell :is(.card,.item,.lead-card,.column,.mechanic-card,.company-card,.api-phase,.public-vehicle-card,.account-card,.file-summary>div,.health-card,.access-lane,.match-lane,.application-lane,.claim-lane,.message-lane,.timeline-item,.access-next-item,.claim-next-item,.match-next-item,.ops-item,.due-row,.mini-row,.payment-next-item,.service-next-item,.fleet-next-item,.accounting-next-item,.customer-pay-card,.today-focus-main,.today-metric,.payment-lane,.service-lane,.fleet-lane,.workflow-step,.readiness-card,.accounting-lane,.api-lane,.executive-card,.native-online-summary span,.native-file-grid>div,.native-application-card,.native-review-file,.local-result-card),
+.admin-shell :is(.native-inventory-board,.native-website-apps,.native-applications-board){
+  background:#121519!important;
+  border-color:rgba(203,210,218,.12)!important;
+  box-shadow:0 16px 34px rgba(0,0,0,.16)!important;
+}
+.admin-shell :is(.card,.item,.lead-card,.mechanic-card,.company-card,.due-row,.mini-row,.customer-pay-card,.native-online-card,.native-application-card,.native-review-file,.local-result-card):hover{
+  background:#121519!important;
+  border-color:rgba(213,177,95,.27)!important;
+  box-shadow:0 18px 38px rgba(0,0,0,.21)!important;
+}
+
+/* Customer actions share the staff app's light modern gold treatment. */
+.customer-app-shell .btn.primary,
+.customer-app-shell .btn.gold{
+  background:linear-gradient(145deg,rgba(240,217,147,.18),rgba(213,177,95,.07)),rgba(24,27,30,.94)!important;
+  border-color:rgba(240,217,147,.58)!important;
+  color:#f4dda0!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 9px 22px rgba(0,0,0,.2),0 0 0 1px rgba(213,177,95,.05)!important;
+}
+.customer-app-shell .btn.primary:hover,
+.customer-app-shell .btn.gold:hover{
+  background:linear-gradient(145deg,rgba(240,217,147,.25),rgba(213,177,95,.10)),rgba(28,31,34,.96)!important;
+  border-color:rgba(240,217,147,.78)!important;
+  color:#ffeab4!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 11px 26px rgba(0,0,0,.24),0 0 18px rgba(213,177,95,.08)!important;
+}
+.customer-app-tabs.customer-action-hub a.active{
+  background:linear-gradient(180deg,rgba(213,177,95,.18),rgba(213,177,95,.09))!important;
+  border-color:rgba(240,217,147,.48)!important;
+  color:#f0d993!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 8px 18px rgba(0,0,0,.14)!important;
+}
+
+/* Message workspaces use the same near-black card surface as the customer app. */
+.admin-shell :is(.message-inbox-shell,.message-thread-list,.message-conversation-panel,.message-tool-panel,.message-setup-focused>.card,.message-focused-tabs),
+.admin-shell .message-inbox-shell :is(.message-thread-row,.message-conversation-head,.message-reply-box){
+  background:#121519!important;
+  border-color:rgba(203,210,218,.12)!important;
+}
+.admin-shell .message-inbox-shell .message-bubbles{background:#0f1216!important}
+
+@media(min-width:761px){
+  .customer-pay-card{position:relative;overflow:visible!important}
+  .customer-pay-card:has(.action-menu[open]){z-index:90}
+  .customer-pay-card>.actions>.action-menu[open]{display:inline-block;flex:0 0 auto;min-width:0;z-index:95}
+  .customer-pay-card>.actions>.action-menu>.action-menu-panel{
+    position:absolute;
+    z-index:100;
+    top:calc(100% + 7px);
+    right:auto;
+    left:0;
+    margin-top:0;
+  }
 }

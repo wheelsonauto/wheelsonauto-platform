@@ -158,7 +158,12 @@ if (launchPreflight.includes('Two active assignment records block')) {
   '.business-overview-grid{display:grid',
   '.payment-action-bar>div:first-child{display:none!important}',
   '.action-menu-panel{',
-  '.action-menu:not([open])>.action-menu-panel{display:none}'
+  '.action-menu:not([open])>.action-menu-panel{display:none}',
+  'function MobileOperations()',
+  'data-mobile-fleet-filter',
+  'function enhanceMobileSwipeTabs()',
+  '.admin-shell .mobile-swipe-tabs{',
+  '.login-card .btn{'
 ].forEach(text => {
   if (!(app + css).includes(text)) fail('action hierarchy/mobile shell guard is missing: ' + text);
 });

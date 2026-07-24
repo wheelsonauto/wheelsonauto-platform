@@ -81,7 +81,10 @@ assert(html.includes('Current password'), 'Sensitive profile edits must require 
 assert(html.includes('JPG, PNG, or PDF up to 5 MB'), 'Private document upload limits must be visible.');
 assert(clientSource.includes('weekly / 7 * days'), 'The live date-change preview must use the exact weekly divided-by-seven calculation.');
 assert(clientSource.includes("window.addEventListener('hashchange'"), 'Browser back and customer tab changes must stay synchronized.');
+assert(clientSource.includes('function setupSettingsNavigation()') && clientSource.includes('data-customer-settings-target'), 'Settings must open focused app-style category screens instead of one long stack of cards.');
+assert(clientSource.includes('data-customer-settings-back') && clientSource.includes("window.sessionStorage.setItem(storageKey, key)"), 'Settings detail screens must include Back navigation and preserve the active screen after a save.');
 assert(styleSource.includes('.customer-app-pages') && styleSource.includes('.customer-app-tabs'), 'The responsive customer app layout styles are missing.');
+assert(styleSource.includes('.customer-settings-menu-row') && styleSource.includes('.customer-settings-panel[hidden]'), 'Settings category rows and focused-panel visibility styles are missing.');
 assert(/@media\s*\(max-width:\s*760px\)/.test(styleSource), 'The customer app must retain a phone-specific layout.');
 assert(/font-size:\s*16px/.test(styleSource), 'Phone form controls must retain a 16px size to prevent input zoom.');
 

@@ -608,7 +608,7 @@ assertIncludes('Focused Messages workspace', messagesFocused + app + css, [
   'message-mobile-thread-open',
   'message-mobile-back',
   'Showing the latest ',
-  'Sensitive payment and account changes still need admin approval.'
+  'messageIsConversationRecord'
 ]);
 assertIncludes('Communication command board', messages + communicationCommandItems + communicationCommandBoard + app + css, [
   'Communication command',

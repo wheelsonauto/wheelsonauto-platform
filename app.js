@@ -389,7 +389,8 @@ function messagePhoneValue(m){return[m&&m.phone,m&&m.from,m&&m.to].find(function
 function messageEmailValue(m){return m&&m.email||[m&&m.from,m&&m.to].find(function(value){return String(value||'').indexOf('@')>0})||''}
 function messageTimeValue(m){var value=m&&(m.createdAt||m.date||''),time=Date.parse(value);return Number.isFinite(time)?time:0}
 function messageThreadKey(m){return clientPhoneKey(messagePhoneValue(m))||normName(messageEmailValue(m))||normName(m.customer)||m.id}
-function messageThreads(){var map={};(db.messages||[]).forEach(function(m){var k=messageThreadKey(m),phone=messagePhoneValue(m),email=messageEmailValue(m);if(!map[k])map[k]={key:k,customer:m.customer||'Unknown texter',phone:phone,email:email,last:m,items:[]};map[k].items.push(m);if(messageTimeValue(m)>messageTimeValue(map[k].last))map[k].last=m;if(m.customer&&!/^Unknown|Customer$/i.test(m.customer))map[k].customer=m.customer;if(phone)map[k].phone=phone;if(email)map[k].email=email});return Object.keys(map).map(function(k){var x=map[k];x.items=x.items.sort(function(a,b){return messageTimeValue(a)-messageTimeValue(b)});return x}).sort(function(a,b){return messageTimeValue(b.last)-messageTimeValue(a.last)})}
+function messageIsConversationRecord(m){var source=String(m&&m.source||''),direction=String(m&&m.direction||''),event=String(m&&m.event||''),channel=String(m&&m.channel||'');if(source==='WheelsonAuto email notification'||direction==='Outbound notification'||event==='customer_message')return false;if(/Star AI/i.test(source)||/AI draft|AI action/i.test(direction)||channel==='Star AI')return false;return true}
+function messageThreads(){var map={};(db.messages||[]).filter(messageIsConversationRecord).forEach(function(m){var k=messageThreadKey(m),phone=messagePhoneValue(m),email=messageEmailValue(m);if(!map[k])map[k]={key:k,customer:m.customer||'Unknown texter',phone:phone,email:email,last:m,items:[]};map[k].items.push(m);if(messageTimeValue(m)>messageTimeValue(map[k].last))map[k].last=m;if(m.customer&&!/^Unknown|Customer$/i.test(m.customer))map[k].customer=m.customer;if(phone)map[k].phone=phone;if(email)map[k].email=email});return Object.keys(map).map(function(k){var x=map[k];x.items=x.items.sort(function(a,b){return messageTimeValue(a)-messageTimeValue(b)});return x}).sort(function(a,b){return messageTimeValue(b.last)-messageTimeValue(a.last)})}
 function smsDeliveryNeedsReview(message){return isOwner()&&/confirmation pending/i.test(String(message&&message.status||''))&&/^woa-sms-[a-f0-9]{64}$/.test(String(message&&message.providerIdempotencyKey||''))&&!message.deliveryReviewOutcome}
 function smsDeliveryReviewButton(message){return smsDeliveryNeedsReview(message)?'<button class="btn gold" data-action="review-sms-delivery" data-id="'+esc(message.id)+'">Review delivery</button>':''}
 function openSmsDeliveryReview(message){var contact=formatPhone(message.phone||message.to||message.from)||'No phone saved';openModal('Review SMS delivery','<div class="notice warn"><strong>Check Telnyx before choosing.</strong><br>The carrier response was interrupted, so WheelsonAuto blocked every automatic retry. Confirm the customer, time, destination, and message in Telnyx first.</div><div class="item"><strong>'+esc(message.customer||'Unknown customer')+'</strong><div>'+esc(contact+' | '+(message.provider||'SMS provider'))+'</div><div class="muted">'+esc(message.body||message.subject||'No message text saved')+'</div></div><div class="field" style="margin-top:12px"><label>Owner review note</label><textarea id="smsDeliveryReviewNote" placeholder="What Telnyx shows, provider message ID, or why retry is safe"></textarea></div><div class="actions" style="margin-top:12px"><button class="btn primary" data-action="confirm-sms-delivered" data-id="'+esc(message.id)+'">Carrier shows delivered</button><button class="btn danger" data-action="release-sms-retry" data-id="'+esc(message.id)+'">Carrier shows no send - allow retry</button><button class="btn" data-action="close-modal">Back</button></div>')}
@@ -414,7 +415,62 @@ function openComposeMessage(id){
   openModal((msg.type==='Manual text'?'New message':'Compose: '+msg.type),'<div class="grid two"><div class="field"><label>Customer</label><input id="messageCustomer" value="'+esc(msg.customer||'')+'" placeholder="Customer name"></div><div class="field"><label>Channel</label><select id="messageChannel">'+(portalReady?'<option value="Customer portal" '+(preferred==='Customer portal'?'selected':'')+'>Customer app</option>':'')+'<option value="Email" '+(preferred==='Email'?'selected':'')+'>Email</option><option value="SMS" '+(preferred==='SMS'?'selected':'')+'>Optional SMS</option></select></div><div class="field"><label>Phone number</label><input id="messagePhone" value="'+esc(phone)+'" placeholder="Customer phone"></div><div class="field"><label>Email</label><input id="messageEmail" value="'+esc(email)+'" placeholder="Customer email"></div><div class="item"><strong>Type</strong><div>'+esc(msg.type||'Message')+'</div></div><div class="item"><strong>Send mode</strong><div>'+sendBadge+'</div><div class="muted">'+esc(modeCopy)+'</div></div></div><div class="field span2" style="margin-top:12px"><label>Message</label><textarea id="payLinkMessage">'+esc(msg.body||'')+'</textarea></div><input id="messageTemplate" type="hidden" value="'+esc(msg.type||'Manual text')+'"><div class="actions" style="margin-top:12px"><button class="btn primary" data-action="send-message-now">Send message</button><button class="btn" data-action="copy-pay-link">Copy message</button><button class="btn" data-view="Messages">Back</button></div>')
 }
 document.addEventListener('click',async function(e){var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(['review-sms-delivery','confirm-sms-delivered','release-sms-retry','close-modal'].indexOf(a)<0)return;e.preventDefault();e.stopImmediatePropagation();if(a==='close-modal'){closeModal();return}if(!isOwner()){notify('Only the owner can review uncertain SMS delivery');return}var message=(db.messages||[]).find(function(item){return item.id===b.dataset.id});if(!message){notify('SMS delivery record was not found. Refresh and try again.');return}if(a==='review-sms-delivery'){openSmsDeliveryReview(message);return}b.disabled=true;b.classList.add('is-loading');var reviewed=await post('/api/messages/delivery-review',{messageId:message.id,action:a==='confirm-sms-delivered'?'confirm_delivered':'release_retry',note:val('smsDeliveryReviewNote')});b.disabled=false;b.classList.remove('is-loading');if(reviewed.ok){await refreshData(true);closeModal();view='Messages';tab='History';Messages();notify(a==='confirm-sms-delivered'?'SMS marked delivered after owner carrier review.':'Retry released. Send a new message only after confirming Telnyx shows no delivery.')}else notify(reviewed.error||'SMS delivery review did not save')},true)
-document.addEventListener('click',async function(e){var b=e.target.closest('button[data-action]');if(!b)return;var a=b.dataset.action;if(a==='select-message-thread'){e.preventDefault();e.stopImmediatePropagation();if(!actionAllowed(a)){notify('This account does not have access to that action');return}activeMessageThreadKey=b.dataset.id||'';localStorage.setItem('woa-active-message-thread',activeMessageThreadKey);view='Messages';tab='Inbox';Messages();return}if(a==='compose-message'){e.preventDefault();e.stopImmediatePropagation();if(!actionAllowed('compose-message')){notify('This account does not have access to that action');return}openComposeMessage(b.dataset.id||'new');return}if(a==='send-message-now'||a==='send-thread-message'){e.preventDefault();e.stopImmediatePropagation();if(!actionAllowed(a)){notify('This account does not have access to that action');return}var threadMode=a==='send-thread-message',messageDeliveryId=b.dataset.deliveryId||('ui-message-'+Date.now()+'-'+Math.random().toString(16).slice(2));b.dataset.deliveryId=messageDeliveryId;var payload=threadMode?{customer:val('threadMessageCustomer'),phone:val('threadMessagePhone'),email:val('threadMessageEmail'),channel:val('threadMessageChannel')||'Customer portal',body:val('threadMessageBody'),template:'Thread reply',subject:'WheelsonAuto reply',deliveryId:messageDeliveryId}:{customer:val('messageCustomer'),phone:val('messagePhone'),email:val('messageEmail'),channel:val('messageChannel')||'Customer portal',body:val('payLinkMessage'),template:val('messageTemplate')||'Manual text',subject:val('messageTemplate')||'WheelsonAuto message',deliveryId:messageDeliveryId};if(!payload.body){delete b.dataset.deliveryId;notify('Type a message first');return}b.disabled=true;b.classList.add('is-loading');var sent=await post('/api/messages/send',payload);b.disabled=false;b.classList.remove('is-loading');if(sent.ok){if(sent.confirmationPending){notify(sent.warning||'Message is waiting for provider confirmation. WheelsonAuto did not send another copy.');return}delete b.dataset.deliveryId;if(threadMode)pendingThreadReplyDraft=null;await refreshData(true);if(threadMode&&sent.message)activeMessageThreadKey=messageThreadKey(sent.message);if(activeMessageThreadKey)localStorage.setItem('woa-active-message-thread',activeMessageThreadKey);if(!threadMode)closeModal();view='Messages';tab='Inbox';Messages();notify(sent.sent?(payload.channel==='Customer portal'?'Delivered in customer app':payload.channel==='Email'?'Email sent':'Text sent'):(payload.channel==='Email'?'Email saved until connected':'Message saved'))}else notify(sent.error||'Message did not send');return}if(a==='star-ai-custom'){e.preventDefault();e.stopImmediatePropagation();if(!actionAllowed(a)){notify('This account does not have access to that action');return}var customer=val('starPromptCustomer'),contact=messageContact(customer),body=val('starPromptBody'),channel=val('starPromptChannel')||'Customer portal';if(!body){notify('Tell Star what the customer said first');return}b.disabled=true;b.classList.add('is-loading');var made=await post('/api/messages/ai-reply',{customer:customer,phone:contact.phone,email:contact.email,channel:channel,body:body,message:body,forceNew:true});b.disabled=false;b.classList.remove('is-loading');if(made.ok){await refreshData(true);view='Messages';tab='Star';Messages();notify('Star prepared the reply and action plan')}else notify(made.error||'Star could not prepare a reply')}},true);
+document.addEventListener('click',async function(e){
+  var b=e.target.closest('button[data-action]');
+  if(!b)return;
+  var a=b.dataset.action;
+  if(a==='select-message-thread'){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(!actionAllowed(a)){notify('This account does not have access to that action');return}
+    activeMessageThreadKey=b.dataset.id||'';
+    localStorage.setItem('woa-active-message-thread',activeMessageThreadKey);
+    view='Messages';tab='Inbox';Messages();return
+  }
+  if(a==='compose-message'){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(!actionAllowed('compose-message')){notify('This account does not have access to that action');return}
+    openComposeMessage(b.dataset.id||'new');return
+  }
+  if(a==='send-message-now'||a==='send-thread-message'){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(!actionAllowed(a)){notify('This account does not have access to that action');return}
+    var threadMode=a==='send-thread-message',messageDeliveryId=b.dataset.deliveryId||('ui-message-'+Date.now()+'-'+Math.random().toString(16).slice(2));
+    b.dataset.deliveryId=messageDeliveryId;
+    var payload=threadMode?{
+      customer:val('threadMessageCustomer'),phone:val('threadMessagePhone'),email:val('threadMessageEmail'),channel:val('threadMessageChannel')||'Customer portal',body:val('threadMessageBody'),template:'Thread reply',subject:'WheelsonAuto reply',deliveryId:messageDeliveryId
+    }:{
+      customer:val('messageCustomer'),phone:val('messagePhone'),email:val('messageEmail'),channel:val('messageChannel')||'Customer portal',body:val('payLinkMessage'),template:val('messageTemplate')||'Manual text',subject:val('messageTemplate')||'WheelsonAuto message',deliveryId:messageDeliveryId
+    };
+    if(!payload.body){delete b.dataset.deliveryId;notify('Type a message first');return}
+    b.disabled=true;b.classList.add('is-loading');
+    var sent=await post('/api/messages/send',payload);
+    b.disabled=false;b.classList.remove('is-loading');
+    if(sent.ok){
+      if(sent.confirmationPending){notify(sent.warning||'Message is waiting for provider confirmation. WheelsonAuto did not send another copy.');return}
+      delete b.dataset.deliveryId;
+      if(threadMode)pendingThreadReplyDraft=null;
+      if(sent.message)upsertLiveMessageRecord(sent.message);
+      if(threadMode&&sent.message)activeMessageThreadKey=messageThreadKey(sent.message);
+      if(activeMessageThreadKey)localStorage.setItem('woa-active-message-thread',activeMessageThreadKey);
+      if(!threadMode)closeModal();
+      view='Messages';tab='Inbox';Messages();
+      void refreshFocusedMessageFeed(true);
+      void refreshData(true);
+      notify(sent.sent?(payload.channel==='Customer portal'?'Delivered in customer app':payload.channel==='Email'?'Email sent':'Text sent'):(payload.channel==='Email'?'Email saved until connected':'Message saved'))
+    }else notify(sent.error||'Message did not send');
+    return
+  }
+  if(a==='star-ai-custom'){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(!actionAllowed(a)){notify('This account does not have access to that action');return}
+    var customer=val('starPromptCustomer'),contact=messageContact(customer),body=val('starPromptBody'),channel=val('starPromptChannel')||'Customer portal';
+    if(!body){notify('Tell Star what the customer said first');return}
+    b.disabled=true;b.classList.add('is-loading');
+    var made=await post('/api/messages/ai-reply',{customer:customer,phone:contact.phone,email:contact.email,channel:channel,body:body,message:body,forceNew:true});
+    b.disabled=false;b.classList.remove('is-loading');
+    if(made.ok){await refreshData(true);view='Messages';tab='Star';Messages();notify('Star prepared the reply and action plan')}else notify(made.error||'Star could not prepare a reply')
+  }
+},true);
 
 
 
@@ -570,7 +626,7 @@ var __woaDailyCloseoutBase=dailyCloseout;dailyCloseout=function(){var html=__woa
 var __woaStarWebhookReadinessCardsBase=starWebhookReadinessCards;starWebhookReadinessCards=function(){var cards=__woaStarWebhookReadinessCardsBase(),stale=staleAutopayRows();if(stale.length)cards.unshift({label:'Stale autopay schedules',count:stale.length,tone:'warn',detail:'Active autopay rows have past next-run dates with no paid/failed/setup status. Review before closeout or Star follow-up.',view:'Payments',tab:'Active'});return cards};
 function fastMessageRows(limit){return(db.messages||[]).filter(function(m){return!m.hiddenFromInbox}).slice(0,limit||300)}
 var __woaVisibleMessageCountBase=count;count=function(n){if(n==='Messages')return(db.messages||[]).filter(function(m){return!m.hiddenFromInbox}).length;return __woaVisibleMessageCountBase(n)}
-function fastMessageThreads(limit){var map={},rows=fastMessageRows(limit||360);rows.forEach(function(m){var k=messageThreadKey(m),phone=messagePhoneValue(m),email=messageEmailValue(m);if(!map[k])map[k]={key:k,customer:m.customer||'Unknown texter',phone:phone,email:email,last:m,items:[],totalCount:0};map[k].totalCount++;if(map[k].items.length<80)map[k].items.push(m);if(messageTimeValue(m)>messageTimeValue(map[k].last))map[k].last=m;if(m.customer&&!/^Unknown|Customer$/i.test(m.customer))map[k].customer=m.customer;if(phone)map[k].phone=phone;if(email)map[k].email=email});return Object.keys(map).map(function(k){var x=map[k];x.items=x.items.sort(function(a,b){return messageTimeValue(a)-messageTimeValue(b)});return x}).sort(function(a,b){return messageTimeValue(b.last)-messageTimeValue(a.last)})}
+function fastMessageThreads(limit){var map={},rows=fastMessageRows(limit||360).filter(messageIsConversationRecord);rows.forEach(function(m){var k=messageThreadKey(m),phone=messagePhoneValue(m),email=messageEmailValue(m);if(!map[k])map[k]={key:k,customer:m.customer||'Unknown texter',phone:phone,email:email,last:m,items:[],totalCount:0};map[k].totalCount++;if(map[k].items.length<80)map[k].items.push(m);if(messageTimeValue(m)>messageTimeValue(map[k].last))map[k].last=m;if(m.customer&&!/^Unknown|Customer$/i.test(m.customer))map[k].customer=m.customer;if(phone)map[k].phone=phone;if(email)map[k].email=email});return Object.keys(map).map(function(k){var x=map[k];x.items=x.items.sort(function(a,b){return messageTimeValue(a)-messageTimeValue(b)});return x}).sort(function(a,b){return messageTimeValue(b.last)-messageTimeValue(a.last)})}
 function fastStarAiDrafts(limit){return fastMessageRows(limit||300).filter(function(m){return m.aiPlan||/Star AI|AI draft|AI action|Star approved/i.test(String([m.channel,m.direction,m.source,m.template].filter(Boolean).join(' ')))})}
 function fastMessageStats(rows){rows=rows||fastMessageRows(500);var inbound=0,outbound=0;rows.forEach(function(m){var d=String(m.direction||'').toLowerCase(),s=String(m.status||'').toLowerCase();if(d.indexOf('in')>=0||s==='received')inbound++;if(d.indexOf('out')>=0)outbound++});return{inbound:inbound,outbound:outbound,total:rows.length}}
 function fastMessageQueueRows(){var roster=recurringRoster(),queue=[],seen={};function add(q){var k=(q.type||'')+'|'+normName(q.customer);if(seen[k])return;seen[k]=true;queue.push(q)}roster.forEach(function(r){var state=paymentState(r),tries=todayFailureCount(r),contact=messageContact(r.customer),ctx=messageQueueVehicleContext(r.customer,r.vehicleId),amount=money(r.amount||0);if(state.key==='contact'||tries>=2)add({id:'pay-'+r.id,customer:r.customer,phone:contact.phone,email:contact.email,type:'2x failed payment',reason:[amount,r.frequency||'payment',ctx.line].filter(Boolean).join(' | '),tone:'bad',body:'Hi '+(r.customer||'there')+', this is WheelsonAuto. Your payment did not go through after two attempts. Please contact us today or use the secure link we send.'});else if(state.key==='retry'||tries===1)add({id:'pay-'+r.id,customer:r.customer,phone:contact.phone,email:contact.email,type:'1x failed payment',reason:[amount,r.frequency||'payment',ctx.line].filter(Boolean).join(' | '),tone:'warn',body:'Hi '+(r.customer||'there')+', this is WheelsonAuto. Your payment did not go through. Clover may retry once. Please contact us if you need help.'});else if(state.key==='notfound')add({id:'notfound-'+r.id,customer:r.customer,phone:contact.phone,email:contact.email,type:'Payment not found',reason:[amount,'Clover/card source missing',ctx.line].filter(Boolean).join(' | '),tone:'bad',body:'Hi '+(r.customer||'there')+', this is WheelsonAuto. We could not find a valid payment source. Please contact us today or use the secure card setup link we send.'});else if(state.key==='setup')add({id:'setup-'+r.id,customer:r.customer,phone:contact.phone,email:contact.email,type:'Card setup needed',reason:[amount,r.frequency||'payment',ctx.line].filter(Boolean).join(' | '),tone:'warn',body:'Hi '+(r.customer||'there')+', this is WheelsonAuto. Please securely save or update your card on file so autopay can run correctly.'});else if(isDueToday(r)&&!rowPaidToday(r))add({id:'due-'+r.id,customer:r.customer,phone:contact.phone,email:contact.email,type:'Payment due today',reason:[amount,'due today',ctx.line].filter(Boolean).join(' | '),tone:'blue',body:'Hi '+(r.customer||'there')+', this is WheelsonAuto. Your '+(r.frequency||'payment').toLowerCase()+' payment of '+amount+' is due today. Thank you.'})});customerMaintenanceJobs().slice(0,60).forEach(function(m){var d=dateKeyFrom(m.due||m.nextDue);if(!(d&&d<=todayKey()&&isOpenMaintenance(m)))return;var customer=m.customer||vehicleCustomer(findVehicle(m.vehicleId))||'Customer',contact=messageContact(customer);add({id:'mnt-'+m.id,customer:customer,phone:contact.phone,email:contact.email,type:'Maintenance reminder',reason:(m.vehicle||'Vehicle')+' due '+(m.due||m.nextDue||'now'),tone:'warn',body:'Hi '+customer+', this is WheelsonAuto. Your vehicle '+(m.vehicle||'')+' is due for maintenance. Please contact us to schedule a time.'})});(db.paymentRequests||[]).slice(0,60).forEach(function(r){var st=String(r.status||'Open').toLowerCase();if(st.indexOf('paid')>=0||st.indexOf('closed')>=0||st.indexOf('cancel')>=0||st.indexOf('expired')>=0)return;var contact=messageContact(r.customer),ctx=messageQueueVehicleContext(r.customer,r.vehicleId);add({id:'plink-'+(r.id||Date.now()),customer:r.customer||'Customer',phone:r.phone||contact.phone,email:r.email||contact.email,type:'Open payment link',reason:[money(r.amount||0)+' secure pay link open',ctx.line].filter(Boolean).join(' | '),tone:'blue',body:'Hi '+(r.customer||'there')+', this is WheelsonAuto. Your secure payment link for '+money(r.amount||0)+' is still open. You can pay here: '+(r.url||'please contact us for a fresh link')})});return queue.slice(0,96)}
@@ -3042,8 +3098,8 @@ function messageFocusedDateLabel(value,includeTime){
 }
 
 function messageFocusedThreadCard(thread){
-  var last=thread.last||{},ctx=messageThreadContext(thread),contact=messageContact(thread.customer),phone=thread.phone||ctx.phone||contact.phone||'',email=thread.email||ctx.email||contact.email||'',channel=String(last.channel||'SMS').toUpperCase(),preview=last.body||last.subject||last.template||'No message text saved',vehicle=ctx.vehicle||'No vehicle linked',status=ctx.status||last.status||last.direction||'',unread=last.read===false||/unread/i.test(String(last.status||'')),searchText=(thread.items||[]).map(function(message){return[message.customer,message.phone,message.email,message.from,message.to,message.subject,message.body,message.template].filter(Boolean).join(' ')}).join(' '),fullSearch=[searchText,thread.customer,phone,email,vehicle,ctx.vin,ctx.tag,ctx.tracker,status].filter(Boolean).join(' ');
-  return '<button class="message-thread-card message-thread-row '+(activeMessageThreadKey===thread.key?'active ':'')+'" data-action="select-message-thread-focused" data-id="'+esc(thread.key)+'"><span hidden>'+esc(fullSearch)+'</span><span class="message-thread-avatar">'+esc(messageFocusedInitials(thread.customer))+(unread?'<i aria-label="Unread message"></i>':'')+'</span><span class="message-thread-copy"><span class="message-thread-title"><strong>'+esc(thread.customer||'Unknown customer')+'</strong><time>'+esc(messageFocusedDateLabel(last.createdAt||last.date,true))+'</time></span><small class="message-thread-context">'+esc([vehicle,formatPhone(phone)||email||'No contact saved'].filter(Boolean).join(' | '))+'</small><span class="message-thread-preview">'+esc(preview)+'</span><span class="message-thread-meta"><span>'+esc(channel)+'</span>'+(status?'<span>'+esc(status)+'</span>':'')+'</span></span><span class="message-thread-chevron" aria-hidden="true">&rsaquo;</span></button>'
+  var last=thread.last||{},ctx=messageThreadContext(thread),contact=messageContact(thread.customer),phone=thread.phone||ctx.phone||contact.phone||'',email=thread.email||ctx.email||contact.email||'',preview=last.body||last.subject||last.template||'No message text saved',unread=last.read===false||/unread/i.test(String(last.status||'')),searchText=(thread.items||[]).map(function(message){return[message.customer,message.phone,message.email,message.from,message.to,message.subject,message.body,message.template].filter(Boolean).join(' ')}).join(' '),fullSearch=[searchText,thread.customer,phone,email,ctx.vehicle,ctx.vin,ctx.tag,ctx.tracker].filter(Boolean).join(' ');
+  return '<button class="message-thread-card message-thread-row '+(activeMessageThreadKey===thread.key?'active ':'')+'" data-action="select-message-thread-focused" data-id="'+esc(thread.key)+'"><span hidden>'+esc(fullSearch)+'</span><span class="message-thread-avatar">'+esc(messageFocusedInitials(thread.customer))+(unread?'<i aria-label="Unread message"></i>':'')+'</span><span class="message-thread-copy"><span class="message-thread-title"><strong>'+esc(thread.customer||'Unknown customer')+'</strong><time>'+esc(messageFocusedDateLabel(last.createdAt||last.date,true))+'</time></span><span class="message-thread-preview">'+esc(preview)+'</span></span><span class="message-thread-chevron" aria-hidden="true">&rsaquo;</span></button>'
 }
 
 function messageFocusedBubble(message){
@@ -3052,17 +3108,16 @@ function messageFocusedBubble(message){
 }
 
 function messageFocusedReply(thread,status){
-  var ctx=messageThreadContext(thread),draft=pendingThreadReplyDraft&&pendingThreadReplyDraft.key===thread.key?pendingThreadReplyDraft:null,phone=ctx.phone||draft&&draft.phone||'',email=ctx.email||draft&&draft.email||'',portal=customerPortalAccountFor(thread.customer),portalReady=customerPortalLoginReady(portal),draftChannel=String(draft&&draft.channel||''),preferred=draftChannel==='Email'?'Email':draftChannel==='SMS'?'SMS':portalReady?'Customer portal':email?'Email':'SMS',connected=preferred==='Customer portal'||preferred==='Email'&&status.emailConfigured||preferred==='SMS'&&status.configured,mode=preferred==='Customer portal'?'Customer app':connected?(preferred==='Email'?'Live email':'Optional SMS'):(preferred==='Email'?'Email draft':'SMS unavailable'),target=preferred==='Customer portal'?'Secure customer account':preferred==='Email'?(email||'Add email'):(formatPhone(phone)||'Add phone number');
-  return '<div class="message-reply-box '+(draft?'has-star-draft':'')+'">'+(draft?'<div class="message-star-draft-note"><strong>Star draft ready</strong><span>Review the wording before sending.</span></div>':'')+'<details class="message-recipient-details"><summary><span>'+esc(preferred==='Customer portal'?'Customer app':preferred)+'</span><strong>'+esc(target)+'</strong><small>Change channel</small></summary><div class="message-reply-fields"><select id="threadMessageChannel">'+(portalReady?'<option value="Customer portal" '+(preferred==='Customer portal'?'selected':'')+'>Customer app</option>':'')+'<option value="Email" '+(preferred==='Email'?'selected':'')+'>Email</option><option value="SMS" '+(preferred==='SMS'?'selected':'')+'>Optional SMS</option></select><input id="threadMessagePhone" value="'+esc(phone)+'" placeholder="Phone"><input id="threadMessageEmail" value="'+esc(email)+'" placeholder="Email"></div></details><div class="message-compose-row"><textarea id="threadMessageBody" placeholder="Write a message...">'+esc(draft&&draft.body||'')+'</textarea><div class="message-compose-actions"><button class="btn gold" data-action="star-ai-thread" data-id="'+esc(thread.key)+'">'+(draft?'Rewrite with Star':'Ask Star')+'</button><button class="btn primary" data-action="send-thread-message" data-id="'+esc(thread.key)+'">'+esc(connected?'Send':'Save draft')+'</button></div></div><input id="threadMessageCustomer" type="hidden" value="'+esc(thread.customer||'')+'"><div class="message-composer-foot"><span>'+badge(mode,connected?'good':'warn')+' Sensitive payment and account changes still need admin approval.</span><button class="btn" data-action="compose-message" data-id="thread-'+esc(thread.key)+'">Full composer</button></div></div>'
+  var ctx=messageThreadContext(thread),draft=pendingThreadReplyDraft&&pendingThreadReplyDraft.key===thread.key?pendingThreadReplyDraft:null,phone=ctx.phone||draft&&draft.phone||'',email=ctx.email||draft&&draft.email||'',portal=customerPortalAccountFor(thread.customer),portalReady=customerPortalLoginReady(portal),draftChannel=String(draft&&draft.channel||''),preferred=draftChannel==='Email'?'Email':draftChannel==='SMS'?'SMS':portalReady?'Customer portal':email?'Email':'SMS',connected=preferred==='Customer portal'||preferred==='Email'&&status.emailConfigured||preferred==='SMS'&&status.configured,target=preferred==='Customer portal'?'Customer app':preferred==='Email'?(email||'Add email'):(formatPhone(phone)||'Add phone');
+  return '<div class="message-reply-box '+(draft?'has-star-draft':'')+'">'+(draft?'<div class="message-star-draft-note"><strong>Star draft</strong><span>Review before sending.</span></div>':'')+'<div class="message-compose-row"><textarea id="threadMessageBody" placeholder="Message '+esc(thread.customer||'customer')+'...">'+esc(draft&&draft.body||'')+'</textarea><div class="message-compose-actions"><button class="btn gold" data-action="star-ai-thread" data-id="'+esc(thread.key)+'">'+(draft?'Rewrite':'Star')+'</button><button class="btn primary" data-action="send-thread-message" data-id="'+esc(thread.key)+'">'+esc(connected?'Send':'Save')+'</button></div></div><details class="message-recipient-details"><summary><span>'+esc(preferred==='Customer portal'?'App':preferred)+'</span><strong>'+esc(target)+'</strong><small>Delivery</small></summary><div class="message-reply-fields"><select id="threadMessageChannel">'+(portalReady?'<option value="Customer portal" '+(preferred==='Customer portal'?'selected':'')+'>Customer app</option>':'')+'<option value="Email" '+(preferred==='Email'?'selected':'')+'>Email</option><option value="SMS" '+(preferred==='SMS'?'selected':'')+'>Optional SMS</option></select><input id="threadMessagePhone" value="'+esc(phone)+'" placeholder="Phone"><input id="threadMessageEmail" value="'+esc(email)+'" placeholder="Email"></div></details><input id="threadMessageCustomer" type="hidden" value="'+esc(thread.customer||'')+'"></div>'
 }
 
 function messageFocusedConversation(thread,status){
   if(!thread)return '<section class="message-conversation-panel empty"><div class="message-empty-state"><span class="message-empty-mark">WOA</span><h2>Select a conversation</h2><p>Choose a customer or begin a secure customer-app conversation.</p><button class="btn primary" data-action="compose-message" data-id="new">New message</button></div></section>';
-  var ctx=messageThreadContext(thread),allItems=thread.items||[],visibleItems=allItems.slice(Math.max(0,allItems.length-100)),lastDay='',items='';
+  var ctx=messageThreadContext(thread),allItems=(thread.items||[]).filter(messageIsConversationRecord),visibleItems=allItems.slice(Math.max(0,allItems.length-100)),lastDay='',items='';
   visibleItems.forEach(function(message){var date=new Date(message.createdAt||message.date||''),dayKey=isNaN(date.getTime())?'unknown':[date.getFullYear(),date.getMonth()+1,date.getDate()].join('-');if(dayKey!==lastDay){items+='<div class="message-date-separator"><span>'+esc(messageFocusedDateLabel(message.createdAt||message.date,false)||'Recent')+'</span></div>';lastDay=dayKey}items+=messageFocusedBubble(message)});
   if(!items)items='<div class="item">No messages in this conversation yet.</div>';
-  var chips=[ctx.vin?'VIN '+ctx.vin:'',ctx.tag?'Tag '+ctx.tag:'',ctx.tracker?'Tracker '+ctx.tracker:'',ctx.amount?money(ctx.amount):'',ctx.status||''].filter(Boolean);
-  return '<section class="message-conversation-panel"><div class="message-conversation-head"><button class="btn message-mobile-back" data-action="message-mobile-back">&lsaquo; Messages</button><div class="message-conversation-identity"><span class="message-thread-avatar">'+esc(messageFocusedInitials(thread.customer))+'</span><div><h2>'+esc(thread.customer||'Unknown customer')+'</h2><p>'+esc([formatPhone(ctx.phone),ctx.email,ctx.vehicle].filter(Boolean).join(' | ')||'No contact saved yet')+'</p></div></div><div class="actions"><button class="btn gold" data-action="star-ai-thread" data-id="'+esc(thread.key)+'">Ask Star</button>'+customerFileButton(thread.customer,'File')+'</div></div><div class="message-context-strip">'+(chips.length?chips.map(function(value){return '<span>'+esc(value)+'</span>'}).join(''):'<span>Customer context will appear when a file or vehicle is linked.</span>')+'</div>'+(allItems.length>visibleItems.length?'<div class="message-history-trim">Showing the latest '+visibleItems.length+' messages for speed.</div>':'')+'<div class="message-bubbles">'+items+'</div>'+messageFocusedReply(thread,status)+'</section>'
+  return '<section class="message-conversation-panel"><div class="message-conversation-head"><button class="btn message-mobile-back" data-action="message-mobile-back">&lsaquo; Back</button><div class="message-conversation-identity"><span class="message-thread-avatar">'+esc(messageFocusedInitials(thread.customer))+'</span><div><h2>'+esc(thread.customer||'Unknown customer')+'</h2><p>'+esc([formatPhone(ctx.phone),ctx.email].filter(Boolean).join(' | ')||'Customer app')+'</p></div></div>'+customerFileButton(thread.customer,'File')+'</div>'+(allItems.length>visibleItems.length?'<div class="message-history-trim">Showing the latest '+visibleItems.length+' messages.</div>':'')+'<div class="message-bubbles">'+items+'</div>'+messageFocusedReply(thread,status)+'</section>'
 }
 
 function messageFocusedTabs(selected,threadCount){
@@ -3126,6 +3181,80 @@ function renderFocusedMessagesDirect(){
     window.__woaRenderMetrics=(window.__woaRenderMetrics||[]).concat(metric).slice(-30);
     if(document.documentElement&&document.documentElement.setAttribute)document.documentElement.setAttribute('data-woa-render-metric',JSON.stringify(metric))
   }
+}
+
+var __woaMessageFeedRevision='';
+var __woaMessageFeedReady=false;
+var __woaMessageFeedInFlight=null;
+function upsertLiveMessageRecord(message){
+  if(!message||!message.id)return;
+  db.messages=(db.messages||[]).filter(function(row){return String(row&&row.id||'')!==String(message.id)});
+  db.messages.unshift(message)
+}
+function focusedMessageDraftSnapshot(){
+  var body=document.getElementById('threadMessageBody'),bubbles=document.querySelector('.view-messages .message-bubbles'),details=document.querySelector('.view-messages .message-recipient-details'),active=document.activeElement;
+  if(!body)return null;
+  return{
+    body:body.value,
+    phone:val('threadMessagePhone'),
+    email:val('threadMessageEmail'),
+    channel:val('threadMessageChannel'),
+    focus:active===body,
+    start:body.selectionStart,
+    end:body.selectionEnd,
+    recipientOpen:!!(details&&details.open),
+    bottomDistance:bubbles?Math.max(0,bubbles.scrollHeight-bubbles.scrollTop-bubbles.clientHeight):0
+  }
+}
+function restoreFocusedMessageDraft(snapshot){
+  if(!snapshot)return;
+  requestAnimationFrame(function(){
+    var body=document.getElementById('threadMessageBody'),phone=document.getElementById('threadMessagePhone'),email=document.getElementById('threadMessageEmail'),channel=document.getElementById('threadMessageChannel'),details=document.querySelector('.view-messages .message-recipient-details'),bubbles=document.querySelector('.view-messages .message-bubbles');
+    if(body)body.value=snapshot.body;
+    if(phone)phone.value=snapshot.phone;
+    if(email)email.value=snapshot.email;
+    if(channel&&snapshot.channel)channel.value=snapshot.channel;
+    if(details)details.open=snapshot.recipientOpen;
+    if(bubbles)bubbles.scrollTop=Math.max(0,bubbles.scrollHeight-bubbles.clientHeight-snapshot.bottomDistance);
+    if(body&&snapshot.focus){body.focus();try{body.setSelectionRange(snapshot.start,snapshot.end)}catch(error){}}
+  })
+}
+function liveMessageIsInbound(message){
+  return /inbound|received|customer action/i.test(String([message&&message.direction,message&&message.status].filter(Boolean).join(' ')))
+}
+async function refreshFocusedMessageFeed(force){
+  if(isPublic||roleName()==='mechanic')return null;
+  if(!force&&(view!=='Messages'||document.hidden))return null;
+  if(__woaMessageFeedInFlight)return __woaMessageFeedInFlight;
+  __woaMessageFeedInFlight=(async function(){
+    try{
+      var response=await fetch('/api/messages/feed?limit=800',{credentials:'same-origin',headers:{Accept:'application/json'},cache:'no-store'});
+      if(response.status===401)return null;
+      var result=await response.json();
+      if(!response.ok||!result.ok)return null;
+      if(result.revision===__woaMessageFeedRevision){__woaMessageFeedReady=true;return result}
+      var previousIds=new Set((db.messages||[]).map(function(row){return String(row&&row.id||'')})),incoming=(result.messages||[]).filter(function(row){return row&&row.id&&!previousIds.has(String(row.id))&&liveMessageIsInbound(row)}),feedIds=new Set((result.messages||[]).map(function(row){return String(row&&row.id||'')})),older=(db.messages||[]).filter(function(row){return row&&row.id&&!feedIds.has(String(row.id))});
+      db.messages=(result.messages||[]).concat(older);
+      __woaMessageFeedRevision=result.revision||'';
+      var shouldAnnounce=__woaMessageFeedReady&&incoming.length;
+      __woaMessageFeedReady=true;
+      if(view==='Messages'&&tab==='Inbox'){
+        var snapshot=focusedMessageDraftSnapshot();
+        renderFocusedMessagesDirect();
+        restoreFocusedMessageDraft(snapshot)
+      }
+      if(shouldAnnounce)notify('New message from '+(incoming[0].customer||'a customer'));
+      return result
+    }catch(error){return null}
+    finally{__woaMessageFeedInFlight=null}
+  })();
+  return __woaMessageFeedInFlight
+}
+window.__woaRefreshMessageFeed=refreshFocusedMessageFeed;
+if(!isPublic){
+  setInterval(function(){void refreshFocusedMessageFeed(false)},2500);
+  window.addEventListener('focus',function(){void refreshFocusedMessageFeed(true)});
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)void refreshFocusedMessageFeed(true)})
 }
 
 document.addEventListener('click',function(event){
@@ -3321,6 +3450,110 @@ Operations=function(){
 };
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
+
+// Mobile workspaces keep the useful destinations visible and move fleet
+// statuses into one filter. Desktop retains the denser operating layout.
+var mobileFleetFilter='all';
+function mobileFleetOnlineRecord(vehicle){
+  var id=String(vehicle&&vehicle.id||''),vin=String(vehicle&&vehicle.vin||'').trim().toLowerCase();
+  return nativeOnlineVehicles().find(function(row){
+    return String(row.platformVehicleId||'')===id||(vin&&String(row.vin||'').trim().toLowerCase()===vin)
+  })||null
+}
+function mobileFleetHasOpenService(vehicle){
+  var id=String(vehicle&&vehicle.id||''),name=normName(vehicleName(vehicle));
+  return customerMaintenanceJobs().some(function(job){
+    return isOpenMaintenance(job)&&(String(job.vehicleId||'')===id||(!job.vehicleId&&name&&normName(job.vehicle||job.car)===name))
+  })
+}
+function mobileFleetGroup(vehicle){
+  var status=String(vehicle&&vehicle.status||'').trim().toLowerCase();
+  if(isAssignedFleetVehicle(vehicle))return'assigned';
+  if(mobileFleetHasOpenService(vehicle)||/service|maintenance|repair|blocked/.test(status))return'service';
+  if(isFleetReviewVehicle(vehicle))return'prep';
+  if(mobileFleetOnlineRecord(vehicle))return'online';
+  return isInventoryVehicle(vehicle)?'available':'prep'
+}
+function mobileFleetStateLabel(vehicle){
+  var group=mobileFleetGroup(vehicle),online=mobileFleetOnlineRecord(vehicle);
+  if(group==='assigned')return'Rented / assigned';
+  if(group==='service')return'Service';
+  if(group==='prep')return'Prep / review';
+  if(online&&online.published)return'Online';
+  return'Available'
+}
+function mobileFleetCard(vehicle){
+  var state=mobileFleetStateLabel(vehicle),tone=mobileFleetGroup(vehicle),html=staffFleetCard(vehicle,isAssignedFleetVehicle(vehicle));
+  return html.replace('class="mechanic-card','class="mechanic-card mobile-fleet-card').replace('><div class="item-row">',' data-fleet-state="'+esc(tone)+'"><div class="mobile-fleet-state '+esc(tone)+'">'+esc(state)+'</div><div class="item-row">')
+}
+function mobileFleetStandaloneOnlineRows(cars){
+  var linked={};
+  cars.forEach(function(vehicle){var online=mobileFleetOnlineRecord(vehicle);if(online)linked[String(online.id||'')]=true});
+  return nativeOnlineVehicles().filter(function(row){return!linked[String(row.id||'')]})
+}
+function mobileFleetFilterLabel(key){
+  return({all:'All cars',available:'Available',online:'Online',prep:'Prep / review',assigned:'Assigned',service:'Service'})[key]||'All cars'
+}
+function mobileFleetFilterControl(cars,onlineOnly){
+  var counts={all:cars.length+onlineOnly.length,available:0,online:onlineOnly.length,prep:0,assigned:0,service:0};
+  cars.forEach(function(vehicle){var group=mobileFleetGroup(vehicle);counts[group]=(counts[group]||0)+1;if(mobileFleetOnlineRecord(vehicle)&&group!=='online')counts.online++});
+  return '<details class="mobile-fleet-filter"><summary>Filter <strong>'+esc(mobileFleetFilterLabel(mobileFleetFilter))+'</strong><span>'+esc(counts[mobileFleetFilter]||0)+'</span></summary><div>'+['all','available','online','prep','assigned','service'].map(function(key){return '<button class="'+(mobileFleetFilter===key?'active':'')+'" data-mobile-fleet-filter="'+esc(key)+'"><span>'+esc(mobileFleetFilterLabel(key))+'</span><b>'+esc(counts[key]||0)+'</b></button>'}).join('')+'</div></details>'
+}
+function mobileVerificationAttentionCount(){
+  var cases=db.verificationCases||[],active=activeCustomerFiles(),missing={insurance:verificationMissingRows('insurance',{cases:cases,active:active}),driver_record:verificationMissingRows('driver_record',{cases:cases,active:active}),driver_license:verificationMissingRows('driver_license',{cases:cases,active:active}),background:verificationMissingRows('background',{cases:cases,active:active})};
+  return verificationMissingSummaryRows(active,missing).length+cases.filter(function(row){return!/verified|closed/i.test(String(row.status||''))}).length
+}
+function mobileOperationsTabs(selected,counts){
+  return fastWorkspaceTabs([['Fleet','Fleet',counts.fleet],['Service','Service',counts.service],['Claims','Claims',counts.claims],['Verification','Verify',counts.verification]],selected,'staff-tabs mobile-operations-tabs')
+}
+function MobileOperations(){
+  var cars=(db.vehicles||[]).filter(function(vehicle){return String(vehicle.status||'').toLowerCase()!=='removed'}),onlineOnly=mobileFleetStandaloneOnlineRows(cars),openJobs=customerMaintenanceJobs().filter(isOpenMaintenance),openClaims=(db.claims||[]).filter(function(claim){return !/paid|closed/i.test(String(claim.status||'Open'))}),counts={fleet:cars.length+onlineOnly.length,service:openJobs.length,claims:openClaims.length,verification:mobileVerificationAttentionCount()};
+  if(['Online','Review','Assigned'].indexOf(tab)>=0){mobileFleetFilter=tab==='Online'?'online':tab==='Assigned'?'assigned':'prep';tab='Fleet'}
+  var selected=['Fleet','Service','Claims','Verification','Verify review','Verify insurance','Verify identity','Verify background'].indexOf(tab)>=0?tab:'Fleet';
+  if(/^Verify/.test(selected)||selected==='Verification'){
+    IntegratedInsurance();
+    var main=root&&root.querySelector('.main'),inner=main&&main.querySelector('.tabs');
+    if(main){
+      main.classList.add('view-operations');
+      main.querySelector('.topbar h1').textContent='Operations';
+      main.querySelector('.topbar').insertAdjacentHTML('afterend',mobileOperationsTabs('Verification',counts));
+      if(inner){var filter=document.createElement('details');filter.className='mobile-verification-filter';filter.innerHTML='<summary>Verification filter</summary><div></div>';inner.parentNode.insertBefore(filter,inner);filter.querySelector('div').appendChild(inner)}
+    }
+    enhanceMobileSwipeTabs();return
+  }
+  var body=mobileOperationsTabs(selected,counts),limit=compactLimit();
+  if(selected==='Fleet'){
+    var filtered=cars.filter(function(vehicle){if(mobileFleetFilter==='all')return true;if(mobileFleetFilter==='online')return!!mobileFleetOnlineRecord(vehicle);return mobileFleetGroup(vehicle)===mobileFleetFilter}),standalone=mobileFleetFilter==='all'||mobileFleetFilter==='online'?onlineOnly:[],cards=filtered.map(mobileFleetCard).join('')+standalone.map(nativeOnlineCard).join('');
+    body+='<section class="card section compact-fleet-board staff-card-board mobile-unified-fleet" data-limit="'+limit+'"><div class="section-head"><div><h2>Fleet</h2><p>Availability, online listing, prep, rental, and service status stay together.</p></div><button class="btn primary" data-action="new-vehicle">Add</button></div>'+mobileFleetFilterControl(cars,onlineOnly)+localSearch('Search car, customer, VIN, tag, tracker, or status')+'<div class="mechanic-cards staff-card-grid mobile-fleet-grid">'+(cards||'<div class="item">No vehicles match this filter.</div>')+'</div></section>'
+  }
+  if(selected==='Service')body+='<section class="card section compact-service-board staff-card-board" data-limit="'+limit+'"><div class="section-head"><h2>Service</h2><button class="btn primary" data-action="new-maintenance">Add job</button></div>'+localSearch('Search customer, car, VIN, tag, tracker, or issue')+staffCardGrid(openJobs.map(staffServiceCard),'No open service records.')+'</section>';
+  if(selected==='Claims')body+='<section class="card section compact-claims-board staff-card-board" data-limit="'+limit+'"><div class="section-head"><h2>Claims & issues</h2><button class="btn primary" data-action="new-claim">Add issue</button></div>'+localSearch('Search customer, VIN, tag, reference, or issue')+staffCardGrid(openClaims.map(staffClaimCard),'No open claims or issues.')+'</section>';
+  shell('Operations','',body,'');enhanceMobileSwipeTabs();requestAnimationFrame(addPassTimeFleetLauncher)
+}
+function enhanceMobileSwipeTabs(){
+  if(!root||!window.matchMedia||!window.matchMedia('(max-width:760px)').matches)return;
+  root.querySelectorAll('.tabs').forEach(function(bar){bar.classList.add('mobile-swipe-tabs')})
+}
+var __woaMobileSwipeShellBase=shell;
+shell=function(){__woaMobileSwipeShellBase.apply(null,arguments);enhanceMobileSwipeTabs()};
+var mobileTabTouch=null;
+document.addEventListener('touchstart',function(event){
+  var bar=event.target.closest('.mobile-swipe-tabs');if(!bar||event.touches.length!==1)return;
+  mobileTabTouch={bar:bar,x:event.touches[0].clientX,y:event.touches[0].clientY}
+},{passive:true});
+document.addEventListener('touchend',function(event){
+  if(!mobileTabTouch||!event.changedTouches.length)return;
+  var start=mobileTabTouch;mobileTabTouch=null;
+  if(!document.body.contains(start.bar))return;
+  var dx=event.changedTouches[0].clientX-start.x,dy=event.changedTouches[0].clientY-start.y;
+  if(Math.abs(dx)<52||Math.abs(dx)<Math.abs(dy)*1.25)return;
+  var buttons=Array.from(start.bar.querySelectorAll(':scope>button[data-tab]')).filter(function(button){return button.offsetParent!==null}),active=Math.max(0,buttons.findIndex(function(button){return button.classList.contains('active')})),next=dx<0?Math.min(buttons.length-1,active+1):Math.max(0,active-1);
+  if(buttons[next]&&next!==active)buttons[next].click()
+},{passive:true});
+document.addEventListener('click',function(event){
+  var button=event.target.closest('[data-mobile-fleet-filter]');if(!button)return;
+  event.preventDefault();event.stopPropagation();mobileFleetFilter=button.dataset.mobileFleetFilter||'all';tab='Fleet';MobileOperations()
+});
 
 function openStripePilotReviewTasks(){
   return (db.tasks||[]).filter(function(task){
@@ -4998,3 +5231,15 @@ Operations=function(){
 };
 OperationsTruthFocused=Operations;
 OperationsFocused=Operations;
+
+// Final responsive bindings stay after every operations and provider decorator.
+var __woaResponsiveOperationsLiveBase=Operations;
+Operations=function(){
+  return window.matchMedia&&window.matchMedia('(max-width:760px)').matches?MobileOperations():__woaResponsiveOperationsLiveBase()
+};
+OperationsTruthFocused=Operations;
+OperationsFocused=Operations;
+var __woaMobileSwipeTabsLiveBase=fastWorkspaceTabs;
+fastWorkspaceTabs=function(items,selected,extraClass){
+  return __woaMobileSwipeTabsLiveBase(items,selected,extraClass).replace('class="tabs ','class="tabs mobile-swipe-tabs ')
+};

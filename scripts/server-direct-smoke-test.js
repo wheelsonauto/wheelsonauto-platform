@@ -227,6 +227,10 @@ async function main() {
   process.env.WOA_STAR_AI_ENABLED = '1';
   process.env.WOA_AI_AUTO_SEND = '0';
   process.env.WOA_AI_REPLY_DRAFTS = '1';
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.WOA_OPENAI_API_KEY;
+  delete process.env.OPENAI_MODEL;
+  delete process.env.WOA_AI_MODEL;
   process.env.WOA_EMAIL_ENABLED = '1';
   process.env.WOA_ERROR_ALERTS_ENABLED = '1';
   process.env.WOA_ERROR_ALERT_VALIDATION_MAX_AGE_MS = String(30 * 24 * 60 * 60 * 1000);
@@ -844,6 +848,9 @@ async function main() {
     assert(loginPage.text.includes('WheelsonAuto Portal'), 'Login page content is missing.');
     assert(loginPage.text.includes('Forgot password?') && loginPage.text.includes('/forgot'), 'Staff login should include owner-approved password help.');
     assert(loginPage.text.includes('rel="manifest" href="/staff-manifest.webmanifest"') && loginPage.text.includes('/staff-pwa.js') && loginPage.text.includes('apple-mobile-web-app-capable'), 'Staff login must remain inside the separately installed standalone staff app.');
+    const publicCustomerLoginPage = await request(server, 'GET', '/customer/login');
+    assert(publicCustomerLoginPage.status === 200 && publicCustomerLoginPage.text.includes('My WheelsonAuto'), 'Customer login page did not load.');
+    assert(!publicCustomerLoginPage.text.includes('Staff login') && !publicCustomerLoginPage.text.includes('href="/login"'), 'Customer login must not advertise the private staff login route.');
     const staffManifest = await request(server, 'GET', '/staff-manifest.webmanifest');
     assert(staffManifest.status === 200 && staffManifest.json.scope === '/' && staffManifest.json.display === 'standalone' && String(staffManifest.json.start_url || '').startsWith('/login'), 'Staff manifest must launch the secure staff workspace as a standalone app.');
     const staffServiceWorker = await request(server, 'GET', '/staff-service-worker.js');
@@ -3078,19 +3085,32 @@ async function main() {
 
 	    const customerPortalMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, form: { body: 'Can you help me update my card and confirm my next payment?' } });
 	    assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer#portal-messages', 'Customer portal message should return to Messages.');
+	    const customerPortalMessageSavedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+	    const customerPortalFormMessage = (customerPortalMessageSavedState.json.messages || []).find(message => message.channel === 'Customer portal' && message.template === 'Customer portal message' && message.direction === 'Inbound' && message.customer === 'Alicia Brown' && /confirm my next payment/i.test(message.body || ''));
+	    assert(customerPortalFormMessage && customerPortalFormMessage.id, 'Customer portal message should be saved before background follow-up starts.');
+	    const customerPortalFormMessageId = customerPortalFormMessage.id;
+	    const customerPortalJsonStartedAt = Date.now();
 	    const customerPortalJsonMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, json: { body: 'This customer app reply should update without a page reload.' } });
 	    assert(customerPortalJsonMessage.status === 201 && customerPortalJsonMessage.json.ok && customerPortalJsonMessage.json.message.channel === 'Customer portal' && Array.isArray(customerPortalJsonMessage.json.portal.messages), 'Customer portal JSON replies should save and return refreshed scoped conversation state.');
+	    assert(Date.now() - customerPortalJsonStartedAt < 750, 'Customer portal delivery should not wait for Star or owner-email follow-up.');
 	    const staffPortalDeliveryId = 'direct-customer-app-delivery-1';
 	    const managerPortalReply = await request(server, 'POST', '/api/messages/send', { cookie: managerCookie, json: { customer: 'Alicia Brown', channel: 'Customer portal', body: 'Your secure WheelsonAuto customer-app reply is ready.', deliveryId: staffPortalDeliveryId } });
 	    assert(managerPortalReply.status === 200 && managerPortalReply.json.ok && managerPortalReply.json.sent && managerPortalReply.json.message.channel === 'Customer portal' && managerPortalReply.json.message.provider === 'wheelsonauto' && managerPortalReply.json.message.customerAccountId, 'Manager should deliver a staff reply inside the matched customer account without a carrier.');
 	    const duplicateManagerPortalReply = await request(server, 'POST', '/api/messages/send', { cookie: managerCookie, json: { customer: 'Alicia Brown', channel: 'Customer portal', body: 'Your secure WheelsonAuto customer-app reply is ready.', deliveryId: staffPortalDeliveryId } });
 	    assert(duplicateManagerPortalReply.status === 200 && duplicateManagerPortalReply.json.duplicate === true && duplicateManagerPortalReply.json.message.id === managerPortalReply.json.message.id, 'Retrying the same customer-app delivery must return the original message instead of duplicating it.');
-    const customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
-    const savedPortalMessage = (customerPortalMessageRead.json.messages || []).find(message => message.channel === 'Customer portal' && message.customer === 'Alicia Brown' && /update my card/i.test(message.body || ''));
+	    let customerPortalMessageRead = null;
+	    for (let attempt = 0; attempt < 240; attempt += 1) {
+	      customerPortalMessageRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+	      const rows = customerPortalMessageRead.json.messages || [];
+	      const inbound = rows.find(message => message.id === customerPortalFormMessageId);
+	      if (inbound && rows.some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === inbound.id) && rows.some(note => note.event === 'customer_message' && /Admin approval required: Yes/.test(note.body || ''))) break;
+	      await new Promise(resolve => setTimeout(resolve, 25));
+	    }
+    const savedPortalMessage = (customerPortalMessageRead.json.messages || []).find(message => message.id === customerPortalFormMessageId);
     assert(savedPortalMessage, 'Customer portal message should be saved in staff Messages.');
     assert(savedPortalMessage.status === 'Needs admin review' && savedPortalMessage.approvalRequired === true && savedPortalMessage.intent === 'Money/account question', 'Customer portal money/card questions should be triaged for admin review.');
     assert(savedPortalMessage.vehicleId === 'veh-003' && savedPortalMessage.vin === '3LN6L2G91FR123456' && savedPortalMessage.plate === 'LNZ-229' && Number(savedPortalMessage.amount) === 229, 'Customer portal messages should carry vehicle, VIN/tag, and payment context into staff Messages.');
-    assert((customerPortalMessageRead.json.messages || []).some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === savedPortalMessage.id), 'Customer portal message should create a Star draft for staff review.');
+	    assert((customerPortalMessageRead.json.messages || []).some(message => message.source === 'WheelsonAuto Star AI' && message.aiSourceMessageId === savedPortalMessage.id), 'Customer portal message ' + JSON.stringify({ id: savedPortalMessage.id, body: savedPortalMessage.body, source: savedPortalMessage.source, direction: savedPortalMessage.direction, template: savedPortalMessage.template, createdAt: savedPortalMessage.createdAt, portalFollowUpStartedAt: savedPortalMessage.portalFollowUpStartedAt, portalFollowUpStage: savedPortalMessage.portalFollowUpStage }) + ' should create a Star draft for staff review. Background rows: ' + JSON.stringify((customerPortalMessageRead.json.messages || []).filter(message => message.source === 'WheelsonAuto Star AI' || message.portalFollowUpCompletedAt).map(message => ({ id: message.id, source: message.source, aiSourceMessageId: message.aiSourceMessageId, portalFollowUpCompletedAt: message.portalFollowUpCompletedAt }))) + ' Job errors: ' + JSON.stringify((customerPortalMessageRead.json.jobErrors || []).slice(0, 8).map(row => ({ source: row.source, message: row.message, eventId: row.eventId }))));
     assert((customerPortalMessageRead.json.messages || []).some(note => note.event === 'customer_message' && /money\/account review/i.test(note.subject || '') && /Admin approval required: Yes/.test(note.body || '')), 'Customer portal message should notify the owner by email with triage and approval context.');
     assert((customerPortalMessageRead.json.auditLogs || []).some(row => row.action === 'Customer portal message received' && String(row.details || '').includes('Alicia Brown') && String(row.details || '').includes('Money/account question')), 'Customer portal messages should be audit logged with triage context.');
 
