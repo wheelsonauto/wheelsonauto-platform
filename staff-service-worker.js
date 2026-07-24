@@ -1,6 +1,6 @@
 'use strict';
 
-const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v7';
+const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v8';
 const STAFF_SHELL_ASSETS = [
   '/styles.css',
   '/app.js',

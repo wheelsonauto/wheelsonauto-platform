@@ -1,6 +1,6 @@
 'use strict';
 
-const SHELL_CACHE = 'wheelsonauto-customer-shell-v7';
+const SHELL_CACHE = 'wheelsonauto-customer-shell-v8';
 const SHELL_ASSETS = [
   '/styles.css',
   '/customer-portal.js',

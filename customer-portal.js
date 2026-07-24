@@ -7,36 +7,18 @@
     if (!portal || !hub) return;
     var mobile = window.matchMedia('(max-width: 760px)');
     var links = Array.prototype.slice.call(hub.querySelectorAll('a[href^="#portal-"]'));
-    var panels = Array.prototype.slice.call(portal.querySelectorAll('.customer-panel[id^="portal-"]'));
-    var groups = {
-      '#portal-overview': ['portal-vehicle', 'portal-card'],
-      '#portal-apply': ['portal-apply'],
-      '#portal-payments': ['portal-payments', 'portal-payment-history'],
-      '#portal-card': ['portal-card'],
-      '#portal-service': ['portal-service'],
-      '#portal-documents': ['portal-documents'],
-      '#portal-issues': ['portal-issues'],
-      '#portal-messages': ['portal-messages']
-    };
+    var panels = Array.prototype.slice.call(portal.querySelectorAll('[data-portal-page][id^="portal-"]'));
+    var groups = ['#portal-home', '#portal-messages', '#portal-payments', '#portal-vehicle', '#portal-settings'];
     function show(hash, scroll) {
-      var key = groups[hash] ? hash : '#portal-overview';
-      var visible = groups[key];
+      var key = groups.indexOf(hash) >= 0 ? hash : '#portal-home';
       portal.classList.add('customer-portal-focused');
-      portal.classList.toggle('customer-portal-detail', key !== '#portal-overview');
+      portal.classList.toggle('customer-portal-detail', key !== '#portal-home');
       portal.classList.toggle('customer-mobile-focused', mobile.matches);
-      portal.classList.toggle('customer-mobile-detail', mobile.matches && key !== '#portal-overview');
+      portal.classList.toggle('customer-mobile-detail', mobile.matches && key !== '#portal-home');
       panels.forEach(function (panel) {
-        var showPanel = visible.indexOf(panel.id) >= 0;
+        var showPanel = '#' + panel.id === key;
         panel.classList.toggle('portal-visible', showPanel);
-        panel.classList.toggle('portal-mobile-visible', showPanel);
-        if (panel.parentNode) {
-          var visibleCount = Array.prototype.filter.call(panel.parentNode.children, function (child) {
-            return child.classList && child.classList.contains('portal-visible');
-          }).length;
-          panel.parentNode.classList.toggle('portal-has-visible', visibleCount > 0);
-          panel.parentNode.classList.toggle('portal-single-visible', visibleCount === 1);
-          panel.parentNode.classList.toggle('portal-mobile-has-visible', visibleCount > 0);
-        }
+        panel.hidden = !showPanel;
       });
       links.forEach(function (link) {
         var active = link.getAttribute('href') === key;
@@ -44,7 +26,7 @@
         if (active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
       });
       if (window.history && window.history.replaceState) window.history.replaceState(null, '', key);
-      if (scroll) hub.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      if (scroll) window.scrollTo({ top: 0, behavior: 'smooth' });
     }
     links.forEach(function (link) {
       link.addEventListener('click', function (event) {
@@ -54,7 +36,34 @@
     });
     function applyLayout() { show(window.location.hash, false); }
     if (mobile.addEventListener) mobile.addEventListener('change', applyLayout); else mobile.addListener(applyLayout);
+    window.addEventListener('hashchange', applyLayout);
     applyLayout();
+  }
+
+  function setupPaymentDateFee() {
+    var form = document.querySelector('[data-payment-date-change]');
+    if (!form) return;
+    var input = form.querySelector('input[name="targetDate"]');
+    var output = form.querySelector('[data-payment-date-fee]');
+    var button = form.querySelector('button[type="submit"]');
+    var weekly = Number(form.getAttribute('data-weekly-amount') || 0);
+    var original = form.getAttribute('data-original-date') || '';
+    function dateAtNoon(value) { return value ? new Date(value + 'T12:00:00') : null; }
+    function render() {
+      var target = input && input.value;
+      var start = dateAtNoon(original);
+      var end = dateAtNoon(target);
+      var days = start && end ? Math.round((end.getTime() - start.getTime()) / 86400000) : 0;
+      var valid = weekly > 0 && days >= 1 && days <= 7;
+      if (button) button.disabled = !valid;
+      if (!output) return;
+      if (!target) output.textContent = 'Choose a date to see the exact fee.';
+      else if (!valid) output.textContent = 'Choose a date one to seven days after the current due date.';
+      else output.textContent = days + ' day' + (days === 1 ? '' : 's') + ' x $' + (weekly / 7).toFixed(2) + ' = $' + (weekly / 7 * days).toFixed(2);
+      output.classList.toggle('ready', valid);
+    }
+    if (input) input.addEventListener('change', render);
+    render();
   }
 
   function filePayload(file) {
@@ -160,7 +169,7 @@
         if (nextFingerprint !== lastFingerprint) {
           renderConversation(list, messages, !!forceBottom);
           lastFingerprint = nextFingerprint;
-          var count = document.querySelector('.customer-action-hub a[href="#portal-messages"] strong');
+          var count = document.querySelector('.customer-action-hub a[href="#portal-messages"] b');
           if (count) count.textContent = String(messages.length);
         }
         updateConnection();
@@ -345,6 +354,7 @@
   }
 
   setupPortalNavigation();
+  setupPaymentDateFee();
   setupConversation();
   setupInstallableApp();
   setupCustomerNotifications();
@@ -382,7 +392,7 @@
         var result = await response.json().catch(function () { return {}; });
         if (!response.ok || result.ok === false) throw new Error(result.error || 'The document could not be uploaded.');
         show(result.message || 'Document uploaded securely.');
-        window.setTimeout(function () { window.location.href = '/customer#portal-documents'; }, 450);
+        window.setTimeout(function () { window.location.href = '/customer#portal-settings'; }, 450);
       } catch (error) {
         show(error.message || 'The document could not be uploaded.', true);
         if (button) { button.disabled = false; button.textContent = 'Upload securely'; }

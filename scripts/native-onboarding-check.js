@@ -245,7 +245,7 @@ async function main() {
     const customerPhoneLogin = await request(server, 'POST', '/customer/login', { form: { username: '(856) 555-0107', password: customerPassword } });
     assert(customerPhoneLogin.status === 302 && String(customerPhoneLogin.cookie).includes('woa_customer_session='), 'Customer should be able to log in with the account phone number.');
     const customerPortal = await request(server, 'GET', '/customer', { cookie: String(customerEmailLogin.cookie).split(';')[0] });
-    assert(customerPortal.status === 200 && /Cars &amp; applications|Cars & applications/.test(customerPortal.text) && /Continue setup/.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text), 'Pending applicant portal should keep the selected car and continuation step inside the account.');
+    assert(customerPortal.status === 200 && /Applications/.test(customerPortal.text) && /My requests/.test(customerPortal.text) && />Continue</.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text) && /#portal-vehicle/.test(customerPortal.text), 'Pending applicant portal should keep the selected car and continuation step inside the Vehicle workspace.');
 
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     saved.applications.unshift({

@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260723-app-alerts-340';
+const ASSET_VERSION = 'platform-20260723-account-app-341';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10108,10 +10108,10 @@ function customerAppNotifications(data, account) {
   });
   (portal.applications || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
     const stage = row.stage || row.status || 'Submitted';
-    notices.push(appNotificationItem('application', row, 'Application ' + String(stage).toLowerCase(), row.vehicle || 'Open your account for the latest application step.', { tone: /approved|paid|scheduled/i.test(stage) ? 'good' : 'warn', url: '/customer#portal-apply' }));
+    notices.push(appNotificationItem('application', row, 'Application ' + String(stage).toLowerCase(), row.vehicle || 'Open your account for the latest application step.', { tone: /approved|paid|scheduled/i.test(stage) ? 'good' : 'warn', url: '/customer#portal-vehicle' }));
   });
   (portal.maintenance || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
-    notices.push(appNotificationItem('service', row, 'Service update', [row.vehicle || portal.summary && portal.summary.vehicle || 'Vehicle', row.issue || row.type || row.status || 'Maintenance'].join(' - '), { tone: /complete|fixed/i.test(String(row.status || '')) ? 'good' : 'warn', url: '/customer#portal-service' }));
+    notices.push(appNotificationItem('service', row, 'Service update', [row.vehicle || portal.summary && portal.summary.vehicle || 'Vehicle', row.issue || row.type || row.status || 'Maintenance'].join(' - '), { tone: /complete|fixed/i.test(String(row.status || '')) ? 'good' : 'warn', url: '/customer#portal-vehicle' }));
   });
   return appNotificationSortLimit(notices);
 }
@@ -10253,6 +10253,8 @@ function customerPortalHtml(account, state) {
 function customerPortalAssistanceHtml(html, customerUser = {}) {
   if (!customerUser.assistedByOwner) return html;
   const banner = '<aside class="customer-assistance-banner" role="status"><div><strong>Owner assistance mode</strong><span>You are viewing ' + escapeHtml(customerUser.name || customerUser.customer || 'this customer') + '\'s portal for support. This session expires in 15 minutes and the access is audited.</span></div><a class="btn primary" href="/customer/assist/end">Return to admin</a></aside>';
+  const appMarker = '<main class="customer-portal customer-app-shell">';
+  if (html.includes(appMarker)) return html.replace(appMarker, appMarker + banner);
   return html.replace('<main class="customer-portal">', '<main class="customer-portal">' + banner);
 }
 const __woaCustomerPortalHubBase = customerPortalHtml;
@@ -10324,6 +10326,65 @@ customerPortalHtml = function customerPortalHtmlWithApplications(account, state)
   html = html.replace('<section class="customer-grid">', customerPortalApplicationWorkspace(state) + '<section class="customer-grid">');
   return html;
 };
+function customerPortalMoneySummary(state = {}) {
+  const recurring = state.recurring || {};
+  const weeklyAmount = Math.max(0, Number(recurring.amount || recurring.weeklyAmount || state.customer && state.customer.weeklyAmount || state.application && state.application.weekly || state.vehicle && (state.vehicle.weeklyPayment || state.vehicle.rate) || 0));
+  const accountCredit = Math.max(0, Number(recurring.customerPortalCreditBalance || 0));
+  const weeklyRemaining = Math.max(0, Number((weeklyAmount - Math.min(weeklyAmount, accountCredit)).toFixed(2)));
+  const openClaims = (state.claims || []).filter(row => !/paid|closed|resolved|dismissed|cancel/i.test(String(row.status || '')));
+  const tollsAndFees = openClaims.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
+  return { weeklyAmount, accountCredit, weeklyRemaining, tollsAndFees, openClaims };
+}
+function customerPortalCardChangeForm(state = {}) {
+  const recurring = state.recurring || {};
+  const provider = normalizedPaymentProvider(recurring.paymentProvider || recurring.provider || 'clover');
+  if (provider === 'stripe' && !stripeCardPreparationReady()) return '<div class="customer-app-notice warn"><strong>Card update needs office help</strong><span>Stripe card setup is not connected right now. Message WheelsonAuto for a secure link.</span></div>';
+  return '<form method="POST" action="/customer/card-change" class="customer-app-form compact"><input type="hidden" name="paymentProvider" value="' + escapeHtml(provider) + '"><div><strong>Card on file</strong><span>' + escapeHtml(recurring.cardLabel || recurring.paymentSetup || paymentProviderLabel(provider) + ' saved card') + '</span></div><button class="btn primary" type="submit">Change card</button></form>';
+}
+function customerPortalFiveTabHtml(account, state) {
+  const summary = state.summary || {};
+  const recurring = state.recurring || {};
+  const vehicle = state.vehicle || {};
+  const application = state.application || {};
+  const money = customerPortalMoneySummary(state);
+  const customerName = account.name || account.customer || summary.customer || 'Customer';
+  const firstName = customerName.trim().split(/\s+/)[0] || 'Customer';
+  const vehicleTitle = summary.vehicle && !weakValue('vehicle', summary.vehicle) ? summary.vehicle : application.vehicle || (vehicle.id ? vehicleNameFromParts(vehicle) : 'No vehicle assigned');
+  const vin = summary.vin || vehicle.vin || recurring.vin || '';
+  const tag = summary.tag || vehicle.plate || vehicle.stock || recurring.licensePlate || recurring.plate || '';
+  const nextRun = validCalendarDateKey(recurring.nextRun || recurring.adminNextRun || '') || '';
+  const tomorrow = addDaysToDateKey(localDateKey(), 1);
+  const earliestDateChange = nextRun && nextRun >= localDateKey() ? addDaysToDateKey(nextRun, 1) : tomorrow;
+  const latestDateChange = nextRun ? addDaysToDateKey(nextRun, 7) : '';
+  const nextMaintenance = (state.maintenance || []).filter(row => !/complete|closed|fixed/i.test(String(row.status || ''))).sort((a, b) => Date.parse(a.nextDue || a.due || a.preferredDate || a.date || 0) - Date.parse(b.nextDue || b.due || b.preferredDate || b.date || 0))[0] || {};
+  const maintenanceDue = nextMaintenance.nextDue || nextMaintenance.due || nextMaintenance.preferredDate || 'No service due date';
+  const paymentStatus = recurring.status || summary.paymentStatus || (application.id ? application.status || application.stage || 'Application in progress' : 'Schedule not set');
+  const claimRows = money.openClaims.length ? money.openClaims.map(row => '<div class="customer-app-row"><div><strong>' + escapeHtml(row.type || 'Account item') + '</strong><span>' + escapeHtml([row.status || 'Open', row.incidentDate || row.date || '', row.vehicle || vehicleTitle].filter(Boolean).join(' | ')) + '</span></div><b>' + moneyText(row.amount || 0) + '</b></div>').join('') : '<div class="customer-app-empty">No open tolls, violations, late fees, or claims.</div>';
+  const paymentRows = (state.payments || []).length ? state.payments.map(row => customerPortalPaymentRow(row, vehicleTitle, vehicle, summary)).join('') : '<div class="customer-app-empty">No payment history is linked yet.</div>';
+  const requestRows = (state.paymentRequests || []).length ? state.paymentRequests.map(customerPortalPaymentRequestRow).join('') : '<div class="customer-app-empty">No open payment requests.</div>';
+  const cardSetupRows = (state.cardSetupRequests || []).length ? state.cardSetupRequests.map(customerPortalCardSetupRequestRow).join('') : '';
+  const serviceRows = (state.maintenance || []).length ? state.maintenance.map(row => customerPortalServiceRow(row, vehicleTitle, vehicle, summary)).join('') : '<div class="customer-app-empty">No maintenance history is linked yet.</div>';
+  const documentRows = (state.documents || []).length ? state.documents.map(row => customerPortalDocumentRow(row, vehicleTitle)).join('') : '<div class="customer-app-empty">No customer documents are available yet.</div>';
+  const applicationRows = (state.applications || []).length ? state.applications.map(row => {
+    const session = (state.onboardingSessions || []).find(item => item.applicationId === row.id);
+    const status = session && session.finalReviewStatus && session.finalReviewStatus !== 'Waiting on customer' ? session.finalReviewStatus : row.status || row.stage || session && session.status || 'Application received';
+    return '<div class="customer-app-row"><div><strong>' + escapeHtml(row.vehicle || 'Vehicle application') + '</strong><span>' + escapeHtml([status, row.updatedAt || row.submittedAt || row.createdAt || ''].filter(Boolean).join(' | ')) + '</span></div>' + (session ? '<a class="customer-app-link" href="' + escapeHtml(session.portalUrl) + '">Continue</a>' : '<span>Office review</span>') + '</div>';
+  }).join('') : '<div class="customer-app-empty">No active applications.</div>';
+  const availableRows = (state.availableVehicles || []).length ? state.availableVehicles.map(row => '<label class="customer-vehicle-choice"><input type="radio" name="onlineVehicleId" value="' + escapeHtml(row.id) + '" required><span class="customer-vehicle-choice-media">' + (row.imageUrl ? '<img src="' + escapeHtml(row.imageUrl) + '" alt="">' : '<i>WOA</i>') + '</span><span><strong>' + escapeHtml(row.title || 'Available vehicle') + '</strong><small>' + moneyText(row.weeklyPayment) + '/week' + (Number(row.downPayment || 0) ? ' | ' + moneyText(row.downPayment) + ' down' : ' | No down payment') + '</small></span></label>').join('') : '<div class="customer-app-empty">No vehicles are online right now.</div>';
+  const availableBrowseRows = (state.availableVehicles || []).length ? state.availableVehicles.map(row => '<a class="customer-app-row customer-browse-row" href="/apply/' + encodeURIComponent(row.slug || row.id) + '"><div><strong>' + escapeHtml(row.title || 'Available vehicle') + '</strong><span>' + moneyText(row.weeklyPayment) + '/week | View and apply</span></div><b>Open</b></a>').join('') : '<div class="customer-app-empty">No vehicles are online right now.</div>';
+  const profilePhone = account.phone || state.customer && state.customer.phone || '';
+  const profileEmail = account.email || state.customer && state.customer.email || '';
+  const profileUsername = account.username || profileEmail || profilePhone || '';
+  const conversation = customerPortalConversationHtml(account, state).replace('id="portal-messages" class="customer-panel customer-conversation-panel"', 'class="customer-conversation-panel"');
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><link rel="manifest" href="/manifest.webmanifest"><title>My WheelsonAuto</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body class="customer-app-body"><main class="customer-portal customer-app-shell"><header class="customer-app-header"><a class="customer-app-brand" href="#portal-home"><img src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=96" alt=""><span><strong>WheelsonAuto</strong><small>My account</small></span></a><div class="customer-app-welcome"><small>Welcome back</small><strong>' + escapeHtml(firstName) + '</strong></div><div class="customer-account-actions"></div></header><nav class="customer-action-hub customer-app-tabs" aria-label="Customer account"><a href="#portal-home"><span>Home</span></a><a href="#portal-messages"><span>Messages</span><b>' + escapeHtml(String((state.messages || []).length)) + '</b></a><a href="#portal-payments"><span>Payments</span></a><a href="#portal-vehicle"><span>Vehicle</span></a><a href="#portal-settings"><span>Settings</span></a></nav><div class="customer-app-pages">' +
+    '<section id="portal-home" class="customer-portal-page" data-portal-page><div class="customer-page-heading"><div><small>Account overview</small><h1>Good ' + (new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening') + ', ' + escapeHtml(firstName) + '</h1></div><span class="customer-status ' + (/active|paid|current/i.test(paymentStatus) ? 'good' : 'warn') + '">' + escapeHtml(paymentStatus) + '</span></div><div class="customer-home-stats"><article><span>Next payment</span><strong>' + moneyText(money.weeklyRemaining) + '</strong><small>' + escapeHtml(nextRun || 'Date not set') + (money.accountCredit ? ' | ' + moneyText(money.accountCredit) + ' credit' : '') + '</small></article><article><span>Tolls & fees</span><strong>' + moneyText(money.tollsAndFees) + '</strong><small>' + escapeHtml(String(money.openClaims.length)) + ' open item' + (money.openClaims.length === 1 ? '' : 's') + '</small></article><article><span>Service</span><strong>' + escapeHtml(maintenanceDue) + '</strong><small>' + escapeHtml(nextMaintenance.type || nextMaintenance.issue || nextMaintenance.status || 'Vehicle maintenance') + '</small></article></div><div class="customer-app-columns"><section class="customer-app-surface"><div class="customer-section-title"><div><small>My vehicle</small><h2>' + escapeHtml(vehicleTitle) + '</h2></div><a class="customer-app-link" href="#portal-vehicle">Details</a></div><div class="customer-vehicle-summary"><span>VIN <b>' + escapeHtml(vin || 'Not linked') + '</b></span><span>Tag <b>' + escapeHtml(tag || 'Not linked') + '</b></span><span>Status <b>' + escapeHtml(vehicle.status || 'Not set') + '</b></span></div></section><section class="customer-app-surface"><div class="customer-section-title"><div><small>Account items</small><h2>What needs attention</h2></div><a class="customer-app-link" href="#portal-payments">Payments</a></div>' + claimRows + '</section></div></section>' +
+    '<section id="portal-messages" class="customer-portal-page" data-portal-page><div class="customer-mobile-page-head"><a href="#portal-home" aria-label="Back to Home">Back</a><strong>WheelsonAuto</strong></div>' + conversation + '</section>' +
+    '<section id="portal-payments" class="customer-portal-page" data-portal-page><div class="customer-page-heading"><div><small>Payments</small><h1>Balance and billing</h1></div><span class="customer-status">' + moneyText(money.accountCredit) + ' credit</span></div><div class="customer-home-stats payments"><article><span>Weekly amount</span><strong>' + moneyText(money.weeklyAmount) + '</strong><small>' + escapeHtml(recurring.frequency || 'Weekly') + '</small></article><article><span>Still due</span><strong>' + moneyText(money.weeklyRemaining) + '</strong><small>After verified account credit</small></article><article><span>Next charge</span><strong>' + escapeHtml(nextRun || 'Not set') + '</strong><small>' + escapeHtml(recurring.chargeTime || recurring.paymentTime || 'Time not set') + '</small></article></div><div class="customer-app-columns"><section class="customer-app-surface"><div class="customer-section-title"><div><small>Saved card</small><h2>Payment method</h2></div></div>' + customerPortalCardChangeForm(state) + '<div class="customer-divider"></div><form method="POST" action="/customer/account-payment" class="customer-app-form"><div class="customer-section-title"><div><small>Pay early or catch up</small><h2>Make a payment</h2></div></div><label>Amount<input name="amount" type="number" min="1" max="5000" step="0.01" value="' + escapeHtml(money.weeklyRemaining || money.weeklyAmount || '') + '" required></label><label>Apply payment to<select name="allocation"><option value="current_week">Current weekly payment</option><option value="pay_ahead">Pay ahead</option><option value="past_due">Past-due balance</option><option value="tolls_fees">Tolls, violations, or fees</option></select></label><button class="btn primary" type="submit">Continue to secure payment</button><small>Verified weekly payments become account credit. Autopay charges only the remaining weekly amount.</small></form><div class="customer-divider"></div><form method="POST" action="/customer/payment-date-change" class="customer-app-form" data-payment-date-change data-weekly-amount="' + escapeHtml(String(money.weeklyAmount)) + '" data-original-date="' + escapeHtml(nextRun) + '"><div class="customer-section-title"><div><small>Move the due date</small><h2>Change payment date</h2></div></div><label>New payment date<input name="targetDate" type="date" min="' + escapeHtml(earliestDateChange) + '"' + (latestDateChange ? ' max="' + escapeHtml(latestDateChange) + '"' : '') + ' required></label><div class="customer-date-fee" data-payment-date-fee>Choose a date to see the exact fee.</div><button class="btn" type="submit"' + (nextRun ? '' : ' disabled') + '>Review date-change fee</button><small>Fee per day: weekly payment divided by seven. The schedule changes only after the fee is verified.</small></form></section><section class="customer-app-surface"><div class="customer-section-title"><div><small>Open requests</small><h2>Pay or update card</h2></div></div><div class="customer-app-list">' + requestRows + cardSetupRows + '</div><div class="customer-divider"></div><div class="customer-section-title"><div><small>History</small><h2>Recent payments</h2></div></div><div class="customer-app-list">' + paymentRows + '</div><details class="customer-app-disclosure"><summary>Receipts, statements, or outside payment</summary><form method="POST" action="/customer/receipt-request" class="customer-app-form compact"><label>Payment date, amount, or note<input name="paymentHint" maxlength="160"></label><button class="btn" type="submit">Request receipt</button></form><form method="POST" action="/customer/statement-request" class="customer-app-form compact"><label>Document<select name="requestType"><option>Account statement</option><option>Payoff balance</option><option>Payment history</option><option>Balance letter</option></select></label><label>Note<input name="note" maxlength="200"></label><button class="btn" type="submit">Request document</button></form><form method="POST" action="/customer/paid-outside" class="customer-app-form compact"><label>Amount<input name="amount" type="number" min="0.01" step="0.01"></label><label>Method<select name="method"><option>Cash</option><option>Zelle</option><option>Cash App</option><option>Money order</option><option>Clover terminal</option><option>Other</option></select></label><label>Date<input name="paidDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Proof or note<textarea name="note" maxlength="1200"></textarea></label><button class="btn" type="submit">Send for verification</button></form></details></section></div></section>' +
+    '<section id="portal-vehicle" class="customer-portal-page" data-portal-page><div class="customer-page-heading"><div><small>Vehicle</small><h1>' + escapeHtml(vehicleTitle) + '</h1></div><span class="customer-status ' + (/ready|active|rented|assigned/i.test(String(vehicle.status || '')) ? 'good' : 'warn') + '">' + escapeHtml(vehicle.status || 'Not set') + '</span></div><div class="customer-app-columns"><section class="customer-app-surface"><div class="customer-section-title"><div><small>Current vehicle</small><h2>Identity and service</h2></div></div><div class="customer-vehicle-facts"><span>VIN<b>' + escapeHtml(vin || 'Not linked') + '</b></span><span>Tag / plate<b>' + escapeHtml(tag || 'Not linked') + '</b></span><span>Mileage<b>' + escapeHtml(String(vehicle.mileage || vehicle.currentMileage || 'Not recorded')) + '</b></span><span>Inspection / service<b>' + escapeHtml(maintenanceDue) + '</b></span></div><form method="POST" action="/customer/service-request" class="customer-app-form"><div class="customer-section-title"><div><small>Need service?</small><h2>Schedule an appointment</h2></div></div><label>Service needed<select name="type"><option>Monthly inspection / oil change</option><option>Repair issue</option><option>Tire / brake concern</option><option>Warning light</option><option>Other service request</option></select></label><label>Preferred date<input name="preferredDate" type="date" min="' + escapeHtml(localDateKey()) + '"></label><label>What is happening?<textarea name="notes" maxlength="1200" required></textarea></label><button class="btn primary" type="submit">Request service</button></form><div class="customer-divider"></div><div class="customer-section-title"><div><small>Maintenance history</small><h2>Service record</h2></div></div><div class="customer-app-list">' + serviceRows + '</div><details class="customer-app-disclosure"><summary>Report a toll, ticket, damage, or other issue</summary><form method="POST" action="/customer/issue-report" class="customer-app-form"><label>Issue type<select name="type"><option>Toll / E-ZPass notice</option><option>Ticket / violation</option><option>Damage</option><option>Insurance / claim</option><option>Tracker issue</option><option>Reimbursement question</option><option>Other issue</option></select></label><label>Notice or incident date<input name="incidentDate" type="date" value="' + escapeHtml(localDateKey()) + '"></label><label>Amount, if shown<input name="amount" type="number" min="0" step="0.01" value="0"></label><label>Proof link or note<input name="proofUrl" maxlength="500"></label><label>What happened?<textarea name="notes" maxlength="1200" required></textarea></label><button class="btn primary" type="submit">Send issue for review</button></form></details></section><section class="customer-app-surface"><div class="customer-section-title"><div><small>Applications</small><h2>My requests</h2></div></div>' + applicationRows + '<div class="customer-divider"></div><div class="customer-section-title"><div><small>Available vehicles</small><h2>Browse or request a swap</h2></div></div><div class="customer-app-list">' + availableBrowseRows + '</div>' + ((state.availableVehicles || []).length ? '<details class="customer-app-disclosure"><summary>Request a vehicle swap</summary><form method="POST" action="/customer/swap-request" class="customer-app-form"><div class="customer-vehicle-choices">' + availableRows + '</div><label class="customer-check"><input type="checkbox" name="termResetAccepted" value="yes" required><span>I understand a free swap starts a new ' + escapeHtml(String(nativeSite.CONTRACT_MONTHS)) + '-month term after WheelsonAuto approves and completes the swap.</span></label><label>Note<textarea name="notes" maxlength="600" placeholder="Tell us why you want to swap."></textarea></label><button class="btn primary" type="submit">Send swap request</button><small>This does not reassign a vehicle. WheelsonAuto confirms availability and completes the swap.</small></form></details>' : '') + '</section></div></section>' +
+    '<section id="portal-settings" class="customer-portal-page" data-portal-page><div class="customer-page-heading"><div><small>Settings</small><h1>Account and privacy</h1></div></div><div class="customer-app-columns"><section class="customer-app-surface"><form method="POST" action="/customer/profile" class="customer-app-form"><div class="customer-section-title"><div><small>Personal information</small><h2>Profile and login</h2></div></div><label>Legal name<input value="' + escapeHtml(customerName) + '" disabled><small>Message the office to update a legal name across contracts and payment records.</small></label><label>Phone<input name="phone" type="tel" value="' + escapeHtml(profilePhone) + '" required></label><label>Email<input name="email" type="email" value="' + escapeHtml(profileEmail) + '" required></label><label>Username<input name="username" value="' + escapeHtml(profileUsername) + '" required></label><label>Current password<input name="currentPassword" type="password" autocomplete="current-password" required></label><button class="btn primary" type="submit">Save account changes</button><small>Changes apply only to this signed-in account and its exact linked records.</small></form><div class="customer-settings-actions"><a class="customer-app-link" href="/customer/forgot">Reset password</a><button class="customer-app-link" type="button" data-install-customer-app hidden>Install app</button><a class="customer-app-link danger" href="/customer/logout">Log out</a></div></section><section class="customer-app-surface"><form method="POST" action="/customer/feedback" class="customer-app-form"><div class="customer-section-title"><div><small>Help improve WheelsonAuto</small><h2>Bug or suggestion</h2></div></div><label>Type<select name="category"><option>Report a bug</option><option>Suggest an improvement</option><option>Account help</option></select></label><label>Page<select name="page"><option>Home</option><option>Messages</option><option>Payments</option><option>Vehicle</option><option>Settings</option></select></label><label>Details<textarea name="details" maxlength="1600" required placeholder="Tell us what happened or what would make the app better."></textarea></label><button class="btn primary" type="submit">Send to WheelsonAuto</button></form><div class="customer-divider"></div><div class="customer-section-title"><div><small>Private documents</small><h2>Files and policies</h2></div></div><form method="POST" action="/customer/document-update" class="customer-app-form" data-customer-document-upload><label>Document type<select name="type"><option>Insurance proof</option><option>Driver license</option><option>Registration</option><option>Other document</option></select></label><label>Secure file<input name="documentFile" type="file" accept="image/jpeg,image/png,application/pdf" required></label><label>Reference<input name="reference" maxlength="160"></label><label>Expiration date<input name="expires" type="date"></label><label>Note<textarea name="notes" maxlength="600"></textarea></label><button class="btn primary" type="submit">Upload securely</button><small data-document-upload-status>JPG, PNG, or PDF up to 5 MB. Staff verification is required.</small></form><div class="customer-app-list">' + documentRows + '</div><div class="customer-policy-links"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/cancellation">Cancellation policy</a></div></section></div></section>' +
+    '</div></main><script src="/customer-portal.js?v=' + ASSET_VERSION + '"></script></body></html>';
+}
+customerPortalHtml = customerPortalFiveTabHtml;
 function requestBaseUrl(req) {
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
   const protocol = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || (host.includes('localhost') || host.startsWith('127.') ? 'http' : 'https');
@@ -13174,6 +13235,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('GET', '/customer', 'Customer self-service portal'),
     route('POST', '/api/customer-accounts/assist', 'Open an audited owner-only customer assistance session'),
     route('POST', '/customer/message', 'Customer portal inbound message'),
+    route('POST', '/customer/account-payment', 'Customer advance, partial, or catch-up payment'),
+    route('POST', '/customer/payment-date-change', 'Customer payment date change with verified fee'),
+    route('POST', '/customer/swap-request', 'Customer vehicle swap request with term acknowledgement'),
+    route('POST', '/customer/profile', 'Exact-account customer profile update'),
+    route('POST', '/customer/feedback', 'Customer app bug or improvement feedback'),
     route('POST', '/customer/receipt-request', 'Customer portal receipt request'),
     route('POST', '/customer/paid-outside', 'Customer portal paid-outside-app report'),
     route('POST', '/customer/service-request', 'Customer portal maintenance/service request'),
@@ -16913,7 +16979,9 @@ function publicPayHtml(data, request, message = '') {
   const provider = paymentProviderLabel(request.paymentProvider);
   const paymentReady = normalizedPaymentProvider(request.paymentProvider) !== 'stripe' || stripeMoneyActionsArmed() && controlledStripePilotMoneyActionReview(data, request).allowed;
   const providerNotice = paymentReady ? '' : '<div class="notice" style="margin-top:12px">This Stripe payment link is not live yet. WheelsonAuto will send a fresh secure link after production launch checks are complete.</div>';
-  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + providerNotice + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit"' + (paymentReady ? '' : ' disabled') + '>Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="https://www.wheelsonauto.com/">Back to WheelsonAuto</a></form></section></main></div></body></html>';
+  const returnUrl = request.onboardingReturnUrl || (request.customerAccountId ? '/customer#portal-payments' : 'https://www.wheelsonauto.com/');
+  const returnLabel = request.customerAccountId ? 'Back to my account' : 'Back to WheelsonAuto';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + providerNotice + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit"' + (paymentReady ? '' : ' disabled') + '>Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></form></section></main></div></body></html>';
 }
 function paymentResultHtml(title, message, returnUrl = 'https://www.wheelsonauto.com/', returnLabel = 'Back to WheelsonAuto') {
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>' + escapeHtml(title) + '</h1><p>' + escapeHtml(message) + '</p></div><main class="public-main"><section class="card section"><a class="btn primary" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></section></main></div></body></html>';
@@ -16948,6 +17016,13 @@ function createPaymentRequest(data, payload) {
     paymentType: String(payload.paymentType || payload.reason || '').trim(),
     reason: String(payload.reason || payload.paymentType || '').trim(),
     notes: String(payload.notes || '').trim(),
+    customerAccountId: String(payload.customerAccountId || '').trim(),
+    appliesToRecurringPaymentId: String(payload.appliesToRecurringPaymentId || '').trim(),
+    paymentAllocation: String(payload.paymentAllocation || '').trim(),
+    paymentDateChangeOriginal: validCalendarDateKey(payload.paymentDateChangeOriginal || ''),
+    paymentDateChangeTarget: validCalendarDateKey(payload.paymentDateChangeTarget || ''),
+    paymentDateChangeDays: Math.max(0, Math.min(7, Number(payload.paymentDateChangeDays || 0))),
+    paymentDateChangeDailyFee: Math.max(0, Number(payload.paymentDateChangeDailyFee || 0)),
     onboardingReturnUrl: String(payload.onboardingReturnUrl || '').trim(),
     paymentProvider: normalizedPaymentProvider(payload.paymentProvider || WOA_PAYMENT_PROVIDER),
     status: 'Open',
@@ -18866,6 +18941,45 @@ async function chargeSavedRecurringCard(data, payload, req) {
   await writeData(data);
   return { charge, payment, recurring };
 }
+function applyCustomerPortalCreditToBilling(data, recurring, amount, scheduledDueDate, options = {}) {
+  const applied = Math.max(0, Math.min(Number(recurring.customerPortalCreditBalance || 0), Number(amount || 0)));
+  if (!applied) return null;
+  const now = new Date().toISOString();
+  recurring.customerPortalCreditBalance = Number((Math.max(0, Number(recurring.customerPortalCreditBalance || 0)) - applied).toFixed(2));
+  recurring.customerPortalCreditUpdatedAt = now;
+  recurring.customerPortalCreditLastAppliedAt = now;
+  recurring.customerPortalCreditLastAppliedAmount = applied;
+  const payment = {
+    id: 'pay-account-credit-' + crypto.randomBytes(8).toString('hex'),
+    recurringPaymentId: recurring.id || '',
+    customerAccountId: recurring.customerAccountId || '',
+    organizationId: recurring.organizationId || MAIN_ORG_ID,
+    customer: recurring.customer || '',
+    phone: recurring.phone || '',
+    email: recurring.email || '',
+    vehicleId: recurring.vehicleId || '',
+    vehicle: recurring.vehicle || '',
+    vin: recurring.vin || '',
+    licensePlate: recurring.licensePlate || recurring.plate || '',
+    date: new Date(now).toLocaleString('en-US'),
+    createdAt: now,
+    scheduledDueDate,
+    dueDate: scheduledDueDate,
+    billingPeriodKey: stripeMigration.billingPeriodKey(scheduledDueDate),
+    method: 'WheelsonAuto account credit',
+    paymentType: options.fullCoverage ? 'Weekly payment covered by account credit' : 'Account credit applied to weekly payment',
+    amount: applied,
+    status: 'Paid',
+    tone: 'good',
+    source: 'Verified customer portal advance/partial payment',
+    externalChargeRequired: !options.fullCoverage,
+    remainingExternalCharge: Math.max(0, Number((Number(amount || 0) - applied).toFixed(2)))
+  };
+  data.payments = Array.isArray(data.payments) ? data.payments : [];
+  data.payments.unshift(payment);
+  ensurePaymentReceiptDocument(data, payment, { paymentProvider: 'internal', title: payment.paymentType, customer: payment.customer, vehicle: payment.vehicle });
+  return payment;
+}
 async function runWheelsonAutoAutopay(options = {}) {
   if (woaAutopayStatus.inFlight) return { ok: true, skipped: true, reason: 'already running', status: woaAutopayStatus };
   woaAutopayStatus.inFlight = true;
@@ -18873,7 +18987,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -18918,13 +19032,33 @@ async function runWheelsonAutoAutopay(options = {}) {
       try {
         const nextRun = nextFutureRecurringDate(row, dateKey, scheduledDueDate);
         if (!nextRun) throw new Error('WheelsonAuto could not calculate the next ' + (row.frequency || 'recurring') + ' date. The card was not charged.');
+        const weeklyAmount = Math.max(0, Number(row.amount || row.weeklyAmount || 0));
+        const availableCredit = Math.max(0, Number(row.customerPortalCreditBalance || 0));
+        if (weeklyAmount > 0 && availableCredit >= weeklyAmount) {
+          applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: true });
+          row.lastAutoChargeDate = dateKey;
+          row.lastAutoChargeAt = new Date().toISOString();
+          row.nextRun = nextRun;
+          row.adminNextRun = nextRun;
+          row.paymentDay = /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.paymentDay;
+          row.chargeDay = /week/i.test(String(row.frequency || '')) ? calendarDayName(nextRun) : row.chargeDay;
+          row.status = 'Active';
+          row.tone = 'good';
+          row.retryCount = 0;
+          row.failedAttempts = 0;
+          row.lastAutoChargeResult = 'Paid with account credit';
+          result.creditCovered += 1;
+          continue;
+        }
+        const creditToApply = Math.min(availableCredit, weeklyAmount);
+        const externalAmount = Number(Math.max(0, weeklyAmount - creditToApply).toFixed(2));
         const charged = await chargeSavedRecurringCard(data, {
           recurringPaymentId: row.id,
-          amount: row.amount,
+          amount: externalAmount || row.amount,
           nextRun,
           scheduledDueDate,
           automatic: true,
-          note: 'WheelsonAuto autopay charged for due date ' + scheduledDueDate
+          note: 'WheelsonAuto autopay charged for due date ' + scheduledDueDate + (creditToApply ? ' after ' + moneyText(creditToApply) + ' account credit' : '')
         }, null);
         if (!charged || !charged.payment || String(charged.payment.status || '').toLowerCase() !== 'paid') {
           throw new Error(paymentProviderLabel(row.paymentProvider || row.provider || 'clover') + ' returned ' + String(charged && charged.payment && charged.payment.status || 'an unconfirmed result') + '. The next charge date was not advanced.');
@@ -18937,6 +19071,15 @@ async function runWheelsonAutoAutopay(options = {}) {
         row.retryCount = 0;
         row.failedAttempts = 0;
         row.lastAutoChargeResult = 'Paid';
+        if (creditToApply) {
+          const creditPayment = applyCustomerPortalCreditToBilling(data, row, weeklyAmount, scheduledDueDate, { fullCoverage: false });
+          if (creditPayment) {
+            charged.payment.accountCreditApplied = creditPayment.amount;
+            charged.payment.weeklyAmountCovered = weeklyAmount;
+            charged.payment.externalChargedAmount = externalAmount;
+            result.creditApplied += 1;
+          }
+        }
         result.charged += 1;
       } catch (err) {
         if (isStripeLaunchGuardError(err)) {
@@ -19561,7 +19704,7 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
   data.payments = Array.isArray(data.payments) ? data.payments : [];
   let payment = data.payments.find(row => row.paymentRequestId === request.id);
   if (!payment) {
-    payment = { id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', controlledStripePilotTest: request.controlledStripePilotTest === true, paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' };
+    payment = { id: 'pay-' + crypto.randomBytes(8).toString('hex'), paymentRequestId: request.id, recurringPaymentId: request.recurringPaymentId || '', appliesToRecurringPaymentId: request.appliesToRecurringPaymentId || '', customerAccountId: request.customerAccountId || '', paymentAllocation: request.paymentAllocation || '', applicationId: request.applicationId || '', onboardingSessionId: request.onboardingSessionId || '', onlineVehicleId: request.onlineVehicleId || '', controlledStripePilotTest: request.controlledStripePilotTest === true, paymentProvider: provider, providerPaymentId: request.providerPaymentId || '', stripePaymentIntentId, stripeLivemode: provider === 'stripe' && details.stripeLivemode === true, cloverPaymentId: request.cloverPaymentId || '', date: new Date(request.paidAt).toLocaleString('en-US'), createdAt: request.paidAt, customer: request.customer, phone: request.phone || '', email: request.email || '', vehicleId: request.vehicleId || '', vehicle: request.vehicle || '', vin: request.vin || '', licensePlate: request.licensePlate || '', method: providerName + ' Hosted Checkout', paymentType: request.paymentType || request.reason || 'Payment', amount: request.amount, status: 'Paid', tone: 'good', source: providerName + ' Hosted Checkout verified webhook' };
     data.payments.unshift(payment);
   }
   const recurring = (data.recurringPayments || []).find(row => row.id === request.recurringPaymentId);
@@ -19570,6 +19713,40 @@ function recordHostedCheckoutPayment(data, request, details = {}) {
     recurring.tone = 'good';
     recurring.lastPaymentAt = request.paidAt;
     if (request.controlledStripePilotTest === true) recurring.controlledStripePilotTest = true;
+  }
+  const appliedRecurring = (data.recurringPayments || []).find(row => row.id === request.appliesToRecurringPaymentId);
+  if (appliedRecurring && !request.customerPortalCreditAppliedAt && ['current_week', 'pay_ahead', 'past_due'].includes(request.paymentAllocation)) {
+    const credit = Math.max(0, Number(request.amount || 0));
+    appliedRecurring.customerPortalCreditBalance = Number((Math.max(0, Number(appliedRecurring.customerPortalCreditBalance || 0)) + credit).toFixed(2));
+    appliedRecurring.customerPortalCreditUpdatedAt = paidAt;
+    appliedRecurring.customerPortalCreditSourcePaymentRequestId = request.id;
+    request.customerPortalCreditAppliedAt = paidAt;
+    payment.accountCreditAdded = credit;
+    payment.accountCreditBalance = appliedRecurring.customerPortalCreditBalance;
+  }
+  if (appliedRecurring && request.paymentDateChangeOriginal && request.paymentDateChangeTarget && !request.paymentDateChangeAppliedAt) {
+    const currentNextRun = validCalendarDateKey(appliedRecurring.nextRun || appliedRecurring.adminNextRun || '');
+    if (currentNextRun === request.paymentDateChangeOriginal) {
+      Object.assign(appliedRecurring, {
+        nextRun: request.paymentDateChangeTarget,
+        adminNextRun: request.paymentDateChangeTarget,
+        paymentDay: /week/i.test(String(appliedRecurring.frequency || '')) ? calendarDayName(request.paymentDateChangeTarget) : appliedRecurring.paymentDay,
+        chargeDay: /week/i.test(String(appliedRecurring.frequency || '')) ? calendarDayName(request.paymentDateChangeTarget) : appliedRecurring.chargeDay,
+        lastCustomerDateChangeAt: paidAt,
+        lastCustomerDateChangeFrom: request.paymentDateChangeOriginal,
+        lastCustomerDateChangeTo: request.paymentDateChangeTarget,
+        lastCustomerDateChangeFee: Number(request.amount || 0)
+      });
+      request.paymentDateChangeAppliedAt = paidAt;
+      payment.paymentDateChangeApplied = true;
+    } else {
+      request.paymentDateChangeConflictAt = paidAt;
+      request.ownerReviewRequired = true;
+      payment.ownerReviewRequired = true;
+      payment.status = 'Paid - schedule change review required';
+      payment.tone = 'warn';
+      payment.notes = 'The payment schedule changed after this request was created. The fee was paid, but staff must confirm the requested date manually.';
+    }
   }
   ensurePaymentReceiptDocument(data, payment, request);
   if (request.onboardingSessionId) {
@@ -21776,7 +21953,7 @@ const server = http.createServer(async (req, res) => {
           await writeData(data);
         }
         const duplicateSession = (data.onboardingSessions || []).find(row => row.applicationId === duplicateApplication.id && !/replaced|cancelled|expired/i.test(String(row.status || '')));
-        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), onboardingUrl: duplicateSession ? '/customer/onboarding/' + encodeURIComponent(duplicateSession.id) : '/customer#portal-apply', loginUrl: '/customer#portal-apply' });
+        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), onboardingUrl: duplicateSession ? '/customer/onboarding/' + encodeURIComponent(duplicateSession.id) : '/customer#portal-vehicle', loginUrl: '/customer#portal-vehicle' });
       }
       if (!nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
       const pricing = onboarding.pricingSnapshot(selectedVehicle);
@@ -21893,7 +22070,7 @@ const server = http.createServer(async (req, res) => {
       });
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: '/customer/onboarding/' + encodeURIComponent(session.id), loginUrl: '/customer#portal-apply' });
+      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: '/customer/onboarding/' + encodeURIComponent(session.id), loginUrl: '/customer#portal-vehicle' });
     }
     if (/^\/api\/public\/onboarding\/[^/]+\/pickup-availability$/.test(url.pathname) && req.method === 'GET') {
       const availabilityRate = await publicActionLimit(req, 'onboarding-availability', PUBLIC_SECURE_LINK_LIMIT * 2, PUBLIC_SECURE_LINK_WINDOW_MS);
@@ -22885,7 +23062,7 @@ const server = http.createServer(async (req, res) => {
       const next = safeCustomerLoginReturn(url.searchParams.get('next') || '');
       const data = await readData();
       const signedInAccount = activeCustomerSessionAccount(data, customerSessionUser(req));
-      if (signedInAccount) return send(res, 302, '', 'text/plain', { Location: next || '/customer#portal-apply', 'Cache-Control': 'no-store' });
+      if (signedInAccount) return send(res, 302, '', 'text/plain', { Location: next || '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
       return send(res, 200, customerRegisterPage('', next), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/register' && req.method === 'POST') {
@@ -22928,7 +23105,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, customerLoginUser(account), 'Customer account created before application', [email, phone, next || 'Customer portal']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return send(res, 303, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: next || '/customer#portal-apply', 'Cache-Control': 'no-store' });
+      return send(res, 303, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: next || '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage('', url.searchParams.get('next') || ''), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
@@ -23057,6 +23234,201 @@ const server = http.createServer(async (req, res) => {
       const returnPath = safeCustomerLoginReturn(url.searchParams.get('next') || '');
       const assisted = !!(customerSessionUser(req) || {}).assistedByOwner;
       return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: assisted ? '/' : (returnPath || '/customer/login') });
+    }
+    if (url.pathname === '/customer/account-payment' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const amount = Number(form.get('amount') || 0);
+      const allocation = String(form.get('allocation') || 'current_week');
+      if (!Number.isFinite(amount) || amount < 1 || amount > 5000) return send(res, 400, paymentResultHtml('Payment amount needs review', 'Enter an amount from $1 to $5,000.', '/customer#portal-payments', 'Back to payments'));
+      if (!['current_week', 'pay_ahead', 'past_due', 'tolls_fees'].includes(allocation)) return send(res, 400, paymentResultHtml('Payment type needs review', 'Choose what this payment should cover.', '/customer#portal-payments', 'Back to payments'));
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const portal = customerPortalState(data, account);
+      const recurring = findRecurringRow(data, portal.recurring && portal.recurring.id || account.recurringPaymentId || '');
+      if (!recurring) return send(res, 409, paymentResultHtml('Payment schedule not linked', 'WheelsonAuto must connect the exact payment schedule before an online account payment can be accepted.', '/customer#portal-messages', 'Message WheelsonAuto'));
+      const vehicle = portal.vehicle || {};
+      const label = { current_week: 'Current weekly payment', pay_ahead: 'Advance weekly payment', past_due: 'Past-due payment', tolls_fees: 'Tolls, violations, or fees' }[allocation];
+      const duplicate = (data.paymentRequests || []).find(row => isOpenCustomerPaymentRequest(row) && row.customerAccountId === account.id && row.appliesToRecurringPaymentId === recurring.id && row.paymentAllocation === allocation && Number(row.amount || 0) === Number(amount.toFixed(2)));
+      if (duplicate) return send(res, 303, '', 'text/plain', { Location: duplicate.url || '/pay/' + duplicate.id, 'Cache-Control': 'no-store' });
+      const request = createPaymentRequest(data, {
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customerAccountId: account.id,
+        appliesToRecurringPaymentId: recurring.id,
+        paymentAllocation: allocation,
+        customer: account.customer || account.name,
+        phone: account.phone || recurring.phone || '',
+        email: account.email || recurring.email || '',
+        vehicleId: account.vehicleId || vehicle.id || recurring.vehicleId || '',
+        vehicle: portal.summary && portal.summary.vehicle || recurring.vehicle || '',
+        vin: portal.summary && portal.summary.vin || vehicle.vin || recurring.vin || '',
+        licensePlate: portal.summary && portal.summary.tag || vehicle.plate || recurring.licensePlate || recurring.plate || '',
+        amount: Number(amount.toFixed(2)),
+        paymentProvider: recurring.paymentProvider || recurring.provider || WOA_PAYMENT_PROVIDER,
+        frequency: 'One time',
+        paymentType: label,
+        reason: label,
+        notes: label + ' submitted from the exact customer portal account.',
+        onboardingReturnUrl: '/customer#portal-payments'
+      });
+      data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+      data.paymentRequests.unshift(request);
+      appendCustomerPortalAudit(data, account, 'Customer portal payment request created', [label, moneyText(request.amount), request.id, recurring.id]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer account payment request' });
+      await writeData(data);
+      return send(res, 303, '', 'text/plain', { Location: request.url, 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer/payment-date-change' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const targetDate = validCalendarDateKey(form.get('targetDate') || '');
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const portal = customerPortalState(data, account);
+      const recurring = findRecurringRow(data, portal.recurring && portal.recurring.id || account.recurringPaymentId || '');
+      const originalDate = recurring && validCalendarDateKey(recurring.nextRun || recurring.adminNextRun || '');
+      if (!recurring || !originalDate || !targetDate) return send(res, 409, paymentResultHtml('Payment date needs review', 'The exact current payment schedule or new date could not be confirmed.', '/customer#portal-payments', 'Back to payments'));
+      const days = Math.round((new Date(targetDate + 'T12:00:00').getTime() - new Date(originalDate + 'T12:00:00').getTime()) / 86400000);
+      if (days < 1 || days > 7 || targetDate <= localDateKey()) return send(res, 400, paymentResultHtml('Choose a valid new date', 'The payment date can move forward by one to seven days and must still be in the future.', '/customer#portal-payments', 'Back to payments'));
+      const weeklyAmount = Math.max(0, Number(recurring.amount || recurring.weeklyAmount || 0));
+      if (!weeklyAmount) return send(res, 409, paymentResultHtml('Weekly amount needs review', 'WheelsonAuto must confirm the weekly amount before calculating a date-change fee.', '/customer#portal-messages', 'Message WheelsonAuto'));
+      const dailyFee = Number((weeklyAmount / 7).toFixed(2));
+      const fee = Number((weeklyAmount / 7 * days).toFixed(2));
+      const vehicle = portal.vehicle || {};
+      const duplicate = (data.paymentRequests || []).find(row => isOpenCustomerPaymentRequest(row) && row.customerAccountId === account.id && row.appliesToRecurringPaymentId === recurring.id && row.paymentDateChangeOriginal === originalDate && row.paymentDateChangeTarget === targetDate);
+      if (duplicate) return send(res, 303, '', 'text/plain', { Location: duplicate.url || '/pay/' + duplicate.id, 'Cache-Control': 'no-store' });
+      const request = createPaymentRequest(data, {
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customerAccountId: account.id,
+        appliesToRecurringPaymentId: recurring.id,
+        paymentDateChangeOriginal: originalDate,
+        paymentDateChangeTarget: targetDate,
+        paymentDateChangeDays: days,
+        paymentDateChangeDailyFee: dailyFee,
+        customer: account.customer || account.name,
+        phone: account.phone || recurring.phone || '',
+        email: account.email || recurring.email || '',
+        vehicleId: account.vehicleId || vehicle.id || recurring.vehicleId || '',
+        vehicle: portal.summary && portal.summary.vehicle || recurring.vehicle || '',
+        vin: portal.summary && portal.summary.vin || vehicle.vin || recurring.vin || '',
+        licensePlate: portal.summary && portal.summary.tag || vehicle.plate || recurring.licensePlate || recurring.plate || '',
+        amount: fee,
+        paymentProvider: recurring.paymentProvider || recurring.provider || WOA_PAYMENT_PROVIDER,
+        frequency: 'One time',
+        paymentType: 'Payment date change fee',
+        reason: 'Move payment date from ' + originalDate + ' to ' + targetDate,
+        notes: days + ' day date change at ' + moneyText(dailyFee) + ' per day.',
+        onboardingReturnUrl: '/customer#portal-payments'
+      });
+      data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
+      data.paymentRequests.unshift(request);
+      appendCustomerPortalAudit(data, account, 'Customer payment date change requested', [originalDate + ' to ' + targetDate, days + ' day(s)', moneyText(fee), request.id]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer payment date change request' });
+      await writeData(data);
+      return send(res, 303, '', 'text/plain', { Location: request.url, 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer/swap-request' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const onlineVehicleId = String(form.get('onlineVehicleId') || '').trim();
+      const accepted = form.get('termResetAccepted') === 'yes';
+      const notes = String(form.get('notes') || '').trim().slice(0, 600);
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      const selected = nativeSite.publishedVehicles(data).find(row => row.id === onlineVehicleId);
+      if (!selected || !accepted) return send(res, 400, paymentResultHtml('Swap request incomplete', 'Choose an available vehicle and accept the new-term acknowledgement.', '/customer#portal-vehicle', 'Back to vehicles'));
+      const portal = customerPortalState(data, account);
+      const existingSwap = (data.vehicleSwapRequests || []).find(row => row.customerAccountId === account.id && row.requestedOnlineVehicleId === selected.id && !/complete|closed|declined|cancel/i.test(String(row.status || '')));
+      if (existingSwap) return send(res, 303, '', 'text/plain', { Location: '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
+      const now = new Date().toISOString();
+      const request = {
+        id: 'swap-' + crypto.randomBytes(8).toString('hex'),
+        organizationId: account.organizationId || MAIN_ORG_ID,
+        customerAccountId: account.id,
+        customer: account.customer || account.name || '',
+        currentVehicleId: account.vehicleId || portal.vehicle && portal.vehicle.id || '',
+        currentVehicle: portal.summary && portal.summary.vehicle || '',
+        requestedOnlineVehicleId: selected.id,
+        requestedVehicle: nativeSite.vehicleTitle(selected),
+        termMonths: nativeSite.CONTRACT_MONTHS,
+        termResetAccepted: true,
+        status: 'Needs manager review',
+        notes,
+        createdAt: now,
+        updatedAt: now
+      };
+      data.vehicleSwapRequests = Array.isArray(data.vehicleSwapRequests) ? data.vehicleSwapRequests : [];
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.vehicleSwapRequests.unshift(request);
+      data.messages.unshift({ id: 'msg-' + request.id, organizationId: request.organizationId, customerAccountId: account.id, customer: request.customer, phone: account.phone || '', email: account.email || '', direction: 'Customer action', channel: 'Customer portal', template: 'Vehicle swap request', subject: 'Vehicle swap request', status: 'Needs manager review', tone: 'warn', body: ['Customer requested a free vehicle swap.', 'Current: ' + (request.currentVehicle || 'No linked vehicle'), 'Requested: ' + request.requestedVehicle, 'New term: ' + request.termMonths + ' months acknowledged', notes ? 'Note: ' + notes : ''].filter(Boolean).join('\n'), source: 'Customer portal', vehicleId: request.currentVehicleId, createdAt: now, date: new Date(now).toLocaleString('en-US') });
+      appendCustomerPortalAudit(data, account, 'Customer vehicle swap requested', [request.currentVehicle || 'No current vehicle', request.requestedVehicle, request.termMonths + '-month reset acknowledged', request.id]);
+      await queueOwnerEmailNotification(data, 'customer_message', { customer: request.customer, subject: 'Vehicle swap request - ' + request.customer, body: data.messages[0].body });
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer vehicle swap request' });
+      await writeData(data);
+      return send(res, 303, '', 'text/plain', { Location: '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer/profile' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const phone = phoneKey(form.get('phone') || '');
+      const email = String(form.get('email') || '').trim().toLowerCase().slice(0, 180);
+      const username = String(form.get('username') || '').trim().slice(0, 120);
+      const currentPassword = String(form.get('currentPassword') || '');
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
+      if (!verifyPasswordRecord(currentPassword, account)) return send(res, 403, paymentResultHtml('Current password did not match', 'No account information was changed.', '/customer#portal-settings', 'Back to settings'));
+      if (phone.length !== 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || normalizeLogin(username).length < 3) return send(res, 400, paymentResultHtml('Check the account information', 'Enter a valid phone, email, and username.', '/customer#portal-settings', 'Back to settings'));
+      const profileIdentifiers = new Set([normalizeLogin(username), normalizeLogin(email), phoneKey(phone)].filter(Boolean));
+      const profileConflictsWith = row => [row && row.username, row && row.email, row && row.phone].filter(Boolean).some(value => profileIdentifiers.has(normalizeLogin(value)) || phoneKey(value) && profileIdentifiers.has(phoneKey(value)));
+      const profileConflict = (data.customerAccounts || []).some(row => row.id !== account.id && profileConflictsWith(row))
+        || (data.staffAccounts || []).some(profileConflictsWith)
+        || profileConflictsWith(data.security && data.security.ownerLogin || {});
+      if (profileConflict) return send(res, 409, paymentResultHtml('Login information already in use', 'Choose a different username, email, or phone number. No account information was changed.', '/customer#portal-settings', 'Back to settings'));
+      const now = new Date().toISOString();
+      const old = { phone: account.phone || '', email: account.email || '', username: account.username || '' };
+      Object.assign(account, { phone, email, username, updatedAt: now });
+      const exactIds = new Set([account.customerId, account.contractId, account.recurringPaymentId, account.vehicleId].filter(Boolean));
+      ['customers', 'contracts', 'recurringPayments', 'applications'].forEach(collection => {
+        (data[collection] || []).forEach(row => {
+          const exact = row.customerAccountId === account.id || exactIds.has(row.id) || collection === 'applications' && [account.applicationId].concat(account.applicationIds || []).includes(row.id);
+          if (!exact) return;
+          row.phone = phone;
+          row.email = email;
+          row.updatedAt = now;
+        });
+      });
+      appendCustomerPortalAudit(data, account, 'Customer portal profile updated', ['Phone ' + (old.phone === phone ? 'unchanged' : 'updated'), 'Email ' + (old.email === email ? 'unchanged' : 'updated'), 'Username ' + (old.username === username ? 'unchanged' : 'updated')]);
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'exact customer profile update' });
+      await writeData(data);
+      return send(res, 303, '', 'text/plain', { Location: '/customer#portal-settings', 'Cache-Control': 'no-store', 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)) });
+    }
+    if (url.pathname === '/customer/feedback' && req.method === 'POST') {
+      const customerUser = customerSessionUser(req);
+      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const form = new URLSearchParams(await readBody(req, 64 * 1024));
+      const category = String(form.get('category') || 'Report a bug').trim().slice(0, 80);
+      const page = String(form.get('page') || 'Customer portal').trim().slice(0, 80);
+      const details = String(form.get('details') || '').trim().slice(0, 1600);
+      if (details.length < 5) return send(res, 400, paymentResultHtml('Add more detail', 'Tell us what happened or what should improve.', '/customer#portal-settings', 'Back to settings'));
+      const data = await readData();
+      const account = activeCustomerSessionAccount(data, customerUser);
+      if (!account) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const now = new Date().toISOString();
+      data.messages = Array.isArray(data.messages) ? data.messages : [];
+      data.messages.unshift({ id: 'msg-feedback-' + crypto.randomBytes(8).toString('hex'), organizationId: account.organizationId || MAIN_ORG_ID, customerAccountId: account.id, customer: account.customer || account.name || '', phone: account.phone || '', email: account.email || '', direction: 'Customer action', channel: 'Customer portal', template: 'Product feedback', subject: category + ' - ' + page, status: 'Needs product review', tone: category === 'Report a bug' ? 'warn' : 'blue', body: details, source: 'Customer portal', createdAt: now, date: new Date(now).toLocaleString('en-US') });
+      appendCustomerPortalAudit(data, account, 'Customer portal feedback submitted', [category, page, data.messages[0].id]);
+      await queueOwnerEmailNotification(data, 'customer_message', { customer: account.customer || account.name, subject: category + ' - ' + page, body: details });
+      await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer portal feedback' });
+      await writeData(data);
+      return send(res, 303, '', 'text/plain', { Location: '/customer#portal-settings', 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/message' && req.method === 'POST') {
       const wantsJson = /application\/json/i.test(String(req.headers['content-type'] || '')) || /application\/json/i.test(String(req.headers.accept || ''));
@@ -23214,7 +23586,7 @@ const server = http.createServer(async (req, res) => {
 	      });
 	      appendCustomerPortalAudit(data, account, 'Customer portal receipt requested', [customerName, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '', message.amount ? moneyText(message.amount) : 'No amount']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
+	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-settings' });
 	    }
 	    if (url.pathname === '/customer/statement-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
@@ -23330,7 +23702,7 @@ const server = http.createServer(async (req, res) => {
 	      });
 	      appendCustomerPortalAudit(data, account, 'Customer portal statement requested', [customerName, requestType, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '', note || 'No note']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
+	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-settings' });
 	    }
 	    if (url.pathname === '/customer/paid-outside' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -23526,7 +23898,7 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal service requested', [customerName, type, due, vehicleName || service.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-service' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-vehicle' });
     }
     if (url.pathname === '/customer/issue-report' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -23625,7 +23997,7 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal issue reported', [customerName, type, moneyText(claim.amount || 0), vehicleName || claim.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-issues' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-vehicle' });
     }
     if (url.pathname === '/customer/document-update' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -23761,7 +24133,7 @@ const server = http.createServer(async (req, res) => {
         throw error;
       }
       if (jsonUpload) return json(res, 201, { ok: true, message: 'Document uploaded securely for WheelsonAuto verification.', document: { id: document.id, type: document.type, status: document.status, originalName: document.originalName, portalDownloadUrl: '/customer/documents/' + encodeURIComponent(document.id) } });
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-documents' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-settings' });
     }
     if (url.pathname.startsWith('/customer/documents/') && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -23813,7 +24185,7 @@ const server = http.createServer(async (req, res) => {
       const customerName = context.customerName || account.customer || account.name || 'Customer';
       const requestedProvider = normalizedPaymentProvider(form.get('paymentProvider') || recurring.paymentProvider || recurring.provider || WOA_PAYMENT_PROVIDER);
       if (requestedProvider === 'stripe') {
-        try { assertStripeCardPreparationReady(); } catch (error) { return send(res, Number(error.statusCode || 503), paymentResultHtml('Stripe card setup is not live', error.message, '/customer#portal-card', 'Back to my account')); }
+        try { assertStripeCardPreparationReady(); } catch (error) { return send(res, Number(error.statusCode || 503), paymentResultHtml('Stripe card setup is not live', error.message, '/customer#portal-payments', 'Back to my account')); }
       }
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       if (!recurring.id && !account.recurringPaymentId) {
@@ -23844,7 +24216,7 @@ const server = http.createServer(async (req, res) => {
         });
         appendCustomerPortalAudit(data, account, 'Customer portal card change needs review', [customerName, message.status, message.vehicleId || 'No vehicle linked']);
         await writeData(data);
-        return send(res, 302, '', 'text/plain', { Location: '/customer#portal-card' });
+        return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
       }
       const setup = createCardSetupRequest(data, {
         id: recurring.id || account.recurringPaymentId,
@@ -23910,9 +24282,9 @@ const server = http.createServer(async (req, res) => {
       const session = (data.onboardingSessions || []).find(row => row.id === sessionId && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
       const application = session && (data.applications || []).find(row => row.id === session.applicationId);
       const accountApplicationIds = new Set([account.applicationId, ...(Array.isArray(account.applicationIds) ? account.applicationIds : [])].filter(Boolean));
-      if (!session || !application || onboarding.applicationBlocksOnboarding(application) || application.customerAccountId !== account.id && !accountApplicationIds.has(application.id)) return send(res, 404, paymentResultHtml('Application not found', 'This onboarding file is not attached to your customer account.', '/customer#portal-apply', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
+      if (!session || !application || onboarding.applicationBlocksOnboarding(application) || application.customerAccountId !== account.id && !accountApplicationIds.has(application.id)) return send(res, 404, paymentResultHtml('Application not found', 'This onboarding file is not attached to your customer account.', '/customer#portal-vehicle', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
       const vehicle = onboarding.findPublicVehicle(data, session.onlineVehicleId || application.onlineVehicleId);
-      if (!vehicle) return send(res, 404, paymentResultHtml('Vehicle file not found', 'Contact WheelsonAuto so the selected vehicle can be restored to this application.', '/customer#portal-apply', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
+      if (!vehicle) return send(res, 404, paymentResultHtml('Vehicle file not found', 'Contact WheelsonAuto so the selected vehicle can be restored to this application.', '/customer#portal-vehicle', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
       const rawToken = crypto.randomBytes(28).toString('hex');
       const now = new Date();
       session.tokenHash = onboarding.tokenHash(rawToken);
@@ -23926,7 +24298,7 @@ const server = http.createServer(async (req, res) => {
       appendCustomerPortalAudit(data, account, 'Customer opened onboarding from portal', [application.id, session.id, application.vehicle || nativeSite.vehicleTitle(vehicle)]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return send(res, 200, nativeSite.onboardingHtml(data, renderSession, application, vehicle, template, contract.body, requestBaseUrl(req), { ...nativeRenderOptions(req), homePath: '/customer#portal-apply' }), 'text/html; charset=utf-8', ONBOARDING_CAMERA_RESPONSE_HEADERS);
+      return send(res, 200, nativeSite.onboardingHtml(data, renderSession, application, vehicle, template, contract.body, requestBaseUrl(req), { ...nativeRenderOptions(req), homePath: '/customer#portal-vehicle' }), 'text/html; charset=utf-8', ONBOARDING_CAMERA_RESPONSE_HEADERS);
     }
     if (url.pathname === '/customer' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);

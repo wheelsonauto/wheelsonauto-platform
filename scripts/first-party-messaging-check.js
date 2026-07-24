@@ -74,7 +74,7 @@ assert.strictEqual(staffManifest.scope, '/', 'Staff install must keep login, rec
 assert(staffManifest.start_url.startsWith('/login'), 'The staff app must start at secure staff login instead of the customer portal.');
 assert.strictEqual(staffManifest.display, 'standalone', 'The installed staff app must not show browser address-bar chrome.');
 assert(staffPwa.includes("register('/staff-service-worker.js'") && staffPwa.includes("updateViaCache: 'none'"), 'Staff pages must register the root-scoped standalone app shell and bypass stale HTTP cache when checking its worker.');
-assert(staffWorker.includes("wheelsonauto-staff-shell-v2") && staffWorker.includes("fetch(event.request)") && staffWorker.includes(".catch(() => caches.match(event.request))"), 'The installed staff shell must prefer current network assets while retaining an offline fallback in a fresh cache generation.');
+assert(staffWorker.includes("wheelsonauto-staff-shell-v8") && staffWorker.includes("fetch(event.request)") && staffWorker.includes(".catch(() => caches.match(event.request))"), 'The installed staff shell must prefer current network assets while retaining an offline fallback in the current cache generation.');
 assert(staffWorker.includes("'/staff-manifest.webmanifest'") && !staffWorker.includes("url.pathname.startsWith('/api/')"), 'The staff worker must cache only public shell assets and never cache private APIs.');
 assert(worker.includes("key.startsWith('wheelsonauto-customer-shell-')") && staffWorker.includes("key.startsWith('wheelsonauto-staff-shell-')"), 'Customer and staff workers must clean only their own cache families.');
 
