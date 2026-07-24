@@ -82,6 +82,12 @@ requireText('Website command full-width guard', '.view-website>.native-site-comm
 requireText('Website inventory desktop span', '.view-website>.native-inventory-board{grid-column:1/8!important;margin:0}');
 requireText('Website applications desktop span', '.view-website>.native-website-apps{grid-column:8/-1!important;margin:0}');
 requireText('Applications workspace full-width guard', '.view-applications>.native-applications-board{grid-column:1/-1!important;margin:0}');
+requireAnyBlock('Website primary tab rail', '.admin-shell .view-website>.website-tabs{', ['grid-template-columns:repeat(4,minmax(0,1fr))!important', 'margin-bottom:12px!important']);
+requireAnyBlock('Website Applications card fit', '.admin-shell .website-applications-workspace .native-application-grid{', ['repeat(auto-fit,minmax(260px,1fr))', 'align-items:start']);
+requireAnyBlock('Website Performance card fit', '.admin-shell .website-performance-workspace .business-overview-grid{', ['grid-template-columns:repeat(3,minmax(0,1fr))', 'gap:10px']);
+requireAnyBlock('Website phone primary tabs', '.admin-shell .view-website>.website-tabs{', ['grid-template-columns:repeat(2,minmax(0,1fr))!important']);
+requireAnyBlock('Website phone Applications cards', '.admin-shell .website-applications-workspace .native-application-grid{', ['grid-template-columns:1fr']);
+requireAnyBlock('Website phone Performance cards', '.admin-shell .website-performance-workspace .business-overview-grid{', ['grid-template-columns:repeat(2,minmax(0,1fr))', 'gap:7px']);
 requireBlock('Mobile wrapped tabs', '.admin-shell .tabs{', ['grid-template-columns:repeat(auto-fit,minmax(72px,1fr))', 'overflow:visible!important']);
 
 requireAnyBlock('Dark modal surface', '.modal{', ['background:linear-gradient', 'rgba(24,27,30,.98)', 'border-color:rgba(255,255,255,.13)', '!important']);

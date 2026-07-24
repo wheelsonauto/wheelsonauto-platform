@@ -7508,6 +7508,52 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   min-width:0!important;
 }
 .admin-shell .view-website>.website-overview-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+.admin-shell .view-website>.website-tabs{
+  grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  margin-bottom:12px!important;
+}
+.admin-shell .view-website>:is(.website-applications-workspace,.website-performance-workspace){
+  display:grid;
+  gap:10px;
+  width:100%;
+  min-width:0;
+  grid-column:1/-1!important;
+}
+.admin-shell .website-applications-workspace>.workspace-count-tabs{
+  grid-template-columns:repeat(3,minmax(0,1fr))!important;
+  margin:0!important;
+}
+.admin-shell .website-applications-workspace>.native-applications-board,
+.admin-shell .website-performance-workspace>.website-performance-board{
+  width:100%;
+  min-width:0;
+  margin:0!important;
+}
+.admin-shell .website-applications-workspace .native-application-grid{
+  grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+  gap:10px;
+  align-items:start;
+}
+.admin-shell .website-applications-workspace .native-application-card{height:100%}
+.admin-shell .website-performance-workspace .business-overview-grid{
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.admin-shell .website-performance-workspace .business-overview-card{min-height:104px}
+@media(max-width:920px){
+  .admin-shell .website-applications-workspace .native-application-grid,
+  .admin-shell .website-performance-workspace .business-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:760px){
+  .admin-shell .view-website>.website-tabs{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .admin-shell .website-applications-workspace>.workspace-count-tabs{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+  .admin-shell .website-applications-workspace .native-application-grid{grid-template-columns:1fr}
+  .admin-shell .website-performance-workspace .business-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .admin-shell .website-performance-workspace .business-overview-card{min-height:116px;padding:9px}
+  .admin-shell .website-applications-workspace .section-head,
+  .admin-shell .website-performance-workspace .section-head{align-items:flex-start;flex-direction:column}
+  .admin-shell .website-performance-workspace .section-head .btn{align-self:stretch;width:100%;justify-content:center}
+}
 .admin-shell .btn:not(.primary):not(.gold):not(.danger):hover,
 .admin-shell :is(.tabs,.staff-tabs) button:not(.active):hover,
 .admin-shell .quickbar button:not(.active):hover{

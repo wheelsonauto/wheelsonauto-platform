@@ -4641,8 +4641,8 @@ function WebsiteWorkspace(){
   var body=fastWorkspaceTabs([['Overview','Overview'],['Inventory','Inventory',rows.length],['Applications','Applications',apps.length],['Performance','Performance']],selected,'website-tabs');
   if(selected==='Overview')body+='<section class="native-site-command"><div><span>Native WheelsonAuto website</span><strong>'+published+' '+(published===1?'car':'cars')+' live-ready</strong><small>Inventory, applications, onboarding, and performance now stay in one website workspace.</small></div><div class="actions"><a class="btn primary" href="/site-preview" target="_blank">Preview website</a><a class="btn" href="/inventory" target="_blank">Inventory</a>'+(isOwner()?'<button class="btn gold" data-action="native-import-shopify">Import Shopify once</button><button class="btn" data-action="native-site-settings">Defaults</button><button class="btn" data-action="native-edit-contract">Contract</button>':'')+'</div></section><div class="business-overview-grid website-overview-grid"><button class="business-overview-card good" data-tab="Inventory"><span>Published fleet</span><strong>'+published+'</strong><small>'+rows.length+' online inventory records</small></button><button class="business-overview-card blue" data-tab="Applications"><span>Applications</span><strong>'+apps.length+'</strong><small>Customer files from the public website</small></button><button class="business-overview-card warn" data-tab="Performance"><span>Performance</span><strong>Open</strong><small>Application and onboarding conversion</small></button></div>';
   if(selected==='Inventory')body+=nativeInventoryBoard(false);
-  if(selected==='Applications')body+=nativeApplicationsWorkspaceBody(websiteApplicationTab,true);
-  if(selected==='Performance')body+=WebsitePerformanceBoard();
+  if(selected==='Applications')body+='<div class="website-applications-workspace">'+nativeApplicationsWorkspaceBody(websiteApplicationTab,true)+'</div>';
+  if(selected==='Performance')body+='<div class="website-performance-workspace">'+WebsitePerformanceBoard()+'</div>';
   shell('Website','',body,'')
 }
 

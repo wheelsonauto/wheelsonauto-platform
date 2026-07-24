@@ -197,6 +197,7 @@ async function main() {
   try {
     const preview = await request(server, 'GET', '/site-preview');
     assert(preview.status === 200 && /2016 Ford Focus/.test(preview.text), 'Public preview should render only the native published vehicle.');
+    assert(preview.headers['Permissions-Policy'] === 'camera=(), microphone=(), geolocation=()', 'Ordinary public pages must continue to deny camera, microphone, and location access.');
     assert(/<b>19 months<\/b>/.test(preview.text) && !/<b>18 months<\/b>/.test(preview.text), 'Public purchase-eligibility copy should use the canonical 19-month term even when an older vehicle record still says 18.');
     assert(/name="robots" content="noindex,nofollow"/.test(preview.text) && /class="site-brand" href="\/site-preview"/.test(preview.text), 'Render preview should stay out of search results and keep preview navigation inside the public preview.');
     const anonymousApplicationPage = await request(server, 'GET', '/apply/2016-ford-focus');
@@ -237,6 +238,7 @@ async function main() {
     const token = tokenMatch && tokenMatch[1];
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     assert(portalOnboarding.status === 200 && token && savedApplication && pendingCustomerAccount && savedApplication.customerAccountId === pendingCustomerAccount.id && /^pbkdf2\$/.test(pendingCustomerAccount.passwordHash || '') && !savedApplication.pendingPasswordHash, 'The portal should reopen the exact onboarding file without copying account password secrets into the application.');
+    assert(portalOnboarding.headers['Permissions-Policy'] === 'camera=(self), microphone=(), geolocation=()', 'The account-owned onboarding page must allow only its own origin to open the live license and selfie camera.');
     assert(!JSON.stringify(saved).includes(customerPassword), 'Plaintext customer password must never be persisted.');
     const customerEmailLogin = await request(server, 'POST', '/customer/login', { form: { username: applicationPayload.email, password: customerPassword } });
     assert(customerEmailLogin.status === 302 && String(customerEmailLogin.cookie).includes('woa_customer_session='), 'Customer should be able to log in with the account email.');
@@ -259,6 +261,7 @@ async function main() {
     assert(login.status === 302 && String(login.cookie).includes('woa_session='), 'Owner login should provide a signed staff session.');
     const ownerCookie = String(login.cookie).split(';')[0];
     const onboardingPage = await request(server, 'GET', '/onboard/' + token);
+    assert(onboardingPage.headers['Permissions-Policy'] === 'camera=(self), microphone=(), geolocation=()', 'The expiring private onboarding link must allow only its own origin to open the live license and selfie camera.');
     assert(onboardingPage.status === 200 && /<option value="11:30 AM">11:30 AM<\/option>/.test(onboardingPage.text) && /<option value="4:30 PM">4:30 PM<\/option>/.test(onboardingPage.text), 'Thirty-minute pickup settings should render every valid appointment start through 4:30 PM.');
     assert(new RegExp('name="requestedPickupDate"[^>]+value="' + savedApplication.requestedPickupDate + '"').test(onboardingPage.text) && /<option value="1:00 PM" selected>1:00 PM<\/option>/.test(onboardingPage.text), 'Onboarding should prefill the original pickup request without marking the customer profile complete.');
     assert(/data-profile-validation/.test(onboardingPage.text) && /data-field-error="driverLicenseId"/.test(onboardingPage.text) && /autocomplete="street-address"/.test(onboardingPage.text) && onboardingPage.text.includes('/native-site-client.js?v=' + nativeSite.NATIVE_SITE_ASSET_VERSION) && onboardingPage.text.includes('/native-site.css?v=' + nativeSite.NATIVE_SITE_ASSET_VERSION), 'Profile onboarding should expose and freshly load inline customer-side validation before a server rejection.');

@@ -200,6 +200,20 @@ async function main() {
       assert.strictEqual(firstCustomer.status, 200, 'The first customer recovery fixture must be created.');
       assert.strictEqual(secondCustomer.status, 200, 'The second customer recovery fixture must be created.');
 
+      const draftDuplicateState = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+      draftDuplicateState.customerAccounts.push({
+        id: 'recovery-customer-one-old-draft',
+        name: 'Recovery Customer One',
+        customer: 'Recovery Customer One',
+        username: 'old-draft-recovery-one',
+        email: 'recovery-one@example.com',
+        status: 'Active',
+        source: 'Old application draft without a password'
+      });
+      await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(draftDuplicateState, null, 2));
+      const loginBesideOldDraft = await request(server, 'POST', '/customer/login', { username: 'recovery-one@example.com', password: firstCustomerPassword });
+      assert.strictEqual(loginBesideOldDraft.status, 302, 'One password-ready customer account must remain usable when an old passwordless draft shares its email.');
+
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         const failed = await request(server, 'POST', '/customer/login', { username: 'recovery-customer-one', password: 'WrongCustomerPassword' + attempt + '!' });
         assert.strictEqual(failed.status, 401, 'Customer attempts one through four must fail without authenticating.');
