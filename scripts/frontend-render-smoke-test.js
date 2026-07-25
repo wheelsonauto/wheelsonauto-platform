@@ -563,8 +563,36 @@ function ownerSmoke() {
   assert(context.isInventoryVehicle({ status: 'Pending application', currentCustomer: '' }) === false, 'Pending-application cars must not appear in available fleet or autopay pickers.');
   assert(context.isInventoryVehicle({ status: 'Maintenance', currentCustomer: '' }) === false, 'Maintenance cars must not appear in available fleet or autopay pickers.');
   assert(context.isInventoryVehicle({ status: 'Active contract', currentCustomer: '' }) === false, 'Unmatched active-contract cars must stay in review instead of available fleet.');
+  assert(context.isAssignedFleetVehicle({ status: 'Pending application', currentCustomer: 'Test Applicant' }) === false, 'A pending application must stay in Prep / review even when an old customer name is still attached to the vehicle.');
+  assert(context.isFleetReviewVehicle({ status: 'Pending application', currentCustomer: 'Test Applicant' }) === true, 'A pending application with a stale customer label must remain visible for review instead of looking rented.');
   assert(context.Operations === context.OperationsTruthFocused, 'Operations must use the final mutually exclusive fleet categorization.');
   assertHealthy('Operations prep/review truth split', renderView(context, 'Operations', 'Review'), ['Prep / review', 'Unassigned cars that need prep']);
+
+  const exactFileContext = makeContext({ name: 'Exact File Owner', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  exactFileContext.db.vehicles.unshift(
+    { id: 'veh-exact-old', year: 2016, make: 'Ford', model: 'Fiesta', vin: 'OLDPLANVIN', plate: 'OLD-TAG', tempTag: 'OLD-TEMP', tracker: 'OLD-TRACKER', status: 'Rented', currentCustomer: 'Shared Exact Name', mileage: 90000 },
+    { id: 'veh-exact-current', year: 2026, make: 'Exact', model: 'Pickup', vin: 'CURRENTPLANVIN', plate: 'NEW-TAG', tempTag: '', tracker: '', status: 'Rented', currentCustomer: 'Shared Exact Name', mileage: 12345 }
+  );
+  exactFileContext.db.customers.unshift(
+    { id: 'cus-exact-old', applicationId: 'app-exact-old', name: 'Shared Exact Name', vehicleId: 'veh-exact-old', tempTag: 'OLD-TEMP', tracker: 'OLD-TRACKER' },
+    { id: 'cus-exact-current', applicationId: 'app-exact-current', customerAccountId: 'acct-exact-current', name: 'Shared Exact Name', phone: '8565550198', email: 'exact.current@example.com', vehicleId: 'veh-exact-current', tempTag: 'OLD-TEMP', tracker: 'OLD-TRACKER' }
+  );
+  exactFileContext.db.recurringPayments.unshift(
+    { id: 'rec-exact-old', applicationId: 'app-exact-old', customer: 'Shared Exact Name', vehicleId: 'veh-exact-old', amount: 229, status: 'Active', tracker: 'OLD-TRACKER' },
+    { id: 'rec-exact-current', applicationId: 'app-exact-current', customerAccountId: 'acct-exact-current', customer: 'Shared Exact Name', vehicleId: 'veh-exact-current', amount: 1, status: 'Active', nextRun: '2026-08-01', tracker: 'OLD-TRACKER' }
+  );
+  exactFileContext.db.contracts.unshift({ id: 'contract-exact-current', applicationId: 'app-exact-current', customerAccountId: 'acct-exact-current', customerId: 'cus-exact-current', vehicleId: 'veh-exact-current', customer: 'Shared Exact Name', vehicle: '2026 Exact Pickup', weekly: 1, status: 'Active' });
+  exactFileContext.db.payments.unshift(
+    { id: 'payment-exact-old', applicationId: 'app-exact-old', recurringPaymentId: 'rec-exact-old', customer: 'Shared Exact Name', date: '2026-07-20', method: 'Old name-only plan charge', amount: 229, status: 'Paid' },
+    { id: 'payment-exact-current', applicationId: 'app-exact-current', recurringPaymentId: 'rec-exact-current', customer: 'Shared Exact Name', date: '2026-07-24', method: 'Exact current plan charge', amount: 1, status: 'Paid' }
+  );
+  exactFileContext.openContract('contract-exact-current');
+  const exactFileModal = modalHtml(exactFileContext);
+  assert(exactFileModal.includes('Exact current plan charge') && !exactFileModal.includes('Old name-only plan charge'), 'A customer file must show payments linked to its exact application/recurring plan instead of every same-name plan.');
+  assert(exactFileModal.includes('id="fileVehicleId"') && exactFileModal.includes('value="veh-exact-current" selected'), 'A customer file must select the vehicle linked to the exact contract.');
+  assert(exactFileModal.includes('id="fileTempTag" value=""') && exactFileModal.includes('id="fileTracker" value=""'), 'An exact linked vehicle with no old tag or tracker must not borrow those fields from another same-name customer plan.');
+  assert(exactFileModal.includes('id="fileMileage" type="number" value="12345"'), 'The exact customer file must use mileage from its linked vehicle.');
+
   context.db.recurringPayments = context.db.recurringPayments || [];
   const weakVehicleRow = { customer: 'Weak Vehicle Label Smoke', vehicle: '230', plan: '$230.00', amount: 230, status: 'Active' };
   assert(context.enrichedVehicleForRecurring(weakVehicleRow) === 'No vehicle linked', 'A numeric payment amount must not render as a vehicle label on Dashboard, Payments, Reports, or Messages.');

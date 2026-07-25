@@ -5267,3 +5267,79 @@ var __woaMobileSwipeTabsLiveBase=fastWorkspaceTabs;
 fastWorkspaceTabs=function(items,selected,extraClass){
   return __woaMobileSwipeTabsLiveBase(items,selected,extraClass).replace('class="tabs ','class="tabs mobile-swipe-tabs ')
 };
+
+// Customer files can share a name, phone, or email across old applications and
+// separate payment plans. Resolve the selected file by durable links before
+// using legacy name matching so one plan never borrows another plan's car or card.
+function exactCustomerFileContext(contract){
+  contract=contract||{};
+  var roster=recurringRoster(),applicationId=String(contract.applicationId||''),accountId=String(contract.customerAccountId||''),customerId=String(contract.customerId||''),recurringId=String(contract.recurringPaymentId||''),vehicleId=String(contract.vehicleId||'');
+  var customer=(db.customers||[]).find(function(row){return customerId&&row.id===customerId})
+    ||(db.customers||[]).find(function(row){return applicationId&&row.applicationId===applicationId})
+    ||(db.customers||[]).find(function(row){return accountId&&row.customerAccountId===accountId})
+    ||null;
+  var recurring=roster.find(function(row){return recurringId&&row.id===recurringId})
+    ||roster.find(function(row){return applicationId&&row.applicationId===applicationId})
+    ||roster.find(function(row){return accountId&&row.customerAccountId===accountId})
+    ||null;
+  var vehicle=findVehicle(vehicleId||customer&&customer.vehicleId||recurring&&recurring.vehicleId||'');
+  var stronglyLinked=!!(applicationId||accountId||customerId||recurringId||vehicleId);
+  if(!customer&&!stronglyLinked)customer=findCustomerByName(contract.customer);
+  if(!recurring&&!stronglyLinked)recurring=findRecurringByCustomer(contract.customer);
+  if(!vehicle&&!stronglyLinked)vehicle=findVehicleByCustomer(contract.customer)
+    ||(db.vehicles||[]).find(function(row){return normName(vehicleName(row))===normName(contract.vehicle||customer&&customer.vehicle||recurring&&recurring.vehicle)});
+  return{contract:contract,customer:customer||{},recurring:recurring||{},vehicle:vehicle||null,stronglyLinked:stronglyLinked,ids:{applicationId:applicationId,customerAccountId:accountId,customerId:customerId||customer&&customer.id||'',recurringPaymentId:recurringId||recurring&&recurring.id||'',contractId:String(contract.id||''),vehicleId:vehicleId||vehicle&&vehicle.id||''}}
+}
+
+function exactCustomerFileRecordMatch(row,context,allowVehicle){
+  row=row||{};context=context||{};var ids=context.ids||{};
+  var direct=!!(
+    ids.applicationId&&row.applicationId===ids.applicationId
+    ||ids.customerAccountId&&row.customerAccountId===ids.customerAccountId
+    ||ids.customerId&&row.customerId===ids.customerId
+    ||ids.recurringPaymentId&&(row.recurringPaymentId===ids.recurringPaymentId||row.id===ids.recurringPaymentId)
+    ||ids.contractId&&row.contractId===ids.contractId
+    ||allowVehicle&&ids.vehicleId&&row.vehicleId===ids.vehicleId
+  );
+  if(direct)return true;
+  if(context.stronglyLinked)return false;
+  return normName(row.customer||row.name)===normName(context.contract&&context.contract.customer)
+}
+
+function exactCustomerFileRows(collection,context,allowVehicle){
+  return(collection||[]).filter(function(row){return exactCustomerFileRecordMatch(row,context,allowVehicle)})
+}
+
+function exactCustomerFileSummary(context,payments,maintenance,claims){
+  var c=context.contract,cust=context.customer,rec=context.recurring,car=context.vehicle;
+  payments=payments||[];maintenance=maintenance||[];claims=(claims||[]).filter(function(row){var status=String(row.status||'Open').toLowerCase();return status.indexOf('paid')<0&&status.indexOf('closed')<0});
+  var paid=payments.filter(function(row){return String(row.status||'').toLowerCase()==='paid'}).reduce(function(sum,row){return sum+Number(row.amount||0)},0);
+  var dueMaintenance=maintenance.filter(function(row){var due=dateKeyFrom(row.due||row.nextDue),status=String(row.status||'').toLowerCase();return due&&due<=todayKey()&&status.indexOf('complete')<0&&status.indexOf('fixed')<0});
+  var vehicleMeta=car?[car.plate||car.stock,car.tracker].filter(Boolean):[cust.licensePlate||rec.licensePlate,cust.tracker||rec.tracker].filter(Boolean);
+  return '<div class="file-summary"><div><span>Autopay</span><strong>'+retryStatus(rec)+'</strong><small>Next '+esc(recurringDateText(rec)||c.nextDue||'not set')+'</small></div><div><span>Vehicle</span><strong>'+esc(car?vehicleName(car):c.vehicle||'No car linked')+'</strong><small>'+esc(vehicleMeta.join(' / ')||'Plate and tracker needed')+'</small></div><div><span>Paid history</span><strong>'+money(paid)+'</strong><small>'+payments.length+' linked transaction'+(payments.length===1?'':'s')+'</small></div><div><span>Service</span><strong>'+dueMaintenance.length+'</strong><small>'+maintenance.length+' linked maintenance record'+(maintenance.length===1?'':'s')+'</small></div><div><span>Claims</span><strong>'+claims.length+'</strong><small>'+money(claims.reduce(function(sum,row){return sum+Number(row.amount||0)},0))+' open</small></div></div>'
+}
+
+function openExactCustomerFile(id){
+  var c=(db.contracts||[]).find(function(row){return row.id===id});if(!c)return;
+  var context=exactCustomerFileContext(c),cust=context.customer,rec=context.recurring,car=context.vehicle;
+  var allPays=exactCustomerFileRows(db.payments,context,false),pays=allPays.slice(0,5);
+  var allMaint=exactCustomerFileRows(db.maintenance,context,true),maint=allMaint.slice(0,5);
+  var claims=exactCustomerFileRows(db.claims,context,true);
+  var payRows=pays.length?table(['Date','Type','Amount','Status'],pays.map(function(row){return[esc(row.date),esc(row.method||row.type||'Payment'),money(row.amount),badge(row.status,row.tone)]})):'<div class="item">No payment history is linked to this exact customer file yet.</div>';
+  var maintRows=maint.length?table(['Vehicle','VIN / tag / inspection','Issue','Due','Cost','Status'],maint.map(function(row){return[esc(row.vehicle||''),esc(maintenanceFileDetail(row)),esc(row.issue||''),esc(row.due||row.nextDue||''),money(row.cost),badge(row.status||'Scheduled')]})):'<div class="item">No maintenance jobs are linked to this exact customer file yet.</div>';
+  var recId=rec.id||'',plate=car?(car.plate||car.stock||''):(rec.licensePlate||cust.licensePlate||''),tempTag=car?(car.tempTag||''):(cust.tempTag||rec.tempTag||''),tracker=car?(car.tracker||''):(rec.tracker||cust.tracker||'');
+  openModal('Customer file: '+c.customer,
+    '<input id="fileId" type="hidden" value="'+esc(c.id)+'">'
+    +exactCustomerFileSummary(context,allPays,allMaint,claims)
+    +'<div class="grid two"><div class="item"><strong>Autopay</strong><div>'+retryStatus(rec)+'</div><div class="muted">Next '+esc(recurringDateText(rec)||c.nextDue||'Not set')+'</div></div><div class="item"><strong>Vehicle tags</strong><div>'+esc(car?vehicleName(car):c.vehicle||'No vehicle linked')+'</div><div class="muted">Current '+esc(plate||'No plate/tag saved')+' | Old temp '+esc(tempTag||'None')+' | Tracker '+esc(tracker||'None')+'</div></div></div>'
+    +'<div class="form" style="margin-top:12px"><div class="field"><label>Customer name</label><input id="fileCustomer" value="'+esc(c.customer||cust.name||'')+'"></div><div class="field"><label>Phone</label><input id="filePhone" value="'+esc(cust.phone||rec.phone||c.phone||'')+'"></div><div class="field"><label>Email</label><input id="fileEmail" value="'+esc(cust.email||rec.email||c.email||'')+'"></div><input id="fileVehicle" type="hidden" value="'+esc(car?vehicleName(car):c.vehicle||rec.vehicle||'')+'"><div class="field span2"><label>Search / switch vehicle</label><input id="fileVehicleSearch" placeholder="Search ready fleet by year, model, VIN, tag, tracker..."><small>Choose the current car or a ready fleet car. Saving releases the old car and assigns the selected car.</small></div><div class="field span2"><label>Vehicle</label><select id="fileVehicleId">'+customerFileVehicleOptions(c.customer,car&&car.id||'')+'</select><small>Only this file\'s current car and ready fleet cars should be selected. Other assigned cars are labeled for review.</small></div><div class="field"><label>Current tag / license plate</label><input id="filePlate" value="'+esc(plate)+'"></div><div class="field"><label>Old temp tag</label><input id="fileTempTag" value="'+esc(tempTag)+'"></div><div class="field"><label>Tracker name</label><input id="fileTracker" value="'+esc(tracker)+'"></div><div class="field"><label>Weekly payment</label><input id="fileWeekly" type="number" step="0.01" value="'+esc(c.weekly||rec.amount||cust.weeklyAmount||0)+'"></div><div class="field"><label>Balance</label><input id="fileBalance" type="number" step="0.01" value="'+esc(c.balance||0)+'"></div><div class="field"><label>Status</label><select id="fileStatus"><option '+(String(c.status||'Active')==='Active'?'selected':'')+'>Active</option><option '+(String(c.status||'')==='Pending'?'selected':'')+'>Pending</option><option '+(String(c.status||'')==='Removed'?'selected':'')+'>Removed</option><option '+(String(c.status||'')==='Paid off'?'selected':'')+'>Paid off</option></select></div><div class="field"><label>Mileage</label><input id="fileMileage" type="number" value="'+esc(car&&car.mileage||0)+'"></div><div class="field span2"><label>Notes</label><textarea id="fileNotes">'+esc(c.notes||cust.notes||car&&car.notes||'')+'</textarea></div></div>'
+    +'<div class="actions customer-file-actions" style="margin-top:12px"><button class="btn primary" data-action="save-contract-file" data-id="'+esc(c.id)+'">Save file</button><button class="btn" data-action="add-contract-maintenance" data-id="'+esc(c.id)+'">Add maintenance</button>'+(recId?'<button class="btn gold" data-action="record-charge" data-id="'+esc(recId)+'">Charge saved card</button><button class="btn" data-action="record-manual-charge" data-id="'+esc(recId)+'">Manual paid / failed</button><button class="btn" data-action="send-pay-link" data-id="'+esc(recId)+'">Send link</button>':'<button class="btn" data-action="new-autopay">Add autopay</button>')+'<button class="btn danger" data-action="remove-contract-file" data-id="'+esc(c.id)+'">Remove file</button></div>'
+    +'<div class="section" style="padding:0;margin-top:12px"><h2>Recent file activity</h2>'+customerTimeline(allPays,allMaint)+'</div><div class="section" style="padding:0;margin-top:12px"><h2>Payments</h2>'+payRows+'</div><div class="section" style="padding:0;margin-top:12px"><h2>Maintenance</h2>'+maintRows+'</div>')
+}
+openContract=openExactCustomerFile;
+
+var __woaPendingApplicationAssignmentBase=isAssignedFleetVehicle;
+isAssignedFleetVehicle=function(vehicle){
+  if(/^pending application$/i.test(String(vehicle&&vehicle.status||'').trim()))return false;
+  return __woaPendingApplicationAssignmentBase(vehicle)
+};
