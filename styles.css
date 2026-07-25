@@ -279,6 +279,13 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit}
   *,*:before,*:after{animation:none!important;transition:none!important}
 }
 
+/* Keep the desktop rail compact without clipping long workspace names. */
+.nav,.nav-single,.nav-group,.nav-group>div{min-width:0;width:100%}
+.nav button,.nav-group summary{box-sizing:border-box;max-width:100%;min-width:0;width:100%}
+.nav-button-main{min-width:0}
+.nav-button-main>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fleet-stat-tabs .fleet-stat-icon{display:none}
+
 /* Premium command shell refresh */
 .admin-shell{background:#f3f0e8}
 .admin-shell .sidebar{box-shadow:18px 0 46px rgba(5,7,9,.18)}
@@ -6312,6 +6319,12 @@ body.fast-tab-switch .admin-shell .section{
 .view-messages>.message-focused-tabs button:hover{transform:none;background:rgba(240,184,58,.10);color:#fff}
 .view-messages>.message-focused-tabs button.active{border-color:#f0b83a;background:#f0b83a;color:#111820}
 .view-messages>.message-focused-tabs .message-tabs-compose{margin-left:auto;border-color:rgba(240,184,58,.38);color:#f8d988}
+.message-tabs-more{display:none;position:relative;flex:0 0 auto}
+.message-tabs-more>summary{min-height:36px;display:flex;align-items:center;padding:7px 10px;border:1px solid transparent;border-radius:6px;color:#c5cfd7;font-size:12px;font-weight:800;list-style:none;cursor:pointer;white-space:nowrap}
+.message-tabs-more>summary::-webkit-details-marker{display:none}
+.message-tabs-more>summary.active,.message-tabs-more[open]>summary{border-color:rgba(240,184,58,.48);background:rgba(240,184,58,.12);color:#f8d988}
+.message-tabs-more-panel{position:absolute;top:calc(100% + 6px);right:0;z-index:80;display:grid;min-width:148px;padding:5px;border:1px solid rgba(240,184,58,.24);border-radius:7px;background:#151d24;box-shadow:0 18px 34px rgba(0,0,0,.44)}
+.view-messages>.message-focused-tabs .message-tabs-more-panel button{width:100%;justify-content:flex-start;text-align:left}
 .message-inbox-shell{
   flex:1 1 auto;
   display:grid;
@@ -6621,6 +6634,9 @@ body.fast-tab-switch .admin-shell .section{
   .view-messages>.message-focused-tabs{display:flex!important;grid-template-columns:none!important;grid-auto-flow:column!important;margin-bottom:6px!important;overflow-x:auto!important}
   .view-messages>.message-focused-tabs button{min-height:34px;padding:6px 9px;font-size:11px}
   .view-messages>.message-focused-tabs .message-tabs-compose{margin-left:0}
+  .view-messages>.message-focused-tabs .message-tab-secondary{display:none!important}
+  .view-messages>.message-focused-tabs .message-tabs-more{display:block}
+  .view-messages>.message-focused-tabs .message-tabs-more>summary{min-height:34px;padding:6px 8px;font-size:10px}
   .message-inbox-shell{height:calc(100dvh - 222px);min-height:496px;border-radius:7px}
   .message-list-head{min-height:58px;padding:9px 11px}
   .message-list-head h2{font-size:18px}
@@ -7613,8 +7629,8 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
 }
 
 @media(max-width:760px){
-  .admin-shell .view-messages>.message-focused-tabs{overflow:hidden!important}
-  .admin-shell .view-messages>.message-focused-tabs button:not(.message-tabs-compose){
+  .admin-shell .view-messages>.message-focused-tabs{overflow:visible!important}
+  .admin-shell .view-messages>.message-focused-tabs>button:not(.message-tabs-compose){
     flex:1 1 0!important;
     width:auto!important;
     min-width:0!important;
@@ -7636,6 +7652,8 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
     min-width:32px!important;
     box-shadow:none!important;
   }
+  .admin-shell .view-messages>.message-focused-tabs .message-tabs-more{flex:0 0 auto!important}
+  .admin-shell .view-messages>.message-focused-tabs .message-tabs-more-panel button{display:flex!important;min-width:136px!important;padding:8px 10px!important;font-size:11px!important}
 }
 
 /* Palette balance: charcoal owns the canvas, gold marks intent, status colors stay compact. */
@@ -8475,4 +8493,168 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
     left:0;
     margin-top:0;
   }
+}
+
+/* Shared interaction finish: quieter chrome, stronger wayfinding, app-grade focus. */
+html{scrollbar-gutter:stable}
+body.woa-modal-open{overflow:hidden;overscroll-behavior:none}
+:where(button,a,input,select,textarea,summary){-webkit-tap-highlight-color:transparent}
+:where(button,a,input,select,textarea,summary):focus-visible{
+  outline:2px solid rgba(240,217,147,.82);
+  outline-offset:2px;
+}
+.admin-shell,.customer-app-shell,.login-page{font-synthesis:none}
+.admin-shell>.main>*{width:min(100%,1560px);margin-inline:auto}
+
+@media(min-width:761px){
+  .app.admin-shell{grid-template-columns:226px minmax(0,1fr)}
+  .admin-shell>.sidebar{display:flex;flex-direction:column;padding:18px 11px 12px!important}
+  .admin-shell>.sidebar .brand{
+    margin:0 0 13px;
+    padding:8px 7px;
+    border:0!important;
+    background:transparent!important;
+    box-shadow:none!important;
+  }
+  .admin-shell>.sidebar .admin-logo{width:42px;height:42px}
+  .admin-shell>.sidebar .brand b{font-size:15px}
+  .admin-shell>.sidebar .brand span{font-size:9px;color:#838a90!important}
+  .admin-shell>.sidebar .nav{flex:1;align-content:start;overflow:auto;padding-right:2px;scrollbar-width:thin}
+  .admin-shell .nav-group,.admin-shell .nav-single{
+    border:0!important;
+    background:transparent!important;
+    box-shadow:none!important;
+  }
+  .admin-shell .nav-group+.nav-group,.admin-shell .nav-single+.nav-group,.admin-shell .nav-group+.nav-single{margin-top:5px}
+  .admin-shell .nav-group summary{min-height:30px;padding:6px 8px;font-size:9px;color:#737b82!important}
+  .admin-shell .nav-group>div{padding:1px 0 4px}
+  .admin-shell .nav button{min-height:41px;padding:8px 9px;border:1px solid transparent!important}
+  .admin-shell .nav button.active{box-shadow:inset 2px 0 0 var(--staff-accent)!important}
+  .admin-shell>.main{padding:24px clamp(22px,3vw,48px) 50px!important}
+}
+
+.nav-button-main{display:flex;align-items:center;gap:9px;min-width:0}
+.nav-button-main>.quick-icon{width:17px;height:17px;flex:0 0 17px;color:#8f979e}
+.nav-button-main>.quick-icon path{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.nav-button-main>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-shell .nav button.active .nav-button-main>.quick-icon{color:var(--staff-accent-bright)}
+.admin-shell .nav button small{min-width:20px;padding:2px 6px;text-align:center;background:rgba(203,210,218,.08)!important;color:#aeb5ba!important}
+
+.sidebar-account{
+  width:100%;
+  min-width:0;
+  display:grid;
+  grid-template-columns:34px minmax(0,1fr) auto;
+  align-items:center;
+  gap:9px;
+  margin-top:12px;
+  padding:8px;
+  border:1px solid rgba(203,210,218,.1);
+  border-radius:8px;
+  background:#101316;
+  color:#e7eaec;
+  text-align:left;
+  cursor:pointer;
+  transition:border-color .16s ease,background .16s ease,color .16s ease;
+}
+.sidebar-account:hover{border-color:rgba(213,177,95,.3);background:#14171a;color:#f3dda0}
+.sidebar-account-avatar{width:34px;height:34px;display:grid;place-items:center;border:1px solid rgba(213,177,95,.28);border-radius:7px;background:rgba(213,177,95,.08);color:#e5ca82;font-size:10px;font-weight:900}
+.sidebar-account-copy{min-width:0;display:grid;gap:2px}
+.sidebar-account-copy strong,.sidebar-account-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-account-copy strong{font-size:11px;color:inherit!important}
+.sidebar-account-copy small{font-size:8px;color:#7f878d!important}
+.sidebar-account-arrow{color:#747c82;font-size:20px;font-weight:300}
+.admin-shell .side-note{display:none!important}
+
+.admin-shell .topbar.compact-title{
+  min-height:48px;
+  margin-bottom:13px;
+  padding:7px 3px 10px;
+  border-width:0 0 1px!important;
+  border-radius:0;
+  background:transparent!important;
+  box-shadow:none!important;
+  backdrop-filter:none;
+}
+.admin-shell .topbar.compact-title h1{font-size:clamp(21px,2vw,27px);font-weight:780;line-height:1.05}
+.admin-shell .ui-view-enter>*:not(.topbar){opacity:.82;transform:translateY(4px)}
+.admin-shell .ui-view-enter.ui-view-ready>*:not(.topbar){opacity:1;transform:translateY(0);transition:opacity .18s ease,transform .18s ease}
+
+.admin-shell .card.section:hover{
+  background:#121519!important;
+  border-color:rgba(203,210,218,.12)!important;
+  box-shadow:0 16px 34px rgba(0,0,0,.16)!important;
+}
+.admin-shell :is(.btn,button[data-view],button[data-tab],button[data-action]):active:not(:disabled){transform:scale(.985)!important}
+.admin-shell :is(.btn,button)[disabled]{cursor:not-allowed;opacity:.52}
+.admin-shell .is-loading{position:relative;cursor:wait!important}
+.admin-shell .is-loading:after{content:"";width:12px;height:12px;flex:0 0 12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:woa-control-spin .65s linear infinite}
+@keyframes woa-control-spin{to{transform:rotate(360deg)}}
+
+.action-menu[open]>.action-menu-panel,.quickbar-more[open]>.quickbar-more-panel{animation:woa-menu-open .14s ease-out both;transform-origin:top right}
+@keyframes woa-menu-open{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:none}}
+.action-menu-panel{overscroll-behavior:contain}
+
+.modal-backdrop[style*="grid"]{animation:woa-backdrop-in .15s ease-out both}
+.modal-backdrop[style*="grid"]>.modal{animation:woa-dialog-in .18s ease-out both}
+@keyframes woa-backdrop-in{from{opacity:0}to{opacity:1}}
+@keyframes woa-dialog-in{from{opacity:0;transform:translateY(8px) scale(.992)}to{opacity:1;transform:none}}
+.modal{overscroll-behavior:contain}
+.modal-head{position:sticky;top:0;z-index:12;min-height:54px;padding:11px 13px!important}
+.modal-head>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}
+.modal-close{width:36px;min-width:36px;height:36px;justify-content:center;padding:0!important;border-radius:7px!important}
+.modal-close-desktop{font-size:25px;font-weight:400;line-height:1}
+.modal-close-mobile{align-items:center;gap:3px}
+.modal-body{overscroll-behavior:contain}
+
+.login-card label{text-transform:none;letter-spacing:0;font-size:11px}
+.login-card input{font-size:16px;outline:none}
+.login-card .btn{
+  width:100%;
+  min-height:42px;
+  justify-content:center;
+  margin-top:8px!important;
+  border:1px solid rgba(203,210,218,.13)!important;
+  background:#111417!important;
+  color:#c9ced2!important;
+  box-shadow:none!important;
+  text-decoration:none;
+}
+.login-card .btn:hover,.login-card .btn:focus-visible{border-color:rgba(213,177,95,.34)!important;background:#171a1d!important;color:#f0d993!important}
+.login-card .login-pin{margin-top:12px;font-size:10px;line-height:1.45}
+
+.customer-app-tabs .customer-tab-icon{width:16px;height:16px;flex:0 0 16px;color:#8d969d}
+.customer-app-tabs .customer-tab-icon path{fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.customer-app-tabs a{display:flex;align-items:center;justify-content:center;gap:7px}
+.customer-app-tabs a.active .customer-tab-icon{color:#f0d993}
+.customer-app-shell .customer-chat-composer small{font-size:9px;color:#737c84}
+
+@media(min-width:1500px){
+  .admin-shell>.main{padding-inline:clamp(44px,5vw,86px)!important}
+  .admin-shell>.main>*{width:min(100%,1600px)}
+}
+
+@media(max-width:760px){
+  html{scrollbar-gutter:auto}
+  .admin-shell>.main>*{width:100%}
+  .admin-shell .topbar.compact-title{min-height:43px;padding:5px 2px 8px}
+  .admin-shell .topbar.compact-title h1{font-size:18px}
+  .admin-shell .ui-view-enter>*:not(.topbar){transform:translateY(2px)}
+  .admin-shell .quickbar{border-radius:8px!important;box-shadow:0 -12px 32px rgba(0,0,0,.38)!important}
+  .admin-shell .quickbar>button,.admin-shell .quickbar>.quickbar-more>summary{min-height:54px!important}
+  .admin-shell .quickbar .quick-icon{width:19px!important;height:19px!important}
+  .modal-backdrop{place-items:end center!important;padding:0!important}
+  .modal{width:100%!important;max-height:calc(100dvh - env(safe-area-inset-top))!important;border-width:1px 0 0!important;border-radius:8px 8px 0 0!important}
+  .modal-head{min-height:50px;padding:8px 10px!important}
+  .modal-close{width:auto;min-width:62px;border:0!important;background:transparent!important;box-shadow:none!important;color:#f0d993!important}
+  .modal-close-desktop{display:none!important}.modal-close-mobile{display:inline-flex!important}
+  .modal-body{padding:12px 10px calc(18px + env(safe-area-inset-bottom))!important}
+  .login-card{padding:18px!important}
+  .customer-app-tabs.customer-action-hub a{display:grid!important;place-items:center;align-content:center;gap:2px!important}
+  .customer-app-tabs .customer-tab-icon{width:19px;height:19px}
+  .customer-app-shell .customer-chat-composer small{display:none}
+}
+
+@media(prefers-reduced-motion:reduce){
+  .admin-shell .ui-view-enter>*,.admin-shell .ui-view-enter.ui-view-ready>*,.modal-backdrop[style*="grid"],.modal-backdrop[style*="grid"]>.modal,.action-menu[open]>.action-menu-panel,.quickbar-more[open]>.quickbar-more-panel{animation:none!important;transition:none!important;transform:none!important}
 }

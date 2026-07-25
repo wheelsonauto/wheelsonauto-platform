@@ -3147,9 +3147,11 @@ function messageFocusedConversation(thread,status){
 }
 
 function messageFocusedTabs(selected,threadCount){
-  var items=[['Inbox','Inbox',threadCount],['Star','Star',''],['Queue','Follow-up',''],['Templates','Templates',''],['History','History','']];
-  if(isOwner())items.push(['Setup','Setup','']);
-  return '<div class="tabs message-tabs message-focused-tabs">'+items.map(function(item){return '<button class="'+(selected===item[0]?'active':'')+'" data-tab="'+esc(item[0])+'">'+esc(item[1])+(item[2]!==''?'<span>'+esc(item[2])+'</span>':'')+'</button>'}).join('')+'<button class="message-tabs-compose" data-action="compose-message" data-id="new">New message</button></div>'
+  var primary=[['Inbox','Inbox',threadCount],['Star','Star',''],['Queue','Follow-up','']],secondary=[['Templates','Templates',''],['History','History','']];
+  if(isOwner())secondary.push(['Setup','Setup','']);
+  function tabButton(item,extra){return '<button class="'+(extra||'')+(selected===item[0]?' active':'')+'" data-tab="'+esc(item[0])+'">'+esc(item[1])+(item[2]!==''?'<span>'+esc(item[2])+'</span>':'')+'</button>'}
+  var secondarySelected=secondary.some(function(item){return selected===item[0]});
+  return '<div class="tabs message-tabs message-focused-tabs">'+primary.map(function(item){return tabButton(item,'message-tab-primary')}).join('')+secondary.map(function(item){return tabButton(item,'message-tab-secondary')}).join('')+'<details class="message-tabs-more"><summary class="'+(secondarySelected?'active':'')+'">More</summary><div class="message-tabs-more-panel">'+secondary.map(function(item){return tabButton(item,'')}).join('')+'</div></details><button class="message-tabs-compose" data-action="compose-message" data-id="new" aria-label="New message" title="New message">New message</button></div>'
 }
 
 function messageFocusedStarWorkspace(status){
@@ -3350,7 +3352,12 @@ function auditRenderedSurface(){
 function nativeOnlineVehicles(){
   return (db.onlineVehicles||[]).slice().sort(function(a,b){return Number(!!b.published)-Number(!!a.published)||String(a.title||'').localeCompare(String(b.title||''))})
 }
-function nativeOnlineVehicleTitle(v){return v.title||[v.year,v.make,v.model].filter(Boolean).join(' ')||'Online vehicle'}
+function nativeOnlineVehicleTitle(v){
+  v=v||{};
+  var linked=findVehicle(v.platformVehicleId)||{},saved=String(v.title||[v.year,v.make,v.model].filter(Boolean).join(' ')||'').trim(),linkedTitle=vehicleName(linked);
+  if(saved&&!/^online vehicle$/i.test(saved))return saved;
+  return linked.id?linkedTitle:(saved||'Online vehicle')
+}
 function nativeSessionForApplication(a){return (db.onboardingSessions||[]).find(function(s){return s.applicationId===a.id&&!/replaced|cancelled|expired/i.test(String(s.status||''))})||null}
 function nativeSignatureForSession(s){return s&&(db.eSignatures||[]).find(function(x){return x.onboardingSessionId===s.id})||null}
 function nativeRecurringForApplication(a,s){return (db.recurringPayments||[]).find(function(row){return row.onboardingSessionId===(s&&s.id)||row.applicationId===(a&&a.id)})||null}
@@ -3393,8 +3400,8 @@ function WebsiteNative(){
   shell('Website','',body,'')
 }
 function nativeApplicationCard(a){
-  var session=nativeSessionForApplication(a),paid=nativeApplicationHasVerifiedPayment(a),status=session&&session.status||a.status||a.stage||'New',pricing=a.pricingSnapshot||{},hasWeekly=pricing.weeklyPayment!==undefined||a.weekly!==undefined,hasDown=pricing.downPayment!==undefined||a.down!==undefined,price=hasWeekly?money(pricing.weeklyPayment!==undefined?pricing.weeklyPayment:a.weekly)+'/week':'Pricing not captured',down=hasDown?money(pricing.downPayment!==undefined?pricing.downPayment:a.down)+' down':'Legacy application',submitted=nativeApplicationSubmittedMoment(a),next=nativeApplicationNextActions(a,session,null)[0]||{},appointment=(db.pickupAppointments||[]).find(function(row){return row.applicationId===a.id&&!/cancel/i.test(String(row.status||''))});
-  return '<article class="native-application-card '+(paid?'paid-priority':'')+'"><div class="item-row"><strong>'+esc(a.name||'Applicant')+'</strong>'+(paid?badge('Paid - pickup priority','good'):badge(status,applicationTone(status)))+'</div><time class="native-application-submitted"'+(submitted.date?' datetime="'+esc(submitted.date.toISOString())+'"':'')+'>'+esc(nativeApplicationSubmittedLabel(a))+'</time><small>'+esc([a.phone,a.email].filter(Boolean).join(' | ')||'No contact saved')+'</small><div class="native-application-car">'+esc(a.vehicle||'No online car linked')+'</div><div class="native-price-row"><b>'+esc(price)+'</b><span>'+esc(down)+'</span></div>'+(appointment?'<div class="native-application-next good"><b>Pickup</b><span>'+esc([appointment.date,appointment.time].filter(Boolean).join(' at '))+'</span></div>':'<div class="native-application-next"><b>'+esc(next.owner||'Review')+'</b><span>'+esc(next.text||status)+'</span></div>')+'<div class="actions"><button class="btn primary" data-action="open-app" data-id="'+esc(a.id)+'">Open file</button>'+(session?'<button class="btn" data-action="native-copy-onboarding" data-id="'+esc(a.id)+'">Copy link</button>':'')+'</div></article>'
+  var session=nativeSessionForApplication(a),paid=nativeApplicationHasVerifiedPayment(a),status=session&&session.status||a.status||a.stage||'New',pricing=a.pricingSnapshot||{},hasWeekly=pricing.weeklyPayment!==undefined||a.weekly!==undefined,hasDown=pricing.downPayment!==undefined||a.down!==undefined,price=hasWeekly?money(pricing.weeklyPayment!==undefined?pricing.weeklyPayment:a.weekly)+'/week':'Pricing not captured',down=hasDown?money(pricing.downPayment!==undefined?pricing.downPayment:a.down)+' down':'Legacy application',submitted=nativeApplicationSubmittedMoment(a),next=nativeApplicationNextActions(a,session,null)[0]||{},appointment=(db.pickupAppointments||[]).find(function(row){return row.applicationId===a.id&&!/cancel/i.test(String(row.status||''))}),pickupComplete=!!(session&&session.pickupCompletedAt)||!!(appointment&&appointment.completedAt)||/picked up|completed/i.test(String(session&&session.status||'')+' '+String(appointment&&appointment.status||'')),onlineVehicle=(db.onlineVehicles||[]).find(function(row){return row.id===a.onlineVehicleId})||{},carTitle=onlineVehicle.id?nativeOnlineVehicleTitle(onlineVehicle):(a.vehicle||'No online car linked'),priority=paid&&!pickupComplete;
+  return '<article class="native-application-card '+(priority?'paid-priority':'')+'"><div class="item-row"><strong>'+esc(a.name||'Applicant')+'</strong>'+(pickupComplete?badge('Picked up','good'):paid?badge('Paid - pickup priority','good'):badge(status,applicationTone(status)))+'</div><time class="native-application-submitted"'+(submitted.date?' datetime="'+esc(submitted.date.toISOString())+'"':'')+'>'+esc(nativeApplicationSubmittedLabel(a))+'</time><small>'+esc([a.phone,a.email].filter(Boolean).join(' | ')||'No contact saved')+'</small><div class="native-application-car">'+esc(carTitle)+'</div><div class="native-price-row"><b>'+esc(price)+'</b><span>'+esc(down)+'</span></div>'+(appointment?'<div class="native-application-next good"><b>'+(pickupComplete?'Picked up':'Pickup')+'</b><span>'+esc([session&&session.actualPickupDate||appointment.date,appointment.time].filter(Boolean).join(' at '))+'</span></div>':'<div class="native-application-next"><b>'+esc(next.owner||'Review')+'</b><span>'+esc(next.text||status)+'</span></div>')+'<div class="actions"><button class="btn primary" data-action="open-app" data-id="'+esc(a.id)+'">Open file</button>'+(session?'<button class="btn" data-action="native-copy-onboarding" data-id="'+esc(a.id)+'">Copy link</button>':'')+'</div></article>'
 }
 function ApplicationsNative(){
   shell('Applications','',nativeApplicationsWorkspaceBody(),'')
@@ -3435,6 +3442,7 @@ function nativeApplicationNextActions(a,session,pilotCandidate){
   if(!nativePaymentCompleteForApplication(a,session,'First weekly payment'))return[{owner:'Customer',text:'Pay the first weekly payment as a separate Stripe transaction.'}];
   if(!session.insuranceOption)return[{owner:'Customer',text:'Upload full-coverage proof for the exact VIN or request insurance help at pickup.'}];
   if(session.insuranceReleaseStatus!=='Approved')return[{owner:'Staff',text:'Verify active full coverage for the exact vehicle and VIN before physical release.'}];
+  if(session.pickupCompletedAt||/completed|picked up/i.test(String(session.status||'')))return[{owner:'Complete',text:'Pickup is recorded, the vehicle is rented, and weekly autopay is active from the pickup date.'}];
   if(!session.pickupConfirmedAt)return[{owner:'Staff',text:'Record the physical handoff and beginning mileage. Autopay remains off until this is complete.'}];
   return[{owner:'Owner',text:'Review the complete connected file and migration evidence before disabling Clover.'}]
 }
@@ -3446,7 +3454,7 @@ function nativeApplicationActionPanel(actions,link){
 function openNativeApplication(id,createdLink){
   var a=(db.applications||[]).find(function(x){return x.id===id});if(!a)return;
   var session=nativeSessionForApplication(a),signature=nativeSignatureForSession(session),pricing=a.pricingSnapshot||{},link=createdLink||nativeOnboardingLinkForApplication(a),status=session&&session.status||a.status||a.stage||'New',documents=session?nativeDocumentRows(session):'',stripeIdentity=!!(session&&session.identityProvider==='stripe'),identityStatus=String(session&&session.identityVerificationStatus||'not_started').replace(/_/g,' '),onlineVehicle=(db.onlineVehicles||[]).find(function(row){return row.id===a.onlineVehicleId})||{},linkedVehicle=findVehicle(onlineVehicle.platformVehicleId)||{},pilotCandidate=window.__woaSelectedPilotCandidate&&window.__woaSelectedPilotCandidate.applicationId===a.id?window.__woaSelectedPilotCandidate:null,vin=onlineVehicle.vin||linkedVehicle.vin||a.vin||'',plate=onlineVehicle.plate||linkedVehicle.plate||linkedVehicle.stock||a.plate||'',paymentPath=session&&session.paymentProvider||pilotCandidate&&pilotCandidate.paymentProvider||'',identityPath=session&&session.identityProvider||pilotCandidate&&pilotCandidate.identityProvider||'',providerPath=[paymentPath&&(String(paymentPath).toLowerCase()==='stripe'?'Stripe card setup':'Clover card setup'),identityPath&&(String(identityPath).toLowerCase()==='stripe'?'Stripe Identity':'Private staff identity review')].filter(Boolean).join(' + '),cardReady=nativeCardReadyForApplication(a,session),depositPaid=nativePaymentCompleteForApplication(a,session,'Nonrefundable down payment')||Number(pricing.downPayment||0)<=0,firstWeekPaid=nativePaymentCompleteForApplication(a,session,'First weekly payment'),steps=session?[
-    ['Profile',!!session.profileCompletedAt],['Screening files',!!session.documentsCompletedAt&&!/correction/i.test(String(session.documentReviewStatus||''))],['Agreement',!!signature],['Card',cardReady],['Staff screening',session.finalReviewStatus==='Approved'],['Identity verified',!stripeIdentity||session.identityVerificationStatus==='verified'&&session.identityLegalNameMatch===true],['Payments',depositPaid&&firstWeekPaid],['Insurance',!!session.insuranceOption],['Pickup',!!session.pickupConfirmedAt]
+    ['Profile',!!session.profileCompletedAt],['Screening files',!!session.documentsCompletedAt&&!/correction/i.test(String(session.documentReviewStatus||''))],['Agreement',!!signature],['Card',cardReady],['Staff screening',session.finalReviewStatus==='Approved'],['Identity verified',!stripeIdentity||session.identityVerificationStatus==='verified'&&session.identityLegalNameMatch===true],['Payments',depositPaid&&firstWeekPaid],['Insurance',!!session.insuranceOption],['Pickup',!!session.pickupCompletedAt]
   ]:[];
   var identityState=String(session&&session.identityVerificationStatus||'not_started').toLowerCase(),identityNameMatch=session&&session.identityLegalNameMatch,identityProofTone=identityState==='verified'&&identityNameMatch===true?'good':identityNameMatch===false?'bad':'warn',identityProofTitle=identityState==='verified'&&identityNameMatch===true?'Identity verified by Stripe':identityNameMatch===false?'Identity mismatch - payments locked':'Identity not verified yet',identityProofDetail=identityState==='verified'&&identityNameMatch===true?'Stripe confirmed the live driver license, matching selfie, and legal name used on this application.':identityNameMatch===false?'Stripe verified an identity, but the legal name did not match this application. Do not approve payment or release the vehicle.':session&&session.finalReviewStatus==='Approved'?'Preliminary staff screening passed. The customer must still complete Stripe Identity before either payment can open.':'The uploaded license and selfie are screening evidence only. Staff review does not prove who submitted the application; Stripe Identity is still required.';
   var pickupConfirmed=!!(session&&session.pickupAppointmentId&&depositPaid&&firstWeekPaid),pickupDate=session&&session.requestedPickupDate||a.requestedPickupDate||'',pickupTime=session&&session.requestedPickupTime||a.requestedPickupTime||'',nextActions=nativeApplicationNextActions(a,session,pilotCandidate);
@@ -5347,3 +5355,75 @@ isAssignedFleetVehicle=function(vehicle){
   if(/^pending application$/i.test(String(vehicle&&vehicle.status||'').trim()))return false;
   return __woaPendingApplicationAssignmentBase(vehicle)
 };
+
+// Shared app chrome stays compact and recognizable across every staff role.
+// The underlying destinations and permissions are unchanged.
+navButton=function modernStaffNavButton(name){
+  var active=view===name,label=name==='Payments'&&isOwner()?'Payments & Customers':name,total=count(name);
+  return '<button type="button" data-view="'+esc(name)+'" class="'+(active?'active':'')+'" '+(active?'aria-current="page"':'')+'><span class="nav-button-main">'+quickIcon(name)+'<span>'+esc(label)+'</span></span>'+(total?'<small>'+esc(total)+'</small>':'')+'</button>'
+};
+
+sideNote=function compactSidebarAccount(){
+  var company=activeCompany()||{},displayName=String(currentUser&&(currentUser.name||currentUser.username||currentUser.email)||'Staff'),role=String(currentUser&&currentUser.role||'Staff'),initials=displayName.split(/\s+/).filter(Boolean).slice(0,2).map(function(part){return part.charAt(0).toUpperCase()}).join('')||'WO';
+  return '<button type="button" class="sidebar-account" data-view="Settings" aria-label="Open account settings"><span class="sidebar-account-avatar" aria-hidden="true">'+esc(initials)+'</span><span class="sidebar-account-copy"><strong>'+esc(displayName)+'</strong><small>'+esc(role)+' / '+esc(company.name||currentUser.companyName||'WheelsonAuto')+'</small></span><span class="sidebar-account-arrow" aria-hidden="true">&rsaquo;</span></button>'
+};
+
+function decorateSharedAppChrome(){
+  if(!root)return;
+  var shellRoot=root.querySelector('.admin-shell'),sidebar=shellRoot&&shellRoot.querySelector('.sidebar'),main=shellRoot&&shellRoot.querySelector('.main'),navigation=shellRoot&&shellRoot.querySelector('.nav'),toast=document.getElementById('toast');
+  if(sidebar)sidebar.setAttribute('aria-label','WheelsonAuto workspace');
+  if(navigation)navigation.setAttribute('aria-label','Primary navigation');
+  if(main){main.id='main-content';main.setAttribute('data-workspace',view);main.classList.add('ui-view-enter');requestAnimationFrame(function(){if(document.body.contains(main))main.classList.add('ui-view-ready')})}
+  if(toast){toast.setAttribute('role','status');toast.setAttribute('aria-live','polite');toast.setAttribute('aria-atomic','true')}
+  document.querySelectorAll('details.action-menu,details.quickbar-more').forEach(function(details){var summary=details.querySelector(':scope>summary');if(summary)summary.setAttribute('aria-expanded',details.open?'true':'false')})
+}
+
+var __woaSharedChromeShellBase=shell;
+shell=function modernSharedChromeShell(){
+  __woaSharedChromeShellBase.apply(null,arguments);
+  decorateSharedAppChrome()
+};
+
+var __woaAccessibleOpenModalBase=openModal,__woaAccessibleCloseModalBase=closeModal,__woaModalReturnFocus=null;
+openModal=function accessibleOpenModal(title,body){
+  var backdrop=document.getElementById('modalBackdrop'),wasOpen=backdrop&&backdrop.style.display==='grid';
+  if(!wasOpen&&document.activeElement&&document.activeElement!==document.body)__woaModalReturnFocus=document.activeElement;
+  __woaAccessibleOpenModalBase(title,body);
+  var modal=backdrop&&backdrop.querySelector('.modal'),close=backdrop&&backdrop.querySelector('.modal-close');
+  document.body.classList.add('woa-modal-open');
+  if(backdrop)backdrop.setAttribute('role','presentation');
+  if(modal){modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-labelledby','modalTitle');modal.setAttribute('tabindex','-1')}
+  requestAnimationFrame(function(){if(close&&document.body.contains(close))close.focus({preventScroll:true});else if(modal)modal.focus({preventScroll:true})})
+};
+closeModal=function accessibleCloseModal(){
+  var returnFocus=__woaModalReturnFocus;
+  __woaModalReturnFocus=null;
+  __woaAccessibleCloseModalBase();
+  document.body.classList.remove('woa-modal-open');
+  if(returnFocus&&document.body.contains(returnFocus))requestAnimationFrame(function(){returnFocus.focus({preventScroll:true})})
+};
+
+document.addEventListener('toggle',function(event){
+  var details=event.target;if(!details||!details.matches||!details.matches('details.action-menu,details.quickbar-more'))return;
+  var summary=details.querySelector(':scope>summary');if(summary)summary.setAttribute('aria-expanded',details.open?'true':'false');
+  if(!details.open)return;
+  document.querySelectorAll(details.matches('.action-menu')?'details.action-menu[open]':'details.quickbar-more[open]').forEach(function(other){if(other!==details)other.removeAttribute('open')})
+},true);
+
+document.addEventListener('click',function(event){
+  if(event.target===document.getElementById('modalBackdrop'))closeModal();
+  var destination=event.target.closest&&event.target.closest('.quickbar-more-panel button[data-view]');
+  if(destination){var more=destination.closest('details.quickbar-more');if(more)more.removeAttribute('open')}
+},true);
+
+document.addEventListener('keydown',function(event){
+  if(event.key!=='Tab')return;
+  var backdrop=document.getElementById('modalBackdrop');if(!backdrop||backdrop.style.display!=='grid')return;
+  var modal=backdrop.querySelector('.modal'),focusable=modal&&Array.from(modal.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter(function(node){return node.offsetParent!==null});
+  if(!focusable||!focusable.length){event.preventDefault();if(modal)modal.focus();return}
+  var first=focusable[0],last=focusable[focusable.length-1];
+  if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}
+},true);
+
+if(window.__woaBootReady){render();decorateSharedAppChrome()}

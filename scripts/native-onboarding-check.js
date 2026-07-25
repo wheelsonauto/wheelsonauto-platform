@@ -464,6 +464,19 @@ async function main() {
       status: 'Removed - owner test reset',
       updatedAt: new Date(Date.now() + 1000).toISOString()
     });
+    saved.recurringPayments.unshift({
+      id: 'rec-stale-competing-vehicle',
+      applicationId: removedApplicationId,
+      onboardingSessionId: 'onboard-stale-competing-vehicle',
+      customer: 'Different Test Applicant',
+      vehicle: '2018 Ford Focus SE',
+      vehicleId: 'veh-native-1',
+      vin: 'VINNATIVE123456789',
+      licensePlate: 'TEST123',
+      status: 'Active',
+      autoChargeEnabled: true,
+      nextRun: plusDays(pickupDate, 7)
+    });
     linkedPortalAccount.applicationIds = [applicationId, removedApplicationId];
     linkedPortalAccount.applicationId = removedApplicationId;
     linkedPortalAccount.portalStage = 'Removed - owner test reset';
@@ -487,6 +500,8 @@ async function main() {
     finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     const completedPortalAccount = saved.customerAccounts.find(row => row.id === pendingCustomerAccount.id);
     assert(finalRecurring.autoChargeEnabled === true && finalRecurring.autopayAnchorDate === actualPickupDate && finalRecurring.nextRun === plusDays(actualPickupDate, 7), 'Handoff must activate weekly autopay from the actual physical pickup date.');
+    const staleCompetingRecurring = saved.recurringPayments.find(row => row.id === 'rec-stale-competing-vehicle');
+    assert(staleCompetingRecurring && staleCompetingRecurring.autoChargeEnabled === false && /history - vehicle assigned elsewhere/i.test(staleCompetingRecurring.status || '') && !staleCompetingRecurring.nextRun, 'Physical pickup must stop every different-customer onboarding autopay that still claims the exact vehicle.');
     assert(completedPortalAccount.applicationId === applicationId && completedPortalAccount.portalStage === 'Active customer' && completedPortalAccount.recurringPaymentId === finalRecurring.id && completedPortalAccount.vehicleId === 'veh-native-1', 'Pickup must relink the exact password-owning portal account even when a newer removed application and duplicate contact exist.');
     const completedPortal = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert(completedPortal.status === 200 && completedPortal.json.portal.application.id === applicationId && completedPortal.json.portal.account.applicationId === applicationId && completedPortal.json.portal.vehicle.id === 'veh-native-1' && completedPortal.json.portal.recurring.id === finalRecurring.id, 'Customer portal must show the picked-up rental instead of a linked removed test application.');
