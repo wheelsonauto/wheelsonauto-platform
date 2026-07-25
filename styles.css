@@ -8428,6 +8428,29 @@ body:has(.admin-shell){background:repeating-linear-gradient(118deg,rgba(230,235,
   .message-compose-actions{grid-template-columns:1fr;gap:3px}
   .message-compose-actions .btn{min-height:28px;padding:4px 5px;font-size:9px}
 }
+
+/* An open phone conversation is a focused screen; its composer owns the bottom edge. */
+@media(max-width:760px){
+  body:has(.admin-shell .message-inbox-shell.message-mobile-thread-open) .admin-shell>.main{
+    height:100dvh;
+    min-height:0;
+    padding:calc(7px + env(safe-area-inset-top)) 7px calc(7px + env(safe-area-inset-bottom))!important;
+    overflow:hidden;
+  }
+  body:has(.admin-shell .message-inbox-shell.message-mobile-thread-open) .admin-shell .view-messages{
+    height:100%;
+    min-height:0;
+    padding:0!important;
+    overflow:hidden;
+  }
+  body:has(.admin-shell .message-inbox-shell.message-mobile-thread-open) .admin-shell .message-inbox-shell{
+    height:100%!important;
+    min-height:0!important;
+  }
+  body:has(.admin-shell .message-inbox-shell.message-mobile-thread-open) .admin-shell .quickbar{
+    display:none!important;
+  }
+}
 @media(max-width:700px){
   html:has(body.customer-message-keyboard-open),body.customer-message-keyboard-open{height:var(--customer-live-viewport-height,100dvh);overflow:hidden;overscroll-behavior:none}
   body.customer-message-keyboard-open .customer-app-shell.customer-portal{height:var(--customer-live-viewport-height,100dvh);overflow:hidden}
@@ -8653,8 +8676,403 @@ body.woa-modal-open{overflow:hidden;overscroll-behavior:none}
   .customer-app-tabs.customer-action-hub a{display:grid!important;place-items:center;align-content:center;gap:2px!important}
   .customer-app-tabs .customer-tab-icon{width:19px;height:19px}
   .customer-app-shell .customer-chat-composer small{display:none}
+  .message-inbox-shell .message-thread-list>.local-search{grid-template-columns:minmax(0,1fr)!important}
+  .customer-app-shell .customer-chat{height:calc(var(--customer-live-viewport-height,100dvh) - 170px - env(safe-area-inset-bottom))!important;grid-template-rows:auto minmax(0,1fr) auto}
+  .customer-app-shell .customer-chat-composer textarea{height:44px;min-height:44px;max-height:88px;resize:none;overflow-y:auto}
 }
 
 @media(prefers-reduced-motion:reduce){
   .admin-shell .ui-view-enter>*,.admin-shell .ui-view-enter.ui-view-ready>*,.modal-backdrop[style*="grid"],.modal-backdrop[style*="grid"]>.modal,.action-menu[open]>.action-menu-panel,.quickbar-more[open]>.quickbar-more-panel{animation:none!important;transition:none!important;transform:none!important}
+}
+
+/* Interface system 350: quieter structure, stronger hierarchy, and lighter rendering. */
+.admin-shell,
+.customer-app-shell,
+.login-page,
+.modal{
+  --woa-canvas:#0b0d0f;
+  --woa-surface:#111417;
+  --woa-surface-raised:#161a1e;
+  --woa-surface-hover:#1a1e22;
+  --woa-line:rgba(220,226,231,.13);
+  --woa-line-strong:rgba(220,226,231,.22);
+  --woa-text:#f3f4f2;
+  --woa-muted:#9ca4aa;
+  --woa-gold:#d7bb74;
+  --woa-gold-bright:#f0d993;
+  --woa-gold-line:rgba(215,187,116,.48);
+  --woa-focus:rgba(240,217,147,.78);
+  letter-spacing:0;
+}
+.admin-shell :is(h1,h2,h3,p,button,a,input,select,textarea,label,small,strong,span),
+.customer-app-shell :is(h1,h2,h3,p,button,a,input,select,textarea,label,small,strong,span),
+.login-page :is(h1,h2,h3,p,button,a,input,label,small,strong,span){letter-spacing:0!important}
+body:has(.admin-shell),body.customer-app-body{overscroll-behavior-y:none}
+.admin-shell :is(button,a,summary),.customer-app-shell :is(button,a,summary){touch-action:manipulation}
+
+/* Keep large operational lists responsive without changing their data or actions. */
+.admin-shell :is(.staff-card-grid>.mechanic-card,.customer-pay-list>.customer-pay-card,.native-online-grid>.native-online-card,.native-application-grid>.native-application-card,.integration-list>.integration-row,.message-thread-grid>.message-thread-row){
+  content-visibility:auto;
+  contain-intrinsic-size:auto 170px;
+}
+.admin-shell :is(.table-wrap,.integration-list,.message-thread-scroller,.message-bubbles),
+.customer-app-shell :is(.customer-app-list,.customer-chat-messages){scrollbar-width:thin;scrollbar-color:#444b51 transparent}
+
+@media(min-width:761px){
+  .app.admin-shell{grid-template-columns:266px minmax(0,1fr)}
+  .admin-shell>.sidebar{padding:20px 13px 13px!important}
+  .admin-shell>.sidebar .brand{padding:8px 6px 12px}
+  .admin-shell>.sidebar .brand b{font-size:16px}
+  .admin-shell>.sidebar .brand span{font-size:10px}
+  .admin-shell .nav button{min-height:44px;padding:9px 10px;font-size:13px}
+  .admin-shell .nav-group summary{font-size:10px}
+  .admin-shell>.main{padding:27px clamp(26px,3vw,52px) 56px!important}
+  .admin-shell>.main>*{width:min(100%,1500px)}
+  .admin-shell .topbar.compact-title{min-height:51px;margin-bottom:15px;padding:6px 2px 12px}
+  .admin-shell .topbar.compact-title h1{font-size:26px;font-weight:780}
+  .admin-shell .section-head h2{font-size:19px}
+  .admin-shell .section-head p{font-size:12px;line-height:1.45}
+}
+
+.admin-shell>.main{background:linear-gradient(145deg,#0b0d0f 0%,#121518 52%,#0d1012 100%)!important}
+.admin-shell>.sidebar{background:#080a0c!important}
+.admin-shell .card{animation:none!important}
+.admin-shell :is(.card,.item,.lead-card,.column,.mechanic-card,.company-card,.api-phase,.public-vehicle-card,.native-inventory-board,.native-website-apps,.native-applications-board,.message-inbox-shell,.message-thread-list,.message-conversation-panel,.message-tool-panel){
+  background:var(--woa-surface)!important;
+  border-color:var(--woa-line)!important;
+  box-shadow:0 12px 30px rgba(0,0,0,.16)!important;
+}
+.admin-shell .card.section{padding:16px}
+.admin-shell .section-head{margin-bottom:13px}
+.admin-shell .section-head>.actions{gap:6px}
+.admin-shell .btn{min-height:38px;padding:8px 11px;border-radius:7px;font-size:12px;line-height:1.15}
+.admin-shell .btn:not(.primary):not(.gold):not(.danger){
+  background:rgba(225,231,236,.055)!important;
+  border-color:rgba(225,231,236,.14)!important;
+  color:#d7dbde!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.055)!important;
+}
+.admin-shell .btn:not(.primary):not(.gold):not(.danger):hover{
+  background:rgba(225,231,236,.085)!important;
+  border-color:rgba(225,231,236,.24)!important;
+  color:#f3f4f2!important;
+}
+.admin-shell :is(.btn.primary,.btn.gold){min-height:38px}
+.admin-shell .tag{padding:4px 8px;font-size:10px}
+.admin-shell .notice{font-size:11px;line-height:1.5}
+.admin-shell .ui-view-enter>*:not(.topbar){opacity:.96;transform:translateY(2px)}
+.admin-shell .ui-view-enter.ui-view-ready>*:not(.topbar){opacity:1;transform:none;transition:opacity .14s ease-out,transform .14s ease-out}
+
+/* Dashboard sections are groups, not decorative cards around other cards. */
+.admin-shell .view-dashboard>:is(.business-overview,.dashboard-intake-summary){
+  padding:0!important;
+  border:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+}
+.admin-shell .view-dashboard>:is(.business-overview,.dashboard-intake-summary)>.section-head{padding:0 1px}
+.business-overview-grid{gap:9px}
+.business-overview-card{
+  min-height:116px;
+  padding:14px;
+  border-color:var(--woa-line)!important;
+  background:var(--woa-surface-raised)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05)!important;
+  transition:border-color .16s ease,background .16s ease,transform .16s ease!important;
+}
+.business-overview-card:hover{background:var(--woa-surface-hover)!important;transform:translateY(-1px)!important}
+.business-overview-card span{font-size:10px;color:var(--woa-muted)}
+.business-overview-card strong{font-size:25px}
+.business-overview-card small{font-size:11px;color:var(--woa-muted)}
+.dashboard-intake-grid{gap:9px}
+.dashboard-intake-grid button{
+  min-height:82px;
+  border-color:var(--woa-line)!important;
+  background:var(--woa-surface)!important;
+  color:var(--woa-text)!important;
+  transition:border-color .16s ease,background .16s ease,transform .16s ease;
+}
+.dashboard-intake-grid button:hover{border-color:rgba(213,177,95,.28)!important;background:var(--woa-surface-hover)!important;transform:translateY(-1px)}
+
+/* Workspace rails scan like segmented controls instead of rows of unrelated cards. */
+.admin-shell .workspace-count-tabs{
+  gap:3px!important;
+  padding:4px!important;
+  border-color:var(--woa-line)!important;
+  background:#0f1215!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-tab{
+  grid-template-columns:minmax(0,1fr)!important;
+  min-height:45px!important;
+  padding:7px 9px!important;
+}
+.admin-shell .workspace-count-tabs .fleet-stat-icon{display:none!important}
+.admin-shell .workspace-count-tabs .fleet-stat-tab>span{gap:8px}
+.admin-shell .workspace-count-tabs .fleet-stat-tab small{font-size:10px!important;color:#a6adb2}
+.admin-shell .workspace-count-tabs .fleet-stat-tab strong{font-size:14px!important;color:#eef0f1!important}
+.admin-shell .workspace-count-tabs .fleet-stat-tab.active{box-shadow:inset 0 -2px 0 rgba(213,177,95,.72)!important}
+
+.admin-shell .local-search{gap:7px}
+.admin-shell .local-search-input{min-height:42px!important;border-radius:7px!important;font-size:14px!important}
+.admin-shell .local-search .search-all{min-width:82px!important}
+.premium-vehicle-card{gap:10px!important;padding:15px!important}
+.premium-vehicle-card .vehicle-card-name{font-size:16px!important}
+.premium-vehicle-card :is(.vehicle-identity-line,.vehicle-tracking-line){font-size:11px;line-height:1.55!important}
+.premium-vehicle-card .vehicle-mileage{font-size:20px!important}
+.staff-card-grid{gap:10px!important}
+
+/* Messages favor the conversation and preserve screen height. */
+.admin-shell .view-messages>.message-focused-tabs{min-height:45px;padding:4px!important;background:#101316!important}
+.admin-shell .view-messages>.message-focused-tabs button{min-height:36px;padding:7px 10px;font-size:11px}
+.message-inbox-shell{border-radius:8px!important;background:#0f1215!important}
+.message-inbox-shell .message-thread-list{background:#101316!important}
+.message-inbox-shell .message-thread-row{min-height:82px!important;padding:11px 12px!important}
+.message-inbox-shell .message-thread-row.active{background:#191b18!important}
+.message-inbox-shell .message-list-empty{padding:34px 18px;color:var(--woa-muted)}
+.message-inbox-shell .message-list-empty strong{color:#d8c27f!important}
+.message-inbox-shell .message-list-empty span{color:#a8b0b6!important}
+.message-inbox-shell .message-conversation-panel.empty>div{max-width:360px}
+.message-inbox-shell .message-conversation-panel.empty p{font-size:13px;line-height:1.45}
+.message-inbox-shell .message-bubble{border-radius:11px;padding:9px 11px}
+.message-inbox-shell .message-bubble-text{font-size:13px;line-height:1.5}
+.message-inbox-shell .message-reply-box{border-top-color:var(--woa-line)!important;background:#101316!important}
+.message-inbox-shell .message-reply-box textarea{border-color:var(--woa-line-strong)!important;background:#0c0f12!important}
+
+/* Customer app follows the same hierarchy without becoming an admin dashboard. */
+.customer-app-shell.customer-portal{background:var(--woa-canvas);color:var(--woa-text)}
+.customer-app-header{border-bottom-color:var(--woa-line)}
+.customer-app-tabs.customer-action-hub{background:var(--woa-canvas)}
+.customer-app-tabs.customer-action-hub a{color:#939ba1}
+.customer-app-surface{
+  background:var(--woa-surface)!important;
+  border-color:var(--woa-line)!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.15)!important;
+}
+.customer-page-heading h1{color:var(--woa-text)}
+.customer-section-title h2{color:#eceeeb}
+.customer-home-stats article{background:var(--woa-surface)!important;border-color:var(--woa-line)!important;box-shadow:none!important}
+.customer-app-form :is(input,select,textarea){background:#0c0f12!important;border-color:var(--woa-line-strong)!important;color:var(--woa-text)!important}
+.customer-app-form :is(input,select,textarea):focus{border-color:rgba(240,217,147,.56)!important;outline:2px solid rgba(213,177,95,.14)!important;outline-offset:1px}
+.customer-chat{border-color:var(--woa-line)!important;background:#0f1215!important}
+.customer-chat-composer{background:#101316!important;border-top-color:var(--woa-line)!important}
+.customer-chat-composer textarea{background:#0b0e11!important;border-color:var(--woa-line-strong)!important;color:var(--woa-text)!important}
+.admin-shell :is(input,textarea)::placeholder,.customer-app-shell :is(input,textarea)::placeholder{color:#818b93!important;opacity:1}
+
+@media(min-width:1500px){
+  .admin-shell>.main{padding-inline:clamp(48px,4.5vw,76px)!important}
+  .admin-shell>.main>*{width:min(100%,1560px)}
+  .business-overview-grid{gap:11px}
+  .business-overview-card{min-height:122px;padding:16px}
+}
+
+@media(max-width:1000px) and (min-width:761px){
+  .app.admin-shell{grid-template-columns:214px minmax(0,1fr)}
+  .admin-shell>.main{padding:22px 20px 44px!important}
+  .admin-shell .nav button{font-size:12px}
+  .business-overview-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+
+@media(min-width:761px) and (max-width:900px){
+  .app.admin-shell{display:block;grid-template-columns:1fr}
+  .admin-shell>.sidebar{display:none!important}
+  .admin-shell>.main{width:100%;min-height:100dvh;padding:22px 22px 88px!important}
+  .admin-shell .quickbar{
+    position:fixed;
+    z-index:80;
+    left:12px;
+    right:12px;
+    bottom:12px;
+    display:grid!important;
+    grid-template-columns:repeat(5,minmax(0,1fr));
+    gap:5px;
+    padding:6px;
+    border:1px solid rgba(213,177,95,.30)!important;
+    border-radius:8px;
+    background:#0d1012!important;
+    box-shadow:0 -16px 40px rgba(0,0,0,.38)!important;
+  }
+  .admin-shell .quickbar>button,
+  .admin-shell .quickbar>.quickbar-more>summary{
+    min-height:54px;
+    display:grid;
+    place-items:center;
+    align-content:center;
+    gap:3px;
+    padding:6px 4px;
+    border:1px solid rgba(225,231,236,.12);
+    border-radius:7px;
+    background:rgba(225,231,236,.055);
+    color:#d9dddf;
+    font-size:9px;
+    font-weight:900;
+    list-style:none;
+  }
+  .admin-shell .quickbar>.quickbar-more>summary::-webkit-details-marker{display:none}
+  .admin-shell .quickbar .quick-icon{width:20px;height:20px}
+  .admin-shell .quickbar>button.active,
+  .admin-shell .quickbar>.quickbar-more.active>summary,
+  .admin-shell .quickbar>.quickbar-more[open]>summary{
+    border-color:rgba(240,217,147,.46)!important;
+    background:rgba(213,177,95,.12)!important;
+    color:var(--woa-gold-bright)!important;
+  }
+  .admin-shell .quickbar-more-panel{
+    position:fixed;
+    z-index:82;
+    left:12px;
+    right:12px;
+    bottom:80px;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:6px;
+    padding:8px;
+    border:1px solid rgba(213,177,95,.28);
+    border-radius:8px;
+    background:#111417;
+    box-shadow:0 -18px 44px rgba(0,0,0,.42);
+  }
+  .admin-shell .quickbar-more-panel button{width:100%;min-height:44px}
+  .admin-shell .view-payments-customers .payment-lanes{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+  .admin-shell .view-payments-customers .payment-lane>*{min-width:0;max-width:100%}
+  .admin-shell .view-payments-customers .payment-lane small{overflow-wrap:anywhere;word-break:break-word}
+}
+
+@media(max-width:760px){
+  .admin-shell>.main{padding:calc(7px + env(safe-area-inset-top)) 9px calc(86px + env(safe-area-inset-bottom))!important}
+  .admin-shell .topbar.compact-title{min-height:44px;margin-bottom:7px;padding:4px 1px 8px}
+  .admin-shell .topbar.compact-title h1{max-width:calc(100vw - 74px);font-size:19px}
+  .admin-shell .card.section{padding:12px}
+  .admin-shell .section-head{gap:8px;margin-bottom:10px}
+  .admin-shell .section-head h2{font-size:17px}
+  .admin-shell .section-head p{font-size:10px;line-height:1.4}
+  .admin-shell .btn{min-height:38px;padding:8px 9px;font-size:11px}
+  .admin-shell .ui-view-enter>*:not(.topbar){opacity:.98;transform:translateY(1px)}
+  .admin-shell .workspace-count-tabs{
+    display:flex!important;
+    grid-template-columns:none!important;
+    gap:3px!important;
+    overflow-x:auto!important;
+    overscroll-behavior-x:contain;
+    scroll-snap-type:x mandatory;
+    scrollbar-width:none;
+  }
+  .admin-shell .workspace-count-tabs::-webkit-scrollbar{display:none}
+  .admin-shell .workspace-count-tabs .fleet-stat-tab{
+    flex:1 0 78px!important;
+    min-width:78px!important;
+    min-height:40px!important;
+    scroll-snap-align:start;
+  }
+  .admin-shell .workspace-count-tabs .fleet-stat-tab small{font-size:9px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .admin-shell .workspace-count-tabs .fleet-stat-tab strong{font-size:12px!important}
+  .admin-shell .local-search{display:grid;grid-template-columns:minmax(0,1fr) 72px;gap:5px}
+  .admin-shell .local-search .search-field{width:100%;min-width:0}
+  .admin-shell .local-search .search-field .local-search-input{
+    width:100%;
+    min-width:0;
+    min-height:40px!important;
+    border:1px solid var(--woa-line-strong)!important;
+    border-radius:7px!important;
+    font-size:16px!important;
+  }
+  .admin-shell .local-search .search-all{
+    min-width:0!important;
+    width:100%;
+    border:1px solid var(--woa-gold-line)!important;
+    border-radius:7px!important;
+  }
+  .business-overview-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .business-overview-card{min-height:91px;padding:10px}
+  .business-overview-card strong{font-size:20px}
+  .business-overview-card small{font-size:9px}
+  .dashboard-intake-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .dashboard-intake-grid button{min-height:70px;padding:9px}
+  .admin-shell .quickbar{left:7px!important;right:7px!important;bottom:calc(7px + env(safe-area-inset-bottom))!important;padding:5px!important;gap:3px!important;border-radius:8px!important}
+  .admin-shell .quickbar>button,.admin-shell .quickbar>.quickbar-more>summary{min-height:51px!important}
+  .admin-shell .quickbar button{font-size:9px!important}
+  .message-inbox-shell .message-thread-row{min-height:78px!important;padding:9px 10px!important}
+  .message-inbox-shell .message-list-empty{padding:30px 14px}
+  .message-inbox-shell .message-bubble{max-width:90%;padding:8px 10px}
+  .message-inbox-shell .message-bubble-text{font-size:13px}
+  .customer-app-shell.customer-portal{padding-inline:10px}
+  .customer-app-header{height:54px}
+  .customer-page-heading{margin-bottom:12px}
+  .customer-page-heading h1{font-size:22px}
+  .customer-home-stats article{min-height:84px;padding:10px 8px}
+  .customer-app-surface{padding:12px}
+  .customer-app-tabs.customer-action-hub{left:7px;right:7px;bottom:calc(7px + env(safe-area-inset-bottom));padding:5px}
+}
+
+@media(max-width:370px){
+  .admin-shell>.main{padding-inline:7px!important}
+  .business-overview-card{min-height:88px;padding:8px}
+  .admin-shell .quickbar button,.customer-app-tabs.customer-action-hub a{font-size:8px!important}
+  .customer-home-stats,.customer-home-stats.payments{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .customer-home-stats article:last-child{grid-column:1/-1}
+}
+
+@media(prefers-reduced-motion:reduce){
+  .business-overview-card,.dashboard-intake-grid button{transition:none!important;transform:none!important}
+}
+
+/* Interface system 350 role-portal containment and operational surface balance. */
+.admin-shell .card.section{
+  background:#111417!important;
+  border-color:var(--woa-line)!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.17)!important;
+}
+.admin-shell :is(.compact-fleet-board,.compact-service-board,.compact-claims-board,.staff-card-board,.manager-mini-board,.match-board,.fleet-command){
+  background:#101316!important;
+  border-color:var(--woa-line)!important;
+  box-shadow:0 12px 28px rgba(0,0,0,.17)!important;
+}
+.view-manager-portal .manager-overview-grid,
+.view-manager-portal .manager-overview-grid>*{
+  min-width:0;
+  max-width:100%;
+}
+.view-manager-portal .manager-mini-board :is(.mini-list,.mini-row,.mini-row>div,.mini-row strong,.mini-row small,.mini-row .tag,.mini-row .btn){
+  min-width:0;
+  max-width:100%;
+}
+.view-manager-portal .manager-mini-board .mini-row :is(strong,small){
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+@media(min-width:901px){
+  .view-mechanic-portal .mechanic-workspace{display:block}
+  .view-mechanic-portal .mechanic-cards{
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    max-height:none;
+    overflow:visible;
+    padding:0;
+  }
+}
+@media(min-width:761px) and (max-width:900px){
+  .view-manager-portal .fleet-lanes{
+    grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  }
+  .view-manager-portal .fleet-lane{
+    min-width:0!important;
+    white-space:normal;
+  }
+  .view-mechanic-portal .mechanic-workspace{display:block}
+  .view-mechanic-portal .mechanic-cards{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    max-height:none;
+    overflow:visible;
+    padding:0;
+  }
+}
+@media(max-width:760px){
+  .view-manager-portal .manager-mini-board .mini-row{
+    width:100%;
+    overflow:hidden;
+  }
+  .view-manager-portal .manager-mini-board .mini-row>.tag,
+  .view-manager-portal .manager-mini-board .mini-row>.btn{
+    width:100%;
+    justify-content:center;
+  }
+  .admin-shell .app-notification-bell b{right:-1px;top:-4px}
 }

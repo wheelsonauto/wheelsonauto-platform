@@ -31,6 +31,7 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 const SEED_FILE = path.join(ROOT, 'seed.json');
 const VEHICLE_IMPORT_FILE = path.join(ROOT, 'vehicle-import.json');
 const CONTRACT_TEMPLATE_FILE = path.join(ROOT, 'contract-template.txt');
+const MAX_VEHICLE_MILEAGE = 2000000;
 const PORT = Number(process.env.PORT || 4181);
 const HOST = process.env.HOST || '0.0.0.0';
 const LOGIN_PIN = process.env.WOA_ADMIN_PIN || '';
@@ -261,7 +262,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260725-truth-responsive-349';
+const ASSET_VERSION = 'platform-20260725-interface-system-351';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -10543,7 +10544,7 @@ function customerPortalConversationHtml(account = {}, state = {}) {
       const inbound = /inbound|customer action/i.test(String(message.direction || ''));
       const className = inbound ? 'customer-chat-bubble customer' : 'customer-chat-bubble staff';
       const sender = inbound ? 'You' : (/star/i.test(String([message.channel, message.source, message.template].filter(Boolean).join(' '))) ? 'Star / WheelsonAuto' : 'WheelsonAuto');
-      return '<div class="' + className + '" data-message-id="' + escapeHtml(message.id || '') + '"><span>' + escapeHtml(sender) + '</span><p>' + escapeHtml(message.body || message.subject || message.template || 'Message') + '</p><small>' + escapeHtml([message.createdAt || message.date || '', message.status || ''].filter(Boolean).join(' | ')) + '</small></div>';
+      return '<div class="' + className + '" data-message-id="' + escapeHtml(message.id || '') + '"><span>' + escapeHtml(sender) + '</span><p>' + escapeHtml(message.body || message.subject || message.template || 'Message') + '</p><small>' + escapeHtml([customerPortalMessageDateLabel(message.createdAt || message.date), message.status || ''].filter(Boolean).join(' | ')) + '</small></div>';
     }).join('')
     : '<div class="customer-chat-empty" data-customer-chat-empty><strong>Start a conversation</strong><span>Messages stay connected to your WheelsonAuto account and vehicle.</span></div>';
   const context = [
@@ -10552,6 +10553,18 @@ function customerPortalConversationHtml(account = {}, state = {}) {
     summary.tag || vehicle.plate || vehicle.stock ? 'Tag ' + (summary.tag || vehicle.plate || vehicle.stock) : ''
   ].filter(Boolean);
   return '<article id="portal-messages" class="customer-panel customer-conversation-panel"><div class="customer-chat"><header class="customer-chat-header"><span class="customer-chat-avatar">WOA</span><div><strong>WheelsonAuto</strong><small>Secure account conversation</small></div><i data-customer-connection-status>Online</i></header><div class="customer-chat-context">' + context.map(value => '<span>' + escapeHtml(value) + '</span>').join('') + '</div><div class="customer-chat-messages" data-customer-message-list>' + messageRows + '</div><form method="POST" action="/customer/message" class="customer-chat-composer" data-customer-message-form><textarea name="body" maxlength="1200" rows="1" aria-label="Message WheelsonAuto" placeholder="Write a message..."></textarea><button class="btn primary" type="submit">Send</button><small data-customer-message-status>Private to your WheelsonAuto account.</small></form></div></article>';
+}
+function customerPortalMessageDateLabel(value) {
+  const timestamp = new Date(value || '');
+  if (Number.isNaN(timestamp.getTime())) return String(value || '');
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: WOA_TIME_ZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(timestamp);
 }
 const __woaCustomerPortalConversationBase = customerPortalHtml;
 customerPortalHtml = function customerPortalHtmlWithConversation(account, state) {
@@ -12161,7 +12174,9 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (insurancePolicyKey.length < 4 || insurancePolicyKey.length > 60) throw new Error('Enter the complete insurance policy number verified at pickup.');
   if (pickupSession && pickupSession.insuranceOption === 'upload' && !insuranceDocument) throw new Error('The uploaded insurance proof is missing or still needs correction.');
   const mileage = Number(payload.mileage);
-  if (!Number.isFinite(mileage) || mileage < 0) throw new Error('Enter the vehicle mileage shown at physical pickup.');
+  if (!Number.isInteger(mileage) || mileage < 0 || mileage > MAX_VEHICLE_MILEAGE) {
+    throw new Error('Enter a whole-number pickup mileage between 0 and 2,000,000.');
+  }
   const scheduledPickupDate = String(appointment.date || '').slice(0, 10);
   const actualPickupDate = String(payload.actualPickupDate || localDateKey()).slice(0, 10);
   const actualPickupDateValue = new Date(actualPickupDate + 'T12:00:00Z');

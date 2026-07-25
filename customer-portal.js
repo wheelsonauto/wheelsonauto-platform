@@ -26,7 +26,12 @@
         if (active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
       });
       if (window.history && window.history.replaceState) window.history.replaceState(null, '', key);
-      if (scroll) window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (scroll) {
+        var active = document.activeElement;
+        if (active && /input|select|textarea/i.test(active.tagName)) active.blur();
+        window.scrollTo({ top: 0, behavior: 'auto' });
+        portal.scrollTop = 0;
+      }
     }
     links.forEach(function (link) {
       link.addEventListener('click', function (event) {
@@ -86,7 +91,7 @@
     var value = message && (message.createdAt || message.date) || '';
     var date = new Date(value);
     if (isNaN(date.getTime())) return value;
-    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return date.toLocaleString([], { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
   function messageFingerprint(messages) {

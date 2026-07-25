@@ -79,8 +79,10 @@ assert(html.includes('starts a new 19-month term'), 'The vehicle swap must discl
 assert(html.includes('This does not reassign a vehicle.'), 'A swap request must not silently mutate the fleet assignment.');
 assert(html.includes('Current password'), 'Sensitive profile edits must require the current password.');
 assert(html.includes('JPG, PNG, or PDF up to 5 MB'), 'Private document upload limits must be visible.');
+assert(html.includes('Jul 23, 2026') && !html.includes('2026-07-23T12:30:00.000Z'), 'Customer chat must show a readable local timestamp while keeping raw audit time out of the interface.');
 assert(clientSource.includes('weekly / 7 * days'), 'The live date-change preview must use the exact weekly divided-by-seven calculation.');
 assert(clientSource.includes("window.addEventListener('hashchange'"), 'Browser back and customer tab changes must stay synchronized.');
+assert(clientSource.includes("window.scrollTo({ top: 0, behavior: 'auto' })") && clientSource.includes('active.blur()'), 'Customer tab changes must reset the app viewport immediately and dismiss an open keyboard.');
 assert(clientSource.includes('function setupSettingsNavigation()') && clientSource.includes('data-customer-settings-target'), 'Settings must open focused app-style category screens instead of one long stack of cards.');
 assert(clientSource.includes('data-customer-settings-back') && clientSource.includes("window.sessionStorage.setItem(storageKey, key)"), 'Settings detail screens must include Back navigation and preserve the active screen after a save.');
 assert(styleSource.includes('.customer-app-pages') && styleSource.includes('.customer-app-tabs'), 'The responsive customer app layout styles are missing.');

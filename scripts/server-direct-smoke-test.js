@@ -2530,6 +2530,14 @@ async function main() {
     assert(mechanicPickupCompletion.status === 403, 'Mechanic must not complete the customer/account pickup handoff.');
     const unconfirmedPickupCompletion = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { mileage: 41234 } });
     assert(unconfirmedPickupCompletion.status === 400, 'Pickup completion must require explicit physical-handoff confirmation.');
+    const absurdPickupMileage = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Direct Test Insurance', insurancePolicyNumber: 'DIRECT-POLICY-100', mileage: 11111111111111 } });
+    assert(absurdPickupMileage.status === 409 && /between 0 and 2,000,000/i.test(absurdPickupMileage.json.error || ''), 'Pickup completion must reject an impossible odometer value.');
+    const stateAfterAbsurdMileage = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const rejectedMileageAppointment = stateAfterAbsurdMileage.json.pickupAppointments.find(row => row.id === 'pickup-direct-calendar');
+    const rejectedMileageVehicle = stateAfterAbsurdMileage.json.vehicles.find(row => row.id === 'veh-direct-pickup-car');
+    const rejectedMileageRecurring = stateAfterAbsurdMileage.json.recurringPayments.find(row => row.id === 'rec-direct-pickup');
+    const rejectedMileageOnlineVehicle = stateAfterAbsurdMileage.json.onlineVehicles.find(row => row.id === 'online-direct-pickup');
+    assert(rejectedMileageAppointment.status !== 'Picked up' && rejectedMileageVehicle.mileage === 41000 && rejectedMileageVehicle.status !== 'Rented' && rejectedMileageRecurring.status !== 'Active' && rejectedMileageOnlineVehicle.availability !== 'Rented', 'Rejected pickup mileage must not partially change pickup, vehicle, autopay, or online inventory records.');
     const completedPickup = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Direct Test Insurance', insurancePolicyNumber: 'DIRECT-POLICY-100', mileage: 41234, notes: 'Active coverage and exact VIN confirmed; keys and vehicle handed to customer.' } });
     assert(completedPickup.status === 200 && completedPickup.json.appointment.status === 'Picked up' && completedPickup.json.vehicle.status === 'Rented' && completedPickup.json.recurring.status === 'Active', 'Manager should atomically complete the physical pickup, fleet status, and autopay activation.');
     const completedPickupState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });

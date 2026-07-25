@@ -936,6 +936,8 @@ assertIncludes('Physical pickup completion handoff', app + server, [
   'integrated-open-pickup-completion',
   'integrated-save-pickup-completion',
   'Starting mileage at handoff',
+  'max="2000000"',
+  'whole-number pickup mileage between 0 and 2,000,000',
   '/api/pickups/',
   '/complete',
   'Customer pickup completed',
