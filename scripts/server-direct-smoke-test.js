@@ -899,6 +899,11 @@ async function main() {
     assert(oversizedCustomerLogin.status === 413, 'Oversized customer login bodies must be rejected before authentication work.');
 
     const ownerCookie = await login(server, { username: 'owner', password: adminPassword });
+    const ownerPage = await request(server, 'GET', '/', { cookie: ownerCookie });
+    const ownerAssetVersions = [...ownerPage.text.matchAll(/\/(?:styles\.css|app\.js|staff-pwa\.js)\?v=([^"']+)/g)].map(match => match[1]);
+    const loginAssetVersion = (loginPage.text.match(/\/styles\.css\?v=([^"']+)/) || [])[1];
+    assert(ownerPage.status === 200 && ownerAssetVersions.length >= 4, 'Authenticated staff shell must load every versioned application asset.');
+    assert(new Set(ownerAssetVersions).size === 1 && ownerAssetVersions[0] === loginAssetVersion, 'Authenticated staff HTML must stamp the current server release onto every asset so a deploy cannot leave installed apps on stale JavaScript.');
     const crossOriginOwnerWrite = await request(server, 'POST', '/api/tasks', {
       cookie: ownerCookie,
       headers: { origin: 'https://malicious.example' },
