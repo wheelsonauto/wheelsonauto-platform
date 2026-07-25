@@ -592,6 +592,10 @@ function ownerSmoke() {
   assert(exactFileModal.includes('id="fileVehicleId"') && exactFileModal.includes('value="veh-exact-current" selected'), 'A customer file must select the vehicle linked to the exact contract.');
   assert(exactFileModal.includes('id="fileTempTag" value=""') && exactFileModal.includes('id="fileTracker" value=""'), 'An exact linked vehicle with no old tag or tracker must not borrow those fields from another same-name customer plan.');
   assert(exactFileModal.includes('id="fileMileage" type="number" value="12345"'), 'The exact customer file must use mileage from its linked vehicle.');
+  const exactRecurringCard = exactFileContext.paymentRecurringCard(exactFileContext.db.recurringPayments.find(row => row.id === 'rec-exact-current'));
+  assert(exactRecurringCard.includes('2026 Exact Pickup') && exactRecurringCard.includes('NEW-TAG') && !exactRecurringCard.includes('OLD-TEMP') && !exactRecurringCard.includes('OLD-TRACKER'), 'An active recurring card must use the exact linked vehicle and never fill blank identity fields from an older same-name plan.');
+  assert(exactRecurringCard.includes('Last: 2026-07-24 Paid') && !exactRecurringCard.includes('2026-07-20'), 'An active recurring card must show the latest payment linked to that exact plan instead of another same-name customer payment.');
+  assert(exactRecurringCard.includes('data-id="contract-exact-current"'), 'The active recurring customer link must open the exact linked contract instead of resolving the file by customer name.');
 
   context.db.recurringPayments = context.db.recurringPayments || [];
   const weakVehicleRow = { customer: 'Weak Vehicle Label Smoke', vehicle: '230', plan: '$230.00', amount: 230, status: 'Active' };
