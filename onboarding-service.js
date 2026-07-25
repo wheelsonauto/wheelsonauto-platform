@@ -614,16 +614,23 @@ function pickupAvailability(data = {}, settings = {}, requestedDate, options = {
 
 function createPendingCustomerAccount(data, application, links = {}) {
   ensureCollections(data);
-  // A phone number or email can be shared or recycled. Only the application ID
-  // is strong enough to reuse a pending portal account without crossing records.
-  let account = data.customerAccounts.find(item => item.applicationId === application.id);
+  // A phone number or email can be shared or recycled. Reuse only a portal
+  // account explicitly linked by account ID or by this exact application ID.
+  let account = data.customerAccounts.find(item => application.customerAccountId && item.id === application.customerAccountId)
+    || data.customerAccounts.find(item => item.applicationId === application.id);
+  const applicationIds = [...new Set([
+    ...(account && Array.isArray(account.applicationIds) ? account.applicationIds : []),
+    account && account.applicationId,
+    application.id
+  ].filter(Boolean))];
   const base = {
     customer: application.name,
     name: application.name,
-    username: String(application.email || application.phone || '').toLowerCase(),
+    username: String(account && account.username || application.email || application.phone || '').toLowerCase(),
     phone: application.phone || '',
     email: application.email || '',
     applicationId: application.id,
+    applicationIds,
     organizationId: application.organizationId || 'org-wheelsonauto',
     status: 'Active',
     source: 'Native website application',

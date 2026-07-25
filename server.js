@@ -261,7 +261,7 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260724-mobile-messages-344';
+const ASSET_VERSION = 'platform-20260724-pickup-account-truth-345';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
@@ -9863,12 +9863,31 @@ function customerPortalApplicationPending(account = {}, application = {}) {
   const status = [account.portalStage, application.stage, application.status].filter(Boolean).join(' ').toLowerCase();
   return !/active customer|vehicle picked up|picked up|completed/.test(status);
 }
+function customerPortalApplicationClosed(application = {}) {
+  return /denied|rejected|cancelled|removed|archived|expired/.test(String([
+    application.stage,
+    application.status,
+    application.cleanupArchivedAt ? 'archived' : ''
+  ].filter(Boolean).join(' ')).toLowerCase());
+}
+function customerPortalCurrentApplication(account = {}, applications = []) {
+  const current = applications.find(row => row.id === account.applicationId) || null;
+  if (current && !customerPortalApplicationClosed(current)) return current;
+  return applications.find(row => !customerPortalApplicationClosed(row)) || current || applications[0] || {};
+}
 function customerPortalApplicationContext(scopedData = {}, account = {}, application = {}, pendingApplication = false) {
-  const applicationId = String(account.applicationId || application.id || '');
-  const recurring = allRecurringRows(scopedData).find(row => row.id === account.recurringPaymentId || applicationId && row.applicationId === applicationId) || null;
-  const customer = (scopedData.customers || []).find(row => row.id === account.customerId || applicationId && row.applicationId === applicationId) || null;
-  const contract = (scopedData.contracts || []).find(row => row.id === account.contractId || applicationId && row.applicationId === applicationId) || null;
-  const vehicleId = account.vehicleId || recurring && recurring.vehicleId || customer && customer.vehicleId || contract && contract.vehicleId || '';
+  const applicationId = String(application.id || account.applicationId || '');
+  const recurringRows = allRecurringRows(scopedData);
+  const recurring = recurringRows.find(row => applicationId && row.applicationId === applicationId)
+    || recurringRows.find(row => row.id === account.recurringPaymentId)
+    || null;
+  const customer = (scopedData.customers || []).find(row => applicationId && row.applicationId === applicationId)
+    || (scopedData.customers || []).find(row => row.id === account.customerId)
+    || null;
+  const contract = (scopedData.contracts || []).find(row => applicationId && row.applicationId === applicationId)
+    || (scopedData.contracts || []).find(row => row.id === account.contractId)
+    || null;
+  const vehicleId = recurring && recurring.vehicleId || customer && customer.vehicleId || contract && contract.vehicleId || account.vehicleId || '';
   const vehicle = !pendingApplication && vehicleId ? (scopedData.vehicles || []).find(row => row.id === vehicleId) || null : null;
   const recordIsExplicit = row => {
     if (!row) return false;
@@ -9880,6 +9899,7 @@ function customerPortalApplicationContext(scopedData = {}, account = {}, applica
   const payments = (scopedData.payments || []).filter(recordIsExplicit);
   const claims = (scopedData.claims || []).filter(recordIsExplicit);
   return {
+    applicationId,
     contact: { name: application.name || account.customer || account.name || '', phone: application.phone || account.phone || '', email: application.email || account.email || '' },
     customerName: application.name || account.customer || account.name || '',
     organizationId: account.organizationId || application.organizationId || MAIN_ORG_ID,
@@ -9913,11 +9933,11 @@ function customerPortalIdentity(account = {}, context = {}, options = {}) {
   const emails = [account.email, context.email, recurring.email, customer.email, contract.email].map(emailKey).filter(Boolean);
   const ids = {
     customerAccountId: account.id || '',
-    applicationId: account.applicationId || '',
-    customerId: account.customerId || customer.id || '',
-    contractId: account.contractId || contract.id || '',
-    recurringPaymentId: account.recurringPaymentId || recurring.id || '',
-    vehicleId: account.vehicleId || recurring.vehicleId || customer.vehicleId || contract.vehicleId || vehicle.id || '',
+    applicationId: context.applicationId || account.applicationId || '',
+    customerId: customer.id || account.customerId || '',
+    contractId: contract.id || account.contractId || '',
+    recurringPaymentId: recurring.id || account.recurringPaymentId || '',
+    vehicleId: recurring.vehicleId || customer.vehicleId || contract.vehicleId || vehicle.id || account.vehicleId || '',
     cloverCustomerId: account.cloverCustomerId || recurring.cloverCustomerId || customer.cloverCustomerId || ''
   };
   return {
@@ -10132,18 +10152,22 @@ function customerPortalState(data, account) {
   const applications = (scopedData.applications || [])
     .filter(row => row.customerAccountId === account.id || accountApplicationIds.has(row.id))
     .sort((a, b) => Date.parse(b.updatedAt || b.submittedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.submittedAt || a.createdAt || 0));
-  const application = applications.find(row => row.id === account.applicationId) || applications[0] || {};
-  const hasStrongOperationalLink = !!(account.customerId || account.contractId || account.recurringPaymentId || account.vehicleId || account.cloverCustomerId);
+  const application = customerPortalCurrentApplication(account, applications);
+  const applicationIsActive = /active customer|vehicle picked up|picked up|completed/i.test(String([application.stage, application.status].filter(Boolean).join(' ')));
+  const portalAccount = application.id && (application.id !== account.applicationId || applicationIsActive && !/active customer/i.test(String(account.portalStage || '')))
+    ? { ...account, applicationId: application.id, portalStage: applicationIsActive ? 'Active customer' : application.stage || account.portalStage }
+    : account;
+  const hasStrongOperationalLink = !!(portalAccount.customerId || portalAccount.contractId || portalAccount.recurringPaymentId || portalAccount.vehicleId || portalAccount.cloverCustomerId);
   const unlinkedAccount = !application.id && !hasStrongOperationalLink;
-  const pendingApplication = unlinkedAccount || customerPortalApplicationPending(account, application);
-  const context = application.id ? customerPortalApplicationContext(scopedData, account, application, pendingApplication) : hasStrongOperationalLink ? aiFindCustomerContext(scopedData, {
-    customer: account.customer || account.name,
-    phone: account.phone,
-    email: account.email,
-    recurringPaymentId: account.recurringPaymentId,
-    id: account.recurringPaymentId
-  }) : { contact: { name: account.name || account.customer || '', phone: account.phone || '', email: account.email || '' }, customerName: account.name || account.customer || '', phone: account.phone || '', email: account.email || '', recurring: null, customer: null, contract: null, vehicle: null, vehicleName: '', latestPayment: null, maintenance: [], claims: [], openClaims: [], documents: [], applications: [], tasks: [], portalAccount: account, paymentRequests: [], cardSetupRequests: [], latestMessages: [] };
-  const identity = customerPortalIdentity(account, context, { pendingApplication });
+  const pendingApplication = unlinkedAccount || customerPortalApplicationPending(portalAccount, application);
+  const context = application.id ? customerPortalApplicationContext(scopedData, portalAccount, application, pendingApplication) : hasStrongOperationalLink ? aiFindCustomerContext(scopedData, {
+    customer: portalAccount.customer || portalAccount.name,
+    phone: portalAccount.phone,
+    email: portalAccount.email,
+    recurringPaymentId: portalAccount.recurringPaymentId,
+    id: portalAccount.recurringPaymentId
+  }) : { contact: { name: portalAccount.name || portalAccount.customer || '', phone: portalAccount.phone || '', email: portalAccount.email || '' }, customerName: portalAccount.name || portalAccount.customer || '', phone: portalAccount.phone || '', email: portalAccount.email || '', recurring: null, customer: null, contract: null, vehicle: null, vehicleName: '', latestPayment: null, maintenance: [], claims: [], openClaims: [], documents: [], applications: [], tasks: [], portalAccount, paymentRequests: [], cardSetupRequests: [], latestMessages: [] };
+  const identity = customerPortalIdentity(portalAccount, context, { pendingApplication });
   const vehicles = (scopedData.vehicles || []).filter(row => customerPortalRecordMatches(row, identity, 'vehicle'));
   const customers = (scopedData.customers || []).filter(row => customerPortalRecordMatches(row, identity, 'customer'));
   const contracts = (scopedData.contracts || []).filter(row => customerPortalRecordMatches(row, identity, 'contract'));
@@ -10166,7 +10190,7 @@ function customerPortalState(data, account) {
   delete summary.modules;
   delete summary.systemHealth;
   return {
-    account: safeCustomerAccount(account),
+    account: safeCustomerAccount(portalAccount),
     application: stripPrivateCustomerFields(application),
     applications: applications.map(stripPrivateCustomerFields),
     onboardingSessions: (scopedData.onboardingSessions || [])
@@ -11955,13 +11979,73 @@ function finalizeNativePickup(data, session, application, vehicle, actor = { nam
   application.contractId = contract.id;
   return appointment;
 }
+function pickupCustomerAccount(data, application, session, recurring = null) {
+  const accounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  const applicationId = String(application && application.id || '');
+  const customerAccountId = String(application && application.customerAccountId || '');
+  return accounts.find(row => customerAccountId && row.id === customerAccountId)
+    || accounts.find(row => applicationId && (row.applicationId === applicationId || Array.isArray(row.applicationIds) && row.applicationIds.includes(applicationId)))
+    || onboardingOwnedRecord(accounts, application, session, recurring);
+}
+function reconcilePickupCustomerAccountLinks(account, application, recurring, customer, contract, appointment, onlineVehicle, now = new Date().toISOString()) {
+  if (!account || !application) return { account: account || null, changed: false };
+  const applicationIds = [...new Set([
+    ...(Array.isArray(account.applicationIds) ? account.applicationIds : []),
+    account.applicationId,
+    application.id
+  ].filter(Boolean))];
+  const patch = {
+    status: 'Active',
+    portalStage: 'Active customer',
+    applicationId: application.id,
+    applicationIds,
+    onlineVehicleId: application.onlineVehicleId || onlineVehicle && onlineVehicle.id || account.onlineVehicleId || '',
+    recurringPaymentId: recurring && recurring.id || account.recurringPaymentId || '',
+    customerId: customer && customer.id || account.customerId || '',
+    contractId: contract && contract.id || account.contractId || '',
+    vehicleId: appointment && appointment.vehicleId || recurring && recurring.vehicleId || customer && customer.vehicleId || contract && contract.vehicleId || account.vehicleId || '',
+    customer: application.name || account.customer || account.name || '',
+    name: application.name || account.name || account.customer || '',
+    phone: application.phone || account.phone || '',
+    email: application.email || account.email || '',
+    updatedAt: now
+  };
+  const linkedRows = [recurring, customer, contract].filter(Boolean);
+  const changed = Object.entries(patch).some(([key, value]) => key !== 'updatedAt' && JSON.stringify(account[key] || '') !== JSON.stringify(value || ''))
+    || application.customerAccountId !== account.id
+    || customer && application.customerId !== customer.id
+    || contract && application.contractId !== contract.id
+    || recurring && application.recurringPaymentId !== recurring.id
+    || linkedRows.some(row => row.applicationId !== application.id || row.customerAccountId !== account.id);
+  Object.assign(account, patch);
+  linkedRows.forEach(row => {
+    row.applicationId = application.id;
+    row.customerAccountId = account.id;
+    row.updatedAt = now;
+  });
+  application.customerAccountId = account.id;
+  if (customer) application.customerId = customer.id;
+  if (contract) application.contractId = contract.id;
+  if (recurring) application.recurringPaymentId = recurring.id;
+  return { account, changed };
+}
 function completePickupHandoff(data, appointment, payload = {}, actor = { name: 'WheelsonAuto staff', role: 'Staff' }) {
   if (!appointment) throw new Error('Pickup appointment was not found.');
   if (/cancel/i.test(String(appointment.status || ''))) throw new Error('A cancelled pickup cannot be completed.');
-  if (/picked up|completed/i.test(String(appointment.status || ''))) return { appointment, alreadyCompleted: true };
+  const alreadyCompleted = /picked up|completed/i.test(String(appointment.status || ''));
   const pickupSession = (data.onboardingSessions || []).find(row => row.id === appointment.onboardingSessionId) || null;
   const pickupApplication = (data.applications || []).find(row => row.id === appointment.applicationId) || null;
   if (!pickupSession || !pickupApplication) throw new Error('The connected onboarding and application records are required before pickup.');
+  if (alreadyCompleted) {
+    const recurring = allRecurringRows(data).find(row => row.id === pickupApplication.recurringPaymentId || row.pickupAppointmentId === appointment.id || row.applicationId === pickupApplication.id) || null;
+    const account = pickupCustomerAccount(data, pickupApplication, pickupSession, recurring);
+    const customer = onboardingOwnedRecord(data.customers, pickupApplication, pickupSession, recurring, account);
+    const contract = onboardingOwnedRecord(data.contracts, pickupApplication, pickupSession, recurring, account);
+    const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId || recurring && row.id === recurring.vehicleId) || null;
+    const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
+    const repaired = reconcilePickupCustomerAccountLinks(account, pickupApplication, recurring, customer, contract, appointment, onlineVehicle);
+    return { appointment, vehicle, recurring, customer, contract, application: pickupApplication, session: pickupSession, account: repaired.account, onlineVehicle, alreadyCompleted: true, repaired: repaired.changed };
+  }
   const pickupGate = nativeOnboardingReadyForPickup(data, pickupSession, pickupApplication);
   if (!pickupGate.paymentsReady) throw new Error('The verified down payment and first weekly payment must both be complete before this car can be marked Rented.');
   if (!pickupGate.recurring) throw new Error('The exact recurring payment record is missing. Do not release the vehicle until it is restored.');
@@ -11999,7 +12083,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   const recurring = pickupGate.recurring;
   const application = pickupApplication;
   const session = pickupSession;
-  const account = onboardingOwnedRecord(data.customerAccounts, application, session, recurring);
+  const account = pickupCustomerAccount(data, application, session, recurring);
   const customer = onboardingOwnedRecord(data.customers, application, session, recurring, account);
   const contract = onboardingOwnedRecord(data.contracts, application, session, recurring, account);
   const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
@@ -12031,8 +12115,8 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', actualPickupDate, insuranceProvider, insurancePolicyNumber, insuranceVerifiedAt: now, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
   if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', actualPickupDate, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, nextRecurringCharge, insuranceReleaseStatus: 'Approved', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceVerifiedAt: now, insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
   if (insuranceDocument) Object.assign(insuranceDocument, { status: 'Verified - active at pickup', verifiedAt: now, verifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff' });
-  if (account) Object.assign(account, { portalStage: 'Active customer', recurringPaymentId: recurring && recurring.id || account.recurringPaymentId || '', vehicleId: appointment.vehicleId || account.vehicleId || '', updatedAt: now });
   if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });
+  const accountReconciliation = reconcilePickupCustomerAccountLinks(account, application, recurring, customer, contract, appointment, onlineVehicle, now);
   const pilotLock = controlledStripePilotCandidateLock(data);
   if (pilotLock.onboardingSessionId === session.id && pilotLock.applicationId === application.id) {
     const pilotAudit = controlledStripePilotSessionEvidence(data, session, { liveRequired: !STRIPE_ISOLATED_PROVIDER_TEST_MODE });
@@ -12046,7 +12130,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     Object.assign(session, pilotAuditPatch);
     syncStripePilotOwnerReviewTask(data, pilotAudit, session, application, appointment, now);
   }
-  return { appointment, vehicle, recurring, customer, contract, application, session, account, onlineVehicle, alreadyCompleted: false };
+  return { appointment, vehicle, recurring, customer, contract, application, session, account: accountReconciliation.account, onlineVehicle, alreadyCompleted: false, repaired: accountReconciliation.changed };
 }
 
 function stripePilotOwnerReviewTaskId(sessionId) {
@@ -25261,8 +25345,8 @@ const server = http.createServer(async (req, res) => {
         } catch (error) {
           return json(res, 409, { ok: false, error: error.message || 'Pickup could not be completed.' });
         }
-        if (!completed.alreadyCompleted) {
-          appendAuditLog(data, user, 'Customer pickup completed', [appointment.customer || 'Customer', appointment.vehicle || appointment.vin || 'Vehicle', appointment.date || '', 'Mileage ' + appointment.pickupMileage]);
+        if (!completed.alreadyCompleted || completed.repaired) {
+          appendAuditLog(data, user, completed.alreadyCompleted ? 'Completed pickup account links repaired' : 'Customer pickup completed', [appointment.customer || 'Customer', appointment.vehicle || appointment.vin || 'Vehicle', appointment.date || '', 'Mileage ' + appointment.pickupMileage]);
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }

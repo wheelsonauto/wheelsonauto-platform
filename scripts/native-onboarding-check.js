@@ -451,6 +451,33 @@ async function main() {
     assert(staleApprovalHandoff.status === 409 && /final staff approval/i.test(staleApprovalHandoff.json.error || ''), 'A pickup must stop if final approval or another readiness gate becomes stale after scheduling.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     saved.onboardingSessions.find(row => row.id === onboardingId).finalReviewStatus = 'Approved';
+    const linkedPortalAccount = saved.customerAccounts.find(row => row.id === pendingCustomerAccount.id);
+    const removedApplicationId = 'app-removed-before-current-pickup';
+    saved.applications.unshift({
+      id: removedApplicationId,
+      customerAccountId: linkedPortalAccount.id,
+      organizationId: 'org-wheelsonauto',
+      name: 'Native Applicant',
+      phone: applicationPayload.phone,
+      email: applicationPayload.email,
+      stage: 'Removed',
+      status: 'Removed - owner test reset',
+      updatedAt: new Date(Date.now() + 1000).toISOString()
+    });
+    linkedPortalAccount.applicationIds = [applicationId, removedApplicationId];
+    linkedPortalAccount.applicationId = removedApplicationId;
+    linkedPortalAccount.portalStage = 'Removed - owner test reset';
+    saved.customerAccounts.unshift({
+      id: 'account-stale-duplicate-contact',
+      applicationId: removedApplicationId,
+      organizationId: 'org-wheelsonauto',
+      customer: 'Native Applicant',
+      name: 'Native Applicant',
+      phone: applicationPayload.phone,
+      email: applicationPayload.email,
+      status: 'Disabled',
+      portalStage: 'Removed'
+    });
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
 
     const actualPickupDate = latestStaffedDate();
@@ -458,8 +485,23 @@ async function main() {
     assert(handoff.status === 200 && handoff.json.vehicle.status === 'Rented' && handoff.json.recurring.status === 'Active', 'Only the staff insurance check and physical handoff should activate the rental and recurring card schedule.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
+    const completedPortalAccount = saved.customerAccounts.find(row => row.id === pendingCustomerAccount.id);
     assert(finalRecurring.autoChargeEnabled === true && finalRecurring.autopayAnchorDate === actualPickupDate && finalRecurring.nextRun === plusDays(actualPickupDate, 7), 'Handoff must activate weekly autopay from the actual physical pickup date.');
+    assert(completedPortalAccount.applicationId === applicationId && completedPortalAccount.portalStage === 'Active customer' && completedPortalAccount.recurringPaymentId === finalRecurring.id && completedPortalAccount.vehicleId === 'veh-native-1', 'Pickup must relink the exact password-owning portal account even when a newer removed application and duplicate contact exist.');
+    const completedPortal = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
+    assert(completedPortal.status === 200 && completedPortal.json.portal.application.id === applicationId && completedPortal.json.portal.account.applicationId === applicationId && completedPortal.json.portal.vehicle.id === 'veh-native-1' && completedPortal.json.portal.recurring.id === finalRecurring.id, 'Customer portal must show the picked-up rental instead of a linked removed test application.');
     assert(saved.customers.find(row => row.id === sameNameCustomer.id).status === 'History' && saved.contracts.find(row => row.id === sameNameContract.id).status === 'Ended' && saved.customerAccounts.find(row => row.id === sameNameAccount.id).portalStage === 'History', 'Physical handoff must update only the application-owned customer, contract, and portal account when names collide.');
+
+    completedPortalAccount.applicationId = removedApplicationId;
+    completedPortalAccount.portalStage = 'Removed - owner test reset';
+    completedPortalAccount.recurringPaymentId = '';
+    completedPortalAccount.vehicleId = '';
+    await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
+    const repairedHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000 } });
+    assert(repairedHandoff.status === 200 && repairedHandoff.json.alreadyCompleted === true, 'Repeating a completed pickup must remain operationally idempotent while repairing account links.');
+    saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
+    const repairedPortalAccount = saved.customerAccounts.find(row => row.id === pendingCustomerAccount.id);
+    assert(repairedPortalAccount.applicationId === applicationId && repairedPortalAccount.portalStage === 'Active customer' && repairedPortalAccount.recurringPaymentId === finalRecurring.id && repairedPortalAccount.vehicleId === 'veh-native-1', 'An already-completed pickup must repair stale portal links without another charge or rental transition.');
 
     await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });
     await signedWebhook({ Type: 'PAYMENT', Status: 'DECLINED', Data: 'checkout-native-first', Id: 'clover-payment-first-late-decline' });
