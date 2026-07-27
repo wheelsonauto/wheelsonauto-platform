@@ -69,9 +69,9 @@ export function MessagesPage() {
   const feedRevision = useRef('');
   const messageEnd = useRef<HTMLDivElement>(null);
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, force = false) => {
     try {
-      const feed = await loadMessageFeed(signal);
+      const feed = await loadMessageFeed(signal, force);
       if (feed.revision !== feedRevision.current) {
         feedRevision.current = feed.revision;
         setMessages(feed.messages || []);
@@ -91,7 +91,7 @@ export function MessagesPage() {
     const onPlatform = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || '{}');
-        if ((payload.topics || []).includes('messages')) void refresh();
+        if ((payload.topics || []).includes('messages')) void refresh(undefined, true);
       } catch { /* Ignore malformed event frames; the connection will deliver the next valid frame. */ }
     };
     events.addEventListener('platform', onPlatform as EventListener);
@@ -138,7 +138,7 @@ export function MessagesPage() {
         : [...current, result.message]);
       setBody('');
       setNotice(result.sent ? 'Message sent' : result.warning || 'Message saved');
-      void refresh();
+      void refresh(undefined, true);
     } catch (requestError) {
       setError((requestError as Error).message);
     } finally {

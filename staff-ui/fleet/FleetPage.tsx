@@ -2,12 +2,14 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { loadVehicles, updateVehicle } from '../api';
 import type { VehicleRecord } from '../types';
 import { statusTone, wordsMatch } from '../ui';
+import { useSwipeTabs } from '../useSwipeTabs';
 
 function title(vehicle: VehicleRecord) {
   return vehicle.name || [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(' ') || 'Vehicle';
 }
 
 type Filter = 'all' | 'available' | 'assigned' | 'service';
+const filters: readonly Filter[] = ['all', 'available', 'assigned', 'service'];
 
 export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) => void }) {
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
@@ -20,8 +22,8 @@ export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) =
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
-    try { const feed = await loadVehicles(signal); setVehicles(feed.records || []); setError(''); }
+  const refresh = async (signal?: AbortSignal, force = false) => {
+    try { const feed = await loadVehicles(signal, force); setVehicles(feed.records || []); setError(''); }
     catch (requestError) { if ((requestError as Error).name !== 'AbortError') setError((requestError as Error).message); }
     finally { setLoading(false); }
   };
@@ -29,7 +31,7 @@ export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) =
   useEffect(() => {
     const controller = new AbortController(); void refresh(controller.signal);
     const events = new EventSource('/api/events');
-    events.addEventListener('platform', (event: MessageEvent) => { try { const payload = JSON.parse(event.data || '{}'); if ((payload.topics || []).includes('assignments')) void refresh(); } catch { /* next event repairs the view */ } });
+    events.addEventListener('platform', (event: MessageEvent) => { try { const payload = JSON.parse(event.data || '{}'); if ((payload.topics || []).includes('assignments')) void refresh(undefined, true); } catch { /* next event repairs the view */ } });
     return () => { controller.abort(); events.close(); };
   }, []);
 
@@ -58,15 +60,17 @@ export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) =
         expectedUpdatedAt: draft.updatedAt, plate: draft.plate, stock: draft.stock, tempTag: draft.tempTag,
         tracker: draft.tracker, color: draft.color, location: draft.location, mileage: draft.mileage, notes: draft.notes
       });
-      await refresh(); setDraft(result.record); setNotice('Vehicle file updated everywhere it is linked.');
-    } catch (requestError) { setError((requestError as Error).message); await refresh(); }
+      await refresh(undefined, true); setDraft(result.record); setNotice('Vehicle file updated everywhere it is linked.');
+    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
+
+  const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
       <header className="workspace-title"><div><span>Inventory and assignments</span><h1>Fleet</h1></div></header>
-      <div className="compact-metrics four">{(['all', 'available', 'assigned', 'service'] as Filter[]).map(key => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key === 'all' ? 'All' : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status" {...filterSwipe}>{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key === 'all' ? 'All' : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search vehicle, VIN, tag, tracker, customer" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       {!loading && visible.length ? <div className="record-table-head vehicle-table-head"><span /><span>Vehicle</span><span>Assignment</span><span>Status / mileage</span></div> : null}

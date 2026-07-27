@@ -15,12 +15,12 @@ export function AccountingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
-    try { const feed = await loadPayments(signal); setPayments(feed.records || []); setError(''); }
+  const refresh = async (signal?: AbortSignal, force = false) => {
+    try { const feed = await loadPayments(signal, force); setPayments(feed.records || []); setError(''); }
     catch (requestError) { if ((requestError as Error).name !== 'AbortError') setError((requestError as Error).message); }
     finally { setLoading(false); }
   };
-  useEffect(() => { const controller = new AbortController(); void refresh(controller.signal); const events = new EventSource('/api/events'); events.addEventListener('platform', () => void refresh()); return () => { controller.abort(); events.close(); }; }, []);
+  useEffect(() => { const controller = new AbortController(); void refresh(controller.signal); const events = new EventSource('/api/events'); events.addEventListener('platform', () => void refresh(undefined, true)); return () => { controller.abort(); events.close(); }; }, []);
 
   const rows = useMemo(() => payments.filter(payment => monthKey(payment.createdAt || payment.date) === period), [payments, period]);
   const paid = rows.filter(row => /paid|succeeded|complete/i.test(row.status || ''));

@@ -25,10 +25,10 @@ export function DashboardPage({ onNavigate }: { onNavigate: (workspace: string) 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, force = false) => {
     try {
       const [customers, vehicles, payments, applications, tasks, maintenance, notifications] = await Promise.all([
-        loadCustomers(signal), loadVehicles(signal), loadPayments(signal), loadApplications(signal), loadTasks(signal), loadMaintenance(signal), loadNotifications(signal)
+        loadCustomers(signal, force), loadVehicles(signal, force), loadPayments(signal, force), loadApplications(signal, force), loadTasks(signal, force), loadMaintenance(signal, force), loadNotifications(signal, force)
       ]);
       setState({
         customers: customers.records || [], vehicles: vehicles.records || [], payments: payments.records || [], applications: applications.items || [],
@@ -44,7 +44,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (workspace: string) 
     const controller = new AbortController();
     void refresh(controller.signal);
     const events = new EventSource('/api/events');
-    events.addEventListener('platform', () => void refresh());
+    events.addEventListener('platform', () => void refresh(undefined, true));
     return () => { controller.abort(); events.close(); };
   }, []);
 

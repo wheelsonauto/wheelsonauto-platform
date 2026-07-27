@@ -1,6 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { completeMaintenance, loadMaintenance, loadVehicles, saveMaintenance } from '../api';
 import type { MaintenanceRecord, VehicleRecord } from '../types';
+import { useSwipeTabs } from '../useSwipeTabs';
+
+type Filter = 'open' | 'due' | 'history';
+const filters: readonly Filter[] = ['open', 'due', 'history'];
 
 const checklistOptions = [
   ['oil', 'Oil / filter'], ['tires', 'Tires'], ['brakes', 'Brakes'], ['lights', 'Lights'],
@@ -45,16 +49,16 @@ export function MaintenancePage() {
   const [draft, setDraft] = useState<MaintenanceRecord | null>(null);
   const [completing, setCompleting] = useState(false);
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'open' | 'due' | 'history'>('open');
+  const [filter, setFilter] = useState<Filter>('open');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const mechanic = String(window.__WOA_STAFF_USER__?.role || '').toLowerCase() === 'mechanic';
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, force = false) => {
     try {
-      const [maintenanceFeed, vehicleFeed] = await Promise.all([loadMaintenance(signal), loadVehicles(signal)]);
+      const [maintenanceFeed, vehicleFeed] = await Promise.all([loadMaintenance(signal, force), loadVehicles(signal, force)]);
       setJobs(maintenanceFeed.records || []);
       setVehicles(vehicleFeed.records || []);
       setError('');
@@ -72,7 +76,7 @@ export function MaintenancePage() {
     const onPlatform = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || '{}');
-        if ((payload.topics || []).some((topic: string) => topic === 'service' || topic === 'assignments')) void refresh();
+        if ((payload.topics || []).some((topic: string) => topic === 'service' || topic === 'assignments')) void refresh(undefined, true);
       } catch { /* The next valid event will refresh this feed. */ }
     };
     events.addEventListener('platform', onPlatform as EventListener);
@@ -110,13 +114,13 @@ export function MaintenancePage() {
     setSaving(true); setError(''); setNotice('');
     try {
       const result = await saveMaintenance({ ...draft, expectedUpdatedAt: draft.updatedAt });
-      await refresh();
+      await refresh(undefined, true);
       setSelectedId(result.job.id);
       setDraft(result.job);
       setNotice('Maintenance job saved');
     } catch (requestError) {
       setError((requestError as Error).message);
-      await refresh();
+      await refresh(undefined, true);
     } finally {
       setSaving(false);
     }
@@ -137,14 +141,14 @@ export function MaintenancePage() {
         mechanicSignoff: draft.mechanicSignoff,
         notes: draft.notes || ''
       });
-      await refresh();
+      await refresh(undefined, true);
       setSelectedId(result.job.id);
       setDraft(result.job);
       setCompleting(false);
       setNotice(result.nextReminder ? `Completed. Next monthly visit: ${result.nextReminder.due}` : 'Maintenance completed');
     } catch (requestError) {
       setError((requestError as Error).message);
-      await refresh();
+      await refresh(undefined, true);
     } finally {
       setSaving(false);
     }
@@ -161,13 +165,15 @@ export function MaintenancePage() {
     setDraft({ ...draft, inspectionChecklist: [...values] });
   };
 
+  const filterSwipe = useSwipeTabs(filters, filter, setFilter);
+
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
       <header className="workspace-title"><div><span>Fleet care</span><h1>Maintenance</h1></div><button className="primary-command" onClick={openNew}>Schedule</button></header>
-      <div className="compact-metrics">
-        <button className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
-        <button className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
-        <button className={filter === 'history' ? 'active' : ''} onClick={() => setFilter('history')}><span>History</span><strong>{counts.history}</strong></button>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Maintenance status" {...filterSwipe}>
+        <button role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
+        <button role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
+        <button role="tab" aria-selected={filter === 'history'} className={filter === 'history' ? 'active' : ''} onClick={() => setFilter('history')}><span>History</span><strong>{counts.history}</strong></button>
       </div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search vehicle, VIN, tag, customer" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}

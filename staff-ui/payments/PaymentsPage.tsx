@@ -2,10 +2,14 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { createAutopay, loadAutopay, loadCustomers, loadPayments, loadVehicles, sendMessage } from '../api';
 import type { CustomerRecord, PaymentRecord, RecurringPaymentRecord, VehicleRecord } from '../types';
 import { dateTime, money, statusTone, wordsMatch } from '../ui';
+import { useSwipeTabs } from '../useSwipeTabs';
 
 type TransactionFilter = 'all' | 'paid' | 'attention' | 'unmatched';
 type AutopayFilter = 'all' | 'active' | 'setup' | 'attention';
 type PaymentView = 'transactions' | 'autopay';
+const paymentViews: readonly PaymentView[] = ['transactions', 'autopay'];
+const transactionFilters: readonly TransactionFilter[] = ['all', 'paid', 'attention', 'unmatched'];
+const autopayFilters: readonly AutopayFilter[] = ['all', 'active', 'setup', 'attention'];
 type AutopayDraft = {
   customer: string;
   phone: string;
@@ -60,12 +64,16 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, force = false) => {
     try {
-      const paymentFeed = await loadPayments(signal);
+      const [paymentFeed, autopayFeed, customerFeed, vehicleFeed] = await Promise.all([
+        loadPayments(signal, force),
+        owner ? loadAutopay(signal, force) : Promise.resolve(null),
+        owner ? loadCustomers(signal, force) : Promise.resolve(null),
+        owner ? loadVehicles(signal, force) : Promise.resolve(null)
+      ]);
       setPayments(paymentFeed.records || []);
-      if (owner) {
-        const [autopayFeed, customerFeed, vehicleFeed] = await Promise.all([loadAutopay(signal), loadCustomers(signal), loadVehicles(signal)]);
+      if (owner && autopayFeed && customerFeed && vehicleFeed) {
         setAutopay(autopayFeed.records || []);
         setCustomers(customerFeed.records || []);
         setVehicles(vehicleFeed.records || []);
@@ -85,7 +93,7 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
     events.addEventListener('platform', (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || '{}');
-        if ((payload.topics || []).some((topic: string) => topic === 'payments' || topic === 'assignments')) void refresh();
+        if ((payload.topics || []).some((topic: string) => topic === 'payments' || topic === 'assignments')) void refresh(undefined, true);
       } catch { /* The next valid event repairs the view. */ }
     });
     return () => { controller.abort(); events.close(); };
@@ -134,6 +142,10 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
     setSelectedPaymentId(''); setSelectedAutopayId(''); setDraft(null); setSetupUrl(''); setError(''); setNotice('');
   };
 
+  const viewSwipe = useSwipeTabs(paymentViews, view, next => { closeDetail(); setView(next); });
+  const transactionSwipe = useSwipeTabs(transactionFilters, transactionFilter, setTransactionFilter);
+  const autopaySwipe = useSwipeTabs(autopayFilters, autopayFilter, setAutopayFilter);
+
   const openNew = () => {
     setView('autopay'); setSelectedPaymentId(''); setSelectedAutopayId(''); setDraft(emptyAutopay()); setSetupUrl(''); setError(''); setNotice('');
   };
@@ -173,7 +185,7 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
       });
       setSetupUrl(result.setupLink.url);
       setNotice('Autopay plan saved. No charge was made. Send the secure Stripe card link to the customer.');
-      await refresh();
+      await refresh(undefined, true);
     } catch (requestError) {
       setError((requestError as Error).message);
     } finally {
@@ -213,8 +225,8 @@ export function PaymentsPage({ onOpenRental }: { onOpenRental: (rentalId: string
           {owner ? <button className="primary-command" onClick={openNew}>Add autopay</button> : null}
         </div>
       </header>
-      {owner ? <div className="workspace-view-switch" role="tablist" aria-label="Payment view"><button className={view === 'transactions' ? 'active' : ''} onClick={() => { closeDetail(); setView('transactions'); }}>Transactions</button><button className={view === 'autopay' ? 'active' : ''} onClick={() => { closeDetail(); setView('autopay'); }}>Autopay</button></div> : null}
-      {view === 'transactions' ? <div className="compact-metrics four">{(['all', 'paid', 'attention', 'unmatched'] as TransactionFilter[]).map(key => <button key={key} className={transactionFilter === key ? 'active' : ''} onClick={() => setTransactionFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{transactionCounts[key]}</strong></button>)}</div> : <div className="compact-metrics four">{(['all', 'active', 'setup', 'attention'] as AutopayFilter[]).map(key => <button key={key} className={autopayFilter === key ? 'active' : ''} onClick={() => setAutopayFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{autopayCounts[key]}</strong></button>)}</div>}
+      {owner ? <div className="workspace-view-switch swipe-tabs" role="tablist" aria-label="Payment view" {...viewSwipe}>{paymentViews.map(key => <button role="tab" aria-selected={view === key} key={key} className={view === key ? 'active' : ''} onClick={() => { closeDetail(); setView(key); }}>{key === 'transactions' ? 'Transactions' : 'Autopay'}</button>)}</div> : null}
+      {view === 'transactions' ? <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Transaction status" {...transactionSwipe}>{transactionFilters.map(key => <button role="tab" aria-selected={transactionFilter === key} key={key} className={transactionFilter === key ? 'active' : ''} onClick={() => setTransactionFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{transactionCounts[key]}</strong></button>)}</div> : <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Autopay status" {...autopaySwipe}>{autopayFilters.map(key => <button role="tab" aria-selected={autopayFilter === key} key={key} className={autopayFilter === key ? 'active' : ''} onClick={() => setAutopayFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{autopayCounts[key]}</strong></button>)}</div>}
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder={view === 'autopay' ? 'Search customer, vehicle, VIN, tag, tracker' : 'Search name, vehicle, VIN, tag, transaction'} /></label>
       {error && !hasDetail ? <div className="inline-alert error">{error}</div> : null}
       {view === 'transactions' ? <div className="record-list payment-records">

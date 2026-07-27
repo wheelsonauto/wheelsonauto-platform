@@ -1,18 +1,23 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { loadNotifications } from './api';
+import { loadNotifications, prewarmStaffFeeds } from './api';
 
 const DashboardPage = lazy(() => import('./dashboard/DashboardPage').then(module => ({ default: module.DashboardPage })));
 const ServiceDashboardPage = lazy(() => import('./dashboard/ServiceDashboardPage').then(module => ({ default: module.ServiceDashboardPage })));
-const FleetPage = lazy(() => import('./fleet/FleetPage').then(module => ({ default: module.FleetPage })));
-const CustomersPage = lazy(() => import('./customers/CustomersPage').then(module => ({ default: module.CustomersPage })));
-const PaymentsPage = lazy(() => import('./payments/PaymentsPage').then(module => ({ default: module.PaymentsPage })));
+const loadFleetModule = () => import('./fleet/FleetPage');
+const loadCustomersModule = () => import('./customers/CustomersPage');
+const loadPaymentsModule = () => import('./payments/PaymentsPage');
+const loadMessagesModule = () => import('./messages/MessagesPage');
+const loadMoreModule = () => import('./more/MorePage');
+const FleetPage = lazy(() => loadFleetModule().then(module => ({ default: module.FleetPage })));
+const CustomersPage = lazy(() => loadCustomersModule().then(module => ({ default: module.CustomersPage })));
+const PaymentsPage = lazy(() => loadPaymentsModule().then(module => ({ default: module.PaymentsPage })));
 const ApplicationsPage = lazy(() => import('./applications/ApplicationsPage').then(module => ({ default: module.ApplicationsPage })));
-const MessagesPage = lazy(() => import('./messages/MessagesPage').then(module => ({ default: module.MessagesPage })));
+const MessagesPage = lazy(() => loadMessagesModule().then(module => ({ default: module.MessagesPage })));
 const DispatchPage = lazy(() => import('./dispatch/DispatchPage').then(module => ({ default: module.DispatchPage })));
 const MaintenancePage = lazy(() => import('./maintenance/MaintenancePage').then(module => ({ default: module.MaintenancePage })));
 const AccountingPage = lazy(() => import('./accounting/AccountingPage').then(module => ({ default: module.AccountingPage })));
 const SystemsPage = lazy(() => import('./systems/SystemsPage').then(module => ({ default: module.SystemsPage })));
-const MorePage = lazy(() => import('./more/MorePage').then(module => ({ default: module.MorePage })));
+const MorePage = lazy(() => loadMoreModule().then(module => ({ default: module.MorePage })));
 const SettingsPage = lazy(() => import('./settings/SettingsPage').then(module => ({ default: module.SettingsPage })));
 const RentalFilePage = lazy(() => import('./rentals/RentalFilePage').then(module => ({ default: module.RentalFilePage })));
 
@@ -130,9 +135,16 @@ export function StaffApp() {
   }, [allowedWorkspaces]);
   useEffect(() => {
     const controller = new AbortController();
-    const refresh = () => loadNotifications(controller.signal).then(feed => setUnread(Number(feed.unreadCount ?? feed.unread ?? (feed.notifications || feed.notices || feed.items || []).filter(row => !row.read).length))).catch(() => undefined);
-    void refresh(); const events = new EventSource('/api/events'); events.addEventListener('platform', refresh); return () => { controller.abort(); events.close(); };
+    const refresh = (force = false) => loadNotifications(controller.signal, force).then(feed => setUnread(Number(feed.unreadCount ?? feed.unread ?? (feed.notifications || feed.notices || feed.items || []).filter(row => !row.read).length))).catch(() => undefined);
+    void refresh(); const events = new EventSource('/api/events'); events.addEventListener('platform', () => void refresh(true)); return () => { controller.abort(); events.close(); };
   }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void Promise.allSettled([loadFleetModule(), loadCustomersModule(), loadPaymentsModule(), loadMessagesModule(), loadMoreModule()]);
+      prewarmStaffFeeds(role);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [role]);
 
   const open = (value: string, nextRecordId = '') => {
     const next = value as Workspace;

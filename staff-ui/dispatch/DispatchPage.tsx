@@ -1,6 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { loadTasks, saveTask } from '../api';
 import type { TaskRecord } from '../types';
+import { useSwipeTabs } from '../useSwipeTabs';
+
+type Filter = 'open' | 'due' | 'done';
+const filters: readonly Filter[] = ['open', 'due', 'done'];
 
 function todayKey() {
   const date = new Date();
@@ -27,15 +31,15 @@ export function DispatchPage() {
   const [selectedId, setSelectedId] = useState('');
   const [draft, setDraft] = useState<TaskRecord | null>(null);
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'open' | 'due' | 'done'>('open');
+  const [filter, setFilter] = useState<Filter>('open');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, force = false) => {
     try {
-      const feed = await loadTasks(signal);
+      const feed = await loadTasks(signal, force);
       setTasks(feed.records || []);
       setError('');
     } catch (requestError) {
@@ -52,7 +56,7 @@ export function DispatchPage() {
     const onPlatform = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data || '{}');
-        if ((payload.topics || []).includes('tasks')) void refresh();
+        if ((payload.topics || []).includes('tasks')) void refresh(undefined, true);
       } catch { /* The next valid event will refresh this feed. */ }
     };
     events.addEventListener('platform', onPlatform as EventListener);
@@ -89,13 +93,13 @@ export function DispatchPage() {
     setSaving(true); setError(''); setNotice('');
     try {
       const result = await saveTask({ ...draft, expectedUpdatedAt: draft.updatedAt });
-      await refresh();
+      await refresh(undefined, true);
       setSelectedId(result.task.id);
       setDraft(result.task);
       setNotice('Task saved');
     } catch (requestError) {
       setError((requestError as Error).message);
-      await refresh();
+      await refresh(undefined, true);
     } finally {
       setSaving(false);
     }
@@ -106,13 +110,13 @@ export function DispatchPage() {
     setSaving(true); setError(''); setNotice('');
     try {
       const result = await saveTask({ ...draft, status: 'Done', doneAt: new Date().toISOString(), expectedUpdatedAt: draft.updatedAt });
-      await refresh();
+      await refresh(undefined, true);
       setSelectedId(result.task.id);
       setDraft(result.task);
       setNotice('Task completed');
     } catch (requestError) {
       setError((requestError as Error).message);
-      await refresh();
+      await refresh(undefined, true);
     } finally {
       setSaving(false);
     }
@@ -124,13 +128,15 @@ export function DispatchPage() {
     setError(''); setNotice('');
   };
 
+  const filterSwipe = useSwipeTabs(filters, filter, setFilter);
+
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
       <header className="workspace-title"><div><span>Operations</span><h1>Dispatch</h1></div><button className="primary-command" onClick={openNew}>New task</button></header>
-      <div className="compact-metrics">
-        <button className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
-        <button className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
-        <button className={filter === 'done' ? 'active' : ''} onClick={() => setFilter('done')}><span>Done</span><strong>{counts.done}</strong></button>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Task status" {...filterSwipe}>
+        <button role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
+        <button role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
+        <button role="tab" aria-selected={filter === 'done'} className={filter === 'done' ? 'active' : ''} onClick={() => setFilter('done')}><span>Done</span><strong>{counts.done}</strong></button>
       </div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks, customers, vehicles" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}

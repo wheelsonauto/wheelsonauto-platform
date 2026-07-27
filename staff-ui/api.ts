@@ -6,13 +6,57 @@ async function parseJson<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
-export async function loadMessageFeed(signal?: AbortSignal): Promise<MessageFeed> {
-  const response = await fetch('/api/messages/feed?limit=800', {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-    signal
+type ResourceCacheEntry = {
+  expiresAt: number;
+  value?: unknown;
+  request?: Promise<unknown>;
+};
+
+const RESOURCE_CACHE_MS = 5 * 60_000;
+const resourceCache = new Map<string, ResourceCacheEntry>();
+
+function callerAbort<T>(request: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return request;
+  if (signal.aborted) return Promise.reject(new DOMException('The request was aborted.', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException('The request was aborted.', 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    request.then(
+      value => { signal.removeEventListener('abort', abort); resolve(value); },
+      error => { signal.removeEventListener('abort', abort); reject(error); }
+    );
   });
-  return parseJson<MessageFeed>(response);
+}
+
+async function loadCachedJson<T>(path: string, signal?: AbortSignal, force = false): Promise<T> {
+  if (force) resourceCache.delete(path);
+  const existing = resourceCache.get(path);
+  if (existing?.value !== undefined && existing.expiresAt > Date.now()) return callerAbort(Promise.resolve(existing.value as T), signal);
+  if (existing?.request) return callerAbort(existing.request as Promise<T>, signal);
+
+  const entry: ResourceCacheEntry = { expiresAt: 0 };
+  const request = fetch(path, { headers: { Accept: 'application/json' }, cache: 'no-store' }).then(parseJson<T>);
+  entry.request = request;
+  resourceCache.set(path, entry);
+  request.then(value => {
+    if (resourceCache.get(path) !== entry) return;
+    entry.value = value;
+    entry.expiresAt = Date.now() + RESOURCE_CACHE_MS;
+    delete entry.request;
+  }, () => {
+    if (resourceCache.get(path) === entry) resourceCache.delete(path);
+  });
+  return callerAbort(request, signal);
+}
+
+function invalidateCachedPaths(...prefixes: string[]) {
+  for (const path of resourceCache.keys()) {
+    if (prefixes.some(prefix => path.startsWith(prefix))) resourceCache.delete(path);
+  }
+}
+
+export function loadMessageFeed(signal?: AbortSignal, force = false): Promise<MessageFeed> {
+  return loadCachedJson<MessageFeed>('/api/messages/feed?limit=800', signal, force);
 }
 
 export type SendMessageInput = {
@@ -32,7 +76,9 @@ export async function sendMessage(input: SendMessageInput): Promise<{ ok: boolea
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(input)
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; sent: boolean; message: MessageRecord; warning?: string }>(response);
+  invalidateCachedPaths('/api/messages/feed', '/api/app-notifications');
+  return result;
 }
 
 export async function draftStarReply(message: MessageRecord): Promise<{ ok: boolean; draft: MessageRecord; plan?: { reply?: string } }> {
@@ -52,13 +98,12 @@ export async function draftStarReply(message: MessageRecord): Promise<{ ok: bool
   return parseJson(response);
 }
 
-async function loadPaged<T>(path: string, signal?: AbortSignal): Promise<PagedFeed<T>> {
-  const response = await fetch(path, { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-  return parseJson<PagedFeed<T>>(response);
+async function loadPaged<T>(path: string, signal?: AbortSignal, force = false): Promise<PagedFeed<T>> {
+  return loadCachedJson<PagedFeed<T>>(path, signal, force);
 }
 
-export function loadTasks(signal?: AbortSignal): Promise<PagedFeed<TaskRecord>> {
-  return loadPaged<TaskRecord>('/api/tasks?limit=200', signal);
+export function loadTasks(signal?: AbortSignal, force = false): Promise<PagedFeed<TaskRecord>> {
+  return loadPaged<TaskRecord>('/api/tasks?limit=200', signal, force);
 }
 
 export async function saveTask(task: Partial<TaskRecord> & { id: string; expectedUpdatedAt?: string }): Promise<{ ok: boolean; task: TaskRecord; version: string }> {
@@ -67,27 +112,37 @@ export async function saveTask(task: Partial<TaskRecord> & { id: string; expecte
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(task)
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; task: TaskRecord; version: string }>(response);
+  invalidateCachedPaths('/api/tasks', '/api/app-notifications');
+  return result;
 }
 
-export function loadMaintenance(signal?: AbortSignal): Promise<PagedFeed<MaintenanceRecord>> {
-  return loadPaged<MaintenanceRecord>('/api/maintenance?limit=200', signal);
+export function loadMaintenance(signal?: AbortSignal, force = false): Promise<PagedFeed<MaintenanceRecord>> {
+  return loadPaged<MaintenanceRecord>('/api/maintenance?limit=200', signal, force);
 }
 
-export function loadVehicles(signal?: AbortSignal): Promise<PagedFeed<VehicleRecord>> {
-  return loadPaged<VehicleRecord>('/api/vehicles?limit=200', signal);
+export function loadVehicles(signal?: AbortSignal, force = false): Promise<PagedFeed<VehicleRecord>> {
+  return loadPaged<VehicleRecord>('/api/vehicles?limit=200', signal, force);
 }
 
-export function loadCustomers(signal?: AbortSignal): Promise<PagedFeed<CustomerRecord>> {
-  return loadPaged<CustomerRecord>('/api/customers?limit=200', signal);
+export function loadCustomers(signal?: AbortSignal, force = false): Promise<PagedFeed<CustomerRecord>> {
+  return loadPaged<CustomerRecord>('/api/customers?limit=200', signal, force);
 }
 
-export function loadPayments(signal?: AbortSignal): Promise<PagedFeed<PaymentRecord>> {
-  return loadPaged<PaymentRecord>('/api/payments?limit=200', signal);
+export function loadPayments(signal?: AbortSignal, force = false): Promise<PagedFeed<PaymentRecord>> {
+  return loadPaged<PaymentRecord>('/api/payments?limit=200', signal, force);
 }
 
-export function loadAutopay(signal?: AbortSignal): Promise<PagedFeed<RecurringPaymentRecord>> {
-  return loadPaged<RecurringPaymentRecord>('/api/recurring-payments?limit=300', signal);
+export function loadAutopay(signal?: AbortSignal, force = false): Promise<PagedFeed<RecurringPaymentRecord>> {
+  return loadPaged<RecurringPaymentRecord>('/api/recurring-payments?limit=300', signal, force);
+}
+
+export function prewarmStaffFeeds(role: string) {
+  const normalized = role.toLowerCase();
+  const requests: Promise<unknown>[] = [loadVehicles(), loadTasks(), loadMaintenance()];
+  if (normalized !== 'mechanic') requests.push(loadCustomers(), loadPayments());
+  if (normalized === 'owner') requests.push(loadAutopay());
+  void Promise.allSettled(requests);
 }
 
 export type CreateAutopayInput = {
@@ -119,7 +174,9 @@ export async function createAutopay(input: CreateAutopayInput): Promise<{ ok: bo
       deferVehicleAssignment: true
     })
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; autopay: RecurringPaymentRecord; setupLink: { id: string; url: string } }>(response);
+  invalidateCachedPaths('/api/recurring-payments', '/api/customers', '/api/payments', '/api/app-notifications');
+  return result;
 }
 
 export async function loadRentals(signal?: AbortSignal): Promise<{ ok: boolean; records: RentalRecord[]; count: number }> {
@@ -145,12 +202,13 @@ export async function completeRentalReturn(id: string, input: RentalReturnInput)
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ ...input, confirmation: 'RETURN_RENTAL_VEHICLE' })
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; alreadyEnded: boolean; rentalFile: RentalRecord; vehicle?: VehicleRecord }>(response);
+  invalidateCachedPaths('/api/rentals', '/api/vehicles', '/api/customers', '/api/payments', '/api/recurring-payments', '/api/app-notifications');
+  return result;
 }
 
-export async function loadApplications(signal?: AbortSignal): Promise<ApplicationFeed> {
-  const response = await fetch('/api/applications/live-feed', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-  return parseJson(response);
+export function loadApplications(signal?: AbortSignal, force = false): Promise<ApplicationFeed> {
+  return loadCachedJson<ApplicationFeed>('/api/applications/live-feed', signal, force);
 }
 
 export async function approveApplication(applicationId: string): Promise<{ ok: boolean; onboarding: { id: string; publicUrl?: string }; warning?: string }> {
@@ -159,7 +217,9 @@ export async function approveApplication(applicationId: string): Promise<{ ok: b
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ applicationId, paymentProvider: 'stripe' })
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; onboarding: { id: string; publicUrl?: string }; warning?: string }>(response);
+  invalidateCachedPaths('/api/applications/live-feed', '/api/app-notifications');
+  return result;
 }
 
 export async function reviewApplication(applicationId: string, decision: 'deny' | 'restore', notes: string): Promise<{ ok: boolean }> {
@@ -168,34 +228,36 @@ export async function reviewApplication(applicationId: string, decision: 'deny' 
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ applicationId, decision, notes })
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean }>(response);
+  invalidateCachedPaths('/api/applications/live-feed', '/api/app-notifications');
+  return result;
 }
 
-export async function loadProviders(signal?: AbortSignal): Promise<{ ok: boolean; providers: ProviderRecord[] }> {
-  const response = await fetch('/api/api-providers', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-  return parseJson(response);
+export function loadProviders(signal?: AbortSignal, force = false): Promise<{ ok: boolean; providers: ProviderRecord[] }> {
+  return loadCachedJson<{ ok: boolean; providers: ProviderRecord[] }>('/api/api-providers', signal, force);
 }
 
-export async function loadNotifications(signal?: AbortSignal): Promise<NotificationFeed> {
-  const response = await fetch('/api/app-notifications', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-  return parseJson(response);
+export function loadNotifications(signal?: AbortSignal, force = false): Promise<NotificationFeed> {
+  return loadCachedJson<NotificationFeed>('/api/app-notifications', signal, force);
 }
 
-async function patchResource<T>(path: string, payload: Record<string, unknown>): Promise<{ ok: boolean; record: T; version: string }> {
+async function patchResource<T>(path: string, payload: Record<string, unknown>, invalidate: string[]): Promise<{ ok: boolean; record: T; version: string }> {
   const response = await fetch(path, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(payload)
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; record: T; version: string }>(response);
+  invalidateCachedPaths(...invalidate);
+  return result;
 }
 
 export function updateVehicle(id: string, payload: Partial<VehicleRecord> & { expectedUpdatedAt?: string }) {
-  return patchResource<VehicleRecord>(`/api/vehicles/${encodeURIComponent(id)}`, payload);
+  return patchResource<VehicleRecord>(`/api/vehicles/${encodeURIComponent(id)}`, payload, ['/api/vehicles', '/api/customers', '/api/app-notifications']);
 }
 
 export function updateCustomer(id: string, payload: Partial<CustomerRecord> & { expectedUpdatedAt?: string }) {
-  return patchResource<CustomerRecord>(`/api/customers/${encodeURIComponent(id)}`, payload);
+  return patchResource<CustomerRecord>(`/api/customers/${encodeURIComponent(id)}`, payload, ['/api/customers', '/api/app-notifications']);
 }
 
 export async function saveMaintenance(job: Partial<MaintenanceRecord> & { id: string; vehicleId: string; expectedUpdatedAt?: string }): Promise<{ ok: boolean; job: MaintenanceRecord; version: string }> {
@@ -204,7 +266,9 @@ export async function saveMaintenance(job: Partial<MaintenanceRecord> & { id: st
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(job)
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; job: MaintenanceRecord; version: string }>(response);
+  invalidateCachedPaths('/api/maintenance', '/api/vehicles', '/api/tasks', '/api/app-notifications');
+  return result;
 }
 
 export type MaintenanceCompletionInput = {
@@ -225,5 +289,7 @@ export async function completeMaintenance(id: string, input: MaintenanceCompleti
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(input)
   });
-  return parseJson(response);
+  const result = await parseJson<{ ok: boolean; job: MaintenanceRecord; vehicle: VehicleRecord; nextReminder?: MaintenanceRecord; version: string }>(response);
+  invalidateCachedPaths('/api/maintenance', '/api/vehicles', '/api/tasks', '/api/app-notifications');
+  return result;
 }

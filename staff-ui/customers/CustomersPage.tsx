@@ -2,8 +2,10 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { loadCustomers, updateCustomer } from '../api';
 import type { CustomerRecord } from '../types';
 import { money, shortDate, statusTone, wordsMatch } from '../ui';
+import { useSwipeTabs } from '../useSwipeTabs';
 
 type Filter = 'active' | 'setup' | 'history';
+const filters: readonly Filter[] = ['active', 'setup', 'history'];
 
 function isHistory(customer: CustomerRecord) { return /history|ended|removed|inactive|returned/i.test([customer.status, customer.stage].join(' ')); }
 
@@ -18,12 +20,12 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
-    try { const feed = await loadCustomers(signal); setCustomers(feed.records || []); setError(''); }
+  const refresh = async (signal?: AbortSignal, force = false) => {
+    try { const feed = await loadCustomers(signal, force); setCustomers(feed.records || []); setError(''); }
     catch (requestError) { if ((requestError as Error).name !== 'AbortError') setError((requestError as Error).message); }
     finally { setLoading(false); }
   };
-  useEffect(() => { const controller = new AbortController(); void refresh(controller.signal); const events = new EventSource('/api/events'); events.addEventListener('platform', () => void refresh()); return () => { controller.abort(); events.close(); }; }, []);
+  useEffect(() => { const controller = new AbortController(); void refresh(controller.signal); const events = new EventSource('/api/events'); events.addEventListener('platform', () => void refresh(undefined, true)); return () => { controller.abort(); events.close(); }; }, []);
   useEffect(() => { const customer = customers.find(row => row.id === selectedId); if (customer) setDraft({ ...customer }); }, [selectedId, customers]);
 
   const visible = useMemo(() => customers.filter(customer => {
@@ -45,15 +47,17 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
     event.preventDefault(); if (!draft || saving) return; setSaving(true); setError(''); setNotice('');
     try {
       const result = await updateCustomer(draft.id, { expectedUpdatedAt: draft.updatedAt, phone: draft.phone, email: draft.email, address: draft.address, city: draft.city, state: draft.state, postalCode: draft.postalCode, notes: draft.notes });
-      await refresh(); setDraft(result.record); setNotice('Customer contact details updated across exact linked records.');
-    } catch (requestError) { setError((requestError as Error).message); await refresh(); }
+      await refresh(undefined, true); setDraft(result.record); setNotice('Customer contact details updated across exact linked records.');
+    } catch (requestError) { setError((requestError as Error).message); await refresh(undefined, true); }
     finally { setSaving(false); }
   };
+
+  const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index">
       <header className="workspace-title"><div><span>Connected customer files</span><h1>Customers</h1></div></header>
-      <div className="compact-metrics">{(['active', 'setup', 'history'] as Filter[]).map(key => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status" {...filterSwipe}>{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       <div className="record-list">{loading ? <div className="empty-state">Loading customers...</div> : null}{!loading && !visible.length ? <div className="empty-state">No customers match this view.</div> : null}

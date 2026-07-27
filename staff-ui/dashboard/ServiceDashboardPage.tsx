@@ -26,10 +26,10 @@ export function ServiceDashboardPage({ onNavigate }: { onNavigate: (workspace: s
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, force = false) => {
     try {
       const [vehicles, maintenance, tasks, notifications] = await Promise.all([
-        loadVehicles(signal), loadMaintenance(signal), loadTasks(signal), loadNotifications(signal)
+        loadVehicles(signal, force), loadMaintenance(signal, force), loadTasks(signal, force), loadNotifications(signal, force)
       ]);
       setState({
         vehicles: vehicles.records || [],
@@ -47,7 +47,7 @@ export function ServiceDashboardPage({ onNavigate }: { onNavigate: (workspace: s
     const controller = new AbortController();
     void refresh(controller.signal);
     const events = new EventSource('/api/events');
-    events.addEventListener('platform', () => void refresh());
+    events.addEventListener('platform', () => void refresh(undefined, true));
     return () => { controller.abort(); events.close(); };
   }, []);
 
