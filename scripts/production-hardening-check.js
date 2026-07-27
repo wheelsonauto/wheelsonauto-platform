@@ -18,7 +18,7 @@ const liveEnvironment = {
 
 assert.equal(normalizedHostname('https://WheelsonAuto-Platform.OnRender.com/'), LIVE_RENDER_HOSTNAME);
 assert.equal(isLiveRenderProductionService(liveEnvironment), true);
-assert.equal(productionHardeningRequired(liveEnvironment), false, 'The staged proof pass must continue to honor the explicit disabled hardening value.');
+assert.equal(productionHardeningRequired(liveEnvironment), true, 'The exact WheelsonAuto live Render service must remain fail-closed even if an old environment value disables hardening.');
 assert.equal(productionHardeningRequired({ WOA_PRODUCTION_HARDENING_REQUIRED: '1' }), true);
 assert.equal(productionHardeningRequired({ WOA_PRODUCTION_HARDENING_REQUIRED: '0' }), false);
 
