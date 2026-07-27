@@ -168,9 +168,9 @@ export function MaintenancePage() {
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
-    <section className="operations-index">
+    <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Fleet care</span><h1>Maintenance</h1></div><button className="primary-command" onClick={openNew}>Schedule</button></header>
-      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Maintenance status" {...filterSwipe}>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Maintenance status">
         <button role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
         <button role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
         <button role="tab" aria-selected={filter === 'history'} className={filter === 'history' ? 'active' : ''} onClick={() => setFilter('history')}><span>History</span><strong>{counts.history}</strong></button>

@@ -8,18 +8,24 @@ const loadCustomersModule = () => import('./customers/CustomersPage');
 const loadPaymentsModule = () => import('./payments/PaymentsPage');
 const loadMessagesModule = () => import('./messages/MessagesPage');
 const loadMoreModule = () => import('./more/MorePage');
+const loadApplicationsModule = () => import('./applications/ApplicationsPage');
+const loadDispatchModule = () => import('./dispatch/DispatchPage');
+const loadMaintenanceModule = () => import('./maintenance/MaintenancePage');
+const loadAccountingModule = () => import('./accounting/AccountingPage');
+const loadSettingsModule = () => import('./settings/SettingsPage');
+const loadRentalModule = () => import('./rentals/RentalFilePage');
 const FleetPage = lazy(() => loadFleetModule().then(module => ({ default: module.FleetPage })));
 const CustomersPage = lazy(() => loadCustomersModule().then(module => ({ default: module.CustomersPage })));
 const PaymentsPage = lazy(() => loadPaymentsModule().then(module => ({ default: module.PaymentsPage })));
-const ApplicationsPage = lazy(() => import('./applications/ApplicationsPage').then(module => ({ default: module.ApplicationsPage })));
+const ApplicationsPage = lazy(() => loadApplicationsModule().then(module => ({ default: module.ApplicationsPage })));
 const MessagesPage = lazy(() => loadMessagesModule().then(module => ({ default: module.MessagesPage })));
-const DispatchPage = lazy(() => import('./dispatch/DispatchPage').then(module => ({ default: module.DispatchPage })));
-const MaintenancePage = lazy(() => import('./maintenance/MaintenancePage').then(module => ({ default: module.MaintenancePage })));
-const AccountingPage = lazy(() => import('./accounting/AccountingPage').then(module => ({ default: module.AccountingPage })));
+const DispatchPage = lazy(() => loadDispatchModule().then(module => ({ default: module.DispatchPage })));
+const MaintenancePage = lazy(() => loadMaintenanceModule().then(module => ({ default: module.MaintenancePage })));
+const AccountingPage = lazy(() => loadAccountingModule().then(module => ({ default: module.AccountingPage })));
 const SystemsPage = lazy(() => import('./systems/SystemsPage').then(module => ({ default: module.SystemsPage })));
 const MorePage = lazy(() => loadMoreModule().then(module => ({ default: module.MorePage })));
-const SettingsPage = lazy(() => import('./settings/SettingsPage').then(module => ({ default: module.SettingsPage })));
-const RentalFilePage = lazy(() => import('./rentals/RentalFilePage').then(module => ({ default: module.RentalFilePage })));
+const SettingsPage = lazy(() => loadSettingsModule().then(module => ({ default: module.SettingsPage })));
+const RentalFilePage = lazy(() => loadRentalModule().then(module => ({ default: module.RentalFilePage })));
 
 type Workspace = 'dashboard' | 'fleet' | 'customers' | 'payments' | 'applications' | 'messages' | 'dispatch' | 'maintenance' | 'accounting' | 'systems' | 'more' | 'settings' | 'rental';
 type NavItem = { id: Workspace; label: string; mark: string };
@@ -140,7 +146,10 @@ export function StaffApp() {
   }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void Promise.allSettled([loadFleetModule(), loadCustomersModule(), loadPaymentsModule(), loadMessagesModule(), loadMoreModule()]);
+      void Promise.allSettled([
+        loadFleetModule(), loadCustomersModule(), loadPaymentsModule(), loadMessagesModule(), loadMoreModule(),
+        loadApplicationsModule(), loadDispatchModule(), loadMaintenanceModule(), loadAccountingModule(), loadSettingsModule(), loadRentalModule()
+      ]);
       prewarmStaffFeeds(role);
     }, 250);
     return () => window.clearTimeout(timer);

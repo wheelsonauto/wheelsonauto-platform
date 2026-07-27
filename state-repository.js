@@ -2329,8 +2329,11 @@ class PostgresStateRepository {
   }
 
   async version() {
-    const snapshot = await this.read();
-    return 'pg-' + snapshot.version + '-' + String(snapshot.checksum || '').slice(0, 12);
+    await this.ensureSchema();
+    const result = await this.pool.query('SELECT version, checksum FROM woa_state WHERE organization_id = $1', [this.organizationId]);
+    if (!result.rowCount) return 'pg-0-missing';
+    const row = result.rows[0];
+    return 'pg-' + Number(row.version || 0) + '-' + String(row.checksum || '').slice(0, 12);
   }
 
   async refreshIdentityIndex(client, state) {

@@ -68,9 +68,9 @@ export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) =
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
-    <section className="operations-index">
+    <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Inventory and assignments</span><h1>Fleet</h1></div></header>
-      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status" {...filterSwipe}>{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key === 'all' ? 'All' : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status">{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key === 'all' ? 'All' : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search vehicle, VIN, tag, tracker, customer" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       {!loading && visible.length ? <div className="record-table-head vehicle-table-head"><span /><span>Vehicle</span><span>Assignment</span><span>Status / mileage</span></div> : null}

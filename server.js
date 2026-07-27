@@ -1166,12 +1166,47 @@ function inferredDeleteIds(data = {}) {
 async function readData() {
   try {
     const snapshot = await STATE_REPOSITORY.read();
-    const data = repairDataIds(snapshot && snapshot.state || emptyPlatformState());
+    const data = snapshot && snapshot.state || emptyPlatformState();
     return attachStateReadMeta(data, snapshot || {});
   } catch (error) {
     if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) throw error;
     return attachStateReadMeta(emptyPlatformState(), { version: 'missing' });
   }
+}
+const VIEW_DATA_CACHE_MS = 15 * 1000;
+let viewDataCache = null;
+let viewDataRead = null;
+let viewDataGeneration = 0;
+function invalidateViewDataCache() {
+  viewDataGeneration += 1;
+  viewDataCache = null;
+  viewDataRead = null;
+}
+async function readViewData() {
+  if (viewDataCache && viewDataCache.expiresAt > Date.now()) return viewDataCache.data;
+  if (viewDataRead) return viewDataRead;
+  const generation = viewDataGeneration;
+  const request = (async () => {
+    try {
+      const snapshot = await STATE_REPOSITORY.read();
+      const data = snapshot && snapshot.state || emptyPlatformState();
+      enrichLinkedProfiles(data);
+      if (generation === viewDataGeneration) viewDataCache = { data, expiresAt: Date.now() + VIEW_DATA_CACHE_MS };
+      return data;
+    } catch (error) {
+      if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) throw error;
+      return emptyPlatformState();
+    }
+  })();
+  viewDataRead = request;
+  try {
+    return await request;
+  } finally {
+    if (viewDataRead === request) viewDataRead = null;
+  }
+}
+function viewResourceRows(data, key, user) {
+  return filterRowsForUserOrganization(Array.isArray(data && data[key]) ? data[key] : [], user);
 }
 async function dataVersion() {
   return STATE_REPOSITORY.version();
@@ -1198,6 +1233,7 @@ async function writeDataNow(data) {
   } else {
     written = await STATE_REPOSITORY.write(data, { reason: meta.reason || 'platform state mutation', transactionEffects: meta.transactionEffects || {} });
   }
+  invalidateViewDataCache();
   publishPlatformEvent({
     type: 'state.changed',
     organizationId: meta.organizationId || MAIN_ORG_ID,
@@ -25359,7 +25395,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if ((url.pathname === '/api/app-notifications' && req.method === 'GET') || (url.pathname === '/api/app-notifications/read' && req.method === 'POST')) {
-      const data = await readData();
+      const data = req.method === 'GET' ? await readViewData() : await readData();
       const principalId = appNotificationPrincipal('staff', user);
       const notices = staffAppNotifications(data, user);
       if (req.method === 'POST') {
@@ -26561,8 +26597,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/customers' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view customer records.' });
-      const scoped = stateForUserRead(await readData(), user);
-      const page = paginatedResource(scoped.customers || [], url, { searchFields: ['id', 'name', 'phone', 'email', 'vehicle', 'vin', 'licensePlate'], defaultLimit: 50 });
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'customers', user), url, { searchFields: ['id', 'name', 'phone', 'email', 'vehicle', 'vin', 'licensePlate'], defaultLimit: 50 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     const customerResourceMatch = /^\/api\/customers\/([^/]+)$/.exec(url.pathname);
@@ -26642,8 +26678,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
     }
     if (url.pathname === '/api/vehicles' && req.method === 'GET') {
-      const scoped = stateForUserRead(await readData(), user);
-      const page = paginatedResource(scoped.vehicles || [], url, { searchFields: ['id', 'name', 'year', 'make', 'model', 'vin', 'plate', 'stock', 'tempTag', 'tracker', 'currentCustomer', 'status'], defaultLimit: 50 });
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'vehicles', user), url, { searchFields: ['id', 'name', 'year', 'make', 'model', 'vin', 'plate', 'stock', 'tempTag', 'tracker', 'currentCustomer', 'status'], defaultLimit: 50 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     const vehicleResourceMatch = /^\/api\/vehicles\/([^/]+)$/.exec(url.pathname);
@@ -26857,14 +26893,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/payments' && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();
       if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to payment records.' });
-      const scoped = stateForUserRead(await readData(), user);
-      const page = paginatedResource(scoped.payments || [], url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75 });
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'payments', user), url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/recurring-payments' && req.method === 'GET') {
       if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view recurring payment schedules.' });
-      const scoped = stateForUserRead(await readData(), user);
-      const page = paginatedResource(scoped.recurringPayments || [], url, {
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'recurringPayments', user), url, {
         searchFields: ['id', 'customer', 'phone', 'email', 'vehicle', 'vin', 'licensePlate', 'plate', 'tracker', 'status', 'provider', 'paymentProvider', 'paymentSetup', 'nextRun'],
         defaultLimit: 100
       });
@@ -27250,7 +27286,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/state' && req.method === 'GET') return json(res, 200, stateForUserRead(await readData(), user));
     if (url.pathname === '/api/messages/feed' && req.method === 'GET') {
       if (String(user.role || '').toLowerCase() === 'mechanic') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to customer messages.' });
-      const data = await readData();
+      const data = await readViewData();
       const requestedLimit = Number(url.searchParams.get('limit') || 600);
       const limit = Math.max(50, Math.min(800, Number.isFinite(requestedLimit) ? requestedLimit : 600));
       const scoped = filterRowsForUserOrganization(data.messages || [], user)
@@ -28565,13 +28601,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, provider, task: apiTask });
     }
     if (url.pathname === '/api/tasks' && req.method === 'GET') {
-      const scoped = stateForUserRead(await readData(), user);
-      const page = paginatedResource(scoped.tasks || [], url, { searchFields: ['id', 'title', 'type', 'customer', 'vehicle', 'due', 'status', 'owner', 'notes'], defaultLimit: 100 });
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'tasks', user), url, { searchFields: ['id', 'title', 'type', 'customer', 'vehicle', 'due', 'status', 'owner', 'notes'], defaultLimit: 100 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/maintenance' && req.method === 'GET') {
-      const scoped = stateForUserRead(await readData(), user);
-      const page = paginatedResource(scoped.maintenance || [], url, { searchFields: ['id', 'vehicle', 'customer', 'vin', 'licensePlate', 'plate', 'tracker', 'type', 'issue', 'due', 'nextDue', 'status', 'mechanicSignoff'], defaultLimit: 100 });
+      const data = await readViewData();
+      const page = paginatedResource(viewResourceRows(data, 'maintenance', user), url, { searchFields: ['id', 'vehicle', 'customer', 'vin', 'licensePlate', 'plate', 'tracker', 'type', 'issue', 'due', 'nextDue', 'status', 'mechanicSignoff'], defaultLimit: 100 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/maintenance' && req.method === 'POST') {

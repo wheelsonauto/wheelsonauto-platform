@@ -131,9 +131,9 @@ export function DispatchPage() {
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
-    <section className="operations-index">
+    <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Operations</span><h1>Dispatch</h1></div><button className="primary-command" onClick={openNew}>New task</button></header>
-      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Task status" {...filterSwipe}>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Task status">
         <button role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
         <button role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
         <button role="tab" aria-selected={filter === 'done'} className={filter === 'done' ? 'active' : ''} onClick={() => setFilter('done')}><span>Done</span><strong>{counts.done}</strong></button>

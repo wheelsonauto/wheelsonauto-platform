@@ -55,9 +55,9 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
-    <section className="operations-index">
+    <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Connected customer files</span><h1>Customers</h1></div></header>
-      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status" {...filterSwipe}>{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       <div className="record-list">{loading ? <div className="empty-state">Loading customers...</div> : null}{!loading && !visible.length ? <div className="empty-state">No customers match this view.</div> : null}

@@ -8,6 +8,7 @@ const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 
 const server = read('server.js');
+const stateRepository = read('state-repository.js');
 const api = read('staff-ui/api.ts');
 const shell = read('staff-ui/StaffApp.tsx');
 const messages = read('staff-ui/messages/MessagesPage.tsx');
@@ -45,9 +46,12 @@ assert(api.includes("'/api/customers?limit=200'") && api.includes("'/api/payment
 assert(api.includes("'/api/recurring-payments?limit=300'") && api.includes("'/api/card-setup-requests'") && api.includes('deferVehicleAssignment: true'), 'The modern Payments workspace is missing its scoped autopay roster and inventory-safe Stripe setup command.');
 assert(server.includes("url.pathname === '/api/recurring-payments' && req.method === 'GET'") && server.includes('Only the owner can view recurring payment schedules.'), 'The owner-only recurring schedule feed is missing.');
 assert(payments.includes('Add autopay') && payments.includes('Create Stripe setup link') && payments.includes('No payment was charged') && payments.includes('Email link'), 'Payments does not provide the complete owner autopay setup workflow.');
-assert(api.includes('resourceCache') && api.includes('RESOURCE_CACHE_MS') && api.includes('prewarmStaffFeeds') && shell.includes('prewarmStaffFeeds(role)'), 'Shared feed reuse and idle workspace prewarming are missing.');
+assert(api.includes('resourceCache') && api.includes('RESOURCE_CACHE_MS') && api.includes('prewarmStaffFeeds') && api.includes('loadMessageFeed(), loadApplications()') && shell.includes('prewarmStaffFeeds(role)') && shell.includes('loadApplicationsModule()') && shell.includes('loadMaintenanceModule()') && shell.includes('loadAccountingModule()'), 'Shared feed reuse and complete idle workspace prewarming are missing.');
+assert(server.includes('const VIEW_DATA_CACHE_MS = 15 * 1000') && server.includes('if (viewDataRead) return viewDataRead') && server.includes('invalidateViewDataCache();'), 'The server-side shared view snapshot and write invalidation are incomplete.');
+assert(['customers', 'vehicles', 'payments', 'recurringPayments', 'tasks', 'maintenance'].every(key => server.includes(`viewResourceRows(data, '${key}', user)`)) && server.includes("url.pathname === '/api/messages/feed'") && server.includes('const data = await readViewData();'), 'Heavy staff feeds are not consistently using the shared read snapshot.');
+assert(stateRepository.includes("SELECT version, checksum FROM woa_state WHERE organization_id = $1"), 'PostgreSQL version checks must not load the full JSONB state.');
 assert(payments.includes('Promise.all([') && payments.includes('loadPayments(signal, force)') && payments.includes('loadAutopay(signal, force)'), 'Payments must load its independent feeds concurrently.');
-assert(swipeTabs.includes('Math.abs(deltaX) < 44') && [fleet, customers, payments, applications, dispatch, maintenance].every(source => source.includes('useSwipeTabs')) && css.includes('.swipe-tabs{touch-action:pan-y'), 'Mobile upper-tab swipe navigation is incomplete.');
+assert(swipeTabs.includes('Math.abs(deltaX) < 44') && swipeTabs.includes('swipeBlockedSelector') && swipeTabs.includes('event.stopPropagation()') && [fleet, customers, payments, applications, dispatch, maintenance].every(source => source.includes('useSwipeTabs') && source.includes('swipe-zone')) && css.includes('.swipe-tabs,.swipe-zone{touch-action:pan-y'), 'Full-surface mobile upper-tab swipe navigation is incomplete.');
 assert(api.includes("'/api/api-providers'") && systems.includes('Provider status is evidence-based and never guessed.'), 'Owner Systems must expose honest provider evidence.');
 assert(server.includes('providers: apiProviderRows(data)'), 'Systems must receive computed provider truth instead of only manually saved setup rows.');
 assert(api.includes('/api/rentals/${encodeURIComponent(id)}') && api.includes('RETURN_RENTAL_VEHICLE') && rentals.includes('completeRentalReturn'), 'The canonical Rental File detail and physical-return workflow are incomplete.');
