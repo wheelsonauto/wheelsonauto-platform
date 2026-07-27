@@ -1,4 +1,4 @@
-import type { ApplicationFeed, CustomerRecord, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RentalDetail, RentalRecord, TaskRecord, VehicleRecord } from './types';
+import type { ApplicationFeed, CustomerRecord, MaintenanceRecord, MessageFeed, MessageRecord, NotificationFeed, PagedFeed, PaymentRecord, ProviderRecord, RecurringPaymentRecord, RentalDetail, RentalRecord, TaskRecord, VehicleRecord } from './types';
 
 async function parseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -84,6 +84,42 @@ export function loadCustomers(signal?: AbortSignal): Promise<PagedFeed<CustomerR
 
 export function loadPayments(signal?: AbortSignal): Promise<PagedFeed<PaymentRecord>> {
   return loadPaged<PaymentRecord>('/api/payments?limit=200', signal);
+}
+
+export function loadAutopay(signal?: AbortSignal): Promise<PagedFeed<RecurringPaymentRecord>> {
+  return loadPaged<RecurringPaymentRecord>('/api/recurring-payments?limit=300', signal);
+}
+
+export type CreateAutopayInput = {
+  customer: string;
+  phone?: string;
+  email?: string;
+  vehicle: string;
+  vehicleId: string;
+  vin?: string;
+  licensePlate?: string;
+  plate?: string;
+  tempTag?: string;
+  tracker?: string;
+  amount: number;
+  frequency: string;
+  nextRun: string;
+  chargeTime: string;
+  notes?: string;
+};
+
+export async function createAutopay(input: CreateAutopayInput): Promise<{ ok: boolean; autopay: RecurringPaymentRecord; setupLink: { id: string; url: string } }> {
+  const response = await fetch('/api/card-setup-requests', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      ...input,
+      paymentProvider: 'stripe',
+      paymentSetup: 'Waiting on Stripe card setup',
+      deferVehicleAssignment: true
+    })
+  });
+  return parseJson(response);
 }
 
 export async function loadRentals(signal?: AbortSignal): Promise<{ ok: boolean; records: RentalRecord[]; count: number }> {

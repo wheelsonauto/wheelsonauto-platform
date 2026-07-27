@@ -144,6 +144,7 @@ export function StaffApp() {
   const openRental = (id: string) => { if (id) open('rental', id); };
   const heading = role === 'mechanic' && workspace === 'dashboard' ? 'Service home' : workspaceNames.get(workspace) || 'WheelsonAuto';
   const navigationWorkspace = workspace === 'rental' ? returnWorkspace : workspace;
+  const mobileContextBack = workspace !== 'rental' && !mobileItems.some(item => item.id === workspace);
   const initials = useMemo(() => String(user.name || user.username || 'Staff').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase(), [user.name, user.username]);
 
   return <div className="staff-app-shell">
@@ -153,7 +154,7 @@ export function StaffApp() {
       <footer><button className="staff-profile" onClick={() => open('settings')}><i>{initials}</i><span><strong>{user.name || user.username || 'Staff'}</strong><small>{user.role || 'Staff'}</small></span><b aria-hidden="true">›</b></button></footer>
     </aside>
     <section className="staff-stage">
-      <header className="staff-topbar"><div><span>WheelsonAuto</span><strong>{heading}</strong></div><button className="notification-command" onClick={() => open('dashboard')} aria-label={`${unread} unread notifications`}><span aria-hidden="true">◦</span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button></header>
+      <header className="staff-topbar"><div>{mobileContextBack ? <button className="mobile-context-back" onClick={() => open('more')} aria-label="Back to More">‹</button> : null}<span>WheelsonAuto</span><strong>{heading}</strong></div><button className="notification-command" onClick={() => open('dashboard')} aria-label={`${unread} unread notifications`}><span aria-hidden="true">◦</span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button></header>
       <section className="staff-app-workspace" aria-live="polite"><Suspense fallback={<div className="workspace-loading"><span /><strong>Opening {heading}</strong></div>}>
         {workspace === 'dashboard' ? role === 'mechanic' ? <ServiceDashboardPage onNavigate={open} /> : <DashboardPage onNavigate={open} /> : null}
         {workspace === 'fleet' ? <FleetPage onOpenRental={openRental} /> : null}

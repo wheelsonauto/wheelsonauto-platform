@@ -41,6 +41,9 @@ assert(shell.includes('DesktopNavigation') && shell.includes('MobileNavigation')
 assert(api.includes("'/api/messages/feed?limit=800'") && api.includes("'/api/messages/send'") && api.includes("'/api/messages/ai-reply'"), 'Messages is not using its scoped feed/send/Star commands.');
 assert(api.includes("'/api/tasks?limit=200'") && api.includes("'/api/maintenance?limit=200'") && api.includes("'/api/vehicles?limit=200'"), 'Operations workspaces are not using scoped feeds.');
 assert(api.includes("'/api/customers?limit=200'") && api.includes("'/api/payments?limit=200'") && api.includes("'/api/applications/live-feed'"), 'Business workspaces are not using scoped feeds.');
+assert(api.includes("'/api/recurring-payments?limit=300'") && api.includes("'/api/card-setup-requests'") && api.includes('deferVehicleAssignment: true'), 'The modern Payments workspace is missing its scoped autopay roster and inventory-safe Stripe setup command.');
+assert(server.includes("url.pathname === '/api/recurring-payments' && req.method === 'GET'") && server.includes('Only the owner can view recurring payment schedules.'), 'The owner-only recurring schedule feed is missing.');
+assert(payments.includes('Add autopay') && payments.includes('Create Stripe setup link') && payments.includes('No payment was charged') && payments.includes('Email link'), 'Payments does not provide the complete owner autopay setup workflow.');
 assert(api.includes("'/api/api-providers'") && systems.includes('Provider status is evidence-based and never guessed.'), 'Owner Systems must expose honest provider evidence.');
 assert(server.includes('providers: apiProviderRows(data)'), 'Systems must receive computed provider truth instead of only manually saved setup rows.');
 assert(api.includes('/api/rentals/${encodeURIComponent(id)}') && api.includes('RETURN_RENTAL_VEHICLE') && rentals.includes('completeRentalReturn'), 'The canonical Rental File detail and physical-return workflow are incomplete.');
@@ -50,8 +53,10 @@ assert(dispatch.includes("new EventSource('/api/events')") && maintenance.includ
 assert(sourceFiles.every(source => !source.includes('/api/state')), 'The new React platform must not read or save whole platform state.');
 assert(sourceFiles.every(source => !source.includes('setInterval(')), 'The new React platform must not add independent polling loops.');
 assert(css.includes('@media(max-width:720px)') && css.includes('.detail-back') && css.includes('.staff-mobile-nav'), 'Full-screen mobile detail/back and bottom navigation are missing.');
+assert(shell.includes('mobileContextBack') && shell.includes('mobile-context-back') && css.includes('.mobile-context-back'), 'Secondary mobile workspaces are missing a reliable back route to More.');
 assert(css.includes('env(safe-area-inset-top)') && css.includes('env(safe-area-inset-bottom)'), 'Phone safe-area guards are missing.');
 assert(css.includes('body:has(.next-messages.has-thread) .staff-mobile-nav'), 'The mobile keyboard/message layout does not remove the bottom nav from an open conversation.');
+assert(messages.includes('Back to conversations') && css.includes('.bubble.outbound') && css.includes('background:#1e1d19') && css.includes('.composer-alert{margin-bottom:4px;color:#dfcc8e'), 'Messages must keep its back action and the neutral charcoal/light-gold visual system.');
 assert(css.includes('.rental-file-workspace') && css.includes('.rental-overview-grid'), 'Rental File desktop/mobile presentation is missing.');
 
 const jsFiles = fs.readdirSync(dist).filter(file => file.endsWith('.js'));

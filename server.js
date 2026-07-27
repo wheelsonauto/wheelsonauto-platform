@@ -26861,6 +26861,15 @@ const server = http.createServer(async (req, res) => {
       const page = paginatedResource(scoped.payments || [], url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
+    if (url.pathname === '/api/recurring-payments' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can view recurring payment schedules.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const page = paginatedResource(scoped.recurringPayments || [], url, {
+        searchFields: ['id', 'customer', 'phone', 'email', 'vehicle', 'vin', 'licensePlate', 'plate', 'tracker', 'status', 'provider', 'paymentProvider', 'paymentSetup', 'nextRun'],
+        defaultLimit: 100
+      });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
     const paymentResourceMatch = /^\/api\/payments\/([^/]+)$/.exec(url.pathname);
     if (paymentResourceMatch && req.method === 'GET') {
       const role = String(user.role || '').toLowerCase();

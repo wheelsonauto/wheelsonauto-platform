@@ -140,6 +140,37 @@ export type PaymentRecord = {
   updatedAt?: string;
 };
 
+export type RecurringPaymentRecord = {
+  id: string;
+  organizationId?: string;
+  customer?: string;
+  phone?: string;
+  email?: string;
+  vehicle?: string;
+  vehicleId?: string;
+  vin?: string;
+  licensePlate?: string;
+  plate?: string;
+  tempTag?: string;
+  tracker?: string;
+  amount?: number;
+  frequency?: string;
+  nextRun?: string;
+  chargeTime?: string;
+  status?: string;
+  provider?: string;
+  paymentProvider?: string;
+  paymentSetup?: string;
+  cardLabel?: string;
+  cardLast4?: string;
+  autoChargeEnabled?: boolean;
+  autopayManagedBy?: string;
+  cardSetupUrl?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type RentalRecord = {
   id: string;
   customerName?: string;
