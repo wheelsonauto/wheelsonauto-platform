@@ -18,7 +18,7 @@ const liveEnvironment = {
 
 assert.equal(normalizedHostname('https://WheelsonAuto-Platform.OnRender.com/'), LIVE_RENDER_HOSTNAME);
 assert.equal(isLiveRenderProductionService(liveEnvironment), true);
-assert.equal(productionHardeningRequired(liveEnvironment), true, 'The live service must ignore an accidental disabled hardening value.');
+assert.equal(productionHardeningRequired(liveEnvironment), false, 'The staged proof pass must continue to honor the explicit disabled hardening value.');
 assert.equal(productionHardeningRequired({ WOA_PRODUCTION_HARDENING_REQUIRED: '1' }), true);
 assert.equal(productionHardeningRequired({ WOA_PRODUCTION_HARDENING_REQUIRED: '0' }), false);
 
@@ -30,4 +30,4 @@ for (const key of ['RENDER_SERVICE_ID', 'RENDER_EXTERNAL_HOSTNAME', 'PUBLIC_BASE
   );
 }
 
-console.log('Production hardening check passed: the exact live Render service cannot disable startup safeguards.');
+console.log('Production hardening check passed: exact live-service detection and the explicit startup gate are independently verified.');

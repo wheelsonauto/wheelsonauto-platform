@@ -337,6 +337,15 @@ const WOA_DEPLOY_COMMIT = String(process.env.RENDER_GIT_COMMIT || process.env.WO
 const WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED = process.env.WOA_PRIVATE_DOCUMENT_STORAGE_REQUIRED === '1';
 const WOA_LIVE_RENDER_PRODUCTION = productionHardening.isLiveRenderProductionService(process.env);
 const WOA_PRODUCTION_HARDENING_REQUIRED = productionHardening.productionHardeningRequired(process.env);
+let STARTUP_STRIPE_READINESS_STATUS = {
+  checked: false,
+  accountLive: false,
+  webhookDestinationLive: false,
+  endpointMatched: false,
+  exactEvents: false,
+  enabledEventCount: 0,
+  requiredEventCount: 0
+};
 const WOA_MIGRATION_MAINTENANCE_MODE = process.env.WOA_MIGRATION_MAINTENANCE_MODE === '1';
 const CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION = 3;
 const CONTROLLED_STRIPE_PILOT_APPROVAL_PHRASE = 'APPROVE FIRST LIVE STRIPE PILOT';
@@ -13104,9 +13113,22 @@ async function verifyStripeReadinessForProductionStartup() {
     stripeAccount = refreshed.body.stripeAccount || {};
     stripeWebhookDestination = refreshed.body.stripeWebhookDestination || {};
   }
+  STARTUP_STRIPE_READINESS_STATUS = {
+    checked: true,
+    accountLive: stripeAccount.live === true,
+    webhookDestinationLive: stripeWebhookDestination.live === true,
+    endpointMatched: stripeWebhookDestination.endpointMatched === true,
+    exactEvents: stripeWebhookDestination.exactEvents === true,
+    enabledEventCount: Number(stripeWebhookDestination.enabledEventCount || 0),
+    requiredEventCount: Number(stripeWebhookDestination.requiredEventCount || STRIPE_REQUIRED_WEBHOOK_EVENTS.length)
+  };
   if (!stripeAccount.live || !stripeWebhookDestination.live) {
     const reasons = [stripeAccount.error, stripeWebhookDestination.error].map(value => String(value || '').trim()).filter(Boolean);
-    throw new Error('Hardened production startup could not verify the live Stripe account and exact webhook destination.' + (reasons.length ? ' ' + reasons.join(' ') : ''));
+    if (WOA_PRODUCTION_HARDENING_REQUIRED) {
+      throw new Error('Hardened production startup could not verify the live Stripe account and exact webhook destination.' + (reasons.length ? ' ' + reasons.join(' ') : ''));
+    }
+    console.warn('Staged production startup recorded incomplete Stripe readiness proof. Hardened money actions remain locked.');
+    return { skipped: false, staged: true, stripeAccount, stripeWebhookDestination };
   }
   console.log('Hardened production startup verified the live Stripe account and exact signed webhook destination.');
   return { skipped: false, stripeAccount, stripeWebhookDestination };
@@ -22477,7 +22499,9 @@ const server = http.createServer(async (req, res) => {
         release: ASSET_VERSION,
         commit: WOA_DEPLOY_COMMIT,
         migrationMaintenance: WOA_MIGRATION_MAINTENANCE_MODE,
-        migrationMaintenanceLease: maintenanceLeaseStatus
+        migrationMaintenanceLease: maintenanceLeaseStatus,
+        productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
+        stripeStartupReadiness: STARTUP_STRIPE_READINESS_STATUS
       }, headers);
     }
     if (await staticFile(req, res, url.pathname, url.searchParams)) return;
