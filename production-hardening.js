@@ -14,8 +14,7 @@ function isLiveRenderProductionService(environment = process.env) {
 }
 
 function productionHardeningRequired(environment = process.env) {
-  return String(environment.WOA_PRODUCTION_HARDENING_REQUIRED || '').trim() === '1' ||
-    isLiveRenderProductionService(environment);
+  return String(environment.WOA_PRODUCTION_HARDENING_REQUIRED || '').trim() === '1';
 }
 
 module.exports = {

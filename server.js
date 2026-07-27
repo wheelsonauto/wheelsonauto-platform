@@ -346,6 +346,11 @@ let STARTUP_STRIPE_READINESS_STATUS = {
   enabledEventCount: 0,
   requiredEventCount: 0
 };
+let STARTUP_FOUNDATION_READINESS_STATUS = {
+  checked: false,
+  ready: false,
+  missing: []
+};
 const WOA_MIGRATION_MAINTENANCE_MODE = process.env.WOA_MIGRATION_MAINTENANCE_MODE === '1';
 const CONTROLLED_STRIPE_PILOT_EVIDENCE_VERSION = 3;
 const CONTROLLED_STRIPE_PILOT_APPROVAL_PHRASE = 'APPROVE FIRST LIVE STRIPE PILOT';
@@ -13133,6 +13138,21 @@ async function verifyStripeReadinessForProductionStartup() {
   console.log('Hardened production startup verified the live Stripe account and exact signed webhook destination.');
   return { skipped: false, stripeAccount, stripeWebhookDestination };
 }
+async function collectFoundationReadinessForProductionStartup() {
+  if (!WOA_LIVE_RENDER_PRODUCTION) return { skipped: true, reason: 'Not the exact WheelsonAuto live Render service.' };
+  const preflight = await productionInfrastructurePreflight(await readData());
+  const missing = preflight.providerProofCollection && Array.isArray(preflight.providerProofCollection.missing)
+    ? preflight.providerProofCollection.missing.map(value => String(value || '')).filter(Boolean)
+    : [];
+  STARTUP_FOUNDATION_READINESS_STATUS = {
+    checked: true,
+    ready: missing.length === 0,
+    missing
+  };
+  if (missing.length) console.warn('Staged production foundation check found ' + missing.length + ' incomplete safeguard' + (missing.length === 1 ? '' : 's') + '.');
+  else console.log('Production foundation safeguards are ready for hardened startup.');
+  return { skipped: false, ready: missing.length === 0, missing };
+}
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
   const expectedFingerprint = stripeWebhookConfigurationFingerprint();
@@ -22501,7 +22521,8 @@ const server = http.createServer(async (req, res) => {
         migrationMaintenance: WOA_MIGRATION_MAINTENANCE_MODE,
         migrationMaintenanceLease: maintenanceLeaseStatus,
         productionHardeningRequired: WOA_PRODUCTION_HARDENING_REQUIRED,
-        stripeStartupReadiness: STARTUP_STRIPE_READINESS_STATUS
+        stripeStartupReadiness: STARTUP_STRIPE_READINESS_STATUS,
+        foundationStartupReadiness: STARTUP_FOUNDATION_READINESS_STATUS
       }, headers);
     }
     if (await staticFile(req, res, url.pathname, url.searchParams)) return;
@@ -29670,6 +29691,7 @@ if (require.main === module) {
     .then(() => assertDataBackendTransition())
     .then(() => preparePrivateArtifactsForProductionStartup())
     .then(() => verifyStripeReadinessForProductionStartup())
+    .then(() => collectFoundationReadinessForProductionStartup())
     .then(() => assertProductionInfrastructure())
     .then(() => server.listen(PORT, HOST, () => {
     console.log('WheelsonAuto platform running on ' + HOST + ':' + PORT);
@@ -29891,6 +29913,7 @@ module.exports = {
   stripeWebhookDestinationEvidence,
   refreshStripeLaunchReadiness,
   verifyStripeReadinessForProductionStartup,
+  collectFoundationReadinessForProductionStartup,
   stripeIdentityLiveWebhookEvidence,
   stripeWebhookContract,
   STRIPE_REQUIRED_WEBHOOK_EVENTS,
