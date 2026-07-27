@@ -98,7 +98,9 @@ async function verifyTransientSchemaConnectionRecovery() {
   assert(beginIndex >= 0 && schemaLockIndex > beginIndex && firstCreateIndex > schemaLockIndex, 'PostgreSQL schema upgrades must take a database-wide transaction lock before running any DDL.');
   assert.strictEqual(calls[schemaLockIndex].values.length, 2, 'The schema migration lock must use the stable two-key PostgreSQL advisory lock contract.');
   assert(calls.some(call => /PRIMARY KEY \(organization_id, id\)/.test(call.sql)), 'Schema recovery must still apply the company-scoped private document key.');
+  assert(calls.some(call => /CREATE TABLE IF NOT EXISTS woa_resources/.test(call.sql)), 'Schema recovery must create tenant-scoped normalized resource payload rows.');
   assert(calls.some(call => call.values.includes('20260718_document_tenant_primary_key_v4')), 'Schema recovery must record the private-document tenant migration.');
+  assert(calls.some(call => call.values.includes('20260726_normalized_resource_rows_v9')), 'Schema recovery must record the normalized-resource migration.');
 }
 
 async function verifyWebhookTenantScope() {
@@ -156,18 +158,25 @@ async function verifyTransactionalIndexIsolation() {
     contracts: [{ id: 'file-tenant-a', customer: 'Tenant A Customer', vehicleId: 'vehicle-tenant-a', status: 'Active' }]
   };
   await repository.syncCriticalResourceIndex(client, state);
+  await repository.syncNormalizedResources(client, state, 9);
   await repository.syncActiveAssignmentIndex(client, state);
   const resourceDelete = calls.find(call => /DELETE FROM woa_resource_index/.test(call.sql));
   const resourceInsert = calls.find(call => /INSERT INTO woa_resource_index/.test(call.sql));
+  const normalizedDelete = calls.find(call => /DELETE FROM woa_resources/.test(call.sql));
+  const normalizedInsert = calls.find(call => /INSERT INTO woa_resources/.test(call.sql));
   const assignmentDelete = calls.find(call => /DELETE FROM woa_active_assignments/.test(call.sql));
   const assignmentInsert = calls.find(call => /INSERT INTO woa_active_assignments/.test(call.sql));
-  assert(resourceDelete && resourceInsert && assignmentDelete && assignmentInsert, 'Both transactional indexes must replace their company rows in one repository transaction.');
-  [resourceDelete, resourceInsert, assignmentDelete, assignmentInsert].forEach(call => {
+  assert(resourceDelete && resourceInsert && normalizedDelete && normalizedInsert && assignmentDelete && assignmentInsert, 'Critical indexes, normalized payloads, and assignments must replace their company rows in one repository transaction.');
+  [resourceDelete, resourceInsert, normalizedDelete, normalizedInsert, assignmentDelete, assignmentInsert].forEach(call => {
     assert.strictEqual(call.values[0], 'org-tenant-a', 'Every critical-record and assignment index statement must bind the current company first.');
   });
   const resourceRows = JSON.parse(resourceInsert.values[1]);
+  const normalizedRows = JSON.parse(normalizedInsert.values[2]);
   const assignmentRows = JSON.parse(assignmentInsert.values[1]);
   assert.strictEqual(resourceRows.length, 3, 'The tenant resource index must contain only the supplied company records.');
+  assert.strictEqual(normalizedRows.length, 3, 'The tenant normalized resource table must contain only the supplied company records.');
+  assert.strictEqual(normalizedInsert.values[1], 9, 'Normalized rows must retain the authoritative state version.');
+  assert.deepStrictEqual(normalizedRows.find(row => row.resourceId === 'customer-tenant-a').payload, state.customers[0], 'A tenant-normalized customer must retain its exact payload.');
   assert.strictEqual(assignmentRows.length, 1, 'The tenant assignment index must contain one authoritative vehicle owner.');
   assert.strictEqual(assignmentRows[0].vehicleId, 'vehicle-tenant-a', 'The assignment index must retain the company vehicle id.');
 
@@ -194,7 +203,7 @@ async function main() {
   await verifyDocumentMetadataIsolation();
   await verifyWebhookTenantScope();
   await verifyTransactionalIndexIsolation();
-  console.log('PostgreSQL tenant privacy check passed: webhooks, critical resources, active assignments, and private document metadata remain company-scoped and fail closed on conflicts.');
+  console.log('PostgreSQL tenant privacy check passed: webhooks, normalized resources, active assignments, and private document metadata remain company-scoped and fail closed on conflicts.');
 }
 
 main().catch(error => {

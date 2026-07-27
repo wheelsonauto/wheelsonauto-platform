@@ -305,6 +305,47 @@ requireText('Fallback transaction report possible match note', app, "customer===
 ].forEach(text => requireText('Saved-card/manual charge backend', server, text));
 
 [
+  '/api/payments/manual-result',
+  'manualResultOperationId',
+  'existingPaidPayment',
+  'nextRecurringOccurrence',
+  'ensurePaymentReceiptDocument',
+  'assertResourceRevision'
+].forEach(text => requireText('Scoped manual payment-result command', server, text));
+[
+  "['save-charge','mark-retry-needed'",
+  "__woaOperationId('manual-payment-result'",
+  "post('/api/payments/manual-result'",
+  'expectedUpdatedAt:recurring.updatedAt'
+].forEach(text => requireText('Scoped manual payment-result client wiring', app, text));
+[
+  '/api/payments/:id/match',
+  'paymentCustomerMatchProfileForRecurring',
+  'Owner accepted exact recurring-plan match',
+  'paymentRecordsMatch(row, payment)',
+  'assertResourceRevision(payment, payload)'
+].forEach(text => requireText('Scoped exact transaction-match command', server, text));
+[
+  "'apply-transaction-match'",
+  "post('/api/payments/'+encodeURIComponent(id)+'/match'",
+  'recurringPaymentId:candidate.recurringPaymentId',
+  'expectedUpdatedAt:payment.updatedAt'
+].forEach(text => requireText('Scoped exact transaction-match client wiring', app, text));
+[
+  '/api/claims/:id/match',
+  'claimPossibleMatches(data, claim)',
+  'Owner accepted exact ',
+  'assertResourceRevision(claim, payload)',
+  'delete claim.matchCandidates'
+].forEach(text => requireText('Scoped exact claim-match command', server, text));
+[
+  "'apply-claim-match'",
+  "post('/api/claims/'+encodeURIComponent(id)+'/match'",
+  'candidateReference:claimCandidate.reference',
+  'expectedUpdatedAt:claim.updatedAt'
+].forEach(text => requireText('Scoped exact claim-match client wiring', app, text));
+
+[
   'paymentStronglyMatchesRecurring',
   'todayDueMoneyTruth',
   'scheduled due not fully paid',

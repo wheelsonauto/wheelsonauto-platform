@@ -1,6 +1,28 @@
 (function () {
   'use strict';
 
+  var customerEventSource = null;
+  var customerEventListeners = [];
+
+  function subscribeCustomerEvents(listener) {
+    customerEventListeners.push(listener);
+    if (!customerEventSource && 'EventSource' in window) {
+      customerEventSource = new EventSource('/api/customer/events');
+      customerEventSource.addEventListener('platform', function (event) {
+        var payload = {};
+        try { payload = JSON.parse(event.data || '{}'); } catch (error) {}
+        customerEventListeners.slice().forEach(function (callback) { callback(payload); });
+      });
+    }
+    return function () {
+      customerEventListeners = customerEventListeners.filter(function (callback) { return callback !== listener; });
+      if (!customerEventListeners.length && customerEventSource) {
+        customerEventSource.close();
+        customerEventSource = null;
+      }
+    };
+  }
+
   function setupPortalNavigation() {
     var portal = document.querySelector('.customer-portal');
     var hub = portal && portal.querySelector('.customer-action-hub');
@@ -147,7 +169,6 @@
     var connection = document.querySelector('[data-customer-connection-status]');
     var lastFingerprint = '';
     var liveMessages = [];
-    var pollTimer = null;
     if (!form || !list || !textarea) return;
 
     function setStatus(text, error) {
@@ -243,8 +264,11 @@
     updateConnection();
     list.scrollTop = list.scrollHeight;
     window.addEventListener('focus', function () { refreshConversation(false); });
-    pollTimer = window.setInterval(function () { refreshConversation(false); }, 2500);
-    window.addEventListener('pagehide', function () { if (pollTimer) window.clearInterval(pollTimer); }, { once: true });
+    var unsubscribe = subscribeCustomerEvents(function (payload) {
+      var topics = payload && payload.topics || [];
+      if (topics.indexOf('messages') >= 0 || topics.indexOf('state') >= 0) refreshConversation(false);
+    });
+    window.addEventListener('pagehide', unsubscribe, { once: true });
     refreshConversation(true);
   }
 
@@ -534,8 +558,8 @@
     refresh();
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
-    var timer = window.setInterval(refresh, 5000);
-    window.addEventListener('pagehide', function () { window.clearInterval(timer); }, { once: true });
+    var unsubscribe = subscribeCustomerEvents(refresh);
+    window.addEventListener('pagehide', unsubscribe, { once: true });
   }
 
   setupPortalNavigation();

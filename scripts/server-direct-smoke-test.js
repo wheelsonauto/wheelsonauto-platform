@@ -904,6 +904,13 @@ async function main() {
     const loginAssetVersion = (loginPage.text.match(/\/styles\.css\?v=([^"']+)/) || [])[1];
     assert(ownerPage.status === 200 && ownerAssetVersions.length >= 4, 'Authenticated staff shell must load every versioned application asset.');
     assert(new Set(ownerAssetVersions).size === 1 && ownerAssetVersions[0] === loginAssetVersion, 'Authenticated staff HTML must stamp the current server release onto every asset so a deploy cannot leave installed apps on stale JavaScript.');
+    const ownerStaffNext = await request(server, 'GET', '/staff-next', { cookie: ownerCookie });
+    assert(ownerStaffNext.status === 200 && ownerStaffNext.text.includes('staff-dist/staff-next.js') && ownerStaffNext.text.includes('window.__WOA_STAFF_USER__'), 'Owner should open the isolated React staff workspace.');
+    assert(!ownerStaffNext.text.includes('window.__SERVER_DATA__'), 'React staff workspace must not receive the full platform state in HTML.');
+    const staffNextBundle = await request(server, 'GET', '/staff-dist/staff-next.js');
+    const staffNextStyles = await request(server, 'GET', '/staff-dist/staff-next.css');
+    assert(staffNextBundle.status === 200 && /application\/javascript/.test(String(staffNextBundle.headers['Content-Type'] || staffNextBundle.headers['content-type'] || '')), 'Built React staff JavaScript must be served as a versioned static asset.');
+    assert(staffNextStyles.status === 200 && /text\/css/.test(String(staffNextStyles.headers['Content-Type'] || staffNextStyles.headers['content-type'] || '')), 'Built React staff CSS must be served as a versioned static asset.');
     const crossOriginOwnerWrite = await request(server, 'POST', '/api/tasks', {
       cookie: ownerCookie,
       headers: { origin: 'https://malicious.example' },
@@ -964,6 +971,8 @@ async function main() {
       { id: 'veh-direct-duplicate', name: 'Direct Duplicate Two', vin: 'DIRECTVIN002', plate: 'DIR-002', status: 'Ready' },
       { id: 'veh-direct-autopay-file', year: 2026, make: 'Direct', model: 'Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', tempTag: 'TMP-AUTO', tracker: 'TRK-AUTO', status: 'Ready' },
       { id: 'veh-direct-dispute-car', year: 2025, make: 'Direct', model: 'Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tempTag: 'TMP-DSP', tracker: 'TRK-DSP', currentCustomer: 'Direct Dispute Customer', status: 'Rented' },
+      { id: 'veh-direct-manual-result', year: 2025, make: 'Direct', model: 'Manual Result Car', vin: 'DIRECTMANUALRESULT', plate: 'DIR-MAN', tracker: 'TRK-MAN', currentCustomer: 'Direct Manual Result Customer', status: 'Rented' },
+      { id: 'veh-direct-resource-retire', year: 2023, make: 'Direct', model: 'Retire Resource Car', vin: 'DIRECTRETIREVIN01', plate: 'DIR-RET', tracker: 'TRK-RET', status: 'Ready' },
       { id: 'veh-direct-pickup-car', organizationId: 'org-wheelsonauto', year: 2026, make: 'Direct', model: 'Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', tracker: 'TRK-PUP', currentCustomer: 'Direct Pickup Customer', status: 'Pending pickup', mileage: 41000 },
       { id: 'veh-signal-text-car', year: 2024, make: 'Signal', model: 'Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tempTag: 'TMP-SIG', tracker: 'TRK-SIG', currentCustomer: 'Signal Match Person', status: 'Rented' }
     );
@@ -998,12 +1007,16 @@ async function main() {
       { id: 'stripe-payment-direct-refund', paymentProvider: 'stripe', providerPaymentId: 'pi_direct_refund', stripePaymentIntentId: 'pi_direct_refund', stripeChargeId: 'ch_direct_refund', customer: 'Direct Stripe Refund Customer', date: 'Today', method: 'Stripe saved card', amount: 123.45, status: 'Paid', source: 'Stripe saved-card charge', vehicleId: 'veh-direct-dispute-car', vehicle: '2025 Direct Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tracker: 'TRK-DSP', phone: '3135550199', email: 'direct-stripe-refund@example.com' },
       { id: 'clover-payment-direct-unmatched-a', cloverPaymentId: 'pay-direct-unmatched-duplicate', customer: 'Unmatched Clover payment', date: 'Today', method: 'Clover', amount: 7788.88, status: 'Paid', source: 'Clover' },
       { id: 'clover-payment-direct-unmatched-b', cloverPaymentId: 'pay-direct-unmatched-duplicate', customer: 'Customer match needed', date: 'Today', method: 'Clover', amount: 7788.88, status: 'Paid', source: 'Clover' },
+      { id: 'payment-direct-resource-match-a', providerPaymentId: 'provider-direct-resource-match', customer: 'Customer match needed', date: 'Today', method: 'Imported card payment', amount: 125, status: 'Paid', source: 'Provider import' },
+      { id: 'payment-direct-resource-match-b', providerPaymentId: 'provider-direct-resource-match', customer: 'Unknown customer', date: 'Today', method: 'Imported card payment', amount: 125, status: 'Paid', source: 'Provider webhook' },
       { id: 'pay-signal-alpha-983', cloverPaymentId: 'charge-signal-alpha-983', customer: 'Signal Match Person', date: 'Today', method: 'Clover', amount: 144, status: 'Paid', source: 'Clover', vehicleId: 'veh-signal-text-car', vehicle: '2024 Signal Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tracker: 'TRK-SIG', phone: '3135550201', email: 'signal-match@example.com' },
       { id: 'clover-payment-direct-webhook-dispute', cloverPaymentId: 'pay-direct-webhook-dispute', customer: 'Direct Webhook Dispute Customer', date: 'Today', method: 'Clover', amount: 88, status: 'Paid', source: 'Clover' }
     );
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-dispute-match', customer: 'Direct Recurring Dispute Customer', cloverCustomerId: 'direct-dispute-customer-id', phone: '3135550100', email: 'direct-dispute@example.com', vehicle: 'Direct Dispute Vehicle', amount: 111, status: 'Active' });
+    duplicateState.recurringPayments.unshift({ id: 'rec-direct-manual-result', organizationId: 'org-wheelsonauto', customerId: 'cus-direct-manual-result', customer: 'Direct Manual Result Customer', phone: '3135550151', email: 'direct-manual-result@example.com', vehicleId: 'veh-direct-manual-result', vehicle: '2025 Direct Manual Result Car', vin: 'DIRECTMANUALRESULT', plate: 'DIR-MAN', tracker: 'TRK-MAN', amount: 125, frequency: 'Weekly', status: 'Active', nextRun: '2026-07-27', autoChargeEnabled: true });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', pickupAppointmentId: 'pickup-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', amount: 229, status: 'Scheduled', nextRun: '2026-07-27', paymentDay: 'Monday', paymentProvider: 'clover', cloverPaymentSource: 'src-direct-pickup-card', autoChargeEnabled: true });
     duplicateState.customers.unshift({ id: 'cus-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', recurringPaymentId: 'rec-direct-pickup', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Approved - awaiting pickup' });
+    duplicateState.customers.unshift({ id: 'cus-direct-manual-result', organizationId: 'org-wheelsonauto', recurringPaymentId: 'rec-direct-manual-result', name: 'Direct Manual Result Customer', phone: '3135550151', email: 'direct-manual-result@example.com', vehicleId: 'veh-direct-manual-result', vehicle: '2025 Direct Manual Result Car', status: 'Active' });
     duplicateState.contracts.unshift({ id: 'con-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Signed - awaiting pickup' });
     duplicateState.applications.unshift({ id: 'application-direct-calendar', organizationId: 'org-wheelsonauto', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', onlineVehicleId: 'online-direct-pickup', status: 'Approved - pickup confirmed', stage: 'Ready for pickup', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 } });
     duplicateState.onboardingSessions.unshift({ id: 'onboard-direct-calendar', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onlineVehicleId: 'online-direct-pickup', status: 'Pickup confirmed', finalReviewStatus: 'Approved', insuranceOption: 'help_at_pickup' });
@@ -1013,6 +1026,7 @@ async function main() {
       { id: 'payreq-direct-pickup-first-week', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', onlineVehicleId: 'online-direct-pickup', customer: 'Direct Pickup Customer', paymentProvider: 'clover', paymentType: 'First weekly payment', amount: 229, status: 'Paid', paidAt: '2026-07-19T18:01:00.000Z' }
     );
     duplicateState.onlineVehicles.unshift({ id: 'online-direct-autopay-file', organizationId: 'org-wheelsonauto', title: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', weeklyPayment: 123, downPayment: 0, published: true, availability: 'Available' });
+    duplicateState.onlineVehicles.unshift({ id: 'online-direct-resource-retire', organizationId: 'org-wheelsonauto', platformVehicleId: 'veh-direct-resource-retire', title: '2023 Direct Retire Resource Car', vin: 'DIRECTRETIREVIN01', plate: 'DIR-RET', weeklyPayment: 125, downPayment: 0, published: true, availability: 'Available' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-draft-portal', customer: 'Direct Draft Portal Customer', phone: '3135550188', email: 'direct-draft-portal@example.com', vehicle: 'Direct Draft Portal Car', amount: 77, status: 'Active' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-missing-portal-draft', customer: 'Direct Missing Portal Draft Customer', phone: '3135550189', email: 'direct-missing-portal@example.com', vehicle: 'Direct Missing Portal Draft Car', amount: 79, status: 'Active' });
     duplicateState.customerAccounts.unshift({ id: 'direct-draft-portal-login', name: 'Direct Draft Portal Customer', customer: 'Direct Draft Portal Customer', username: 'direct-draft-portal', phone: '3135550188', email: 'direct-draft-portal@example.com', status: 'Active', recurringPaymentId: 'rec-direct-draft-portal' });
@@ -1037,8 +1051,126 @@ async function main() {
     assert(duplicateWrite.status === 200 && duplicateWrite.json.ok && duplicateWrite.json.version, 'Owner state write failed or did not return the saved state version.');
     const savedStateVersion = await request(server, 'GET', '/api/state/version', { cookie: ownerCookie });
     assert(savedStateVersion.json.version === duplicateWrite.json.version, 'State version endpoint should match the version returned by the completed save.');
+    const createdTask = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      json: { id: 'task-direct-command', title: 'Direct command task', type: 'Smoke test', customer: 'Direct Task Customer', vehicle: 'Direct Task Vehicle', due: '2026-07-27', status: 'Open', owner: 'Owner', notes: 'Created through the exact task command.' }
+    });
+    assert(createdTask.status === 200 && createdTask.json.ok && createdTask.json.task && createdTask.json.task.organizationId === 'org-wheelsonauto' && createdTask.json.task.updatedAt && createdTask.json.version, 'Exact task command should create an organization-scoped task and return its revision/version.');
+    const originalTaskRevision = createdTask.json.task.updatedAt;
+    const updatedTask = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      json: { ...createdTask.json.task, status: 'In progress', notes: 'Updated through the exact task command.', expectedUpdatedAt: originalTaskRevision }
+    });
+    assert(updatedTask.status === 200 && updatedTask.json.ok && updatedTask.json.task.status === 'In progress' && updatedTask.json.task.updatedAt !== originalTaskRevision, 'Exact task command should update the requested task when its revision matches.');
+    const staleTaskUpdate = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      json: { ...createdTask.json.task, status: 'Done', expectedUpdatedAt: originalTaskRevision }
+    });
+    assert(staleTaskUpdate.status === 409 && /changed after it was opened/i.test(staleTaskUpdate.json.error || '') && staleTaskUpdate.json.currentUpdatedAt === updatedTask.json.task.updatedAt, 'Stale task edits must fail with the current revision instead of overwriting newer work.');
+    const revisionlessTaskUpdate = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      json: { id: createdTask.json.task.id, title: createdTask.json.task.title, status: 'Done' }
+    });
+    assert(revisionlessTaskUpdate.status === 428 && /current updatedAt value is required/i.test(revisionlessTaskUpdate.json.error || ''), 'Existing task edits must require an explicit revision.');
+    const completedTask = await request(server, 'POST', '/api/tasks', {
+      cookie: ownerCookie,
+      json: { ...updatedTask.json.task, status: 'Done', doneAt: new Date().toISOString(), expectedUpdatedAt: updatedTask.json.task.updatedAt }
+    });
+    assert(completedTask.status === 200 && completedTask.json.task.status === 'Done' && completedTask.json.task.doneAt, 'Exact task command should complete the requested task without a whole-state browser save.');
+    const taskCommandState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const persistedCommandTask = (taskCommandState.json.tasks || []).find(task => task.id === 'task-direct-command');
+    assert(persistedCommandTask && persistedCommandTask.status === 'Done' && (taskCommandState.json.auditLogs || []).some(row => /Dispatch task updated/.test(row.action || '') && /Direct command task/.test(row.details || '')), 'Task command changes and their audit evidence must persist together.');
+    const createdMaintenance = await request(server, 'POST', '/api/maintenance', {
+      cookie: ownerCookie,
+      json: { id: 'mnt-direct-command', vehicleId: 'veh-direct-dispute-car', type: 'Monthly inspection / oil change', issue: 'Direct monthly inspection', cost: 88.5, due: '2026-07-27', reminder: 'Remind customer when due', notes: 'Created through the exact maintenance command.', status: 'Scheduled' }
+    });
+    assert(createdMaintenance.status === 200 && createdMaintenance.json.ok && createdMaintenance.json.job && createdMaintenance.json.job.vehicleId === 'veh-direct-dispute-car' && createdMaintenance.json.job.customer === 'Direct Dispute Customer' && createdMaintenance.json.job.vin === 'DIRECTDISPUTEVIN' && createdMaintenance.json.job.updatedAt, 'Exact maintenance command should bind the job to server-owned vehicle/customer identity. Received: ' + JSON.stringify(createdMaintenance.json));
+    const originalMaintenanceRevision = createdMaintenance.json.job.updatedAt;
+    const updatedMaintenance = await request(server, 'POST', '/api/maintenance', {
+      cookie: ownerCookie,
+      json: { ...createdMaintenance.json.job, issue: 'Direct monthly inspection updated', cost: 99.25, status: 'In progress', expectedUpdatedAt: originalMaintenanceRevision }
+    });
+    assert(updatedMaintenance.status === 200 && updatedMaintenance.json.job.status === 'In progress' && updatedMaintenance.json.job.cost === 99.25 && updatedMaintenance.json.job.updatedAt !== originalMaintenanceRevision, 'Exact maintenance command should update one revision-matched job.');
+    const staleMaintenanceCompletion = await request(server, 'POST', '/api/maintenance/mnt-direct-command/complete', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: originalMaintenanceRevision, completedAt: '2026-07-27', odometer: 44500, mechanicSignoff: 'Direct Mechanic' }
+    });
+    assert(staleMaintenanceCompletion.status === 409 && /changed after it was opened/i.test(staleMaintenanceCompletion.json.error || ''), 'Stale maintenance completion must fail without touching vehicle history or reminders.');
+    const completedMaintenance = await request(server, 'POST', '/api/maintenance/mnt-direct-command/complete', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: updatedMaintenance.json.job.updatedAt, cost: 101.75, completedAt: '2026-07-27', odometer: 44500, inspectionCondition: 'Good', inspectionChecklist: ['oil', 'tires', 'brakes', 'lights'], damageNotes: 'No new damage.', mechanicSignoff: 'Direct Mechanic', notes: 'Monthly inspection completed through the exact command.' }
+    });
+    assert(completedMaintenance.status === 200 && completedMaintenance.json.job.status === 'Completed' && completedMaintenance.json.job.cost === 101.75 && completedMaintenance.json.vehicle.mileage === 44500 && completedMaintenance.json.vehicle.lastMaintenanceAt === '2026-07-27' && completedMaintenance.json.nextReminder && completedMaintenance.json.nextReminder.due === '2026-08-27', 'Maintenance completion should atomically save service proof, vehicle mileage/history, and the next monthly reminder.');
+    const maintenanceCommandState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const persistedMaintenance = (maintenanceCommandState.json.maintenance || []).find(job => job.id === 'mnt-direct-command');
+    const nextMaintenanceRows = (maintenanceCommandState.json.maintenance || []).filter(job => job.previousMaintenanceId === 'mnt-direct-command' && job.due === '2026-08-27');
+    const maintainedVehicle = (maintenanceCommandState.json.vehicles || []).find(vehicle => vehicle.id === 'veh-direct-dispute-car');
+    assert(persistedMaintenance && persistedMaintenance.status === 'Completed' && persistedMaintenance.mechanicSignoff === 'Direct Mechanic' && nextMaintenanceRows.length === 1 && maintainedVehicle && maintainedVehicle.mileage === 44500 && (maintenanceCommandState.json.auditLogs || []).some(row => /Maintenance job completed/.test(row.action || '') && /Direct Dispute Car/.test(row.details || '')), 'Maintenance job, vehicle history, one reminder, and audit proof must persist in the same state version.');
     assert(savedStateVersion.json.version !== initialStateVersion.json.version, 'State version should change immediately after a real save.');
     const duplicateRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const vehicleResourceSearch = await request(server, 'GET', '/api/vehicles?search=DIRECTDISPUTEVIN&limit=1&page=1', { cookie: ownerCookie });
+    assert(vehicleResourceSearch.status === 200 && vehicleResourceSearch.json && vehicleResourceSearch.json.total === 1 && vehicleResourceSearch.json.records[0].id === 'veh-direct-dispute-car', 'Vehicle resource search must return the exact VIN match with pagination metadata.');
+    const vehicleResourceDetail = await request(server, 'GET', '/api/vehicles/veh-direct-dispute-car', { cookie: ownerCookie });
+    assert(vehicleResourceDetail.status === 200 && vehicleResourceDetail.json.record.vin === 'DIRECTDISPUTEVIN', 'Vehicle resource detail did not return the exact vehicle.');
+    const vehicleResourceUpdate = await request(server, 'PATCH', '/api/vehicles/veh-direct-dispute-car', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: vehicleResourceDetail.json.record.updatedAt || '', tracker: 'TRK-DSP-RESOURCE', mileage: 43210 }
+    });
+    assert(vehicleResourceUpdate.status === 200 && vehicleResourceUpdate.json.record.tracker === 'TRK-DSP-RESOURCE' && vehicleResourceUpdate.json.record.mileage === 43210, 'Scoped vehicle resource update failed.');
+    const staleVehicleResourceUpdate = await request(server, 'PATCH', '/api/vehicles/veh-direct-dispute-car', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: vehicleResourceDetail.json.record.updatedAt || '', tracker: 'TRK-DSP-STALE' }
+    });
+    assert(staleVehicleResourceUpdate.status === 409 && /changed after it was opened/i.test(staleVehicleResourceUpdate.json.error || ''), 'A stale vehicle resource update must fail instead of overwriting newer data.');
+    const customerResourceSearch = await request(server, 'GET', '/api/customers?search=Direct%20Pickup%20Customer&limit=1', { cookie: ownerCookie });
+    assert(customerResourceSearch.status === 200 && customerResourceSearch.json.total === 1 && customerResourceSearch.json.records[0].id === 'cus-direct-pickup', 'Customer resource search did not return the exact customer.');
+    const customerResourceDetail = await request(server, 'GET', '/api/customers/cus-direct-pickup', { cookie: ownerCookie });
+    const customerResourceUpdate = await request(server, 'PATCH', '/api/customers/cus-direct-pickup', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: customerResourceDetail.json.record.updatedAt || '', phone: '3135550144', email: 'direct-pickup-resource@example.com' }
+    });
+    assert(customerResourceUpdate.status === 200 && customerResourceUpdate.json.record.phone === '3135550144' && customerResourceUpdate.json.propagated.some(value => value === 'recurringPayments:rec-direct-pickup'), 'Customer contact update must propagate through its exact recurring-payment link.');
+    const paymentResourceSearch = await request(server, 'GET', '/api/payments?search=pay-direct-dispute&limit=1', { cookie: ownerCookie });
+    assert(paymentResourceSearch.status === 200 && paymentResourceSearch.json.total >= 1 && paymentResourceSearch.json.records[0].id === 'clover-payment-direct-dispute', 'Payment resource search did not return the exact provider payment.');
+    assert(!Object.prototype.hasOwnProperty.call(paymentResourceSearch.json.records[0], 'paymentSource'), 'Payment resource reads must not expose private saved-card source fields.');
+    const paymentResourceDetail = await request(server, 'GET', '/api/payments/clover-payment-direct-dispute', { cookie: ownerCookie });
+    assert(paymentResourceDetail.status === 200 && paymentResourceDetail.json.record.customer === 'Direct Dispute Customer', 'Payment resource detail did not return the exact customer-linked payment.');
+    const paymentMatchDetail = await request(server, 'GET', '/api/payments/payment-direct-resource-match-a', { cookie: ownerCookie });
+    const paymentResourceMatch = await request(server, 'POST', '/api/payments/payment-direct-resource-match-a/match', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: paymentMatchDetail.json.record.updatedAt || '', recurringPaymentId: 'rec-direct-manual-result' }
+    });
+    assert(paymentResourceMatch.status === 200 && paymentResourceMatch.json.ok && paymentResourceMatch.json.matched === 2 && paymentResourceMatch.json.payment.recurringPaymentId === 'rec-direct-manual-result', 'Exact payment matching must update every provider/source copy to the selected recurring plan.');
+    const paymentMatchState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const matchedProviderCopies = paymentMatchState.json.payments.filter(row => row.providerPaymentId === 'provider-direct-resource-match');
+    assert(matchedProviderCopies.length === 2 && matchedProviderCopies.every(row => row.customer === 'Direct Manual Result Customer' && row.vehicleId === 'veh-direct-manual-result' && row.recurringPaymentId === 'rec-direct-manual-result'), 'Payment matching must preserve exact customer and vehicle identity on duplicate provider rows.');
+    const manualPaymentResult = await request(server, 'POST', '/api/payments/manual-result', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: 'rec-direct-manual-result', expectedUpdatedAt: '', operationId: 'direct-manual-result-paid-1', result: 'Paid', amount: 125, method: 'Paid outside app', nextRun: '2026-07-27', notes: 'Direct resource API payment check.' }
+    });
+    assert(manualPaymentResult.status === 201 && manualPaymentResult.json.ok && manualPaymentResult.json.payment.customerId === 'cus-direct-manual-result' && manualPaymentResult.json.payment.vehicleId === 'veh-direct-manual-result', 'Manual payment result must preserve the exact customer and vehicle IDs.');
+    assert(manualPaymentResult.json.recurring.nextRun === '2026-08-03' && manualPaymentResult.json.recurring.retryCount === 0, 'A paid weekly manual result must advance the next charge exactly once and clear retries.');
+    const duplicateManualPaymentResult = await request(server, 'POST', '/api/payments/manual-result', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: 'rec-direct-manual-result', expectedUpdatedAt: '', operationId: 'direct-manual-result-paid-1', result: 'Paid', amount: 125, method: 'Paid outside app', nextRun: '2026-07-27' }
+    });
+    assert(duplicateManualPaymentResult.status === 200 && duplicateManualPaymentResult.json.duplicate === true && duplicateManualPaymentResult.json.payment.id === manualPaymentResult.json.payment.id, 'Retrying the same manual result operation must return the original record without duplicating money.');
+    const manualRetryResult = await request(server, 'POST', '/api/payments/manual-result', {
+      cookie: ownerCookie,
+      json: { recurringPaymentId: 'rec-direct-manual-result', expectedUpdatedAt: manualPaymentResult.json.recurring.updatedAt, operationId: 'direct-manual-result-failed-1', result: '1x failed - retrying', amount: 125, method: 'Manual retry review', nextRun: '2026-08-03' }
+    });
+    assert(manualRetryResult.status === 201 && manualRetryResult.json.recurring.retryCount === 1 && /1x failed/i.test(manualRetryResult.json.recurring.status || ''), 'Manual first-failure recording must update the exact retry state without a full-state save.');
+    const manualResultState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert(manualResultState.json.payments.filter(row => row.manualResultOperationId === 'direct-manual-result-paid-1').length === 1, 'Manual result idempotency must leave only one paid record.');
+    assert(manualResultState.json.documents.some(row => row.paymentId === manualPaymentResult.json.payment.id && row.documentKind === 'payment_receipt'), 'A paid manual result must create its linked receipt record.');
+    const retireVehicleDetail = await request(server, 'GET', '/api/vehicles/veh-direct-resource-retire', { cookie: ownerCookie });
+    const retireVehicle = await request(server, 'POST', '/api/vehicles/veh-direct-resource-retire/retire', { cookie: ownerCookie, json: { expectedUpdatedAt: retireVehicleDetail.json.record.updatedAt || '', confirmation: 'REMOVE_VEHICLE' } });
+    assert(retireVehicle.status === 200 && retireVehicle.json.record.status === 'Removed', 'An unassigned vehicle should be removed through its scoped resource command.');
+    const retiredVehicleState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const retiredOnlineVehicle = retiredVehicleState.json.onlineVehicles.find(row => row.id === 'online-direct-resource-retire');
+    assert(retiredOnlineVehicle && retiredOnlineVehicle.published === false && /unavailable|removed/i.test(retiredOnlineVehicle.availability || ''), 'Removing a vehicle must unpublish its exact online inventory row.');
+    const assignedRetireDenied = await request(server, 'POST', '/api/vehicles/veh-direct-manual-result/retire', { cookie: ownerCookie, json: { expectedUpdatedAt: '', confirmation: 'REMOVE_VEHICLE' } });
+    assert(assignedRetireDenied.status === 409 && /return workflow/i.test(assignedRetireDenied.json.error || ''), 'An assigned vehicle must use the return workflow instead of being silently removed.');
     const duplicateRows = (duplicateRead.json.vehicles || []).filter(vehicle => String(vehicle.name || '').startsWith('Direct Duplicate'));
     assert(duplicateRows.length === 2, 'Duplicate ID repair should preserve both rows.');
     assert(new Set(duplicateRows.map(vehicle => vehicle.id)).size === 2, 'Duplicate ID repair should make unique vehicle IDs.');
@@ -1067,6 +1199,12 @@ async function main() {
     assert(disputeCandidate.tracker === 'TRK-DSP', 'Dispute match candidate should carry tracker evidence.');
     assert(disputeCandidate.phone === '3135550199' && disputeCandidate.email === 'direct-dispute-customer@example.com', 'Dispute match candidate should carry contact evidence.');
     assert(String(disputeCandidate.matchReason || '').includes('same amount'), 'Dispute match candidate should explain why it was suggested.');
+    const claimResourceMatch = await request(server, 'POST', '/api/claims/claim-direct-candidate-dispute/match', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: candidateDispute.updatedAt || '', candidateType: disputeCandidate.type, candidateReference: disputeCandidate.reference, recurringPaymentId: disputeCandidate.recurringPaymentId || '' }
+    });
+    assert(claimResourceMatch.status === 200 && claimResourceMatch.json.ok && claimResourceMatch.json.claim.customer === 'Direct Dispute Customer' && claimResourceMatch.json.claim.vehicleId === 'veh-direct-dispute-car', 'Exact claim matching must save the reviewed customer and vehicle evidence without a whole-state write.');
+    assert(claimResourceMatch.json.claim.customerMatchStatus === 'Matched' && /owner accepted exact/i.test(claimResourceMatch.json.claim.customerMatchSource || ''), 'Exact claim matching must record its owner-reviewed source.');
 
     const compactLargeNote = (duplicateRead.json.contracts || []).find(row => row.id === 'con-direct-large-note');
     assert(compactLargeNote && compactLargeNote.notesOmitted === true && compactLargeNote.notes === '', 'Large customer-file notes should be omitted from normal dashboard state.');
@@ -1245,6 +1383,9 @@ async function main() {
     assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-conflict', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Conflict Car', vin: 'DIRECTCONFLICTVIN', plate: 'DIR-CNF', tracker: 'TRK-CNF', status: 'Rented' });
     assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-reference', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Reference Car', vin: 'DIRECTREFERENCEVIN', plate: 'DIR-REF', tracker: 'TRK-REF', status: 'Rented' });
     assignmentConflictState.vehicles.unshift({ id: 'veh-direct-assignment-transfer', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Transfer Car', vin: 'DIRECTTRANSFERVIN', plate: 'DIR-TRN', tracker: 'TRK-TRN', status: 'Rented' });
+    assignmentConflictState.vehicles.unshift({ id: 'veh-direct-rental-authority', organizationId: 'org-wheelsonauto', year: 2025, make: 'Direct', model: 'Rental Authority Car', vin: 'DIRECTRENTALAUTHVIN', plate: 'DIR-AUTH', tracker: 'TRK-AUTH', currentCustomer: 'Canonical Rental Customer', status: 'Rented' });
+    assignmentConflictState.rentalFiles = Array.isArray(assignmentConflictState.rentalFiles) ? assignmentConflictState.rentalFiles : [];
+    assignmentConflictState.rentalFiles.unshift({ id: 'rental-direct-authority', organizationId: 'org-wheelsonauto', customerId: 'cus-direct-rental-authority', customerName: 'Canonical Rental Customer', vehicleId: 'veh-direct-rental-authority', vehicleName: '2025 Direct Rental Authority Car', vin: 'DIRECTRENTALAUTHVIN', plate: 'DIR-AUTH', tracker: 'TRK-AUTH', status: 'Active', lifecycle: 'Active rental', startDate: '2026-07-20', version: 1 });
     assignmentConflictState.recurringPayments.unshift(
       { id: 'rec-direct-alias-profile-only', organizationId: 'org-wheelsonauto', customer: 'Direct Long Alias Person', amount: 109, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-alias-short', organizationId: 'org-wheelsonauto', customer: 'Direct Alias Person', vehicleId: 'veh-direct-assignment-alias', amount: 109, status: 'Active', nextRun: '2026-07-24' },
@@ -1256,7 +1397,9 @@ async function main() {
       { id: 'rec-direct-reference-id', organizationId: 'org-wheelsonauto', customer: 'ABCD1234XYZ9', vehicleId: 'veh-direct-assignment-reference', amount: 113, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-transfer-old', organizationId: 'org-wheelsonauto', customer: 'Direct Old Driver', vehicleId: 'veh-direct-assignment-transfer', amount: 114, status: 'Active', nextRun: '2026-07-24' },
       { id: 'rec-direct-transfer-new', organizationId: 'org-wheelsonauto', customer: 'Another New Renter', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' },
-      { id: 'rec-direct-transfer-new-reference', organizationId: 'org-wheelsonauto', customer: 'Alternate Billing Name', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' }
+      { id: 'rec-direct-transfer-new-reference', organizationId: 'org-wheelsonauto', customer: 'Alternate Billing Name', vehicleId: 'veh-direct-assignment-transfer', amount: 115, status: 'Active', nextRun: '2026-07-24' },
+      { id: 'rec-direct-rental-authority', organizationId: 'org-wheelsonauto', customer: 'Canonical Rental Customer', customerId: 'cus-direct-rental-authority', vehicleId: 'veh-direct-rental-authority', amount: 116, status: 'Active', nextRun: '2026-07-24' },
+      { id: 'rec-direct-rental-competing', organizationId: 'org-wheelsonauto', customer: 'Different Future Renter', vehicleId: 'veh-direct-rental-authority', amount: 117, status: 'Active', nextRun: '2026-07-24' }
     );
     assignmentConflictState.assignmentCustomerAliases = Array.isArray(assignmentConflictState.assignmentCustomerAliases) ? assignmentConflictState.assignmentCustomerAliases : [];
     assignmentConflictState.assignmentCustomerAliases.unshift({ id: 'alias-direct-transfer-wrong', organizationId: 'org-wheelsonauto', vehicleId: 'veh-direct-assignment-transfer', canonicalCustomer: 'Another New Renter', aliasCustomer: 'Direct Old Driver', aliases: ['Another New Renter', 'Direct Old Driver'], active: true, createdAt: '2026-07-20T12:00:00.000Z', createdBy: 'Regression setup' });
@@ -1291,6 +1434,19 @@ async function main() {
     assert(providerReferenceReview.status === 200 && providerReferenceReview.json.review.triage.kind === 'provider_reference' && providerReferenceReview.json.review.triage.providerReferences.includes('ABCD1234XYZ9'), 'An opaque provider reference in a customer field should be isolated for exact Clover-row review.');
     const transferReview = await request(server, 'GET', '/api/vehicles/veh-direct-assignment-transfer/assignment-conflict', { cookie: ownerCookie });
     assert(transferReview.status === 200 && transferReview.json.review.triage.kind === 'competing_customers' && transferReview.json.review.triage.priority === 1, 'Unrelated active customer names without shared evidence should be prioritized as a possible real transfer.');
+    const rentalAuthorityReview = await request(server, 'GET', '/api/vehicles/veh-direct-rental-authority/assignment-conflict', { cookie: ownerCookie });
+    assert(rentalAuthorityReview.status === 200 && rentalAuthorityReview.json.review.claims.some(row => row.source === 'Rental File' && row.id === 'rental-direct-authority'), 'Assignment review must surface the active Rental File as the canonical renter claim.');
+    const blockedRentalAuthorityTransfer = await request(server, 'POST', '/api/vehicles/veh-direct-rental-authority/assignment-transfer', {
+      cookie: ownerCookie,
+      json: {
+        currentCustomer: 'Different Future Renter',
+        reason: 'Direct smoke must not rewrite an active Rental File.',
+        confirmation: 'KEEP_CURRENT_RENTER_AND_END_OLD_ASSIGNMENTS'
+      }
+    });
+    assert(blockedRentalAuthorityTransfer.status === 409 && blockedRentalAuthorityTransfer.json.code === 'woa_rental_file_authoritative' && blockedRentalAuthorityTransfer.json.rentalFileId === 'rental-direct-authority', 'A legacy assignment repair must not select a different renter while a canonical Rental File is active.');
+    const rentalAuthorityState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    assert((rentalAuthorityState.json.rentalFiles || []).find(row => row.id === 'rental-direct-authority').status === 'Active' && (rentalAuthorityState.json.recurringPayments || []).find(row => row.id === 'rec-direct-rental-competing').status === 'Active', 'A blocked Rental File transfer must leave every source record unchanged for owner review.');
     const transferWithoutConfirmation = await request(server, 'POST', '/api/vehicles/veh-direct-assignment-transfer/assignment-transfer', {
       cookie: ownerCookie,
       json: { currentCustomer: 'Another New Renter' }
@@ -1993,11 +2149,33 @@ async function main() {
     assert(franchiseReadiness.json.records.vehicles === 1 && franchiseReadiness.json.records.customerAccounts === 1, 'Franchise manager readiness should only count scoped franchise fleet and customer portal records.');
 
     const mechanicCookie = await login(server, { username: 'direct-mechanic', password: 'DirectMechanic123!' });
+    const mechanicRetireDenied = await request(server, 'POST', '/api/vehicles/veh-direct-manual-result/retire', { cookie: mechanicCookie, json: { expectedUpdatedAt: '', confirmation: 'REMOVE_VEHICLE' } });
+    assert(mechanicRetireDenied.status === 403, 'Mechanic accounts must not be able to retire fleet vehicles.');
     const mechanicNotifications = await request(server, 'GET', '/api/app-notifications', { cookie: mechanicCookie });
     assert(mechanicNotifications.status === 200 && mechanicNotifications.json.ok && mechanicNotifications.json.notifications.every(row => row.type === 'service'), 'Mechanic app notifications must stay limited to service work.');
     const managerCookie = await login(server, { username: 'direct-manager', password: 'DirectManager456!' });
+    const managerPaymentMatchDenied = await request(server, 'POST', '/api/payments/payment-direct-resource-match-a/match', { cookie: managerCookie, json: { expectedUpdatedAt: '', recurringPaymentId: 'rec-direct-manual-result' } });
+    assert(managerPaymentMatchDenied.status === 403, 'Manager accounts must not be able to accept payment-to-customer matches.');
+    const managerClaimMatchDenied = await request(server, 'POST', '/api/claims/claim-direct-candidate-dispute/match', { cookie: managerCookie, json: { expectedUpdatedAt: '', candidateType: 'payment', candidateReference: 'pay-direct-dispute' } });
+    assert(managerClaimMatchDenied.status === 403, 'Manager accounts must not be able to accept claim-to-customer matches.');
+    const managerStaffNext = await request(server, 'GET', '/staff-next', { cookie: managerCookie });
+    const mechanicStaffNext = await request(server, 'GET', '/staff-next', { cookie: mechanicCookie });
+    assert(managerStaffNext.status === 200 && managerStaffNext.text.includes('staff-dist/staff-next.js'), 'Manager should open the scoped React staff workspace.');
+    assert(mechanicStaffNext.status === 200 && mechanicStaffNext.text.includes('staff-dist/staff-next.js') && mechanicStaffNext.text.includes('direct-mechanic'), 'Mechanic should open the shared role-scoped React shell.');
     const managerNotifications = await request(server, 'GET', '/api/app-notifications', { cookie: managerCookie });
     assert(managerNotifications.status === 200 && managerNotifications.json.ok && managerNotifications.json.notifications.every(row => row.type !== 'payment'), 'Manager app notifications must not expose owner payment alerts.');
+    const managerCustomerResources = await request(server, 'GET', '/api/customers?limit=2', { cookie: managerCookie });
+    assert(managerCustomerResources.status === 200 && managerCustomerResources.json.records.length <= 2, 'Manager should have paginated customer resource access for their company.');
+    const managerPaymentResources = await request(server, 'GET', '/api/payments?limit=2', { cookie: managerCookie });
+    assert(managerPaymentResources.status === 200 && managerPaymentResources.json.records.length <= 2, 'Manager should have paginated payment resource access for their company.');
+    const mechanicVehicleResources = await request(server, 'GET', '/api/vehicles?limit=2', { cookie: mechanicCookie });
+    assert(mechanicVehicleResources.status === 200 && mechanicVehicleResources.json.records.length <= 2, 'Mechanic should have read-only vehicle identity access for service work.');
+    const mechanicCustomerResources = await request(server, 'GET', '/api/customers?limit=2', { cookie: mechanicCookie });
+    assert(mechanicCustomerResources.status === 403, 'Mechanic must not receive the customer resource directory.');
+    const mechanicPaymentResources = await request(server, 'GET', '/api/payments?limit=2', { cookie: mechanicCookie });
+    assert(mechanicPaymentResources.status === 403, 'Mechanic must not receive payment resource records.');
+    const mechanicVehicleUpdate = await request(server, 'PATCH', '/api/vehicles/veh-direct-dispute-car', { cookie: mechanicCookie, json: { expectedUpdatedAt: '', tracker: 'BLOCKED' } });
+    assert(mechanicVehicleUpdate.status === 403, 'Mechanic must not edit fleet identity metadata through the manager resource action.');
     const managerCustomerAssistance = await request(server, 'POST', '/api/customer-accounts/assist', { cookie: managerCookie, json: { id: 'direct-customer-login' } });
     assert(managerCustomerAssistance.status === 403, 'Manager must not be able to impersonate a customer account.');
     const managerStorageValidation = await request(server, 'POST', '/api/system/infrastructure/document-storage/validate', { cookie: managerCookie, json: {} });
@@ -2538,8 +2716,8 @@ async function main() {
     const rejectedMileageRecurring = stateAfterAbsurdMileage.json.recurringPayments.find(row => row.id === 'rec-direct-pickup');
     const rejectedMileageOnlineVehicle = stateAfterAbsurdMileage.json.onlineVehicles.find(row => row.id === 'online-direct-pickup');
     assert(rejectedMileageAppointment.status !== 'Picked up' && rejectedMileageVehicle.mileage === 41000 && rejectedMileageVehicle.status !== 'Rented' && rejectedMileageRecurring.status !== 'Active' && rejectedMileageOnlineVehicle.availability !== 'Rented', 'Rejected pickup mileage must not partially change pickup, vehicle, autopay, or online inventory records.');
-    const completedPickup = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Direct Test Insurance', insurancePolicyNumber: 'DIRECT-POLICY-100', mileage: 41234, notes: 'Active coverage and exact VIN confirmed; keys and vehicle handed to customer.' } });
-    assert(completedPickup.status === 200 && completedPickup.json.appointment.status === 'Picked up' && completedPickup.json.vehicle.status === 'Rented' && completedPickup.json.recurring.status === 'Active', 'Manager should atomically complete the physical pickup, fleet status, and autopay activation.');
+    const completedPickup = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceProvider: 'Direct Test Insurance', insurancePolicyNumber: 'DIRECT-POLICY-100', actualPickupDate: '2026-07-20', mileage: 41234, notes: 'Active coverage and exact VIN confirmed; keys and vehicle handed to customer.' } });
+    assert(completedPickup.status === 200 && completedPickup.json.appointment.status === 'Picked up' && completedPickup.json.vehicle.status === 'Rented' && completedPickup.json.recurring.status === 'Active' && completedPickup.json.rentalFile && completedPickup.json.rentalFile.customerId === 'cus-direct-pickup' && completedPickup.json.rentalFile.vehicleId === 'veh-direct-pickup-car', 'Manager should atomically complete the physical pickup, fleet status, autopay activation, and immutable Rental File.');
     const completedPickupState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const pickupCompletionSnapshot = {
       vehicle: completedPickupState.json.vehicles.find(row => row.id === 'veh-direct-pickup-car'),
@@ -2550,8 +2728,65 @@ async function main() {
       onlineVehicle: completedPickupState.json.onlineVehicles.find(row => row.id === 'online-direct-pickup')
     };
     assert(pickupCompletionSnapshot.vehicle.mileage === 41234 && pickupCompletionSnapshot.customer.status === 'Active' && pickupCompletionSnapshot.contract.status === 'Active' && pickupCompletionSnapshot.application.stage === 'Active customer' && pickupCompletionSnapshot.session.status === 'Completed' && pickupCompletionSnapshot.onlineVehicle.availability === 'Rented', 'Pickup completion must update customer, contract, application, onboarding, vehicle, and online inventory together: ' + JSON.stringify(pickupCompletionSnapshot));
+    const completedRentalFile = completedPickupState.json.rentalFiles.find(row => row.id === completedPickup.json.rentalFile.id);
+    assert(completedRentalFile && completedRentalFile.pickupAppointmentId === 'pickup-direct-calendar' && completedRentalFile.recurringPaymentId === 'rec-direct-pickup' && completedRentalFile.startDate === '2026-07-20', 'Pickup completion must persist one canonical Rental File with the exact pickup and recurring schedule.');
+    const managerRentalFiles = await request(server, 'GET', '/api/rentals', { cookie: managerCookie });
+    assert(managerRentalFiles.status === 200 && managerRentalFiles.json.records.some(row => row.id === completedRentalFile.id), 'Manager should be able to list organization-scoped Rental Files.');
+    const managerRentalDetail = await request(server, 'GET', '/api/rentals/' + encodeURIComponent(completedRentalFile.id), { cookie: managerCookie });
+    assert(managerRentalDetail.status === 200 && managerRentalDetail.json.records.pickupAppointments.some(row => row.id === 'pickup-direct-calendar') && managerRentalDetail.json.records.recurringPayments.some(row => row.id === 'rec-direct-pickup'), 'Rental File detail should connect the exact pickup and payment schedule records.');
+    const activeRentalRevision = Number(managerRentalDetail.json.rentalFile.version || 0);
+    const activeRentalCustomer = await request(server, 'GET', '/api/customers/cus-direct-pickup', { cookie: managerCookie });
+    const updatedRentalCustomer = await request(server, 'PATCH', '/api/customers/cus-direct-pickup', {
+      cookie: managerCookie,
+      json: {
+        expectedUpdatedAt: activeRentalCustomer.json.record.updatedAt || '',
+        phone: '3135550155',
+        email: 'direct-rental-updated@example.com'
+      }
+    });
+    assert(updatedRentalCustomer.status === 200 && updatedRentalCustomer.json.propagated.includes('rentalFiles:' + completedRentalFile.id), 'Active customer contact changes must propagate to the exact Rental File.');
+    const activeRentalVehicle = await request(server, 'GET', '/api/vehicles/veh-direct-pickup-car', { cookie: managerCookie });
+    const updatedRentalVehicle = await request(server, 'PATCH', '/api/vehicles/veh-direct-pickup-car', {
+      cookie: managerCookie,
+      json: {
+        expectedUpdatedAt: activeRentalVehicle.json.record.updatedAt || '',
+        plate: 'RENTAL99',
+        tracker: 'TRACKER-RENTAL-99',
+        location: '5150 NJ-42, Blackwood, NJ 08012',
+        mileage: 41240
+      }
+    });
+    assert(updatedRentalVehicle.status === 200 && updatedRentalVehicle.json.propagated.includes('rentalFiles:' + completedRentalFile.id), 'Active vehicle identity changes must propagate to the exact Rental File.');
+    const propagatedRentalDetail = await request(server, 'GET', '/api/rentals/' + encodeURIComponent(completedRentalFile.id), { cookie: managerCookie });
+    assert(
+      propagatedRentalDetail.status === 200 &&
+      propagatedRentalDetail.json.rentalFile.customerPhone === '3135550155' &&
+      propagatedRentalDetail.json.rentalFile.customerEmail === 'direct-rental-updated@example.com' &&
+      propagatedRentalDetail.json.rentalFile.plate === 'RENTAL99' &&
+      propagatedRentalDetail.json.rentalFile.tracker === 'TRACKER-RENTAL-99' &&
+      propagatedRentalDetail.json.rentalFile.vehicleLocation === '5150 NJ-42, Blackwood, NJ 08012' &&
+      propagatedRentalDetail.json.rentalFile.currentMileage === 41240 &&
+      Number(propagatedRentalDetail.json.rentalFile.version || 0) >= activeRentalRevision + 2,
+      'The active Rental File must expose exact customer and vehicle updates with a newer revision.'
+    );
+    const mechanicRentalFiles = await request(server, 'GET', '/api/rentals', { cookie: mechanicCookie });
+    assert(mechanicRentalFiles.status === 403, 'Mechanic must not receive the financial Rental File API.');
     const repeatedPickupCompletion = await request(server, 'POST', '/api/pickups/pickup-direct-calendar/complete', { cookie: managerCookie, json: { confirmed: true, mileage: 41234 } });
     assert(repeatedPickupCompletion.status === 200 && repeatedPickupCompletion.json.alreadyCompleted === true, 'Repeated pickup completion must be idempotent.');
+    const mechanicRentalReturn = await request(server, 'POST', '/api/rentals/' + encodeURIComponent(completedRentalFile.id) + '/return', { cookie: mechanicCookie, json: { confirmation: 'RETURN_RENTAL_VEHICLE', endDate: '2026-08-20', endingMileage: 42000 } });
+    assert(mechanicRentalReturn.status === 403, 'Mechanic must not end a customer Rental File.');
+    const unconfirmedRentalReturn = await request(server, 'POST', '/api/rentals/' + encodeURIComponent(completedRentalFile.id) + '/return', { cookie: managerCookie, json: { endDate: '2026-08-20', endingMileage: 42000 } });
+    assert(unconfirmedRentalReturn.status === 400, 'Rental return must require explicit physical-return confirmation.');
+    const completedRentalReturn = await request(server, 'POST', '/api/rentals/' + encodeURIComponent(completedRentalFile.id) + '/return', { cookie: managerCookie, json: { confirmation: 'RETURN_RENTAL_VEHICLE', endDate: '2026-08-20', endingMileage: 42000, vehicleStatus: 'Prep', reason: 'Direct smoke return and inspection.' } });
+    assert(completedRentalReturn.status === 200 && completedRentalReturn.json.rentalFile.status === 'Returned' && completedRentalReturn.json.vehicle.status === 'Prep', 'Manager should atomically end the Rental File and move the vehicle into the selected fleet status.');
+    const returnedRentalState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const returnedRental = returnedRentalState.json.rentalFiles.find(row => row.id === completedRentalFile.id);
+    const returnedRentalVehicle = returnedRentalState.json.vehicles.find(row => row.id === 'veh-direct-pickup-car');
+    const returnedRentalCustomer = returnedRentalState.json.customers.find(row => row.id === 'cus-direct-pickup');
+    const returnedRentalRecurring = returnedRentalState.json.recurringPayments.find(row => row.id === 'rec-direct-pickup');
+    assert(returnedRental.endDate === '2026-08-20' && returnedRentalVehicle.activeRentalFileId === '' && returnedRentalCustomer.status === 'Returned' && returnedRentalRecurring.autoChargeEnabled === false, 'Rental return must end customer, vehicle, and recurring state through the same server command.');
+    const repeatedRentalReturn = await request(server, 'POST', '/api/rentals/' + encodeURIComponent(completedRentalFile.id) + '/return', { cookie: managerCookie, json: { confirmation: 'RETURN_RENTAL_VEHICLE', endDate: '2026-08-20', endingMileage: 42000 } });
+    assert(repeatedRentalReturn.status === 200 && repeatedRentalReturn.json.alreadyEnded === true, 'Repeated Rental File return must be idempotent.');
 
     const tollSeedRead = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const tollSeedState = JSON.parse(JSON.stringify(tollSeedRead.json));
@@ -2934,7 +3169,7 @@ async function main() {
 	    const customerReceiptNoAuth = await request(server, 'POST', '/customer/receipt-request');
 	    assert(customerReceiptNoAuth.status === 302 && customerReceiptNoAuth.location === '/customer/login', 'Customer receipt request should require customer login.');
 	    const customerReceiptRequest = await request(server, 'POST', '/customer/receipt-request', { cookie: customerCookie, form: { paymentHint: 'Need receipt for the latest $229 payment.' } });
-	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer#portal-settings', 'Customer receipt request should return to Settings, where private files and account-document actions live.');
+	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer#portal-payments', 'Customer receipt request should return to Payments, where billing actions live.');
 	    const customerReceiptState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const receiptMessage = (customerReceiptState.json.messages || []).find(item => item.event === 'customer_receipt_request' && item.customer === 'Alicia Brown');
 	    assert(receiptMessage && receiptMessage.status === 'Needs admin approval' && receiptMessage.aiPlan && receiptMessage.aiPlan.actionType === 'send_receipt' && receiptMessage.aiPlan.approvalRequired === true, 'Customer receipt request should create an admin-approved send_receipt message.');
@@ -2944,7 +3179,7 @@ async function main() {
 	    const customerStatementNoAuth = await request(server, 'POST', '/customer/statement-request');
 	    assert(customerStatementNoAuth.status === 302 && customerStatementNoAuth.location === '/customer/login', 'Customer account statement request should require customer login.');
 	    const customerStatementRequest = await request(server, 'POST', '/customer/statement-request', { cookie: customerCookie, form: { requestType: 'Payoff balance', note: 'Need payoff amount before Friday.' } });
-	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer#portal-settings', 'Customer statement request should return to Settings, where private files and account-document actions live.');
+	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer#portal-payments', 'Customer statement request should return to Payments, where billing actions live.');
 	    const customerStatementState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const statementMessage = (customerStatementState.json.messages || []).find(item => item.event === 'customer_statement_request' && item.customer === 'Alicia Brown');
 	    assert(statementMessage && statementMessage.status === 'Needs admin approval' && statementMessage.aiPlan && statementMessage.aiPlan.actionType === 'send_account_statement' && statementMessage.aiPlan.approvalRequired === true, 'Customer statement request should create an admin-approved send_account_statement message.');

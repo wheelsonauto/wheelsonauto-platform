@@ -1001,6 +1001,60 @@ async function refreshCoordinationSmoke() {
   assert(ownerCalls === 0, 'A leased provider sync must not call an external sync route twice.');
 }
 
+async function scopedResourceMutationSmoke() {
+  const context = makeContext({ name: 'Owner Resource Edit', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
+  const vehicle = context.db.vehicles.find(row => row.id);
+  assert(vehicle, 'Scoped resource mutation smoke needs one vehicle fixture.');
+  const fields = {
+    vId: vehicle.id,
+    vYear: vehicle.year || '',
+    vMake: vehicle.make || '',
+    vModel: vehicle.model || '',
+    vVin: vehicle.vin || '',
+    vPlate: vehicle.plate || vehicle.stock || '',
+    vTempTag: vehicle.tempTag || '',
+    vCustomer: vehicle.currentCustomer || '',
+    vRate: vehicle.rate || vehicle.price || 0,
+    vMileage: Number(vehicle.mileage || 0) + 1,
+    vTracker: String(vehicle.tracker || '') + '-RESOURCE',
+    vTrackerProvider: vehicle.trackerProvider || '',
+    vTrackerStatus: vehicle.trackerStatus || '',
+    vTrackerLastPing: vehicle.trackerLastPing || vehicle.lastPing || '',
+    vTrackerLocation: vehicle.trackerLocation || vehicle.lastLocation || '',
+    vStatus: vehicle.status || 'Ready',
+    vPhotoUrl: vehicle.photoUrl || '',
+    vOilChange: vehicle.oilChangeDate || '',
+    vToll: vehicle.lastChargedToll || '',
+    vViolation: vehicle.violationBill || '',
+    vNotes: vehicle.notes || ''
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    context.document.elements[id] = element(id, context.document);
+    context.document.elements[id].value = String(value);
+  });
+  const calls = [];
+  context.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: String(init.method || 'GET').toUpperCase(), body: init.body || '' });
+    if (String(url) === '/api/vehicles/' + encodeURIComponent(vehicle.id) && String(init.method || '').toUpperCase() === 'PATCH') {
+      const payload = JSON.parse(String(init.body || '{}'));
+      Object.assign(vehicle, payload, { updatedAt: '2026-07-26T15:00:00.000Z' });
+      delete vehicle.expectedUpdatedAt;
+      return { ok: true, status: 200, json: async () => ({ ok: true, record: { ...vehicle }, version: 'resource-version-2' }) };
+    }
+    if (String(url) === '/api/state/version') return { ok: true, status: 200, json: async () => ({ ok: true, version: 'resource-version-2' }) };
+    if (String(url) === '/api/state') return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(context.db)) };
+    throw new Error('Unexpected scoped-resource client URL: ' + url);
+  };
+
+  assert(context.__woaVehicleMetadataOnly(vehicle), 'Vehicle fixture should qualify as a metadata-only edit: ' + JSON.stringify(vehicle));
+  await dispatchClick(context, { action: 'save-vehicle', id: vehicle.id });
+  const patchCall = calls.find(call => call.method === 'PATCH');
+  assert(patchCall && patchCall.url === '/api/vehicles/' + encodeURIComponent(vehicle.id), 'A metadata-only vehicle edit must use the scoped vehicle PATCH API.');
+  assert(!calls.some(call => call.method === 'PUT' && call.url === '/api/state'), 'A metadata-only vehicle edit must never upload the whole platform state.');
+  const payload = JSON.parse(patchCall.body);
+  assert(payload.expectedUpdatedAt === '' && payload.tracker.endsWith('-RESOURCE') && payload.mileage === Number(fields.vMileage), 'Scoped vehicle PATCH must include its optimistic-lock revision and edited metadata.');
+}
+
 function sessionExpirySmoke() {
   const context = makeContext({ name: 'Owner Session', role: 'Owner', homeView: 'Dashboard', access: 'Full platform access' });
   context.localStorage.setItem('woa-platform-backup', JSON.stringify(seed));
@@ -1089,6 +1143,7 @@ async function main() {
   recoveryConsoleSmoke();
   cloverPartialRosterSmoke();
   await refreshCoordinationSmoke();
+  await scopedResourceMutationSmoke();
   sessionExpirySmoke();
   starAutoSendDefaultSmoke();
   heavyMessagesReportsSmoke();

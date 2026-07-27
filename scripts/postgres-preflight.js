@@ -54,6 +54,8 @@ async function main() {
     });
   });
   let criticalResources = [];
+  let normalizedResources = [];
+  let rentalRelations = { rentals: [], links: [] };
   let activeAssignments = [];
   const assignmentIdentityConflicts = stateRepository.activeAssignmentIdentityConflicts(state);
   if (!nonidenticalCriticalDuplicates.length) {
@@ -62,6 +64,8 @@ async function main() {
         ? stateRepository.collapseExactDuplicateCriticalResources(state).state
         : state;
       criticalResources = stateRepository.criticalResourceIndexRows(indexState);
+      normalizedResources = stateRepository.normalizedResourceRows(indexState);
+      rentalRelations = stateRepository.rentalRelationRows(indexState);
     } catch (error) {
       structuralErrors.push({
         kind: String(error && error.code || 'woa_resource_index_error'),
@@ -149,6 +153,9 @@ async function main() {
       repairableExactDuplicateCopies: repairableExactDuplicates.reduce((sum, row) => sum + row.removedCount, 0),
       nonidenticalCriticalDuplicateGroups: nonidenticalCriticalDuplicates.length,
       criticalResources: criticalResources.length,
+      normalizedResources: normalizedResources.length,
+      rentalFiles: rentalRelations.rentals.length,
+      rentalSourceLinks: rentalRelations.links.length,
       activeAssignments: activeAssignments.length,
       activeAssignmentConflicts: assignmentIdentityConflicts.length,
       immutableProviderIdentities: immutableProviderIdentities.length

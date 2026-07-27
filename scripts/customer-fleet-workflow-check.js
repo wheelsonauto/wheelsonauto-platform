@@ -210,6 +210,19 @@ requireText('Server assignment truth must use the shared transactional rule', ac
 requireText('Pending intake rows must not claim a live assignment', activeAssignmentCandidate, 'INACTIVE_ASSIGNMENT_PATTERN');
 requireText('The shared assignment rule must exclude pending intake', stateRepository, 'pending application');
 requireText('Saved-card onboarding rows must not claim a fleet vehicle before handoff', activeAssignmentCandidate, 'row.onboardingSessionId && !row.pickupCompletedAt');
+[
+  "const vehicleRetireMatch = /^\\/api\\/vehicles\\/([^/]+)\\/retire$/",
+  'Complete the return workflow before removing it from Fleet.',
+  "row.published = false",
+  "row.availability = 'Removed from fleet'",
+  'assertResourceRevision(vehicle, payload)'
+].forEach(text => requireText('Assignment-safe scoped vehicle retirement', server, text));
+[
+  "'confirm-remove-vehicle'",
+  "post('/api/vehicles/'+encodeURIComponent(id)+'/retire'",
+  "confirmation:'REMOVE_VEHICLE'",
+  'expectedUpdatedAt:vehicle.updatedAt'
+].forEach(text => requireText('Scoped vehicle retirement client wiring', app, text));
 if (stateRepositoryRuntime.activeAssignmentCandidate({ customer: 'Test Applicant', vehicleId: 'veh-test', status: 'Card linked', onboardingSessionId: 'onboard-test' }, 'recurringPayments') !== null) fail('A card-linked unpaid onboarding row claimed a fleet assignment.');
 if (!stateRepositoryRuntime.activeAssignmentCandidate({ customer: 'Active Customer', vehicleId: 'veh-live', status: 'Active' }, 'recurringPayments')) fail('A normal active recurring customer should remain valid assignment evidence.');
 

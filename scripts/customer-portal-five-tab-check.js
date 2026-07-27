@@ -80,8 +80,11 @@ assert(html.includes('This does not reassign a vehicle.'), 'A swap request must 
 assert(html.includes('Current password'), 'Sensitive profile edits must require the current password.');
 assert(html.includes('JPG, PNG, or PDF up to 5 MB'), 'Private document upload limits must be visible.');
 assert(html.includes('Jul 23, 2026') && !html.includes('2026-07-23T12:30:00.000Z'), 'Customer chat must show a readable local timestamp while keeping raw audit time out of the interface.');
+assert(!html.includes('customer-chat-context'), 'The customer conversation must not repeat vehicle, VIN, or tag metadata above the messages.');
 assert(clientSource.includes('weekly / 7 * days'), 'The live date-change preview must use the exact weekly divided-by-seven calculation.');
 assert(clientSource.includes("window.addEventListener('hashchange'"), 'Browser back and customer tab changes must stay synchronized.');
+assert(serverSource.includes("url.pathname === '/api/customer/events'") && clientSource.includes("new EventSource('/api/customer/events')"), 'Customer messages and notifications must share one authenticated live event stream.');
+assert(!clientSource.includes('setInterval('), 'The customer portal must not run independent polling loops.');
 assert(clientSource.includes("window.scrollTo({ top: 0, behavior: 'auto' })") && clientSource.includes('active.blur()'), 'Customer tab changes must reset the app viewport immediately and dismiss an open keyboard.');
 assert(clientSource.includes('function setupSettingsNavigation()') && clientSource.includes('data-customer-settings-target'), 'Settings must open focused app-style category screens instead of one long stack of cards.');
 assert(clientSource.includes('data-customer-settings-back') && clientSource.includes("window.sessionStorage.setItem(storageKey, key)"), 'Settings detail screens must include Back navigation and preserve the active screen after a save.');

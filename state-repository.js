@@ -12,6 +12,8 @@ const PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID = '20260718_provider_financial_id
 const RECOVERY_HISTORY_MIGRATION_ID = '20260719_append_only_recovery_history_v6';
 const MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID = '20260719_signed_migration_source_provenance_v7';
 const WEBHOOK_CLAIM_TOKEN_MIGRATION_ID = '20260719_webhook_claim_tokens_v8';
+const NORMALIZED_RESOURCE_MIGRATION_ID = '20260726_normalized_resource_rows_v9';
+const RENTAL_RELATION_MIGRATION_ID = '20260727_canonical_rental_relations_v10';
 const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
   MIGRATION_ID,
   TRANSACTIONAL_INDEX_MIGRATION_ID,
@@ -20,7 +22,9 @@ const REQUIRED_SCHEMA_MIGRATION_IDS = Object.freeze([
   PROVIDER_FINANCIAL_IDENTITY_MIGRATION_ID,
   RECOVERY_HISTORY_MIGRATION_ID,
   MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID,
-  WEBHOOK_CLAIM_TOKEN_MIGRATION_ID
+  WEBHOOK_CLAIM_TOKEN_MIGRATION_ID,
+  NORMALIZED_RESOURCE_MIGRATION_ID,
+  RENTAL_RELATION_MIGRATION_ID
 ]);
 const DEFAULT_ORGANIZATION_ID = 'org-wheelsonauto';
 const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
@@ -34,7 +38,7 @@ const RECOVERY_DRILL_REQUIRED_CHECKS = Object.freeze([
   'stateChecksum',
   'migrationProof'
 ]);
-const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v6-paid-provider-idempotency';
+const RECOVERY_DRILL_SCRIPT_VERSION = 'postgres-runtime-check-v8-canonical-rental-relations';
 const RECOVERY_DRILL_CONTRACT_VERSION = Object.freeze([
   'wheelsonauto-recovery-drill-v2',
   RECOVERY_DRILL_SCRIPT_VERSION,
@@ -56,13 +60,19 @@ const REQUIRED_SCHEMA_CONTRACT = Object.freeze({
     ['woa_rate_limits', 'p', 'PRIMARY KEY (organization_id, scope, key_hash)'],
     ['woa_identity_index', 'p', 'PRIMARY KEY (organization_id, kind, normalized_value)'],
     ['woa_resource_index', 'p', 'PRIMARY KEY (organization_id, resource_type, resource_id)'],
+    ['woa_resources', 'p', 'PRIMARY KEY (organization_id, resource_type, resource_id)'],
+    ['woa_rental_files', 'p', 'PRIMARY KEY (organization_id, id)'],
+    ['woa_rental_links', 'p', 'PRIMARY KEY (organization_id, rental_file_id, resource_type, resource_id)'],
+    ['woa_rental_links', 'u', 'UNIQUE (organization_id, resource_type, resource_id)'],
     ['woa_active_assignments', 'p', 'PRIMARY KEY (organization_id, vehicle_id)'],
     ['woa_documents', 'p', 'PRIMARY KEY (organization_id, id)'],
     ['woa_ai_usage', 'p', 'PRIMARY KEY (organization_id, period_type, period_key)']
   ]),
   indexes: Object.freeze([
     ['woa_documents', 'woa_documents_provider_key_unique', ['unique index', '(storage_provider, object_key)', 'where']],
-    ['woa_job_errors', 'woa_job_errors_open_fingerprint_unique', ['unique index', '(organization_id, fingerprint)', 'where']]
+    ['woa_job_errors', 'woa_job_errors_open_fingerprint_unique', ['unique index', '(organization_id, fingerprint)', 'where']],
+    ['woa_rental_files', 'woa_rental_files_active_vehicle_unique', ['unique index', '(organization_id, vehicle_id)', 'where active']],
+    ['woa_rental_files', 'woa_rental_files_active_customer_unique', ['unique index', '(organization_id, customer_id)', 'where active']]
   ])
 });
 
@@ -648,6 +658,7 @@ const CRITICAL_RESOURCE_COLLECTIONS = Object.freeze([
   ['customers', 'customer'],
   ['contracts', 'customer_file'],
   ['applications', 'application'],
+  ['rentalFiles', 'rental_file'],
   ['verificationCases', 'verification_case'],
   ['documents', 'document'],
   ['eSignatures', 'e_signature'],
@@ -660,7 +671,22 @@ const CRITICAL_RESOURCE_COLLECTIONS = Object.freeze([
   ['cardSetupRequests', 'card_setup_request'],
   ['claims', 'claim'],
   ['maintenance', 'maintenance'],
-  ['customerAccounts', 'customer_account']
+  ['messages', 'message'],
+  ['tasks', 'task'],
+  ['calendarEvents', 'calendar_event'],
+  ['dailyCloseouts', 'daily_closeout'],
+  ['billingInvoices', 'billing_invoice'],
+  ['billingEvents', 'billing_event'],
+  ['ledgerEntries', 'ledger_entry'],
+  ['accountingAdjustments', 'accounting_adjustment'],
+  ['accountingPeriods', 'accounting_period'],
+  ['trackerEvents', 'tracker_event'],
+  ['trackerUnmatched', 'tracker_unmatched'],
+  ['vehicleSwapRequests', 'vehicle_swap_request'],
+  ['customerAccounts', 'customer_account'],
+  ['staffAccounts', 'staff_account'],
+  ['organizations', 'organization'],
+  ['auditLogs', 'audit_log']
 ]);
 
 function activeOnboardingVehicleHoldConflicts(state = {}) {
@@ -824,6 +850,159 @@ function criticalResourceIndexRows(state = {}) {
   return rows.sort((left, right) => left.resourceType.localeCompare(right.resourceType) || left.resourceId.localeCompare(right.resourceId));
 }
 
+function normalizedResourceRows(state = {}) {
+  const metadata = new Map(criticalResourceIndexRows(state).map(row => [row.resourceType + '\u0000' + row.resourceId, row]));
+  const rows = [];
+  CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
+    (Array.isArray(state[collection]) ? state[collection] : []).forEach(record => {
+      const resourceId = rowId(record);
+      const index = metadata.get(resourceType + '\u0000' + resourceId);
+      const payload = clone(record);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        const error = new Error('Critical ' + resourceType.replace(/_/g, ' ') + ' ' + resourceId + ' does not contain an object payload.');
+        error.code = 'woa_resource_payload_invalid';
+        error.resourceType = resourceType;
+        error.resourceId = resourceId;
+        throw error;
+      }
+      rows.push({
+        ...index,
+        payload,
+        payloadChecksum: checksum(payload)
+      });
+    });
+  });
+  return rows.sort((left, right) => left.resourceType.localeCompare(right.resourceType) || left.resourceId.localeCompare(right.resourceId));
+}
+
+const RENTAL_LINK_RESOURCE_TYPES = Object.freeze(new Map(CRITICAL_RESOURCE_COLLECTIONS));
+
+function rentalFileIsActive(record = {}) {
+  const status = String(record.status || record.lifecycle || '').trim();
+  return /\b(active|picked up|rented)\b/i.test(status)
+    && !/\b(ended|returned|closed|cancelled|canceled|history|inactive|removed)\b/i.test(status)
+    && !record.endedAt
+    && !record.endDate;
+}
+
+function nullableIsoDate(value) {
+  const date = String(value || '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+}
+
+function rentalRelationRows(state = {}) {
+  const rentalFiles = Array.isArray(state.rentalFiles) ? state.rentalFiles : [];
+  const rentalIds = new Set();
+  const rows = [];
+  const links = [];
+  const linkOwners = new Map();
+  const addLink = (rentalFileId, resourceType, resourceId) => {
+    const rentalId = String(rentalFileId || '').trim();
+    const type = String(resourceType || '').trim();
+    const id = String(resourceId || '').trim();
+    if (!rentalId || !type || !id || type === 'rental_file') return;
+    const identity = type + '\u0000' + id;
+    const existingOwner = linkOwners.get(identity);
+    if (existingOwner && existingOwner !== rentalId) {
+      const error = new Error('Critical ' + type.replace(/_/g, ' ') + ' ' + id + ' is connected to Rental Files ' + existingOwner + ' and ' + rentalId + '. Refusing to rewrite rental history.');
+      error.code = 'woa_rental_relation_conflict';
+      error.resourceType = type;
+      error.resourceId = id;
+      error.rentalFileIds = [existingOwner, rentalId];
+      throw error;
+    }
+    linkOwners.set(identity, rentalId);
+    const linkIdentity = rentalId + '\u0000' + identity;
+    if (links.some(link => link.identity === linkIdentity)) return;
+    links.push({ identity: linkIdentity, rentalFileId: rentalId, resourceType: type, resourceId: id });
+  };
+
+  rentalFiles.forEach((record, index) => {
+    const id = rowId(record);
+    if (!id) {
+      const error = new Error('Rental File at index ' + index + ' has no stable id.');
+      error.code = 'woa_rental_identity_missing';
+      throw error;
+    }
+    if (rentalIds.has(id)) {
+      const error = new Error('Rental File ' + id + ' appears more than once.');
+      error.code = 'woa_rental_identity_conflict';
+      throw error;
+    }
+    rentalIds.add(id);
+    const customerId = String(record.customerId || '').trim();
+    const vehicleId = String(record.vehicleId || '').trim();
+    if (!customerId || !vehicleId) {
+      const error = new Error('Rental File ' + id + ' must retain its exact customer and vehicle ids.');
+      error.code = 'woa_rental_relation_missing';
+      error.rentalFileId = id;
+      throw error;
+    }
+    rows.push({
+      id,
+      customerId,
+      vehicleId,
+      status: String(record.status || '').trim().slice(0, 160),
+      lifecycle: String(record.lifecycle || '').trim().slice(0, 160),
+      active: rentalFileIsActive(record),
+      startDate: nullableIsoDate(record.startDate || record.actualPickupDate),
+      endDate: nullableIsoDate(record.endDate),
+      pickupAppointmentId: String(record.pickupAppointmentId || '').trim(),
+      applicationId: String(record.applicationId || '').trim(),
+      onboardingSessionId: String(record.onboardingSessionId || '').trim(),
+      recurringPaymentId: String(record.recurringPaymentId || '').trim(),
+      contractId: String(record.contractId || '').trim(),
+      paymentProvider: String(record.paymentProvider || '').trim().slice(0, 80),
+      weeklyAmountCents: Math.max(0, Math.round(Number(record.weeklyAmount || 0) * 100)),
+      payloadChecksum: checksum(record)
+    });
+    (Array.isArray(record.sourceRefs) ? record.sourceRefs : []).forEach(reference => {
+      const collection = String(reference && reference.collection || '').trim();
+      addLink(id, RENTAL_LINK_RESOURCE_TYPES.get(collection) || collection.replace(/[A-Z]/g, letter => '_' + letter.toLowerCase()), reference && reference.id);
+    });
+  });
+
+  CRITICAL_RESOURCE_COLLECTIONS.forEach(([collection, resourceType]) => {
+    if (collection === 'rentalFiles') return;
+    (Array.isArray(state[collection]) ? state[collection] : []).forEach(record => {
+      const rentalFileId = String(record && record.rentalFileId || '').trim();
+      if (!rentalFileId) return;
+      if (!rentalIds.has(rentalFileId)) {
+        const error = new Error('Critical ' + resourceType.replace(/_/g, ' ') + ' ' + rowId(record) + ' points to missing Rental File ' + rentalFileId + '.');
+        error.code = 'woa_rental_link_orphan';
+        error.rentalFileId = rentalFileId;
+        error.resourceType = resourceType;
+        error.resourceId = rowId(record);
+        throw error;
+      }
+      addLink(rentalFileId, resourceType, rowId(record));
+    });
+  });
+
+  const activeVehicles = new Map();
+  const activeCustomers = new Map();
+  rows.filter(row => row.active).forEach(row => {
+    if (activeVehicles.has(row.vehicleId)) {
+      const error = new Error('Vehicle ' + row.vehicleId + ' has more than one active Rental File.');
+      error.code = 'woa_active_rental_vehicle_conflict';
+      error.rentalFileIds = [activeVehicles.get(row.vehicleId), row.id];
+      throw error;
+    }
+    if (activeCustomers.has(row.customerId)) {
+      const error = new Error('Customer ' + row.customerId + ' has more than one active Rental File.');
+      error.code = 'woa_active_rental_customer_conflict';
+      error.rentalFileIds = [activeCustomers.get(row.customerId), row.id];
+      throw error;
+    }
+    activeVehicles.set(row.vehicleId, row.id);
+    activeCustomers.set(row.customerId, row.id);
+  });
+  return {
+    rentals: rows.sort((left, right) => left.id.localeCompare(right.id)),
+    links: links.map(({ identity, ...link }) => link).sort((left, right) => left.rentalFileId.localeCompare(right.rentalFileId) || left.resourceType.localeCompare(right.resourceType) || left.resourceId.localeCompare(right.resourceId))
+  };
+}
+
 function assignmentNameTokens(value) {
   return normalizedIdentity(value).split(/[^a-z0-9]+/).filter(token => token.length > 2 && !['and', 'the', 'jr', 'sr'].includes(token));
 }
@@ -884,7 +1063,7 @@ function sameApprovedAssignmentCustomer(state = {}, vehicleId = '', a, b) {
 }
 
 function activeAssignmentCandidate(row = {}, source = '') {
-  const customer = String(row.customer || row.name || '').trim();
+  const customer = String(row.customerName || row.customer || row.name || '').trim();
   const vehicleId = String(row.vehicleId || '').trim();
   if (!customer || !vehicleId) return null;
   const status = String([row.status, row.stage, row.endStatus, row.nextRun, row.autopayManagedBy].filter(Boolean).join(' '));
@@ -932,6 +1111,7 @@ function activeAssignmentIdentityConflicts(state = {}) {
       claimsByVehicle.set(candidate.vehicleId, list);
     });
   };
+  addClaims(state.rentalFiles, 'rental_file');
   addClaims(state.recurringPayments, 'recurring_payment');
   addClaims((((state.integrations || {}).clover || {}).recurringPlanMembers), 'clover_recurring');
   addClaims(state.contracts, 'customer_file');
@@ -1010,6 +1190,7 @@ function activeAssignmentIndexRows(state = {}) {
       claimsByVehicle.set(candidate.vehicleId, list);
     });
   };
+  addClaims(state.rentalFiles, 'rental_file');
   addClaims(state.recurringPayments, 'recurring_payment');
   addClaims((((state.integrations || {}).clover || {}).recurringPlanMembers), 'clover_recurring');
   addClaims(state.contracts, 'customer_file');
@@ -1066,6 +1247,8 @@ function assertTransactionalSourceReady(state = {}) {
   }
   return {
     criticalResources: criticalResourceIndexRows(state),
+    normalizedResources: normalizedResourceRows(state),
+    rentalRelations: rentalRelationRows(state),
     activeAssignments: activeAssignmentIndexRows(state),
     immutableProviderIdentities: identityEntries(state),
     privateDocuments: privateDocumentRows(state)
@@ -1074,22 +1257,82 @@ function assertTransactionalSourceReady(state = {}) {
 
 function transactionalIndexReadiness(state = {}, counts = {}) {
   const expectedResourceIndexCount = criticalResourceIndexRows(state).length;
+  const expectedNormalizedResources = normalizedResourceRows(state);
   const expectedAssignmentIndexCount = activeAssignmentIndexRows(state).length;
   const expectedIdentityIndexCount = identityEntries(state).length;
   const expectedDocumentIndexCount = privateDocumentRows(state).length;
+  const expectedRentalRelations = rentalRelationRows(state);
   const resourceIndexCount = Number(counts.resourceIndexCount ?? counts.resource_index_count ?? 0);
   const assignmentIndexCount = Number(counts.assignmentIndexCount ?? counts.assignment_index_count ?? 0);
   const identityIndexCount = Number(counts.identityIndexCount ?? counts.identity_index_count ?? 0);
   const documentIndexCount = Number(counts.documentIndexCount ?? counts.document_index_count ?? 0);
+  const normalizedResourceCount = Number(counts.normalizedResourceCount ?? counts.normalized_resource_count ?? 0);
+  const rentalFileCount = Number(counts.rentalFileCount ?? counts.rental_file_count ?? 0);
+  const rentalLinkCount = Number(counts.rentalLinkCount ?? counts.rental_link_count ?? 0);
+  let normalizedResourceEvidenceRows = counts.normalizedResourceRows ?? counts.normalized_resource_rows ?? [];
+  if (typeof normalizedResourceEvidenceRows === 'string') {
+    try { normalizedResourceEvidenceRows = JSON.parse(normalizedResourceEvidenceRows); } catch { normalizedResourceEvidenceRows = []; }
+  }
+  normalizedResourceEvidenceRows = (Array.isArray(normalizedResourceEvidenceRows) ? normalizedResourceEvidenceRows : [])
+    .map(row => ({
+      resourceType: String(row && (row.resourceType || row.resource_type) || ''),
+      resourceId: String(row && (row.resourceId || row.resource_id) || ''),
+      payloadChecksum: String(row && (row.payloadChecksum || row.payload_checksum) || ''),
+      stateVersion: Number(row && (row.stateVersion ?? row.state_version) || 0)
+    }))
+    .sort((left, right) => left.resourceType.localeCompare(right.resourceType) || left.resourceId.localeCompare(right.resourceId));
+  const expectedVersion = Number(counts.version || 0);
+  const expectedNormalizedEvidenceRows = expectedNormalizedResources.map(row => ({
+    resourceType: row.resourceType,
+    resourceId: row.resourceId,
+    payloadChecksum: row.payloadChecksum
+  }));
+  const comparableNormalizedEvidenceRows = normalizedResourceEvidenceRows.map(row => ({
+    resourceType: row.resourceType,
+    resourceId: row.resourceId,
+    payloadChecksum: row.payloadChecksum
+  }));
+  const normalizedVersionsReady = normalizedResourceEvidenceRows.every(row => (
+    Number.isSafeInteger(row.stateVersion) && row.stateVersion >= 0 && row.stateVersion <= expectedVersion
+  ));
   const resourceIndexReady = resourceIndexCount === expectedResourceIndexCount;
   const assignmentIndexReady = assignmentIndexCount === expectedAssignmentIndexCount;
   const identityIndexReady = identityIndexCount === expectedIdentityIndexCount;
   const documentIndexReady = documentIndexCount === expectedDocumentIndexCount;
+  const normalizedResourceReady = normalizedResourceCount === expectedNormalizedResources.length
+    && normalizedVersionsReady
+    && stableJson(comparableNormalizedEvidenceRows) === stableJson(expectedNormalizedEvidenceRows);
+  let rentalFileEvidenceRows = counts.rentalFileRows ?? counts.rental_file_rows ?? [];
+  if (typeof rentalFileEvidenceRows === 'string') {
+    try { rentalFileEvidenceRows = JSON.parse(rentalFileEvidenceRows); } catch { rentalFileEvidenceRows = []; }
+  }
+  rentalFileEvidenceRows = (Array.isArray(rentalFileEvidenceRows) ? rentalFileEvidenceRows : [])
+    .map(row => ({
+      id: String(row && row.id || ''),
+      payloadChecksum: String(row && (row.payloadChecksum || row.payload_checksum) || ''),
+      stateVersion: Number(row && (row.stateVersion ?? row.state_version) || 0)
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const expectedRentalEvidenceRows = expectedRentalRelations.rentals.map(row => ({ id: row.id, payloadChecksum: row.payloadChecksum }));
+  const comparableRentalEvidenceRows = rentalFileEvidenceRows.map(row => ({ id: row.id, payloadChecksum: row.payloadChecksum }));
+  const rentalVersionsReady = rentalFileEvidenceRows.every(row => Number.isSafeInteger(row.stateVersion) && row.stateVersion >= 0 && row.stateVersion <= expectedVersion);
+  const rentalRelationsReady = rentalFileCount === expectedRentalRelations.rentals.length
+    && rentalLinkCount === expectedRentalRelations.links.length
+    && rentalVersionsReady
+    && stableJson(comparableRentalEvidenceRows) === stableJson(expectedRentalEvidenceRows);
   return {
-    allReady: resourceIndexReady && assignmentIndexReady && identityIndexReady && documentIndexReady,
+    allReady: resourceIndexReady && normalizedResourceReady && rentalRelationsReady && assignmentIndexReady && identityIndexReady && documentIndexReady,
     resourceIndexReady,
     resourceIndexCount,
     expectedResourceIndexCount,
+    normalizedResourceReady,
+    normalizedResourceCount,
+    expectedNormalizedResourceCount: expectedNormalizedResources.length,
+    rentalRelationsReady,
+    rentalFileCount,
+    expectedRentalFileCount: expectedRentalRelations.rentals.length,
+    rentalLinkCount,
+    expectedRentalLinkCount: expectedRentalRelations.links.length,
     assignmentIndexReady,
     assignmentIndexCount,
     expectedAssignmentIndexCount,
@@ -1901,6 +2144,60 @@ class PostgresStateRepository {
         )`);
         await client.query('CREATE INDEX IF NOT EXISTS woa_resource_index_org_customer_idx ON woa_resource_index (organization_id, customer_key, resource_type)');
         await client.query('CREATE INDEX IF NOT EXISTS woa_resource_index_org_vehicle_idx ON woa_resource_index (organization_id, vehicle_id, resource_type) WHERE vehicle_id <> \'\'');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_resources (
+          organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          resource_type TEXT NOT NULL,
+          resource_id TEXT NOT NULL,
+          customer_key TEXT NOT NULL DEFAULT '',
+          vehicle_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',
+          payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+          payload_checksum TEXT NOT NULL,
+          state_version BIGINT NOT NULL CHECK (state_version >= 0),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, resource_type, resource_id)
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS woa_resources_org_customer_idx ON woa_resources (organization_id, customer_key, resource_type) WHERE customer_key <> \'\'');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_resources_org_vehicle_idx ON woa_resources (organization_id, vehicle_id, resource_type) WHERE vehicle_id <> \'\'');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_resources_org_status_idx ON woa_resources (organization_id, resource_type, status) WHERE status <> \'\'');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_rental_files (
+          organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
+          id TEXT NOT NULL,
+          customer_id TEXT NOT NULL,
+          vehicle_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT '',
+          lifecycle TEXT NOT NULL DEFAULT '',
+          active BOOLEAN NOT NULL DEFAULT false,
+          start_date DATE,
+          end_date DATE,
+          pickup_appointment_id TEXT NOT NULL DEFAULT '',
+          application_id TEXT NOT NULL DEFAULT '',
+          onboarding_session_id TEXT NOT NULL DEFAULT '',
+          recurring_payment_id TEXT NOT NULL DEFAULT '',
+          contract_id TEXT NOT NULL DEFAULT '',
+          payment_provider TEXT NOT NULL DEFAULT '',
+          weekly_amount_cents BIGINT NOT NULL DEFAULT 0 CHECK (weekly_amount_cents >= 0),
+          payload_checksum TEXT NOT NULL,
+          state_version BIGINT NOT NULL CHECK (state_version >= 0),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, id)
+        )`);
+        await client.query('CREATE UNIQUE INDEX IF NOT EXISTS woa_rental_files_active_vehicle_unique ON woa_rental_files (organization_id, vehicle_id) WHERE active');
+        await client.query('CREATE UNIQUE INDEX IF NOT EXISTS woa_rental_files_active_customer_unique ON woa_rental_files (organization_id, customer_id) WHERE active');
+        await client.query('CREATE INDEX IF NOT EXISTS woa_rental_files_org_start_idx ON woa_rental_files (organization_id, start_date DESC, id)');
+        await client.query(`CREATE TABLE IF NOT EXISTS woa_rental_links (
+          organization_id TEXT NOT NULL,
+          rental_file_id TEXT NOT NULL,
+          resource_type TEXT NOT NULL,
+          resource_id TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (organization_id, rental_file_id, resource_type, resource_id),
+          UNIQUE (organization_id, resource_type, resource_id),
+          FOREIGN KEY (organization_id, rental_file_id) REFERENCES woa_rental_files(organization_id, id) ON DELETE CASCADE
+        )`);
+        await client.query('CREATE INDEX IF NOT EXISTS woa_rental_links_resource_idx ON woa_rental_links (organization_id, resource_type, resource_id)');
         await client.query(`CREATE TABLE IF NOT EXISTS woa_active_assignments (
           organization_id TEXT NOT NULL REFERENCES woa_state(organization_id) ON DELETE CASCADE,
           vehicle_id TEXT NOT NULL,
@@ -1997,11 +2294,14 @@ class PostgresStateRepository {
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [RECOVERY_HISTORY_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID]);
         await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [WEBHOOK_CLAIM_TOKEN_MIGRATION_ID]);
-        const savedState = await client.query('SELECT state, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [NORMALIZED_RESOURCE_MIGRATION_ID]);
+        await client.query('INSERT INTO woa_schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [RENTAL_RELATION_MIGRATION_ID]);
+        const savedState = await client.query('SELECT state, version, checksum FROM woa_state WHERE organization_id = $1 FOR UPDATE', [this.organizationId]);
         if (savedState.rowCount) {
           assertChecksum(savedState.rows[0].state, savedState.rows[0].checksum, 'PostgreSQL state');
           const state = this.repair(clone(savedState.rows[0].state));
           await this.syncCriticalResourceIndex(client, state);
+          await this.syncNormalizedResources(client, state, Number(savedState.rows[0].version || 0));
           await this.syncActiveAssignmentIndex(client, state);
         }
         await client.query('COMMIT');
@@ -2113,6 +2413,102 @@ class PostgresStateRepository {
       FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(rows)]);
   }
 
+  async syncNormalizedResources(client, state, stateVersion) {
+    const rows = normalizedResourceRows(state);
+    const version = Number(stateVersion);
+    if (!Number.isSafeInteger(version) || version < 0) {
+      const error = new Error('Normalized PostgreSQL resources require a non-negative authoritative state version.');
+      error.code = 'woa_resource_state_version_invalid';
+      throw error;
+    }
+    if (!rows.length) {
+      await client.query('DELETE FROM woa_resources WHERE organization_id = $1', [this.organizationId]);
+      return;
+    }
+    const serializedRows = JSON.stringify(rows);
+    await client.query(`INSERT INTO woa_resources (
+      organization_id, resource_type, resource_id, customer_key, vehicle_id, status,
+      payload, payload_checksum, state_version, created_at, updated_at
+    ) SELECT $1, item->>'resourceType', item->>'resourceId', item->>'customerKey', item->>'vehicleId', item->>'status',
+        item->'payload', item->>'payloadChecksum', $2, now(), now()
+      FROM jsonb_array_elements($3::jsonb) AS item
+      ON CONFLICT (organization_id, resource_type, resource_id) DO UPDATE SET
+        customer_key = EXCLUDED.customer_key,
+        vehicle_id = EXCLUDED.vehicle_id,
+        status = EXCLUDED.status,
+        payload = EXCLUDED.payload,
+        payload_checksum = EXCLUDED.payload_checksum,
+        state_version = EXCLUDED.state_version,
+        updated_at = now()
+      WHERE woa_resources.customer_key IS DISTINCT FROM EXCLUDED.customer_key
+        OR woa_resources.vehicle_id IS DISTINCT FROM EXCLUDED.vehicle_id
+        OR woa_resources.status IS DISTINCT FROM EXCLUDED.status
+        OR woa_resources.payload_checksum IS DISTINCT FROM EXCLUDED.payload_checksum`, [this.organizationId, version, serializedRows]);
+    await client.query(`DELETE FROM woa_resources AS resource
+      WHERE resource.organization_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM jsonb_array_elements($2::jsonb) AS item
+          WHERE item->>'resourceType' = resource.resource_type
+            AND item->>'resourceId' = resource.resource_id
+        )`, [this.organizationId, serializedRows]);
+  }
+
+  async syncRentalRelations(client, state, stateVersion) {
+    const projection = rentalRelationRows(state);
+    const version = Number(stateVersion);
+    if (!Number.isSafeInteger(version) || version < 0) {
+      const error = new Error('Canonical PostgreSQL Rental Files require a non-negative authoritative state version.');
+      error.code = 'woa_rental_state_version_invalid';
+      throw error;
+    }
+    await client.query('DELETE FROM woa_rental_links WHERE organization_id = $1', [this.organizationId]);
+    if (!projection.rentals.length) {
+      await client.query('DELETE FROM woa_rental_files WHERE organization_id = $1', [this.organizationId]);
+      return;
+    }
+    await client.query('UPDATE woa_rental_files SET active = false, updated_at = now() WHERE organization_id = $1 AND active', [this.organizationId]);
+    const serializedRentals = JSON.stringify(projection.rentals);
+    await client.query(`INSERT INTO woa_rental_files (
+      organization_id, id, customer_id, vehicle_id, status, lifecycle, active, start_date, end_date,
+      pickup_appointment_id, application_id, onboarding_session_id, recurring_payment_id, contract_id,
+      payment_provider, weekly_amount_cents, payload_checksum, state_version, created_at, updated_at
+    ) SELECT $1, item->>'id', item->>'customerId', item->>'vehicleId', item->>'status', item->>'lifecycle',
+        COALESCE((item->>'active')::boolean, false), NULLIF(item->>'startDate', '')::date, NULLIF(item->>'endDate', '')::date,
+        item->>'pickupAppointmentId', item->>'applicationId', item->>'onboardingSessionId', item->>'recurringPaymentId', item->>'contractId',
+        item->>'paymentProvider', COALESCE((item->>'weeklyAmountCents')::bigint, 0), item->>'payloadChecksum', $2, now(), now()
+      FROM jsonb_array_elements($3::jsonb) AS item
+      ON CONFLICT (organization_id, id) DO UPDATE SET
+        customer_id = EXCLUDED.customer_id,
+        vehicle_id = EXCLUDED.vehicle_id,
+        status = EXCLUDED.status,
+        lifecycle = EXCLUDED.lifecycle,
+        active = EXCLUDED.active,
+        start_date = EXCLUDED.start_date,
+        end_date = EXCLUDED.end_date,
+        pickup_appointment_id = EXCLUDED.pickup_appointment_id,
+        application_id = EXCLUDED.application_id,
+        onboarding_session_id = EXCLUDED.onboarding_session_id,
+        recurring_payment_id = EXCLUDED.recurring_payment_id,
+        contract_id = EXCLUDED.contract_id,
+        payment_provider = EXCLUDED.payment_provider,
+        weekly_amount_cents = EXCLUDED.weekly_amount_cents,
+        payload_checksum = EXCLUDED.payload_checksum,
+        state_version = EXCLUDED.state_version,
+        updated_at = now()`, [this.organizationId, version, serializedRentals]);
+    await client.query(`DELETE FROM woa_rental_files AS rental
+      WHERE rental.organization_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM jsonb_array_elements($2::jsonb) AS item
+          WHERE item->>'id' = rental.id
+        )`, [this.organizationId, serializedRentals]);
+    if (projection.links.length) {
+      await client.query(`INSERT INTO woa_rental_links (
+        organization_id, rental_file_id, resource_type, resource_id, created_at
+      ) SELECT $1, item->>'rentalFileId', item->>'resourceType', item->>'resourceId', now()
+        FROM jsonb_array_elements($2::jsonb) AS item`, [this.organizationId, JSON.stringify(projection.links)]);
+    }
+  }
+
   async syncActiveAssignmentIndex(client, state) {
     const rows = activeAssignmentIndexRows(state);
     await client.query('DELETE FROM woa_active_assignments WHERE organization_id = $1', [this.organizationId]);
@@ -2222,6 +2618,8 @@ class PostgresStateRepository {
       await this.refreshIdentityIndex(client, next);
       await this.syncDocumentMetadata(client, next);
       await this.syncCriticalResourceIndex(client, next);
+      await this.syncNormalizedResources(client, next, nextVersion);
+      await this.syncRentalRelations(client, next, nextVersion);
       await this.syncActiveAssignmentIndex(client, next);
       await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)
@@ -3033,6 +3431,7 @@ class PostgresStateRepository {
       await this.refreshIdentityIndex(client, next);
       await this.syncDocumentMetadata(client, next);
       await this.syncCriticalResourceIndex(client, next);
+      await this.syncNormalizedResources(client, next, nextVersion);
       await this.syncActiveAssignmentIndex(client, next);
       await client.query(`INSERT INTO woa_state_snapshots (organization_id, version, checksum, reason, actor, state)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`, [
@@ -3162,6 +3561,22 @@ class PostgresStateRepository {
         (SELECT COUNT(*)::int FROM woa_state_snapshots WHERE organization_id = $1) AS snapshot_count,
         (SELECT COUNT(*)::int FROM woa_recovery_history WHERE organization_id = $1) AS recovery_history_count,
         (SELECT COUNT(*)::int FROM woa_resource_index WHERE organization_id = $1) AS resource_index_count,
+        (SELECT COUNT(*)::int FROM woa_resources WHERE organization_id = $1) AS normalized_resource_count,
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+          'resourceType', resource_type,
+          'resourceId', resource_id,
+          'payloadChecksum', payload_checksum,
+          'stateVersion', state_version
+        ) ORDER BY resource_type, resource_id), '[]'::jsonb)
+          FROM woa_resources WHERE organization_id = $1) AS normalized_resource_rows,
+        (SELECT COUNT(*)::int FROM woa_rental_files WHERE organization_id = $1) AS rental_file_count,
+        (SELECT COUNT(*)::int FROM woa_rental_links WHERE organization_id = $1) AS rental_link_count,
+        (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+          'id', id,
+          'payloadChecksum', payload_checksum,
+          'stateVersion', state_version
+        ) ORDER BY id), '[]'::jsonb)
+          FROM woa_rental_files WHERE organization_id = $1) AS rental_file_rows,
         (SELECT COUNT(*)::int FROM woa_active_assignments WHERE organization_id = $1) AS assignment_index_count,
         (SELECT COUNT(*)::int FROM woa_identity_index WHERE organization_id = $1) AS identity_index_count,
         (SELECT COUNT(*)::int FROM woa_documents WHERE organization_id = $1) AS document_index_count
@@ -3203,6 +3618,14 @@ class PostgresStateRepository {
           resourceIndexReady: false,
           resourceIndexCount: 0,
           expectedResourceIndexCount: 0,
+          normalizedResourceReady: false,
+          normalizedResourceCount: 0,
+          expectedNormalizedResourceCount: 0,
+          rentalRelationsReady: false,
+          rentalFileCount: 0,
+          expectedRentalFileCount: 0,
+          rentalLinkCount: 0,
+          expectedRentalLinkCount: 0,
           assignmentIndexReady: false,
           assignmentIndexCount: 0,
           expectedAssignmentIndexCount: 0,
@@ -3291,6 +3714,10 @@ class PostgresStateRepository {
             ? 'PostgreSQL schema contract is incomplete. Refusing production readiness until required tenant keys, uniqueness constraints, and safety indexes are restored.'
           : !indexes.resourceIndexReady
             ? 'PostgreSQL critical-record index does not match the authoritative state. Refusing production readiness.'
+          : !indexes.normalizedResourceReady
+            ? 'PostgreSQL normalized resource rows do not match the authoritative state version and payload checksums. Refusing production readiness.'
+            : !indexes.rentalRelationsReady
+              ? 'PostgreSQL canonical Rental File relations do not match the authoritative state and source links. Refusing production readiness.'
             : !indexes.assignmentIndexReady
               ? 'PostgreSQL active-assignment index does not match the authoritative state. Refusing production readiness.'
             : !indexes.identityIndexReady
@@ -3338,6 +3765,8 @@ module.exports = {
   RECOVERY_HISTORY_MIGRATION_ID,
   MIGRATION_SOURCE_PROVENANCE_MIGRATION_ID,
   WEBHOOK_CLAIM_TOKEN_MIGRATION_ID,
+  NORMALIZED_RESOURCE_MIGRATION_ID,
+  RENTAL_RELATION_MIGRATION_ID,
   REQUIRED_SCHEMA_MIGRATION_IDS,
   DEFAULT_ORGANIZATION_ID,
   RECOVERY_DRILL_SCRIPT_VERSION,
@@ -3367,6 +3796,8 @@ module.exports = {
   exactDuplicateCriticalResourcePlan,
   collapseExactDuplicateCriticalResources,
   criticalResourceIndexRows,
+  normalizedResourceRows,
+  rentalRelationRows,
   sameAssignmentCustomer,
   sameApprovedAssignmentCustomer,
   activeAssignmentCandidate,

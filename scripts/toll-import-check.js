@@ -35,6 +35,10 @@ async function run() {
       { id: 'con-old', customer: 'Old Customer', vehicleId: 'veh-toll-1', vehicle: '2016 Ford Escape', startDate: '2026-01-01', endDate: '2026-06-30', status: 'History' },
       { id: 'con-new', customer: 'New Customer', vehicleId: 'veh-toll-1', vehicle: '2016 Ford Escape', startDate: '2026-07-01', status: 'Active' }
     ],
+    rentalFiles: [
+      { id: 'rental-old', customerId: 'cus-old', customerName: 'Old Customer', vehicleId: 'veh-toll-1', startDate: '2026-01-01', endDate: '2026-06-30', status: 'Returned' },
+      { id: 'rental-new', customerId: 'cus-new', customerName: 'New Customer', vehicleId: 'veh-toll-1', startDate: '2026-07-01', status: 'Active' }
+    ],
     recurringPayments: [],
     claims: [],
     auditLogs: []
@@ -57,9 +61,11 @@ async function run() {
   const historicalMatch = tollImportMatch(data, parsed[1]);
   assert(historicalMatch.customer === 'Old Customer', 'Old temp tag and toll date should match the historical customer.');
   assert(historicalMatch.vehicle && historicalMatch.vehicle.id === 'veh-toll-1', 'Historical toll should stay linked to the exact vehicle.');
+  assert(historicalMatch.rentalFile && historicalMatch.rentalFile.id === 'rental-old', 'Historical toll should resolve through the canonical Rental File active on its transaction date.');
 
   const currentMatch = tollImportMatch(data, parsed[2]);
   assert(currentMatch.customer === 'New Customer', 'Current plate and toll date should match the current customer.');
+  assert(currentMatch.rentalFile && currentMatch.rentalFile.id === 'rental-new', 'Current toll should resolve to the active canonical Rental File.');
 
   const preview = prepareTollImport(data, { raw }, { role: 'Owner', organizationId: 'org-wheelsonauto' });
   assert(preview.summary.received === 7, 'Preview should count every statement row.');
@@ -81,6 +87,7 @@ async function run() {
   assert(data.claims.some(claim => !claim.customer && claim.status === 'Missing file' && claim.customerMatchStatus === 'Needs payment/customer match'), 'Unknown plate should stay unassigned in Missing file for owner review.');
   const historicalClaim = data.claims.find(claim => claim.customer === 'Old Customer');
   assert(historicalClaim.transactionDate === '2026-06-15' && historicalClaim.postingDate === '2026-07-15', 'Late-posted tolls must assign the customer using transaction date while preserving posting date.');
+  assert(historicalClaim.customerId === 'cus-old' && historicalClaim.rentalFileId === 'rental-old', 'Imported toll evidence must retain exact customer and Rental File IDs.');
   assert(historicalClaim.receiptUrl && historicalClaim.receiptToken, 'Every imported toll should get a private receipt link.');
   assert(tollReceiptText(historicalClaim).includes('Transaction date: 2026-06-15'), 'Customer proof should include the true transaction date.');
   assert(tollReceiptHtml(historicalClaim).includes('Posted date') && !tollReceiptHtml(historicalClaim).includes('$532.04'), 'Receipt HTML should show posting date but never expose E-ZPass account balance.');

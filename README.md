@@ -1,6 +1,8 @@
 # WheelsonAuto Platform
 
-Rent-to-own platform prototype with public application page and owner dashboard.
+Rent-to-own operations platform with public inventory, customer onboarding, staff portals, payments, fleet management, messaging, evidence, and recovery safeguards.
+
+Architecture migration: [docs/architecture-migration.md](docs/architecture-migration.md)
 
 Start command: `node server.js`
 

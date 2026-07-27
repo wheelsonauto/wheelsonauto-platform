@@ -121,6 +121,7 @@ async function removeTestRows(repository, organizationId) {
   await pool.query('DELETE FROM woa_idempotency_keys WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_identity_index WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_active_assignments WHERE organization_id = $1', [organizationId]);
+  await pool.query('DELETE FROM woa_resources WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_resource_index WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_documents WHERE organization_id = $1', [organizationId]);
   await pool.query('DELETE FROM woa_job_errors WHERE organization_id = $1', [organizationId]);
@@ -409,7 +410,20 @@ async function main() {
     const firstState = {
       vehicles: [{ id: 'vehicle-runtime-1', vin: 'RUNTIMEVIN00000001', plate: 'RUNTIME-1', status: 'Rented', currentCustomer: 'Version One Customer' }],
       customers: [{ id: 'customer-runtime-1', name: 'Version One Customer', email: 'runtime-one@example.com', vehicleId: 'vehicle-runtime-1', status: 'Active' }],
-      contracts: [{ id: 'file-runtime-1', customer: 'Version One Customer', vehicleId: 'vehicle-runtime-1', status: 'Active' }],
+      contracts: [{ id: 'file-runtime-1', customer: 'Version One Customer', vehicleId: 'vehicle-runtime-1', rentalFileId: 'rental-runtime-1', status: 'Active' }],
+      rentalFiles: [{
+        id: 'rental-runtime-1',
+        customerId: 'customer-runtime-1',
+        customerName: 'Version One Customer',
+        vehicleId: 'vehicle-runtime-1',
+        status: 'Active',
+        lifecycle: 'Active rental',
+        startDate: '2026-07-17',
+        contractId: 'file-runtime-1',
+        paymentProvider: 'stripe',
+        weeklyAmount: 325,
+        sourceRefs: [{ collection: 'contracts', id: 'file-runtime-1' }]
+      }],
       payments: [],
       documents: [{
         id: 'document-runtime-1',
@@ -425,6 +439,19 @@ async function main() {
     const firstWrite = await repository.write(firstState, { reason: 'runtime test first state', actor: 'test' });
     const firstResourceIndex = await repository.pool.query('SELECT resource_type, resource_id FROM woa_resource_index WHERE organization_id = $1 ORDER BY resource_type, resource_id', [organizationId]);
     assert.strictEqual(firstResourceIndex.rowCount, stateRepository.criticalResourceIndexRows(firstState).length, 'A PostgreSQL state write must transactionally synchronize every critical resource id.');
+    const firstNormalizedResources = await repository.pool.query('SELECT resource_type, resource_id, payload, payload_checksum, state_version FROM woa_resources WHERE organization_id = $1 ORDER BY resource_type, resource_id', [organizationId]);
+    assert.strictEqual(firstNormalizedResources.rowCount, stateRepository.normalizedResourceRows(firstState).length, 'A PostgreSQL state write must transactionally synchronize every critical resource payload.');
+    const normalizedCustomer = firstNormalizedResources.rows.find(row => row.resource_type === 'customer' && row.resource_id === 'customer-runtime-1');
+    assert.deepStrictEqual(normalizedCustomer.payload, firstState.customers[0], 'The normalized customer row must retain the exact authoritative payload.');
+    assert.strictEqual(normalizedCustomer.payload_checksum, stateRepository.checksum(firstState.customers[0]), 'The normalized customer payload checksum must match the application checksum.');
+    assert.strictEqual(Number(normalizedCustomer.state_version), firstWrite.version, 'The normalized customer must identify the exact state version that produced it.');
+    const canonicalRentalRows = await repository.pool.query('SELECT id, customer_id, vehicle_id, active, weekly_amount_cents, payload_checksum, state_version FROM woa_rental_files WHERE organization_id = $1', [organizationId]);
+    assert.strictEqual(canonicalRentalRows.rowCount, 1, 'A PostgreSQL state write must create one canonical relational Rental File.');
+    assert.strictEqual(canonicalRentalRows.rows[0].active, true, 'The relational Rental File must retain active status.');
+    assert.strictEqual(Number(canonicalRentalRows.rows[0].weekly_amount_cents), 32500, 'The relational Rental File must persist weekly money as integer cents.');
+    assert.strictEqual(Number(canonicalRentalRows.rows[0].state_version), firstWrite.version, 'The relational Rental File must identify its authoritative state version.');
+    const canonicalRentalLinks = await repository.pool.query('SELECT rental_file_id, resource_type, resource_id FROM woa_rental_links WHERE organization_id = $1', [organizationId]);
+    assert.deepStrictEqual(canonicalRentalLinks.rows, [{ rental_file_id: 'rental-runtime-1', resource_type: 'customer_file', resource_id: 'file-runtime-1' }], 'The relational Rental File must retain its exact contract source link once.');
     const firstAssignmentIndex = await repository.pool.query('SELECT vehicle_id, customer_name, source_refs FROM woa_active_assignments WHERE organization_id = $1', [organizationId]);
     assert.strictEqual(firstAssignmentIndex.rowCount, 1, 'A PostgreSQL state write must create one authoritative active assignment for the rented vehicle.');
     assert.strictEqual(firstAssignmentIndex.rows[0].customer_name, 'Version One Customer', 'The transactional assignment index must retain the active customer name.');
@@ -621,6 +648,11 @@ async function main() {
     assert.strictEqual(health.stateImported, true, 'A production-ready PostgreSQL repository must contain imported WheelsonAuto state.');
     assert.strictEqual(health.integrity, 'verified', 'A production-ready PostgreSQL repository must verify the stored state checksum.');
     assert.strictEqual(health.resourceIndexReady, true, 'A production-ready PostgreSQL repository must have a complete critical-resource index.');
+    assert.strictEqual(health.normalizedResourceReady, true, 'A production-ready PostgreSQL repository must have complete checksummed normalized resource rows.');
+    assert.strictEqual(health.normalizedResourceCount, health.expectedNormalizedResourceCount, 'The normalized resource count must match authoritative state after recovery.');
+    assert.strictEqual(health.rentalRelationsReady, true, 'A production-ready PostgreSQL repository must have canonical Rental File rows and exact source links.');
+    assert.strictEqual(health.rentalFileCount, health.expectedRentalFileCount, 'The canonical Rental File count must match authoritative state after recovery.');
+    assert.strictEqual(health.rentalLinkCount, health.expectedRentalLinkCount, 'The canonical Rental File source-link count must match authoritative state after recovery.');
     assert.strictEqual(health.assignmentIndexReady, true, 'A production-ready PostgreSQL repository must have a complete active-assignment index.');
     assert.strictEqual(health.identityIndexReady, true, 'A production-ready PostgreSQL repository must have a complete immutable provider-identity index.');
     assert.strictEqual(health.documentIndexReady, true, 'A production-ready PostgreSQL repository must have complete private-document metadata.');

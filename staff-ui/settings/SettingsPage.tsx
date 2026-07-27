@@ -1,0 +1,8 @@
+export function SettingsPage({ role, onNavigate }: { role: 'owner' | 'manager' | 'mechanic'; onNavigate: (workspace: string) => void }) {
+  const user = window.__WOA_STAFF_USER__ || {};
+  return <main className="settings-workspace"><header className="page-heading"><div><span>Account and platform</span><h1>Settings</h1><p>Security and system controls stay out of daily work screens.</p></div></header>
+    <section className="settings-section"><h2>Account</h2><div className="settings-rows"><div><span><strong>{user.name || user.username || 'Staff'}</strong><small>{user.role || 'Staff'}{user.companyName ? ` | ${user.companyName}` : ''}</small></span></div><a href="/forgot"><span><strong>Reset password</strong><small>Use secure email recovery for this account</small></span><b>›</b></a><a href="/logout"><span><strong>Sign out</strong><small>End this staff session</small></span><b>›</b></a></div></section>
+    <section className="settings-section"><h2>Platform</h2><div className="settings-rows">{role === 'owner' ? <button onClick={() => onNavigate('systems')}><span><strong>Connected systems</strong><small>Provider status and live-test evidence</small></span><b>›</b></button> : null}<a href="/"><span><strong>Current platform</strong><small>Return to your current WheelsonAuto workspace</small></span><b>›</b></a></div></section>
+    <section className="settings-section"><h2>Preview</h2><div className="settings-rows"><div><span><strong>New platform preview</strong><small>Release {window.__WOA_RELEASE__ || 'development'} | No production cutover yet</small></span></div></div></section>
+  </main>;
+}

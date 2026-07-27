@@ -144,8 +144,8 @@ const telnyxDeliverySync = finalFunctionSlice(server, 'syncTelnyxDeliveryStatuse
 ].forEach(([label, source, text]) => requireText(label, source, text));
 
 [
-  'isMonthlyMaintenance',
-  'addMonthsKey',
+  'isMonthlyMaintenanceJob',
+  'addMonths(',
   'nextDue',
   'Completed',
   'Mark done',
@@ -159,9 +159,12 @@ const telnyxDeliverySync = finalFunctionSlice(server, 'syncTelnyxDeliveryStatuse
   'lastInspectionChecklist',
   'inspectionCondition',
   'mechanicSignoff',
-  'await save()',
+  "/api/maintenance/'",
+  "'/complete'",
+  'expectedUpdatedAt',
+  'await refreshData(true)',
   'Maintenance()'
-].forEach(text => requireText('Monthly inspection completion flow', app + actionSlice('confirm-complete-maintenance'), text));
+].forEach(text => requireText('Monthly inspection completion flow', server + app, text));
 
 [
   'Search available fleet by VIN, tag, tracker',

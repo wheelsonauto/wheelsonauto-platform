@@ -241,7 +241,8 @@ async function main() {
   const driftedSchemaContract = stateRepository.schemaContractEvidence(schemaContractRows.slice(0, -1), stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.slice(0, -1));
   assert.strictEqual(driftedSchemaContract.ready, false, 'Missing PostgreSQL migration and safety-index evidence must fail closed.');
   assert.deepStrictEqual(driftedSchemaContract.missingMigrations, [stateRepository.REQUIRED_SCHEMA_MIGRATION_IDS.at(-1)], 'Schema evidence must name the exact missing migration.');
-  assert.deepStrictEqual(driftedSchemaContract.missingIndexes, [{ tableName: 'woa_job_errors', name: 'woa_job_errors_open_fingerprint_unique' }], 'Schema evidence must name the exact missing safety index.');
+  const removedSafetyIndex = stateRepository.REQUIRED_SCHEMA_CONTRACT.indexes.at(-1);
+  assert.deepStrictEqual(driftedSchemaContract.missingIndexes, [{ tableName: removedSafetyIndex[0], name: removedSafetyIndex[1] }], 'Schema evidence must name the exact missing safety index.');
   const staleReviewClassification = assignmentConflictPreflightClassification({
     vehicles: [{ id: 'veh-review-only', year: 2025, make: 'Review', model: 'Only', vin: 'REVIEWONLYVIN', status: 'Rented', currentCustomer: 'Current Customer', assignmentConflict: 'Imported Name / Current Customer' }],
     recurringPayments: [{ id: 'rec-review-only', customer: 'Current Customer', vehicleId: 'veh-review-only', status: 'Active' }]
@@ -382,7 +383,7 @@ async function main() {
       && serverSource.includes(".then(() => preparePrivateArtifactsForProductionStartup())")
       && serverSource.includes("reportBackgroundTaskFailure('private-artifact-storage'")
       && serverSource.includes("missing.push('encrypted payment receipt and dispute evidence artifact backfill')"), 'Paid transactions and owner-reviewed dispute packets must become encrypted immutable artifacts through a durable retry worker, and launch must fail closed while any required artifact is missing.');
-    assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical records and active vehicle assignments into transactionally synchronized indexes.');
+    assert(stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resource_index') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_resources') && stateRepositorySource.includes('CREATE TABLE IF NOT EXISTS woa_active_assignments'), 'PostgreSQL must normalize critical record payloads and active vehicle assignments into transactionally synchronized rows.');
     assert(stateRepositorySource.includes('exactDuplicateCriticalResourcePlan')
       && stateRepositorySource.includes('collapseExactDuplicateCriticalResources')
       && postgresSourceRepairSource.includes("WOA_POSTGRES_SOURCE_REPAIR_CONFIRM !== 'EXACT_DUPLICATES_ONLY'")
@@ -452,7 +453,7 @@ async function main() {
     assert(serverSource.includes("webhookCompletions: [{ provider: 'clover', eventId: durableEventId, claimToken: claim.claimToken }]")
       && serverSource.includes("webhookCompletions: [{ provider: 'stripe', eventId: event.id || '', claimToken: durableClaim.claimToken }]")
       && serverSource.includes("claimToken: claim.claimToken"), 'Live Stripe, Clover, SMS, email, and Telnyx recovery handlers must pass their current repository-issued webhook ownership token instead of inventing or reusing one.');
-    assert(stateRepositorySource.includes('await this.syncCriticalResourceIndex(client, next)') && stateRepositorySource.includes('await this.syncActiveAssignmentIndex(client, next)'), 'Normal writes and controlled recovery must synchronize critical record and assignment indexes in the state transaction.');
+    assert(stateRepositorySource.includes('await this.syncCriticalResourceIndex(client, next)') && stateRepositorySource.includes('await this.syncNormalizedResources(client, next, nextVersion)') && stateRepositorySource.includes('await this.syncActiveAssignmentIndex(client, next)'), 'Normal writes and controlled recovery must synchronize critical payloads and assignment indexes in the state transaction.');
     assert(serverSource.includes('WOA_ERROR_RECORD_WINDOW_MS') && serverSource.includes('operationalErrorRecords'), 'Repeated background failures must be rate-limited before they flood durable operational logs.');
     assert(serverSource.includes('claimJobErrorAlert') && serverSource.includes('releaseJobErrorAlert') && serverSource.includes('operational-error-'), 'Owner error alerts must use a durable cross-restart claim plus provider idempotency instead of a process-memory throttle alone.');
     const operationalFailureStart = serverSource.indexOf('async function recordOperationalFailure');
@@ -889,7 +890,11 @@ async function main() {
       payments: [{ id: 'payment-index-1', customer: 'Maya Stone', vehicleId: 'vehicle-index-1', status: 'Paid' }]
     };
     const resourceIndexRows = stateRepository.criticalResourceIndexRows(indexedBusinessState);
+    const normalizedResourceRows = stateRepository.normalizedResourceRows(indexedBusinessState);
     assert.strictEqual(resourceIndexRows.length, 5, 'The PostgreSQL resource index must include the vehicle, customer, customer file, autopay row, and payment record.');
+    assert.strictEqual(normalizedResourceRows.length, resourceIndexRows.length, 'Every critical resource index row must have one normalized payload row.');
+    assert.deepStrictEqual(normalizedResourceRows.find(row => row.resourceId === 'payment-index-1').payload, indexedBusinessState.payments[0], 'A normalized payment row must retain the complete exact payment payload.');
+    assert.match(normalizedResourceRows.find(row => row.resourceId === 'payment-index-1').payloadChecksum, /^[a-f0-9]{64}$/, 'Every normalized payload must carry its deterministic checksum.');
     assert(resourceIndexRows.some(row => row.resourceType === 'customer_file' && row.resourceId === 'file-index-1' && row.vehicleId === 'vehicle-index-1'), 'A customer file index row must retain its stable file id and vehicle link.');
     assert.throws(
       () => stateRepository.criticalResourceIndexRows({ customers: [{ name: 'Missing Stable Id' }] }),
@@ -905,15 +910,27 @@ async function main() {
     assert.strictEqual(activeAssignments.length, 1, 'Matching active customer, file, and autopay rows must collapse into one vehicle assignment.');
     assert.strictEqual(activeAssignments[0].customerName, 'Maya Stone', 'The active assignment index must retain the canonical saved customer name.');
     assert.strictEqual(activeAssignments[0].sourceRefs.length, 3, 'The active assignment must preserve each authoritative source for later recovery review.');
+    const normalizedEvidenceRows = normalizedResourceRows.map(row => ({
+      resourceType: row.resourceType,
+      resourceId: row.resourceId,
+      payloadChecksum: row.payloadChecksum,
+      stateVersion: 7
+    }));
     const exactIndexReadiness = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      version: 7,
       resourceIndexCount: resourceIndexRows.length,
+      normalizedResourceCount: normalizedResourceRows.length,
+      normalizedResourceRows: normalizedEvidenceRows,
       assignmentIndexCount: activeAssignments.length,
       identityIndexCount: stateRepository.identityEntries(indexedBusinessState).length,
       documentIndexCount: stateRepository.privateDocumentRows(indexedBusinessState).length
     });
     assert.strictEqual(exactIndexReadiness.allReady, true, 'PostgreSQL readiness must require all four transactional indexes to match authoritative state.');
     const missingProviderIdentityIndex = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      version: 7,
       resourceIndexCount: resourceIndexRows.length,
+      normalizedResourceCount: normalizedResourceRows.length,
+      normalizedResourceRows: normalizedEvidenceRows,
       assignmentIndexCount: activeAssignments.length,
       identityIndexCount: Math.max(0, exactIndexReadiness.expectedIdentityIndexCount - 1),
       documentIndexCount: exactIndexReadiness.expectedDocumentIndexCount
@@ -921,13 +938,27 @@ async function main() {
     assert.strictEqual(missingProviderIdentityIndex.allReady, false, 'A missing immutable provider identity row must block PostgreSQL production readiness.');
     assert.strictEqual(missingProviderIdentityIndex.identityIndexReady, false, 'The launch gate must identify provider-identity index drift directly.');
     const orphanedDocumentIndex = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      version: 7,
       resourceIndexCount: resourceIndexRows.length,
+      normalizedResourceCount: normalizedResourceRows.length,
+      normalizedResourceRows: normalizedEvidenceRows,
       assignmentIndexCount: activeAssignments.length,
       identityIndexCount: exactIndexReadiness.expectedIdentityIndexCount,
       documentIndexCount: exactIndexReadiness.expectedDocumentIndexCount + 1
     });
     assert.strictEqual(orphanedDocumentIndex.allReady, false, 'Orphaned private-document metadata must block PostgreSQL production readiness.');
     assert.strictEqual(orphanedDocumentIndex.documentIndexReady, false, 'The launch gate must identify private-document index drift directly.');
+    const impossibleFutureNormalizedResource = stateRepository.transactionalIndexReadiness(indexedBusinessState, {
+      version: 7,
+      resourceIndexCount: resourceIndexRows.length,
+      normalizedResourceCount: normalizedResourceRows.length,
+      normalizedResourceRows: normalizedEvidenceRows.map((row, index) => index === 0 ? { ...row, stateVersion: 8 } : row),
+      assignmentIndexCount: activeAssignments.length,
+      identityIndexCount: exactIndexReadiness.expectedIdentityIndexCount,
+      documentIndexCount: exactIndexReadiness.expectedDocumentIndexCount
+    });
+    assert.strictEqual(impossibleFutureNormalizedResource.allReady, false, 'A normalized row claiming a future authoritative version must block PostgreSQL readiness.');
+    assert.strictEqual(impossibleFutureNormalizedResource.normalizedResourceReady, false, 'The launch gate must identify normalized payload/version drift directly.');
     assert.strictEqual(stateRepository.activeAssignmentIndexRows({
       vehicles: [{ id: 'vehicle-history', status: 'Ready', currentCustomer: 'Old Customer' }],
       customers: [{ id: 'customer-history', name: 'Old Customer', vehicleId: 'vehicle-history', status: 'History' }]

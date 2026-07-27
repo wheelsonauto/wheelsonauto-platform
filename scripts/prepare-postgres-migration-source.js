@@ -13,9 +13,13 @@ function structuralReadiness(state = {}) {
   const conflicts = stateRepository.identityConflicts(state);
   const structuralErrors = [];
   let criticalResources = [];
+  let normalizedResources = [];
+  let rentalRelations = { rentals: [], links: [] };
   let activeAssignments = [];
   try {
     criticalResources = stateRepository.criticalResourceIndexRows(state);
+    normalizedResources = stateRepository.normalizedResourceRows(state);
+    rentalRelations = stateRepository.rentalRelationRows(state);
   } catch (error) {
     structuralErrors.push({
       kind: String(error && error.code || 'woa_resource_index_error'),
@@ -42,6 +46,9 @@ function structuralReadiness(state = {}) {
     warnings: stateRepository.identityWarnings(state),
     counts: {
       criticalResources: criticalResources.length,
+      normalizedResources: normalizedResources.length,
+      rentalFiles: rentalRelations.rentals.length,
+      rentalSourceLinks: rentalRelations.links.length,
       activeAssignments: activeAssignments.length,
       immutableProviderIdentities: stateRepository.identityEntries(state).length,
       privateDocuments: stateRepository.privateDocumentRows(state).length

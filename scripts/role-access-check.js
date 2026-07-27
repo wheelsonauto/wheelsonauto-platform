@@ -225,12 +225,15 @@ if (!/changed:\s*changes\.length > 0/.test(server) || !/changes,\s*version:\s*aw
 if (!/protectConcurrentLocalWrites\(nextState,\s*\{\s*preferIncoming:\s*true,\s*preserveLatestIntegrations:\s*true\s*\}\)/.test(server)) {
   fail('State saves should preserve concurrent background sync rows and the newest integration state.');
 }
-['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/tasks', '/api/account/password'].forEach(route => {
+['/api/staff-accounts', '/api/customer-accounts', '/api/organizations', '/api/api-providers', '/api/account/password'].forEach(route => {
   const index = server.indexOf("url.pathname === '" + route + "'");
   if (index < 0) fail('Could not find direct-save route: ' + route);
   const slice = server.slice(index, index + 3200);
   if (!slice.includes('preferIncoming: true')) fail(route + ' must preserve the just-saved row during concurrent-write protection.');
 });
+if (!server.includes("mutateLatestData('Save exact Dispatch task'")) {
+  fail('/api/tasks must mutate the latest state transactionally instead of saving a stale page snapshot.');
+}
 
 const mechanicReadMatch = stateForUserRead.match(/if \(role === 'mechanic'\) \{((?:.|\n)*?)return mechanic;/m);
 if (!mechanicReadMatch) fail('Could not find mechanic read filter.');

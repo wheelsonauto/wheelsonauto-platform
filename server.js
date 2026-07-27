@@ -24,6 +24,8 @@ const fatalProcessMonitor = require('./fatal-process-monitor');
 const migrationMaintenanceLease = require('./migration-maintenance-lease');
 const vehicleIdentityRepair = require('./vehicle-identity-repair');
 const accountRecovery = require('./account-recovery');
+const rentalFiles = require('./rental-file');
+const starTools = require('./star-tools');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -186,6 +188,146 @@ const WOA_EMAIL_OWNER_NOTIFY = process.env.WOA_EMAIL_OWNER_NOTIFY || process.env
 const WOA_MULTI_TENANT_ENABLED = process.env.WOA_MULTI_TENANT_ENABLED === '1';
 const WOA_PUBLIC_SITE_ENABLED = process.env.WOA_PUBLIC_SITE_ENABLED === '1';
 const MAIN_ORG_ID = 'org-wheelsonauto';
+const PLATFORM_EVENT_CLIENTS = new Map();
+let platformEventSequence = 0;
+
+function platformEventTopics(reason = '') {
+  const value = String(reason || '').toLowerCase();
+  const topics = new Set(['state']);
+  if (/message|sms|email|notification|star/.test(value)) topics.add('messages');
+  if (/payment|stripe|clover|autopay|refund|dispute|billing/.test(value)) topics.add('payments');
+  if (/application|onboarding|pickup|identity|contract/.test(value)) topics.add('applications');
+  if (/vehicle|rental|assignment|fleet|return/.test(value)) topics.add('assignments');
+  if (/maintenance|inspection|service/.test(value)) topics.add('service');
+  if (/task|dispatch/.test(value)) topics.add('tasks');
+  return [...topics];
+}
+
+function platformMessageRevision(rows = []) {
+  return crypto.createHash('sha256').update((Array.isArray(rows) ? rows : []).map(row => [
+    row && row.id,
+    row && (row.createdAt || row.date),
+    row && row.status,
+    row && row.body,
+    row && row.notificationEmailStatus
+  ].map(value => String(value || '')).join('\u001f')).join('\u001e')).digest('hex').slice(0, 20);
+}
+
+function platformWriteTopics(data, baseState, reason = '') {
+  const topics = new Set(platformEventTopics(reason));
+  if (baseState && platformMessageRevision(data && data.messages) !== platformMessageRevision(baseState.messages)) {
+    topics.add('messages');
+  }
+  return [...topics];
+}
+
+function publishPlatformEvent(event = {}) {
+  const payload = {
+    id: String(++platformEventSequence),
+    type: String(event.type || 'state.changed'),
+    organizationId: String(event.organizationId || MAIN_ORG_ID),
+    version: String(event.version || ''),
+    reason: String(event.reason || '').slice(0, 240),
+    topics: Array.isArray(event.topics) ? event.topics : platformEventTopics(event.reason),
+    at: new Date().toISOString()
+  };
+  const frame = 'id: ' + payload.id + '\nevent: platform\ndata: ' + JSON.stringify(payload) + '\n\n';
+  const customerFrame = 'id: ' + payload.id + '\nevent: platform\ndata: ' + JSON.stringify({ id: payload.id, type: 'customer.changed', topics: payload.topics, at: payload.at }) + '\n\n';
+  PLATFORM_EVENT_CLIENTS.forEach((client, id) => {
+    if (!client || !client.res || client.res.destroyed) {
+      PLATFORM_EVENT_CLIENTS.delete(id);
+      return;
+    }
+    const owner = isOwnerUser(client.user);
+    if (!owner && userOrganizationId(client.user) !== payload.organizationId) return;
+    try {
+      client.res.write(client.kind === 'customer' ? customerFrame : frame);
+    } catch {
+      PLATFORM_EVENT_CLIENTS.delete(id);
+    }
+  });
+  return payload;
+}
+
+function openPlatformEventStream(req, res, user, options = {}) {
+  const id = crypto.randomBytes(12).toString('hex');
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Content-Encoding': 'identity'
+  });
+  res.write('retry: 5000\nevent: ready\ndata: ' + JSON.stringify({ ok: true, id, at: new Date().toISOString() }) + '\n\n');
+  PLATFORM_EVENT_CLIENTS.set(id, { res, user, kind: options.kind === 'customer' ? 'customer' : 'staff' });
+  const heartbeat = setInterval(() => {
+    if (res.destroyed) return;
+    try { res.write(': heartbeat ' + Date.now() + '\n\n'); } catch {}
+  }, 25000);
+  if (typeof heartbeat.unref === 'function') heartbeat.unref();
+  const close = () => {
+    clearInterval(heartbeat);
+    PLATFORM_EVENT_CLIENTS.delete(id);
+  };
+  req.once('close', close);
+  req.once('error', close);
+}
+
+function resourceTimestamp(row = {}) {
+  return new Date(row.updatedAt || row.createdAt || row.submittedAt || row.date || 0).getTime() || 0;
+}
+
+function paginatedResource(rows, url, options = {}) {
+  const search = String(url.searchParams.get('search') || '').trim().toLowerCase();
+  const status = String(url.searchParams.get('status') || '').trim().toLowerCase();
+  const searchFields = Array.isArray(options.searchFields) ? options.searchFields : [];
+  let filtered = Array.isArray(rows) ? rows.slice() : [];
+  if (search) {
+    filtered = filtered.filter(row => searchFields.some(field => String(row && row[field] || '').toLowerCase().includes(search)));
+  }
+  if (status) filtered = filtered.filter(row => String(row && row.status || '').trim().toLowerCase() === status);
+  filtered.sort((left, right) => resourceTimestamp(right) - resourceTimestamp(left) || String(left && (left.name || left.customer || left.id) || '').localeCompare(String(right && (right.name || right.customer || right.id) || '')));
+  const requestedLimit = Number(url.searchParams.get('limit') || options.defaultLimit || 50);
+  const requestedPage = Number(url.searchParams.get('page') || 1);
+  const limit = Math.max(1, Math.min(200, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 50));
+  const page = Math.max(1, Number.isFinite(requestedPage) ? Math.floor(requestedPage) : 1);
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const selectedPage = Math.min(page, pages);
+  const start = (selectedPage - 1) * limit;
+  return {
+    records: filtered.slice(start, start + limit),
+    page: selectedPage,
+    limit,
+    total,
+    pages,
+    hasNextPage: selectedPage < pages
+  };
+}
+
+function safeResourcePayload(payload) {
+  return scrubPrivateOperationalFields(payload);
+}
+
+function assertResourceRevision(record, payload) {
+  if (!Object.prototype.hasOwnProperty.call(payload || {}, 'expectedUpdatedAt')) {
+    const error = new Error('Refresh this record before saving. The current updatedAt value is required.');
+    error.statusCode = 428;
+    throw error;
+  }
+  const expected = String(payload.expectedUpdatedAt || '');
+  const current = String(record && record.updatedAt || '');
+  if (expected !== current) {
+    const error = new Error('This record changed after it was opened. Refresh it and review the newer values before saving.');
+    error.statusCode = 409;
+    error.currentUpdatedAt = current;
+    throw error;
+  }
+}
+
+function cleanResourceText(value, maxLength) {
+  return String(value == null ? '' : value).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').trim().slice(0, maxLength);
+}
 const WOA_DATA_BACKEND = String(process.env.WOA_DATA_BACKEND || 'json').trim().toLowerCase();
 const POSTGRES_DRILL_RUNTIME_KEYS = ['WOA_TEST_DATABASE_URL', 'WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL'];
 const POSTGRES_DRILL_CREDENTIALS_CONFIGURED = POSTGRES_DRILL_RUNTIME_KEYS.some(key => !!String(process.env[key] || '').trim());
@@ -262,11 +404,11 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260725-interface-system-351';
+const ASSET_VERSION = 'platform-20260727-rental-relations-353';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
-const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js', 'staff-manifest.webmanifest', 'staff-pwa.js', 'staff-service-worker.js']);
+const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js', 'staff-manifest.webmanifest', 'staff-pwa.js', 'staff-service-worker.js', 'staff-dist/staff-next.js', 'staff-dist/staff-next.css', 'customer-dist/customer-next.js', 'customer-dist/customer-next.css']);
 const staticAssetCache = new Map();
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
 const AUTO_SYNC_STARTUP_DELAY_MS = Math.max(5000, Number(process.env.WOA_AUTO_SYNC_STARTUP_DELAY_MS || 15000));
@@ -865,6 +1007,7 @@ function repairCompletedPickupVehicleClaims(data) {
   return repaired;
 }
 function repairDataIds(data) {
+  data.rentalFiles = Array.isArray(data.rentalFiles) ? data.rentalFiles : [];
   data.onlineVehicles = Array.isArray(data.onlineVehicles) ? data.onlineVehicles : [];
   data.eSignatures = Array.isArray(data.eSignatures) ? data.eSignatures : [];
   data.onboardingSessions = Array.isArray(data.onboardingSessions) ? data.onboardingSessions : [];
@@ -879,6 +1022,7 @@ function repairDataIds(data) {
   data.publicSite = data.publicSite && typeof data.publicSite === 'object' ? data.publicSite : {};
   repairDuplicateVehicleIds(data);
   repairDuplicateRecordIds(data, 'contracts');
+  repairDuplicateRecordIds(data, 'rentalFiles');
   repairDuplicateOpenMaintenance(data);
   repairWeakCustomerVehicleLabels(data);
   ensureBaseOrganization(data);
@@ -943,10 +1087,10 @@ function addVehicleImportIndexKeys(indexes, vehicle, index) {
 const STATE_WRITE_META = Symbol('wheelsonauto.stateWriteMeta');
 const STATE_READ_META = Symbol('wheelsonauto.stateReadMeta');
 let stateRecoveryGeneration = 0;
-const CONCURRENT_COLLECTIONS = ['cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
+const CONCURRENT_COLLECTIONS = ['rentalFiles', 'cardSetupRequests', 'paymentRequests', 'recurringPayments', 'vehicles', 'onlineVehicles', 'contracts', 'maintenance', 'claims', 'messages', 'documents', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'trackerEvents', 'trackerUnmatched', 'marketingEvents', 'subscriptions', 'billingInvoices', 'billingEvents', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'applications', 'tasks', 'apiProviders', 'staffAccounts', 'customerAccounts', 'organizations', 'dailyCloseouts', 'auditLogs', 'websiteLeads'];
 
 function emptyPlatformState() {
-  return { vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
+  return { rentalFiles: [], vehicles: [], onlineVehicles: [], applications: [], customers: [], contracts: [], payments: [], maintenance: [], claims: [], messages: [], messageTemplates: [], staffAccounts: [], customerAccounts: [], organizations: [], subscriptions: [], billingInvoices: [], billingEvents: [], recurringPayments: [], tasks: [], documents: [], eSignatures: [], onboardingSessions: [], pickupAppointments: [], contractTemplates: [], refundRequests: [], verificationCases: [], trackerEvents: [], trackerUnmatched: [], marketingEvents: [], ledgerEntries: [], accountingAdjustments: [], accountingPeriods: [], calendarEvents: [], dailyCloseouts: [], websiteLeads: [], apiProviders: [], auditLogs: [], publicSite: {}, integrations: { clover: {}, shopify: {} } };
 }
 function baseRecordIds(data = {}) {
   const result = {};
@@ -1025,15 +1169,25 @@ async function writeDataNow(data) {
   const options = meta.options
     ? { ...inferred, ...meta.options, deletedIds: { ...inferred.deletedIds, ...(meta.options.deletedIds || {}) }, baseState: meta.options.baseState || inferred.baseState }
     : inferred;
+  let written;
   if (STATE_REPOSITORY.isTransactional && STATE_REPOSITORY.isTransactional()) {
-    return STATE_REPOSITORY.write(data, {
+    written = await STATE_REPOSITORY.write(data, {
       reason: meta.reason || 'platform state mutation',
       actor: meta.actor || '',
       transactionEffects: meta.transactionEffects || {},
       mergeState: latest => mergeConcurrentState(data, repairDataIds(latest || emptyPlatformState()), options)
     });
+  } else {
+    written = await STATE_REPOSITORY.write(data, { reason: meta.reason || 'platform state mutation', transactionEffects: meta.transactionEffects || {} });
   }
-  return STATE_REPOSITORY.write(data, { reason: meta.reason || 'platform state mutation', transactionEffects: meta.transactionEffects || {} });
+  publishPlatformEvent({
+    type: 'state.changed',
+    organizationId: meta.organizationId || MAIN_ORG_ID,
+    version: written && written.version,
+    reason: meta.reason || 'platform state mutation',
+    topics: platformWriteTopics(data, readMeta.baseState, meta.reason || 'platform state mutation')
+  });
+  return written;
 }
 async function writeData(data) {
   const job = writeDataQueue.then(() => writeDataNow(data));
@@ -6015,7 +6169,7 @@ function aiPlanRules(data, payload = {}, context = null) {
   };
 }
 function sanitizeAiPlan(plan, fallback) {
-  const safe = { ...(fallback || {}), ...(plan || {}) };
+  let safe = { ...(fallback || {}), ...(plan || {}) };
   const sensitiveActions = ['charge_saved_card', 'change_autopay_date', 'send_claim_link', 'paid_outside_review', 'send_receipt', 'send_account_statement', 'remove_customer', 'remove_card', 'delete_card', 'refund', 'dispute', 'toll_charge', 'claim_charge', 'edit_autopay', 'cancel_autopay'];
   safe.ok = true;
   safe.reply = String(safe.reply || (fallback && fallback.reply) || '').trim().slice(0, 900);
@@ -6033,6 +6187,7 @@ function sanitizeAiPlan(plan, fallback) {
   safe.provider = String(safe.provider || (safe.mode === 'openai' ? 'openai' : 'rules')).slice(0, 40);
   safe.model = safe.provider === 'openai' ? String(safe.model || WOA_AI_MODEL || '').slice(0, 80) : '';
   if (safe.aiError || safe.providerError) safe.providerError = String(safe.aiError || safe.providerError || '').slice(0, 240);
+  safe = starTools.enforcePlanPolicy(safe);
   return safe;
 }
 function parseStarAiJson(text) {
@@ -6089,6 +6244,7 @@ async function openAiReplyPlan(data, payload, context, fallback) {
       content: JSON.stringify({
         customerMessage: payload.body || payload.message || payload.text || '',
         platformContext: aiContextSummary(context),
+        typedTools: starTools.promptCatalog(),
         allowedWithoutApproval: ['general reply', 'payment link draft/send', 'card setup link draft/send', 'maintenance scheduling'],
         futureChannels: ['SMS now', 'email when provider is connected', 'receipts after approved payments', 'EZPass/tolls after provider is connected'],
         requiresAdminApproval: ['saved-card charge', 'toll or claim charge', 'autopay date/time/frequency change', 'card removal', 'account removal', 'refund/dispute', 'paid outside app verification', 'receipt after charge confirmation', 'account statement or payoff letter', 'contract/e-sign send', 'password reset']
@@ -6485,7 +6641,8 @@ async function approveAiMessage(data, payload = {}) {
       duplicate: true
     };
   }
-  const plan = draft.aiPlan || {};
+  const plan = starTools.enforcePlanPolicy(draft.aiPlan || {});
+  draft.aiPlan = plan;
   if (plan.needsHuman) throw new Error('This AI item needs a human reply first.');
   if (plan.approvalRequired && payload.approveMoneyAction !== true) throw new Error('This AI item prepares a money or account change. Open the customer/payment action and approve it there.');
   const deliveryChannel = String(payload.channel || draft.deliveryChannel || (draft.email && !draft.phone ? 'Email' : 'SMS')).toLowerCase();
@@ -6674,6 +6831,7 @@ function activeAssignmentClaimsForVehicle(data = {}, vehicleId = '') {
       });
     });
   };
+  addRows(data.rentalFiles, 'Rental File');
   addRows(data.recurringPayments, 'WheelsonAuto autopay');
   addRows((((data.integrations || {}).clover || {}).recurringPlanMembers), 'Clover recurring');
   addRows(data.contracts, 'Customer file');
@@ -6687,6 +6845,7 @@ function assignmentConflictIdentityEvidence(data = {}, claims = []) {
     if (name && !names.some(saved => normKey(saved) === normKey(name))) names.push(name);
   });
   const collections = [
+    ['Rental File', data.rentalFiles],
     ['Customer record', data.customers],
     ['Customer file', data.contracts],
     ['WheelsonAuto autopay', data.recurringPayments],
@@ -6698,7 +6857,7 @@ function assignmentConflictIdentityEvidence(data = {}, claims = []) {
     const rows = [];
     collections.forEach(([source, records]) => {
       (Array.isArray(records) ? records : []).forEach(row => {
-        if (normKey(row && (row.customer || row.name) || '') === key) rows.push({ source, row });
+        if (normKey(row && (row.customerName || row.customer || row.name) || '') === key) rows.push({ source, row });
       });
     });
     const unique = values => [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
@@ -6937,6 +7096,7 @@ function syncRowVehicleIdentity(row = {}, vehicle = {}, customer = '', sameCusto
   return changed;
 }
 function syncVehicleAssignmentsFromActiveRecords(data) {
+  data.rentalFiles = Array.isArray(data.rentalFiles) ? data.rentalFiles : [];
   data.vehicles = Array.isArray(data.vehicles) ? data.vehicles : [];
   data.customers = Array.isArray(data.customers) ? data.customers : [];
   data.contracts = Array.isArray(data.contracts) ? data.contracts : [];
@@ -6954,6 +7114,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
     list.push({ ...candidate, row, source });
     byVehicle.set(candidate.vehicleId, list);
   };
+  data.rentalFiles.forEach(row => addCandidate(row, 'rentalFiles'));
   data.recurringPayments.forEach(row => addCandidate(row, 'recurringPayments'));
   data.integrations.clover.recurringPlanMembers.forEach(row => addCandidate(row, 'cloverRecurring'));
   data.contracts.forEach(row => addCandidate(row, 'contracts'));
@@ -6998,7 +7159,10 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
       return;
     }
     const currentCustomer = String(vehicle.currentCustomer || '').trim();
-    const customer = currentCustomer && list.some(item => sameCustomer(item.customer, currentCustomer)) ? currentCustomer : list[0].customer;
+    const canonicalRentalClaim = list.find(item => item.source === 'rentalFiles');
+    const customer = canonicalRentalClaim
+      ? canonicalRentalClaim.customer
+      : (currentCustomer && list.some(item => sameCustomer(item.customer, currentCustomer)) ? currentCustomer : list[0].customer);
     if (vehicle.assignmentConflict) delete vehicle.assignmentConflict;
     const needsRentedStatus = /^(?:ready|available|in lot|fleet ready)?$/i.test(String(vehicle.status || '').trim());
     if (String(vehicle.currentCustomer || '') !== customer || needsRentedStatus) {
@@ -7009,6 +7173,7 @@ function syncVehicleAssignmentsFromActiveRecords(data) {
       vehicleAssignmentsSynced += 1;
     }
     list.forEach(item => {
+      if (item.source === 'rentalFiles') return;
       linkedRowsSynced += syncRowVehicleIdentity(item.row, vehicle, customer, sameCustomer);
     });
     data.maintenance.forEach(job => {
@@ -7033,6 +7198,14 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
   if (!selectedClaim) throw Object.assign(new Error('Choose the current renter from the active claims for this exact vehicle.'), { statusCode: 400 });
   const vehicle = (data.vehicles || []).find(row => String(row.id || '') === String(vehicleId || ''));
   const selectedName = selectedClaim.customer;
+  const authoritativeRentals = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === String(vehicleId || ''));
+  if (authoritativeRentals.length > 1) {
+    throw Object.assign(new Error('This vehicle has more than one active Rental File. Resolve the Rental File conflict before changing assignments.'), { statusCode: 409, code: 'woa_active_rental_vehicle_conflict' });
+  }
+  const authoritativeRental = authoritativeRentals[0] || null;
+  if (authoritativeRental && !sameApprovedAssignmentCustomer(data, vehicleId, authoritativeRental.customerName, selectedName)) {
+    throw Object.assign(new Error('Rental File ' + authoritativeRental.id + ' keeps ' + authoritativeRental.customerName + ' as the active renter. Complete that Rental File return before assigning this vehicle to someone else.'), { statusCode: 409, code: 'woa_rental_file_authoritative', rentalFileId: authoritativeRental.id });
+  }
   const claimNames = [];
   review.claims.forEach(claim => {
     const name = String(claim && claim.customer || '').trim();
@@ -7148,6 +7321,7 @@ function transferVehicleAssignment(data = {}, vehicleId = '', currentCustomer = 
     synced,
     inventory,
     currentCustomer: selectedName,
+    authoritativeRentalFileId: authoritativeRental && authoritativeRental.id || '',
     keptCustomerNames: keptNames,
     archivedCustomerNames: archivedNames,
     revokedNameLinks,
@@ -8338,6 +8512,39 @@ function cookieSecurityFlags(options = {}) {
 function sessionSetCookie(name, value, options = {}) {
   return name + '=' + String(value || '') + '; ' + cookieSecurityFlags(options);
 }
+function localStaffPreviewUser(req) {
+  if (process.env.WOA_LOCAL_STAFF_PREVIEW !== '1' || process.env.NODE_ENV === 'production') return null;
+  let previewHost = '';
+  try { previewHost = new URL(PUBLIC_BASE_URL).hostname; } catch { return null; }
+  if (!['localhost', '127.0.0.1', '::1'].includes(previewHost)) return null;
+  const remoteAddress = String(req && req.socket && req.socket.remoteAddress || '').toLowerCase();
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress)) return null;
+  const requestedRole = String(process.env.WOA_LOCAL_STAFF_PREVIEW_ROLE || 'owner').toLowerCase();
+  const role = requestedRole === 'mechanic' ? 'Mechanic' : requestedRole === 'manager' ? 'Manager' : 'Owner';
+  return {
+    id: 'local-preview-' + role.toLowerCase(),
+    username: 'preview' + role.toLowerCase(),
+    name: 'Preview ' + role.toLowerCase(),
+    role,
+    homeView: role === 'Mechanic' ? 'Service home' : 'Dashboard',
+    access: 'Local preview only',
+    organizationId: MAIN_ORG_ID,
+    companyName: 'WheelsonAuto'
+  };
+}
+function localCustomerPreviewAccount(req, data = {}) {
+  if (process.env.WOA_LOCAL_CUSTOMER_PREVIEW !== '1' || process.env.NODE_ENV === 'production') return null;
+  let previewHost = '';
+  try { previewHost = new URL(PUBLIC_BASE_URL).hostname; } catch { return null; }
+  if (!['localhost', '127.0.0.1', '::1'].includes(previewHost)) return null;
+  const remoteAddress = String(req && req.socket && req.socket.remoteAddress || '').toLowerCase();
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress)) return null;
+  const requestedId = String(process.env.WOA_LOCAL_CUSTOMER_PREVIEW_ACCOUNT || '').trim();
+  const accounts = Array.isArray(data.customerAccounts) ? data.customerAccounts : [];
+  return accounts.find(row => requestedId && String(row.id || '') === requestedId)
+    || accounts.find(row => row && row.disabled !== true && !/disabled|removed|locked/i.test(String(row.status || '')))
+    || null;
+}
 function sessionSignature(scope, payload) {
   return crypto.createHmac('sha256', SESSION_SIGNING_SECRET).update(String(scope || '') + '.' + String(payload || '')).digest('base64url');
 }
@@ -9378,7 +9585,7 @@ function stateForUserRead(data, user) {
     delete safe.integrations.clover;
     delete safe.integrations.apiProviders;
   }
-  ['recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'websiteLeads', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'trackerEvents', 'trackerUnmatched', 'marketingEvents'].forEach(key => {
+  ['rentalFiles', 'recurringPayments', 'payments', 'paymentRequests', 'customers', 'contracts', 'vehicles', 'onlineVehicles', 'maintenance', 'claims', 'messages', 'tasks', 'documents', 'applications', 'websiteLeads', 'eSignatures', 'onboardingSessions', 'pickupAppointments', 'contractTemplates', 'refundRequests', 'verificationCases', 'ledgerEntries', 'accountingAdjustments', 'accountingPeriods', 'calendarEvents', 'trackerEvents', 'trackerUnmatched', 'marketingEvents'].forEach(key => {
     if (Array.isArray(safe[key])) safe[key] = safe[key].map(scrubPrivateOperationalFields);
   });
   Object.keys(safe).forEach(key => {
@@ -9872,7 +10079,15 @@ function customerSessionUser(req) {
 }
 function safeCustomerLoginReturn(value = '') {
   const next = String(value || '').trim();
-  return /^\/(?:apply\/[a-z0-9_-]+|customer\/onboarding\/[a-z0-9_-]+)$/i.test(next) ? next : '';
+  return /^\/(?:apply\/[a-z0-9_-]+|customer\/onboarding\/[a-z0-9_-]+|customer-next)$/i.test(next) ? next : '';
+}
+function customerExperiencePath(req, tab = 'home') {
+  const section = ['home', 'messages', 'payments', 'vehicle', 'settings'].includes(String(tab || '').toLowerCase()) ? String(tab).toLowerCase() : 'home';
+  try {
+    const source = new URL(String(req && req.headers && req.headers.referer || ''));
+    if (source.pathname === '/customer-next') return '/customer-next#' + section;
+  } catch {}
+  return '/customer#portal-' + section;
 }
 function customerLoginPage(message = '', next = '') {
   const returnPath = safeCustomerLoginReturn(next);
@@ -10536,8 +10751,6 @@ customerPortalHtml = function customerPortalHtmlWithHub(account, state) {
   return html;
 };
 function customerPortalConversationHtml(account = {}, state = {}) {
-  const summary = state.summary || {};
-  const vehicle = state.vehicle || {};
   const messages = (state.messages || []).slice().sort((a, b) => Date.parse(a.createdAt || a.date || 0) - Date.parse(b.createdAt || b.date || 0));
   const messageRows = messages.length
     ? messages.map(message => {
@@ -10547,12 +10760,7 @@ function customerPortalConversationHtml(account = {}, state = {}) {
       return '<div class="' + className + '" data-message-id="' + escapeHtml(message.id || '') + '"><span>' + escapeHtml(sender) + '</span><p>' + escapeHtml(message.body || message.subject || message.template || 'Message') + '</p><small>' + escapeHtml([customerPortalMessageDateLabel(message.createdAt || message.date), message.status || ''].filter(Boolean).join(' | ')) + '</small></div>';
     }).join('')
     : '<div class="customer-chat-empty" data-customer-chat-empty><strong>Start a conversation</strong><span>Messages stay connected to your WheelsonAuto account and vehicle.</span></div>';
-  const context = [
-    summary.vehicle || (vehicle.id ? vehicleNameFromParts(vehicle) : ''),
-    summary.vin || vehicle.vin ? 'VIN ' + (summary.vin || vehicle.vin) : '',
-    summary.tag || vehicle.plate || vehicle.stock ? 'Tag ' + (summary.tag || vehicle.plate || vehicle.stock) : ''
-  ].filter(Boolean);
-  return '<article id="portal-messages" class="customer-panel customer-conversation-panel"><div class="customer-chat"><header class="customer-chat-header"><span class="customer-chat-avatar">WOA</span><div><strong>WheelsonAuto</strong><small>Secure account conversation</small></div><i data-customer-connection-status>Online</i></header><div class="customer-chat-context">' + context.map(value => '<span>' + escapeHtml(value) + '</span>').join('') + '</div><div class="customer-chat-messages" data-customer-message-list>' + messageRows + '</div><form method="POST" action="/customer/message" class="customer-chat-composer" data-customer-message-form><textarea name="body" maxlength="1200" rows="1" aria-label="Message WheelsonAuto" placeholder="Write a message..."></textarea><button class="btn primary" type="submit">Send</button><small data-customer-message-status>Private to your WheelsonAuto account.</small></form></div></article>';
+  return '<article id="portal-messages" class="customer-panel customer-conversation-panel"><div class="customer-chat"><header class="customer-chat-header"><span class="customer-chat-avatar">WOA</span><div><strong>WheelsonAuto</strong><small>Secure account conversation</small></div><i data-customer-connection-status>Online</i></header><div class="customer-chat-messages" data-customer-message-list>' + messageRows + '</div><form method="POST" action="/customer/message" class="customer-chat-composer" data-customer-message-form><textarea name="body" maxlength="1200" rows="1" aria-label="Message WheelsonAuto" placeholder="Write a message..."></textarea><button class="btn primary" type="submit">Send</button><small data-customer-message-status>Private to your WheelsonAuto account.</small></form></div></article>';
 }
 function customerPortalMessageDateLabel(value) {
   const timestamp = new Date(value || '');
@@ -11286,6 +11494,7 @@ function staffApplicationFeed(data = {}, user = {}) {
   const items = (data.applications || []).filter(application => !application.cleanupArchivedAt && rowVisibleToUserOrganization(application, user)).map(application => {
     const session = (data.onboardingSessions || []).find(row => row.applicationId === application.id && !/replaced|cancelled|expired/i.test(String(row.status || ''))) || null;
     const pickup = (data.pickupAppointments || []).find(row => row.applicationId === application.id && !/cancel/i.test(String(row.status || ''))) || null;
+    const rentalFile = (data.rentalFiles || []).find(row => String(row.applicationId || '') === String(application.id || '') || pickup && String(row.pickupAppointmentId || '') === String(pickup.id || '')) || null;
     const paid = applicationHasVerifiedPayment(data, application.id);
     return {
       id: application.id,
@@ -11296,6 +11505,7 @@ function staffApplicationFeed(data = {}, user = {}) {
       scheduledPickup: !!pickup,
       pickupDate: pickup && pickup.date || '',
       pickupTime: pickup && pickup.time || '',
+      rentalFileId: rentalFile && rentalFile.id || application.rentalFileId || '',
       lastActivityAt: applicationLatestActivityAt(data, application)
     };
   }).sort((a, b) => Number(b.paid) - Number(a.paid) || String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || '')));
@@ -12154,7 +12364,14 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId || recurring && row.id === recurring.vehicleId) || null;
     const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
     const repaired = reconcilePickupCustomerAccountLinks(account, pickupApplication, recurring, customer, contract, appointment, onlineVehicle);
-    return { appointment, vehicle, recurring, customer, contract, application: pickupApplication, session: pickupSession, account: repaired.account, onlineVehicle, alreadyCompleted: true, repaired: repaired.changed };
+    let rentalFile = (data.rentalFiles || []).find(row => row.id === appointment.rentalFileId || row.pickupAppointmentId === appointment.id) || null;
+    let rentalFileRepaired = false;
+    if (!rentalFile && customer && vehicle && recurring) {
+      const rentalFileResult = rentalFiles.upsertFromCompletedPickup(data, { appointment, application: pickupApplication, session: pickupSession, recurring, customer, contract, vehicle, onlineVehicle }, actor);
+      rentalFile = rentalFileResult.rentalFile;
+      rentalFileRepaired = rentalFileResult.created || rentalFileResult.linkedCount > 0;
+    }
+    return { appointment, vehicle, recurring, customer, contract, application: pickupApplication, session: pickupSession, account: repaired.account, onlineVehicle, rentalFile, alreadyCompleted: true, repaired: repaired.changed || rentalFileRepaired };
   }
   const pickupGate = nativeOnboardingReadyForPickup(data, pickupSession, pickupApplication);
   if (!pickupGate.paymentsReady) throw new Error('The verified down payment and first weekly payment must both be complete before this car can be marked Rented.');
@@ -12229,6 +12446,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
   if (insuranceDocument) Object.assign(insuranceDocument, { status: 'Verified - active at pickup', verifiedAt: now, verifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff' });
   if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });
   const accountReconciliation = reconcilePickupCustomerAccountLinks(account, application, recurring, customer, contract, appointment, onlineVehicle, now);
+  const rentalFileResult = rentalFiles.upsertFromCompletedPickup(data, { appointment, application, session, recurring, customer, contract, vehicle, onlineVehicle }, actor);
   const pilotLock = controlledStripePilotCandidateLock(data);
   if (pilotLock.onboardingSessionId === session.id && pilotLock.applicationId === application.id) {
     const pilotAudit = controlledStripePilotSessionEvidence(data, session, { liveRequired: !STRIPE_ISOLATED_PROVIDER_TEST_MODE });
@@ -12242,7 +12460,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     Object.assign(session, pilotAuditPatch);
     syncStripePilotOwnerReviewTask(data, pilotAudit, session, application, appointment, now);
   }
-  return { appointment, vehicle, recurring, customer, contract, application, session, account: accountReconciliation.account, onlineVehicle, alreadyCompleted: false, repaired: accountReconciliation.changed };
+  return { appointment, vehicle, recurring, customer, contract, application, session, account: accountReconciliation.account, onlineVehicle, rentalFile: rentalFileResult.rentalFile, alreadyCompleted: false, repaired: accountReconciliation.changed };
 }
 
 function stripePilotOwnerReviewTaskId(sessionId) {
@@ -12368,6 +12586,31 @@ async function appHtml({ publicMode = false, user = null } = {}) {
   const inject = '<script>window.__SERVER_DATA__=' + JSON.stringify(clientData).replace(/</g, '\\u003c') + ';window.__SERVER_DATA_VERSION__=' + JSON.stringify(serverDataVersion) + ';window.__PUBLIC_MODE__=' + (publicMode ? 'true' : 'false') + ';window.__CURRENT_USER__=' + JSON.stringify(currentUser).replace(/</g, '\\u003c') + ';</script>';
   return html.replace('</head>', inject + '</head>');
 }
+function staffNextHtml(user = {}) {
+  const safeUser = {
+    id: String(user.id || ''),
+    name: String(user.name || ''),
+    username: String(user.username || ''),
+    role: String(user.role || ''),
+    companyName: String(user.companyName || '')
+  };
+  const bootstrap = JSON.stringify(safeUser).replace(/</g, '\\u003c');
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090b0e"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto Staff</title>'
+    + BROWSER_ICON_LINKS
+    + '<link rel="stylesheet" href="/staff-dist/staff-next.css"><script>window.__WOA_STAFF_USER__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/staff-dist/staff-next.js"></script></head><body><div id="staff-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening staff workspace...</main></div></body></html>';
+}
+function customerNextHtml(account = {}) {
+  const safeAccount = {
+    id: String(account.id || ''),
+    name: String(account.name || account.customer || ''),
+    username: String(account.username || ''),
+    email: String(account.email || '')
+  };
+  const bootstrap = JSON.stringify(safeAccount).replace(/</g, '\\u003c');
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090b0e"><meta name="robots" content="noindex,nofollow"><title>My WheelsonAuto</title>'
+    + BROWSER_ICON_LINKS
+    + '<link rel="stylesheet" href="/customer-dist/customer-next.css"><script>window.__WOA_CUSTOMER_ACCOUNT__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/customer-dist/customer-next.js"></script></head><body><div id="customer-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening your WheelsonAuto account...</main></div></body></html>';
+}
 function acceptedEncodingQuality(header, encoding) {
   const target = String(encoding || '').trim().toLowerCase();
   let wildcardQuality = null;
@@ -12407,7 +12650,9 @@ async function cachedStaticAsset(clean) {
 }
 async function staticFile(req, res, pathname, searchParams) {
   const clean = pathname.replace(/^\//, '');
-  if (!STATIC_ASSET_NAMES.has(clean)) return false;
+  const generatedStaffChunk = /^staff-dist\/staff-[a-z0-9_-]+\.js$/i.test(clean);
+  const generatedCustomerChunk = /^customer-dist\/customer-[a-z0-9_-]+\.js$/i.test(clean);
+  if (!STATIC_ASSET_NAMES.has(clean) && !generatedStaffChunk && !generatedCustomerChunk) return false;
   const type = clean.endsWith('.css')
     ? 'text/css; charset=utf-8'
     : clean.endsWith('.html')
@@ -13576,6 +13821,10 @@ function systemReadiness(data, user = { role: 'Owner' }) {
   const routes = [
     route('GET', '/api/state', 'Dashboard state'),
     route('PUT', '/api/state', 'Role-aware dashboard saves'),
+    route('POST', '/api/payments/manual-result', 'Owner-recorded exact recurring payment result'),
+    route('POST', '/api/payments/:id/match', 'Owner-confirmed exact recurring customer match'),
+    route('POST', '/api/claims/:id/match', 'Owner-confirmed exact claim customer match'),
+    route('POST', '/api/vehicles/:id/retire', 'Assignment-safe vehicle removal'),
     route('GET', '/forgot', 'Staff email password recovery page'),
     route('POST', '/forgot', 'Send account-bound staff recovery code'),
     route('GET', '/forgot/code', 'Enter an account-bound staff recovery code'),
@@ -13608,7 +13857,11 @@ function systemReadiness(data, user = { role: 'Owner' }) {
     route('POST', '/api/customer-accounts/create-missing-drafts', 'Owner-created draft customer portal logins'),
     route('POST', '/api/organizations', 'Owner-managed company/store/franchise accounts'),
     route('POST', '/api/api-providers', 'API readiness setup records'),
-    route('POST', '/api/tasks', 'Dispatch task creation'),
+    route('GET', '/api/tasks', 'Scoped Dispatch task feed'),
+    route('POST', '/api/tasks', 'Exact Dispatch task creation/update'),
+    route('GET', '/api/maintenance', 'Scoped maintenance job feed'),
+    route('POST', '/api/maintenance', 'Exact maintenance job creation/update'),
+    route('POST', '/api/maintenance/:id/complete', 'Atomic maintenance completion, vehicle history, and reminder reset'),
     route('POST', '/api/card-setup-requests', 'Customer card-on-file setup links'),
     route('POST', '/api/payment-links', 'Customer payment links'),
     route('GET', '/api/messages/status', 'Messaging integration status'),
@@ -14441,6 +14694,33 @@ function paymentCustomerMatchProfile(data, customerName) {
     cloverSubscriptionId: recurring.cloverSubscriptionId || ''
   };
 }
+function paymentCustomerMatchProfileForRecurring(data, recurring = {}) {
+  const recurringId = String(recurring.id || '').trim();
+  if (!recurringId) return null;
+  const customer = (data.customers || []).find(row => recurring.customerId && String(row.id || '') === String(recurring.customerId))
+    || (data.customers || []).find(row => String(row.recurringPaymentId || '') === recurringId)
+    || {};
+  const vehicle = reportVehicleFor(data, recurring.customer || customer.name || customer.customer, recurring.vehicleId || customer.vehicleId);
+  const customerName = recurring.customer || customer.name || customer.customer || vehicle.currentCustomer || '';
+  if (!customerName) return null;
+  const tag = vehicle.plate || vehicle.licensePlate || vehicle.stock || recurring.licensePlate || recurring.plate || customer.licensePlate || customer.plate || '';
+  return {
+    customer: customerName,
+    customerId: recurring.customerId || customer.id || '',
+    phone: recurring.phone || customer.phone || '',
+    email: recurring.email || customer.email || '',
+    vehicleId: recurring.vehicleId || vehicle.id || customer.vehicleId || '',
+    vehicle: recurring.vehicle || (vehicle.id ? vehicleNameFromParts(vehicle) : customer.vehicle || ''),
+    vin: recurring.vin || vehicle.vin || customer.vin || '',
+    licensePlate: tag,
+    plate: tag,
+    tempTag: recurring.tempTag || vehicle.tempTag || customer.tempTag || '',
+    tracker: trackerName(recurring) || trackerName(vehicle) || trackerName(customer),
+    recurringPaymentId: recurringId,
+    cloverCustomerId: recurring.cloverCustomerId || customer.cloverCustomerId || '',
+    cloverSubscriptionId: recurring.cloverSubscriptionId || ''
+  };
+}
 function applyPaymentCustomerMatch(payment, profile, source) {
   if (!payment || !profile || !profile.customer) return false;
   payment.customer = profile.customer;
@@ -14724,10 +15004,17 @@ function tollImportMatch(data, row = {}) {
       matchSource = 'Unique active vehicle for tag';
     }
   }
+  const canonicalRental = uniqueVehicle ? rentalFiles.rentalForVehicleDate(data, uniqueVehicle.id, incidentDate) : null;
+  const canonicalCustomer = canonicalRental
+    ? (data.customers || []).find(customer => String(customer.id || '') === String(canonicalRental.customerId || '')) || null
+    : null;
   const datedContracts = uniqueVehicle ? (data.contracts || []).filter(contract => contractMatchesVehicleOnDate(contract, uniqueVehicle)) : [];
   const datedCustomerNames = Array.from(new Set(datedContracts.map(contract => contract.customer || contract.name || '').filter(Boolean).map(normKey)));
-  const datedCustomer = datedCustomerNames.length === 1 ? ((datedContracts.find(contract => normKey(contract.customer || contract.name) === datedCustomerNames[0]) || {}).customer || (datedContracts.find(contract => normKey(contract.customer || contract.name) === datedCustomerNames[0]) || {}).name || '') : '';
-  if (datedCustomer) matchSource = 'Customer assigned on toll date';
+  let datedCustomer = datedCustomerNames.length === 1 ? ((datedContracts.find(contract => normKey(contract.customer || contract.name) === datedCustomerNames[0]) || {}).customer || (datedContracts.find(contract => normKey(contract.customer || contract.name) === datedCustomerNames[0]) || {}).name || '') : '';
+  if (canonicalCustomer) {
+    datedCustomer = canonicalCustomer.name || canonicalCustomer.customer || canonicalRental.customerName || '';
+    matchSource = 'Canonical Rental File on toll date';
+  } else if (datedCustomer) matchSource = 'Customer assigned on toll date';
   let customer = importedCustomer;
   if (customer) {
     const profile = tollCustomerProfile(data, customer);
@@ -14739,7 +15026,7 @@ function tollImportMatch(data, row = {}) {
     const linked = (data.contracts || []).filter(row => row.vehicleId === uniqueVehicle.id && !/removed|returned|history|archived|ended/i.test(String(row.status || 'Active')));
     if (linked.length === 1) customer = linked[0].customer || linked[0].name || '';
   }
-  const profile = tollCustomerProfile(data, customer);
+  const profile = canonicalCustomer || tollCustomerProfile(data, customer);
   const matchCandidates = candidates.slice(0, 5).map(vehicle => ({
     customer: vehicle.currentCustomer || '',
     vehicleId: vehicle.id || '',
@@ -14757,6 +15044,7 @@ function tollImportMatch(data, row = {}) {
     profile: ambiguous ? {} : profile,
     candidates: matchCandidates,
     ambiguous,
+    rentalFile: ambiguous ? null : canonicalRental,
     source: ambiguous ? 'Ambiguous vehicle/customer match' : (customer ? (matchSource || 'Imported customer') : 'No exact customer match')
   };
 }
@@ -14905,10 +15193,12 @@ function prepareTollImport(data, payload = {}, user = {}) {
       id: 'claim-toll-' + Date.now() + '-' + index + '-' + crypto.randomBytes(2).toString('hex'),
       organizationId,
       customer: match.customer || '',
+      customerId: profile.id || '',
       phone: profile.phone || '',
       email: profile.email || '',
       vehicle: vehicle.id ? tollVehicleLabel(vehicle) : tollImportValue(row, ['vehicle', 'car', 'unit']),
       vehicleId: vehicle.id || profile.vehicleId || '',
+      rentalFileId: match.rentalFile && match.rentalFile.id || '',
       vin: vehicle.vin || profile.vin || tollImportValue(row, ['vin']) || '',
       plate,
       licensePlate: plate,
@@ -15171,6 +15461,7 @@ function rematchSavedTollClaims(data, user) {
       email: profile.email || claim.email || '',
       vehicle: tollVehicleLabel(match.vehicle),
       vehicleId: match.vehicle.id || '',
+      rentalFileId: match.rentalFile && match.rentalFile.id || claim.rentalFileId || '',
       vin: match.vehicle.vin || profile.vin || claim.vin || '',
       tracker: match.vehicle.tracker || profile.tracker || claim.tracker || '',
       customerMatchStatus: 'Matched from saved E-ZPass tag',
@@ -16547,21 +16838,129 @@ function syncApiProviderDispatchTask(data = {}, provider = {}) {
   }
   return task;
 }
-function cleanTaskPayload(payload) {
+function cleanTaskPayload(payload, existing = null, user = {}) {
   const now = new Date().toISOString();
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const id = cleanResourceText(source.id || existing && existing.id || ('task-' + Date.now()), 160);
+  if (!id) {
+    const error = new Error('Task ID is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const title = cleanResourceText(source.title || source.type || existing && (existing.title || existing.type) || 'Task', 240);
+  if (!title) {
+    const error = new Error('Task title is required.');
+    error.statusCode = 400;
+    throw error;
+  }
   return {
-    id: String(payload.id || ('task-' + Date.now())).trim(),
-    title: String(payload.title || payload.type || 'Task').trim(),
-    type: String(payload.type || 'Other').trim(),
-    customer: String(payload.customer || '').trim(),
-    vehicle: String(payload.vehicle || '').trim(),
-    due: String(payload.due || '').trim(),
-    status: String(payload.status || 'Open').trim(),
-    owner: String(payload.owner || '').trim(),
-    notes: String(payload.notes || '').trim(),
-    doneAt: String(payload.doneAt || '').trim(),
+    id,
+    title,
+    type: cleanResourceText(source.type || existing && existing.type || 'Other', 120),
+    customer: cleanResourceText(source.customer === undefined ? existing && existing.customer : source.customer, 180),
+    vehicle: cleanResourceText(source.vehicle === undefined ? existing && existing.vehicle : source.vehicle, 220),
+    due: cleanResourceText(source.due === undefined ? existing && existing.due : source.due, 40),
+    status: cleanResourceText(source.status || existing && existing.status || 'Open', 80),
+    owner: cleanResourceText(source.owner === undefined ? existing && existing.owner : source.owner, 160),
+    notes: cleanResourceText(source.notes === undefined ? existing && existing.notes : source.notes, 20000),
+    doneAt: cleanResourceText(source.doneAt === undefined ? existing && existing.doneAt : source.doneAt, 80),
+    organizationId: rowOrganizationId(existing || { organizationId: userOrganizationId(user) }),
+    updatedBy: cleanResourceText(user.name || user.username || user.role || 'Staff', 160),
     updatedAt: now,
-    createdAt: payload.createdAt || now
+    createdAt: existing && existing.createdAt || cleanResourceText(source.createdAt, 80) || now
+  };
+}
+function isMonthlyMaintenanceJob(row = {}) {
+  return /monthly|oil/.test(String([row.type, row.issue].filter(Boolean).join(' ')).toLowerCase());
+}
+function cleanMaintenanceChecklist(value) {
+  const values = Array.isArray(value) ? value : [];
+  return [...new Set(values.map(item => cleanResourceText(item, 80)).filter(Boolean))].slice(0, 20);
+}
+function cleanMaintenanceCost(value, existing, user) {
+  if (String(user && user.role || '').toLowerCase() === 'mechanic') return Number(existing && existing.cost || 0);
+  const cost = Number(value == null || value === '' ? existing && existing.cost || 0 : value);
+  if (!Number.isFinite(cost) || cost < 0 || cost > 1000000) {
+    const error = new Error('Maintenance cost must be between $0 and $1,000,000.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return Math.round(cost * 100) / 100;
+}
+function maintenanceCustomerForVehicle(data, vehicle, existing = null) {
+  const vehicleId = String(vehicle && vehicle.id || '').trim();
+  const organizationId = rowOrganizationId(vehicle || {});
+  const activeRentalFiles = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === vehicleId && rowOrganizationId(row) === organizationId);
+  if (activeRentalFiles.length > 1) {
+    const error = new Error('This vehicle has more than one active Rental File. Resolve the assignment conflict before saving maintenance.');
+    error.statusCode = 409;
+    throw error;
+  }
+  if (activeRentalFiles.length === 1) return cleanResourceText(activeRentalFiles[0].customerName || '', 180);
+  const currentCustomer = cleanResourceText(vehicle && vehicle.currentCustomer || '', 180);
+  if (currentCustomer) return currentCustomer;
+  const activeRecurring = (data.recurringPayments || []).filter(row => String(row.vehicleId || '') === vehicleId && rowOrganizationId(row) === organizationId && !/removed|history|ended|inactive|cancel/i.test(String(row.status || '')) && String(row.customer || '').trim());
+  const recurringNames = [...new Set(activeRecurring.map(row => cleanResourceText(row.customer, 180)).filter(Boolean))];
+  if (recurringNames.length === 1) return recurringNames[0];
+  if (recurringNames.length > 1) {
+    const error = new Error('This vehicle has more than one active recurring customer. Resolve the assignment conflict before saving maintenance.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const activeCustomers = (data.customers || []).filter(row => String(row.vehicleId || '') === vehicleId && rowOrganizationId(row) === organizationId && !/removed|history|ended|inactive|cancel/i.test(String(row.status || '')) && String(row.name || row.customer || '').trim());
+  const customerNames = [...new Set(activeCustomers.map(row => cleanResourceText(row.name || row.customer, 180)).filter(Boolean))];
+  if (customerNames.length === 1) return customerNames[0];
+  if (customerNames.length > 1) {
+    const error = new Error('This vehicle has more than one active customer record. Resolve the assignment conflict before saving maintenance.');
+    error.statusCode = 409;
+    throw error;
+  }
+  return cleanResourceText(existing && existing.customer || '', 180);
+}
+function cleanMaintenancePayload(payload, existing, vehicle, user, customerName = '') {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const now = new Date().toISOString();
+  const id = cleanResourceText(source.id || existing && existing.id || ('mnt-' + Date.now()), 160);
+  if (!id) {
+    const error = new Error('Maintenance job ID is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!vehicle || !vehicle.id) {
+    const error = new Error('Choose an exact fleet vehicle before saving maintenance.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const due = cleanResourceText(source.due === undefined ? existing && (existing.due || existing.nextDue) : source.due, 40);
+  if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+    const error = new Error('Maintenance due date must use YYYY-MM-DD.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const tag = cleanResourceText(vehicle.plate || vehicle.stock || '', 80);
+  return {
+    id,
+    organizationId: rowOrganizationId(existing || vehicle || { organizationId: userOrganizationId(user) }),
+    vehicleId: String(vehicle.id),
+    vehicle: vehicleNameFromParts(vehicle),
+    customer: cleanResourceText(customerName, 180),
+    vin: cleanResourceText(vehicle.vin || '', 80),
+    licensePlate: tag,
+    plate: tag,
+    tempTag: cleanResourceText(vehicle.tempTag || '', 80),
+    tracker: cleanResourceText(trackerName(vehicle), 160),
+    type: cleanResourceText(source.type || existing && existing.type || 'Repair job', 160),
+    issue: cleanResourceText(source.issue === undefined ? existing && existing.issue : source.issue, 500),
+    cost: cleanMaintenanceCost(source.cost, existing, user),
+    due,
+    nextDue: due,
+    reminder: cleanResourceText(source.reminder || existing && existing.reminder || 'Remind customer when due', 120),
+    notes: cleanResourceText(source.notes === undefined ? existing && existing.notes : source.notes, 20000),
+    status: cleanResourceText(source.status || existing && existing.status || 'Scheduled', 80),
+    source: cleanResourceText(existing && existing.source || source.source || 'Staff maintenance', 120),
+    createdAt: existing && existing.createdAt || cleanResourceText(source.createdAt, 80) || now,
+    updatedAt: now,
+    updatedBy: cleanResourceText(user.name || user.username || user.role || 'Staff', 160)
   };
 }
 function weeklyEquivalent(amount, frequency) {
@@ -23592,17 +23991,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/account-payment' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const paymentsReturnPath = customerExperiencePath(req, 'payments');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const amount = Number(form.get('amount') || 0);
       const allocation = String(form.get('allocation') || 'current_week');
-      if (!Number.isFinite(amount) || amount < 1 || amount > 5000) return send(res, 400, paymentResultHtml('Payment amount needs review', 'Enter an amount from $1 to $5,000.', '/customer#portal-payments', 'Back to payments'));
-      if (!['current_week', 'pay_ahead', 'past_due', 'tolls_fees'].includes(allocation)) return send(res, 400, paymentResultHtml('Payment type needs review', 'Choose what this payment should cover.', '/customer#portal-payments', 'Back to payments'));
+      if (!Number.isFinite(amount) || amount < 1 || amount > 5000) return send(res, 400, paymentResultHtml('Payment amount needs review', 'Enter an amount from $1 to $5,000.', paymentsReturnPath, 'Back to payments'));
+      if (!['current_week', 'pay_ahead', 'past_due', 'tolls_fees'].includes(allocation)) return send(res, 400, paymentResultHtml('Payment type needs review', 'Choose what this payment should cover.', paymentsReturnPath, 'Back to payments'));
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const portal = customerPortalState(data, account);
       const recurring = findRecurringRow(data, portal.recurring && portal.recurring.id || account.recurringPaymentId || '');
-      if (!recurring) return send(res, 409, paymentResultHtml('Payment schedule not linked', 'WheelsonAuto must connect the exact payment schedule before an online account payment can be accepted.', '/customer#portal-messages', 'Message WheelsonAuto'));
+      if (!recurring) return send(res, 409, paymentResultHtml('Payment schedule not linked', 'WheelsonAuto must connect the exact payment schedule before an online account payment can be accepted.', customerExperiencePath(req, 'messages'), 'Message WheelsonAuto'));
       const vehicle = portal.vehicle || {};
       const label = { current_week: 'Current weekly payment', pay_ahead: 'Advance weekly payment', past_due: 'Past-due payment', tolls_fees: 'Tolls, violations, or fees' }[allocation];
       const duplicate = (data.paymentRequests || []).find(row => isOpenCustomerPaymentRequest(row) && row.customerAccountId === account.id && row.appliesToRecurringPaymentId === recurring.id && row.paymentAllocation === allocation && Number(row.amount || 0) === Number(amount.toFixed(2)));
@@ -23625,7 +24025,7 @@ const server = http.createServer(async (req, res) => {
         paymentType: label,
         reason: label,
         notes: label + ' submitted from the exact customer portal account.',
-        onboardingReturnUrl: '/customer#portal-payments'
+        onboardingReturnUrl: paymentsReturnPath
       });
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       data.paymentRequests.unshift(request);
@@ -23637,6 +24037,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/payment-date-change' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const paymentsReturnPath = customerExperiencePath(req, 'payments');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const targetDate = validCalendarDateKey(form.get('targetDate') || '');
       const data = await readData();
@@ -23645,11 +24046,11 @@ const server = http.createServer(async (req, res) => {
       const portal = customerPortalState(data, account);
       const recurring = findRecurringRow(data, portal.recurring && portal.recurring.id || account.recurringPaymentId || '');
       const originalDate = recurring && validCalendarDateKey(recurring.nextRun || recurring.adminNextRun || '');
-      if (!recurring || !originalDate || !targetDate) return send(res, 409, paymentResultHtml('Payment date needs review', 'The exact current payment schedule or new date could not be confirmed.', '/customer#portal-payments', 'Back to payments'));
+      if (!recurring || !originalDate || !targetDate) return send(res, 409, paymentResultHtml('Payment date needs review', 'The exact current payment schedule or new date could not be confirmed.', paymentsReturnPath, 'Back to payments'));
       const days = Math.round((new Date(targetDate + 'T12:00:00').getTime() - new Date(originalDate + 'T12:00:00').getTime()) / 86400000);
-      if (days < 1 || days > 7 || targetDate <= localDateKey()) return send(res, 400, paymentResultHtml('Choose a valid new date', 'The payment date can move forward by one to seven days and must still be in the future.', '/customer#portal-payments', 'Back to payments'));
+      if (days < 1 || days > 7 || targetDate <= localDateKey()) return send(res, 400, paymentResultHtml('Choose a valid new date', 'The payment date can move forward by one to seven days and must still be in the future.', paymentsReturnPath, 'Back to payments'));
       const weeklyAmount = Math.max(0, Number(recurring.amount || recurring.weeklyAmount || 0));
-      if (!weeklyAmount) return send(res, 409, paymentResultHtml('Weekly amount needs review', 'WheelsonAuto must confirm the weekly amount before calculating a date-change fee.', '/customer#portal-messages', 'Message WheelsonAuto'));
+      if (!weeklyAmount) return send(res, 409, paymentResultHtml('Weekly amount needs review', 'WheelsonAuto must confirm the weekly amount before calculating a date-change fee.', customerExperiencePath(req, 'messages'), 'Message WheelsonAuto'));
       const dailyFee = Number((weeklyAmount / 7).toFixed(2));
       const fee = Number((weeklyAmount / 7 * days).toFixed(2));
       const vehicle = portal.vehicle || {};
@@ -23676,7 +24077,7 @@ const server = http.createServer(async (req, res) => {
         paymentType: 'Payment date change fee',
         reason: 'Move payment date from ' + originalDate + ' to ' + targetDate,
         notes: days + ' day date change at ' + moneyText(dailyFee) + ' per day.',
-        onboardingReturnUrl: '/customer#portal-payments'
+        onboardingReturnUrl: paymentsReturnPath
       });
       data.paymentRequests = Array.isArray(data.paymentRequests) ? data.paymentRequests : [];
       data.paymentRequests.unshift(request);
@@ -23688,6 +24089,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/swap-request' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const vehicleReturnPath = customerExperiencePath(req, 'vehicle');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const onlineVehicleId = String(form.get('onlineVehicleId') || '').trim();
       const accepted = form.get('termResetAccepted') === 'yes';
@@ -23696,10 +24098,10 @@ const server = http.createServer(async (req, res) => {
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
       const selected = nativeSite.publishedVehicles(data).find(row => row.id === onlineVehicleId);
-      if (!selected || !accepted) return send(res, 400, paymentResultHtml('Swap request incomplete', 'Choose an available vehicle and accept the new-term acknowledgement.', '/customer#portal-vehicle', 'Back to vehicles'));
+      if (!selected || !accepted) return send(res, 400, paymentResultHtml('Swap request incomplete', 'Choose an available vehicle and accept the new-term acknowledgement.', vehicleReturnPath, 'Back to vehicles'));
       const portal = customerPortalState(data, account);
       const existingSwap = (data.vehicleSwapRequests || []).find(row => row.customerAccountId === account.id && row.requestedOnlineVehicleId === selected.id && !/complete|closed|declined|cancel/i.test(String(row.status || '')));
-      if (existingSwap) return send(res, 303, '', 'text/plain', { Location: '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
+      if (existingSwap) return send(res, 303, '', 'text/plain', { Location: vehicleReturnPath, 'Cache-Control': 'no-store' });
       const now = new Date().toISOString();
       const request = {
         id: 'swap-' + crypto.randomBytes(8).toString('hex'),
@@ -23725,11 +24127,12 @@ const server = http.createServer(async (req, res) => {
       await queueOwnerEmailNotification(data, 'customer_message', { customer: request.customer, subject: 'Vehicle swap request - ' + request.customer, body: data.messages[0].body });
       await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer vehicle swap request' });
       await writeData(data);
-      return send(res, 303, '', 'text/plain', { Location: '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
+      return send(res, 303, '', 'text/plain', { Location: vehicleReturnPath, 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/profile' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const settingsReturnPath = customerExperiencePath(req, 'settings');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const phone = phoneKey(form.get('phone') || '');
       const email = String(form.get('email') || '').trim().toLowerCase().slice(0, 180);
@@ -23738,14 +24141,14 @@ const server = http.createServer(async (req, res) => {
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      if (!verifyPasswordRecord(currentPassword, account)) return send(res, 403, paymentResultHtml('Current password did not match', 'No account information was changed.', '/customer#portal-settings', 'Back to settings'));
-      if (phone.length !== 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || normalizeLogin(username).length < 3) return send(res, 400, paymentResultHtml('Check the account information', 'Enter a valid phone, email, and username.', '/customer#portal-settings', 'Back to settings'));
+      if (!verifyPasswordRecord(currentPassword, account)) return send(res, 403, paymentResultHtml('Current password did not match', 'No account information was changed.', settingsReturnPath, 'Back to settings'));
+      if (phone.length !== 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || normalizeLogin(username).length < 3) return send(res, 400, paymentResultHtml('Check the account information', 'Enter a valid phone, email, and username.', settingsReturnPath, 'Back to settings'));
       const profileIdentifiers = new Set([normalizeLogin(username), normalizeLogin(email), phoneKey(phone)].filter(Boolean));
       const profileConflictsWith = row => [row && row.username, row && row.email, row && row.phone].filter(Boolean).some(value => profileIdentifiers.has(normalizeLogin(value)) || phoneKey(value) && profileIdentifiers.has(phoneKey(value)));
       const profileConflict = (data.customerAccounts || []).some(row => row.id !== account.id && profileConflictsWith(row))
         || (data.staffAccounts || []).some(profileConflictsWith)
         || profileConflictsWith(data.security && data.security.ownerLogin || {});
-      if (profileConflict) return send(res, 409, paymentResultHtml('Login information already in use', 'Choose a different username, email, or phone number. No account information was changed.', '/customer#portal-settings', 'Back to settings'));
+      if (profileConflict) return send(res, 409, paymentResultHtml('Login information already in use', 'Choose a different username, email, or phone number. No account information was changed.', settingsReturnPath, 'Back to settings'));
       const now = new Date().toISOString();
       const old = { phone: account.phone || '', email: account.email || '', username: account.username || '' };
       Object.assign(account, { phone, email, username, updatedAt: now });
@@ -23762,16 +24165,17 @@ const server = http.createServer(async (req, res) => {
       appendCustomerPortalAudit(data, account, 'Customer portal profile updated', ['Phone ' + (old.phone === phone ? 'unchanged' : 'updated'), 'Email ' + (old.email === email ? 'unchanged' : 'updated'), 'Username ' + (old.username === username ? 'unchanged' : 'updated')]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'exact customer profile update' });
       await writeData(data);
-      return send(res, 303, '', 'text/plain', { Location: '/customer#portal-settings', 'Cache-Control': 'no-store', 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)) });
+      return send(res, 303, '', 'text/plain', { Location: settingsReturnPath, 'Cache-Control': 'no-store', 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)) });
     }
     if (url.pathname === '/customer/feedback' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const settingsReturnPath = customerExperiencePath(req, 'settings');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const category = String(form.get('category') || 'Report a bug').trim().slice(0, 80);
       const page = String(form.get('page') || 'Customer portal').trim().slice(0, 80);
       const details = String(form.get('details') || '').trim().slice(0, 1600);
-      if (details.length < 5) return send(res, 400, paymentResultHtml('Add more detail', 'Tell us what happened or what should improve.', '/customer#portal-settings', 'Back to settings'));
+      if (details.length < 5) return send(res, 400, paymentResultHtml('Add more detail', 'Tell us what happened or what should improve.', settingsReturnPath, 'Back to settings'));
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
@@ -23782,7 +24186,7 @@ const server = http.createServer(async (req, res) => {
       await queueOwnerEmailNotification(data, 'customer_message', { customer: account.customer || account.name, subject: category + ' - ' + page, body: details });
       await protectConcurrentLocalWrites(data, { preferIncoming: true, reason: 'customer portal feedback' });
       await writeData(data);
-      return send(res, 303, '', 'text/plain', { Location: '/customer#portal-settings', 'Cache-Control': 'no-store' });
+      return send(res, 303, '', 'text/plain', { Location: settingsReturnPath, 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/message' && req.method === 'POST') {
       const wantsJson = /application\/json/i.test(String(req.headers['content-type'] || '')) || /application\/json/i.test(String(req.headers.accept || ''));
@@ -23875,6 +24279,7 @@ const server = http.createServer(async (req, res) => {
 	    if (url.pathname === '/customer/receipt-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
 	      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+	      const paymentsReturnPath = customerExperiencePath(req, 'payments');
 	      const form = new URLSearchParams(await readBody(req, 64 * 1024));
 	      const paymentHint = String(form.get('paymentHint') || '').trim().slice(0, 160);
 	      const data = await readData();
@@ -23940,11 +24345,12 @@ const server = http.createServer(async (req, res) => {
 	      });
 	      appendCustomerPortalAudit(data, account, 'Customer portal receipt requested', [customerName, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '', message.amount ? moneyText(message.amount) : 'No amount']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-settings' });
+	      return send(res, 302, '', 'text/plain', { Location: paymentsReturnPath });
 	    }
 	    if (url.pathname === '/customer/statement-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
 	      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+	      const paymentsReturnPath = customerExperiencePath(req, 'payments');
 	      const form = new URLSearchParams(await readBody(req, 64 * 1024));
 	      const requestType = String(form.get('requestType') || 'Account statement').trim().slice(0, 80) || 'Account statement';
 	      const note = String(form.get('note') || '').trim().slice(0, 200);
@@ -24056,18 +24462,19 @@ const server = http.createServer(async (req, res) => {
 	      });
 	      appendCustomerPortalAudit(data, account, 'Customer portal statement requested', [customerName, requestType, message.vehicle || message.vin || 'No vehicle linked', message.plate ? 'Tag ' + message.plate : '', note || 'No note']);
 	      await writeData(data);
-	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-settings' });
+	      return send(res, 302, '', 'text/plain', { Location: paymentsReturnPath });
 	    }
 	    if (url.pathname === '/customer/paid-outside' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const paymentsReturnPath = customerExperiencePath(req, 'payments');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const amount = Number(form.get('amount') || 0);
       const method = String(form.get('method') || 'Outside app').trim().slice(0, 80);
       const paidDate = String(form.get('paidDate') || '').trim();
       const note = String(form.get('note') || '').trim().slice(0, 1200);
       const proofUrl = String(form.get('proofUrl') || form.get('url') || '').trim().slice(0, 500);
-      if (!Number.isFinite(amount) || amount <= 0) return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
+      if (!Number.isFinite(amount) || amount <= 0) return send(res, 302, '', 'text/plain', { Location: paymentsReturnPath });
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
@@ -24156,11 +24563,12 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal paid-outside reported', [customerName, moneyText(amount), method, vehicleName || payment.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
+      return send(res, 302, '', 'text/plain', { Location: paymentsReturnPath });
     }
     if (url.pathname === '/customer/service-request' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const vehicleReturnPath = customerExperiencePath(req, 'vehicle');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const type = String(form.get('type') || 'Service request').trim().slice(0, 120);
       const preferredDate = String(form.get('preferredDate') || '').trim();
@@ -24252,11 +24660,12 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal service requested', [customerName, type, due, vehicleName || service.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-vehicle' });
+      return send(res, 302, '', 'text/plain', { Location: vehicleReturnPath });
     }
     if (url.pathname === '/customer/issue-report' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const vehicleReturnPath = customerExperiencePath(req, 'vehicle');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const type = String(form.get('type') || 'Customer issue').trim().slice(0, 120);
       const incidentDate = String(form.get('incidentDate') || '').trim();
@@ -24351,7 +24760,7 @@ const server = http.createServer(async (req, res) => {
       });
       appendCustomerPortalAudit(data, account, 'Customer portal issue reported', [customerName, type, moneyText(claim.amount || 0), vehicleName || claim.vin || 'No vehicle linked', tag ? 'Tag ' + tag : '']);
       await writeData(data);
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-vehicle' });
+      return send(res, 302, '', 'text/plain', { Location: vehicleReturnPath });
     }
     if (url.pathname === '/customer/document-update' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
@@ -24523,6 +24932,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/customer/card-change' && req.method === 'POST') {
       const customerUser = customerSessionUser(req);
       if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
+      const paymentsReturnPath = customerExperiencePath(req, 'payments');
       const form = new URLSearchParams(await readBody(req, 64 * 1024));
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
@@ -24539,7 +24949,7 @@ const server = http.createServer(async (req, res) => {
       const customerName = context.customerName || account.customer || account.name || 'Customer';
       const requestedProvider = normalizedPaymentProvider(form.get('paymentProvider') || recurring.paymentProvider || recurring.provider || WOA_PAYMENT_PROVIDER);
       if (requestedProvider === 'stripe') {
-        try { assertStripeCardPreparationReady(); } catch (error) { return send(res, Number(error.statusCode || 503), paymentResultHtml('Stripe card setup is not live', error.message, '/customer#portal-payments', 'Back to my account')); }
+        try { assertStripeCardPreparationReady(); } catch (error) { return send(res, Number(error.statusCode || 503), paymentResultHtml('Stripe card setup is not live', error.message, paymentsReturnPath, 'Back to my account')); }
       }
       data.messages = Array.isArray(data.messages) ? data.messages : [];
       if (!recurring.id && !account.recurringPaymentId) {
@@ -24570,7 +24980,7 @@ const server = http.createServer(async (req, res) => {
         });
         appendCustomerPortalAudit(data, account, 'Customer portal card change needs review', [customerName, message.status, message.vehicleId || 'No vehicle linked']);
         await writeData(data);
-        return send(res, 302, '', 'text/plain', { Location: '/customer#portal-payments' });
+        return send(res, 302, '', 'text/plain', { Location: paymentsReturnPath });
       }
       const setup = createCardSetupRequest(data, {
         id: recurring.id || account.recurringPaymentId,
@@ -24592,6 +25002,7 @@ const server = http.createServer(async (req, res) => {
         nextRun: recurring.nextRun || localDateKey(),
         chargeTime: recurring.chargeTime || recurring.paymentTime || '18:00',
         paymentProvider: requestedProvider,
+        onboardingReturnUrl: paymentsReturnPath,
         reason: 'Customer portal card change request',
         notes: 'Customer requested to change card on file from the WheelsonAuto portal.'
       });
@@ -24656,20 +25067,36 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/customer' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
-      if (!customerUser) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       const data = await readData();
-      const account = activeCustomerSessionAccount(data, customerUser);
+      const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
+      if (!customerUser && !account) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      const portalHtml = customerPortalAssistanceHtml(customerPortalHtml(account, customerPortalState(data, account)), customerUser);
+      const portalHtml = customerPortalAssistanceHtml(customerPortalHtml(account, customerPortalState(data, account)), customerUser || {});
       return send(res, 200, portalHtml, 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+    }
+    if (url.pathname === '/customer-next' && req.method === 'GET') {
+      const customerUser = customerSessionUser(req);
+      const data = await readData();
+      const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
+      if (!customerUser && !account) return send(res, 302, '', 'text/plain', { Location: '/customer/login?next=' + encodeURIComponent('/customer-next') });
+      if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login?next=' + encodeURIComponent('/customer-next') });
+      return send(res, 200, customerNextHtml(account), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
     if (url.pathname === '/api/customer/portal-state' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
-      if (!customerUser) return json(res, 401, { ok: false, error: 'Customer login required.' });
       const data = await readData();
-      const account = activeCustomerSessionAccount(data, customerUser);
+      const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
+      if (!customerUser && !account) return json(res, 401, { ok: false, error: 'Customer login required.' });
       if (!account) return json(res, 401, { ok: false, error: 'Customer account is not active.' });
       return json(res, 200, { ok: true, portal: customerPortalState(data, account) });
+    }
+    if (url.pathname === '/api/customer/events' && req.method === 'GET') {
+      const customerUser = customerSessionUser(req);
+      const data = await readData();
+      const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
+      if (!account) return json(res, 401, { ok: false, error: 'Customer login required.' });
+      openPlatformEventStream(req, res, account, { kind: 'customer' });
+      return;
     }
     if ((url.pathname === '/api/customer/notifications' && req.method === 'GET') || (url.pathname === '/api/customer/notifications/read' && req.method === 'POST')) {
       const customerUser = customerSessionUser(req);
@@ -24813,10 +25240,13 @@ const server = http.createServer(async (req, res) => {
       return send(res, 401, loginPage('That login did not match an active account.', data));
     }
     if (url.pathname === '/logout') return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_session', '', { maxAge: 0 }), Location: '/' });
-    const user = await activeStaffSessionUser(sessionUser(req));
+    const user = localStaffPreviewUser(req) || await activeStaffSessionUser(sessionUser(req));
     if (!user) {
       if (url.pathname.startsWith('/api/')) return json(res, 401, { ok: false, error: 'Authentication required.' });
       return send(res, 200, loginPage('', await readData()));
+    }
+    if (url.pathname === '/staff-next' && req.method === 'GET') {
+      return send(res, 200, staffNextHtml(user), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if ((url.pathname === '/api/app-notifications' && req.method === 'GET') || (url.pathname === '/api/app-notifications/read' && req.method === 'POST')) {
@@ -25468,7 +25898,7 @@ const server = http.createServer(async (req, res) => {
           await protectConcurrentLocalWrites(data, { preferIncoming: true });
           await writeData(data);
         }
-        return json(res, 200, { ok: true, alreadyCompleted: completed.alreadyCompleted, appointment: completed.appointment, vehicle: completed.vehicle && { id: completed.vehicle.id, status: completed.vehicle.status, currentCustomer: completed.vehicle.currentCustomer, mileage: completed.vehicle.mileage }, recurring: completed.recurring && { id: completed.recurring.id, status: completed.recurring.status, nextRun: completed.recurring.nextRun, paymentDay: completed.recurring.paymentDay } });
+        return json(res, 200, { ok: true, alreadyCompleted: completed.alreadyCompleted, appointment: completed.appointment, vehicle: completed.vehicle && { id: completed.vehicle.id, status: completed.vehicle.status, currentCustomer: completed.vehicle.currentCustomer, mileage: completed.vehicle.mileage }, recurring: completed.recurring && { id: completed.recurring.id, status: completed.recurring.status, nextRun: completed.recurring.nextRun, paymentDay: completed.recurring.paymentDay }, rentalFile: completed.rentalFile && rentalFiles.summarize(completed.rentalFile) });
       }
       const pickupIcsMatch = /^\/api\/pickups\/([^/]+)\/calendar\.ics$/.exec(url.pathname);
       if (pickupIcsMatch && req.method === 'GET') {
@@ -26015,6 +26445,567 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, id: contract.id, notes, bytes: Buffer.byteLength(notes, 'utf8'), source: source === customer ? 'customer' : source === vehicle ? 'vehicle' : 'customer file' });
     }
     if (url.pathname === '/api/state/version' && req.method === 'GET') return json(res, 200, { ok: true, version: await dataVersion() });
+    if (url.pathname === '/api/events' && req.method === 'GET') {
+      openPlatformEventStream(req, res, user);
+      return;
+    }
+    if (url.pathname === '/api/customers' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view customer records.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const page = paginatedResource(scoped.customers || [], url, { searchFields: ['id', 'name', 'phone', 'email', 'vehicle', 'vin', 'licensePlate'], defaultLimit: 50 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    const customerResourceMatch = /^\/api\/customers\/([^/]+)$/.exec(url.pathname);
+    if (customerResourceMatch && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view a customer record.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const record = (scoped.customers || []).find(row => String(row.id || '') === decodeURIComponent(customerResourceMatch[1]));
+      if (!record) return json(res, 404, { ok: false, error: 'Customer record was not found.' });
+      return json(res, 200, safeResourcePayload({ ok: true, record }), { 'Cache-Control': 'private, no-store' });
+    }
+    if (customerResourceMatch && req.method === 'PATCH') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can update customer contact details.' });
+      const customerId = decodeURIComponent(customerResourceMatch[1]);
+      const payload = await readJsonBody(req, 128 * 1024);
+      let saved = null;
+      let propagated = [];
+      try {
+        await mutateLatestData('Update exact customer resource', async data => {
+          const record = (data.customers || []).find(row => String(row.id || '') === customerId);
+          if (!record || !rowVisibleToUserOrganization(record, user)) {
+            const error = new Error('Customer record was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(record, payload);
+          const limits = { phone: 80, email: 240, address: 300, city: 120, state: 80, postalCode: 30, notes: 20000 };
+          const changes = [];
+          Object.entries(limits).forEach(([field, maxLength]) => {
+            if (!Object.prototype.hasOwnProperty.call(payload, field)) return;
+            const next = cleanResourceText(payload[field], maxLength);
+            if (String(record[field] || '') === next) return;
+            record[field] = next;
+            changes.push(field);
+          });
+          if (!changes.length) {
+            const error = new Error('No supported customer contact field changed.');
+            error.statusCode = 400;
+            throw error;
+          }
+          const now = new Date().toISOString();
+          record.updatedAt = now;
+          record.updatedBy = user.name || user.username || 'Staff';
+          const contactFields = changes.filter(field => field === 'phone' || field === 'email');
+          const exactLinks = [
+            ['recurringPayments', row => String(row.customerId || '') === customerId || String(record.recurringPaymentId || '') === String(row.id || '')],
+            ['contracts', row => String(row.customerId || '') === customerId],
+            ['customerAccounts', row => String(row.customerId || '') === customerId || String(record.customerAccountId || '') === String(row.id || '')],
+            ['applications', row => String(row.customerId || '') === customerId || String(record.applicationId || '') === String(row.id || '')]
+          ];
+          exactLinks.forEach(([collection, matches]) => {
+            (data[collection] || []).filter(matches).forEach(row => {
+              contactFields.forEach(field => { row[field] = record[field]; });
+              if (contactFields.length) {
+                row.updatedAt = now;
+                propagated.push(collection + ':' + String(row.id || 'linked'));
+              }
+            });
+          });
+          if (contactFields.length) {
+            (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && String(row.customerId || '') === customerId).forEach(row => {
+              if (changes.includes('phone')) row.customerPhone = record.phone || '';
+              if (changes.includes('email')) row.customerEmail = record.email || '';
+              row.updatedAt = now;
+              row.updatedBy = user.name || user.username || 'Staff';
+              row.version = Math.max(1, Number(row.version || 1)) + 1;
+              propagated.push('rentalFiles:' + String(row.id || 'linked'));
+            });
+          }
+          appendAuditLog(data, user, 'Customer contact resource updated', [record.name || record.id, changes.join(', '), propagated.length ? propagated.length + ' exact linked record(s) updated' : 'No copied contact fields required propagation']);
+          saved = { ...record };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
+    }
+    if (url.pathname === '/api/vehicles' && req.method === 'GET') {
+      const scoped = stateForUserRead(await readData(), user);
+      const page = paginatedResource(scoped.vehicles || [], url, { searchFields: ['id', 'name', 'year', 'make', 'model', 'vin', 'plate', 'stock', 'tempTag', 'tracker', 'currentCustomer', 'status'], defaultLimit: 50 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    const vehicleResourceMatch = /^\/api\/vehicles\/([^/]+)$/.exec(url.pathname);
+    if (vehicleResourceMatch && req.method === 'GET') {
+      const scoped = stateForUserRead(await readData(), user);
+      const record = (scoped.vehicles || []).find(row => String(row.id || '') === decodeURIComponent(vehicleResourceMatch[1]));
+      if (!record) return json(res, 404, { ok: false, error: 'Vehicle record was not found.' });
+      return json(res, 200, safeResourcePayload({ ok: true, record }), { 'Cache-Control': 'private, no-store' });
+    }
+    if (vehicleResourceMatch && req.method === 'PATCH') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can update vehicle identity details.' });
+      const vehicleId = decodeURIComponent(vehicleResourceMatch[1]);
+      const payload = await readJsonBody(req, 128 * 1024);
+      let saved = null;
+      let propagated = [];
+      try {
+        await mutateLatestData('Update exact vehicle resource', async data => {
+          const record = (data.vehicles || []).find(row => String(row.id || '') === vehicleId);
+          if (!record || !rowVisibleToUserOrganization(record, user)) {
+            const error = new Error('Vehicle record was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(record, payload);
+          const limits = { plate: 40, stock: 80, tempTag: 80, tracker: 160, color: 80, location: 240, notes: 20000 };
+          const changes = [];
+          Object.entries(limits).forEach(([field, maxLength]) => {
+            if (!Object.prototype.hasOwnProperty.call(payload, field)) return;
+            const next = cleanResourceText(payload[field], maxLength);
+            if (String(record[field] || '') === next) return;
+            record[field] = next;
+            changes.push(field);
+          });
+          if (Object.prototype.hasOwnProperty.call(payload, 'mileage')) {
+            const mileage = Number(payload.mileage);
+            if (!Number.isFinite(mileage) || mileage < 0 || mileage > 99999999) {
+              const error = new Error('Mileage must be a number from 0 to 99,999,999.');
+              error.statusCode = 400;
+              throw error;
+            }
+            if (Number(record.mileage || 0) !== Math.round(mileage)) {
+              record.mileage = Math.round(mileage);
+              changes.push('mileage');
+            }
+          }
+          if (!changes.length) {
+            const error = new Error('No supported vehicle identity field changed.');
+            error.statusCode = 400;
+            throw error;
+          }
+          const now = new Date().toISOString();
+          record.updatedAt = now;
+          record.updatedBy = user.name || user.username || 'Staff';
+          const copiedFields = changes.filter(field => ['plate', 'stock', 'tempTag', 'tracker'].includes(field));
+          const exactLinks = [
+            ['onlineVehicles', row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId],
+            ['recurringPayments', row => String(row.vehicleId || '') === vehicleId],
+            ['contracts', row => String(row.vehicleId || '') === vehicleId],
+            ['applications', row => String(row.vehicleId || '') === vehicleId],
+            ['maintenance', row => String(row.vehicleId || '') === vehicleId]
+          ];
+          exactLinks.forEach(([collection, matches]) => {
+            (data[collection] || []).filter(matches).forEach(row => {
+              copiedFields.forEach(field => {
+                row[field] = record[field];
+              });
+              if (collection === 'onlineVehicles' && changes.includes('mileage')) row.mileage = record.mileage;
+              if (copiedFields.length || collection === 'onlineVehicles' && changes.includes('mileage')) {
+                row.updatedAt = now;
+                propagated.push(collection + ':' + String(row.id || 'linked'));
+              }
+            });
+          });
+          (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === vehicleId).forEach(row => {
+            if (changes.some(field => ['plate', 'stock', 'tempTag'].includes(field))) row.plate = record.plate || record.stock || record.tempTag || '';
+            if (changes.includes('tracker')) row.tracker = record.tracker || '';
+            if (changes.includes('color')) row.vehicleColor = record.color || '';
+            if (changes.includes('location')) row.vehicleLocation = record.location || '';
+            if (changes.includes('mileage')) row.currentMileage = record.mileage;
+            row.updatedAt = now;
+            row.updatedBy = user.name || user.username || 'Staff';
+            row.version = Math.max(1, Number(row.version || 1)) + 1;
+            propagated.push('rentalFiles:' + String(row.id || 'linked'));
+          });
+          appendAuditLog(data, user, 'Vehicle identity resource updated', [vehicleNameFromParts(record), changes.join(', '), propagated.length ? propagated.length + ' exact linked record(s) updated' : 'No copied identity fields required propagation']);
+          saved = { ...record };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
+    }
+    const vehicleRetireMatch = /^\/api\/vehicles\/([^/]+)\/retire$/.exec(url.pathname);
+    if (vehicleRetireMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can remove a vehicle from active fleet.' });
+      const vehicleId = decodeURIComponent(vehicleRetireMatch[1]);
+      const payload = await readJsonBody(req, 64 * 1024);
+      if (String(payload.confirmation || '') !== 'REMOVE_VEHICLE') return json(res, 400, { ok: false, error: 'Confirm vehicle removal before changing fleet availability.' });
+      let saved = null;
+      let alreadyRemoved = false;
+      try {
+        await mutateLatestData('Remove unassigned vehicle resource from active fleet', async data => {
+          const vehicle = (data.vehicles || []).find(row => String(row && row.id || '') === vehicleId);
+          if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) {
+            const error = new Error('Vehicle record was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(vehicle, payload);
+          if (String(vehicle.status || '').toLowerCase() === 'removed') {
+            alreadyRemoved = true;
+            saved = { ...vehicle };
+            return;
+          }
+          const activeRental = (data.rentalFiles || []).find(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === vehicleId);
+          const activeRecurring = (data.recurringPayments || []).find(row => String(row.vehicleId || '') === vehicleId && !/removed|history|ended|stopped/i.test(String(row.status || '')));
+          if (String(vehicle.currentCustomer || '').trim() || activeRental || activeRecurring) {
+            const error = new Error('This vehicle is still assigned to a customer or active Rental File. Complete the return workflow before removing it from Fleet.');
+            error.statusCode = 409;
+            throw error;
+          }
+          const now = new Date().toISOString();
+          Object.assign(vehicle, {
+            status: 'Removed',
+            currentCustomer: '',
+            removedAt: now,
+            removedBy: user.name || user.username || 'Staff',
+            updatedAt: now
+          });
+          (data.onlineVehicles || []).filter(row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId).forEach(row => {
+            row.published = false;
+            row.availability = 'Removed from fleet';
+            row.unpublishedAt = now;
+            row.updatedAt = now;
+          });
+          appendAuditLog(data, user, 'Unassigned vehicle removed from Fleet', [vehicleNameFromParts(vehicle), vehicle.vin ? 'VIN ' + vehicle.vin : 'VIN missing', vehicle.plate || vehicle.stock ? 'Tag ' + (vehicle.plate || vehicle.stock) : 'Tag missing']);
+          saved = { ...vehicle };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, alreadyRemoved, record: saved, version: await dataVersion() }));
+    }
+    const claimMatchCommand = /^\/api\/claims\/([^/]+)\/match$/.exec(url.pathname);
+    if (url.pathname.startsWith('/api/claims/') && claimMatchCommand && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can confirm a claim or dispute customer match.' });
+      const claimId = decodeURIComponent(claimMatchCommand[1]);
+      const payload = await readJsonBody(req, 64 * 1024);
+      const candidateType = cleanResourceText(payload.candidateType, 80).toLowerCase();
+      const candidateReference = cleanResourceText(payload.candidateReference, 240);
+      const recurringPaymentId = cleanResourceText(payload.recurringPaymentId, 240);
+      if (!candidateType || !candidateReference && !recurringPaymentId) return json(res, 400, { ok: false, error: 'Choose an exact saved payment or recurring plan before accepting this match.' });
+      let matchedClaim = null;
+      let matchedCandidate = null;
+      let alreadyMatched = false;
+      try {
+        await mutateLatestData('Match exact claim resource to customer evidence', async data => {
+          const claim = (data.claims || []).find(row => String(row.id || '') === claimId);
+          if (!claim || !rowVisibleToUserOrganization(claim, user)) {
+            const error = new Error('Claim or dispute record was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(claim, payload);
+          const candidates = claimPossibleMatches(data, claim);
+          const referenceKey = normalizedPaymentRecordId(candidateReference);
+          const candidate = candidates.find(row => {
+            if (String(row.type || '').toLowerCase() !== candidateType) return false;
+            if (recurringPaymentId && String(row.recurringPaymentId || '') === recurringPaymentId) return true;
+            return referenceKey && normalizedPaymentRecordId(row.reference) === referenceKey;
+          });
+          if (!candidate) {
+            const error = new Error('That suggested match is no longer available. Refresh the claim and review the current evidence.');
+            error.statusCode = 409;
+            throw error;
+          }
+          alreadyMatched = String(claim.recurringPaymentId || '') === String(candidate.recurringPaymentId || '')
+            && normKey(claim.customer) === normKey(candidate.customer)
+            && String(claim.customerMatchStatus || '').toLowerCase() === 'matched';
+          const now = new Date().toISOString();
+          claim.customer = candidate.customer || claim.customer;
+          claim.customerMatchStatus = 'Matched';
+          claim.customerMatchSource = 'Owner accepted exact ' + String(candidate.type || 'evidence').toLowerCase() + ' match';
+          claim.customerMatchedAt = now;
+          claim.matchAcceptedAt = now;
+          if (candidate.reference) {
+            claim.matchedReference = candidate.reference;
+            if (candidateType === 'payment') {
+              claim.paymentId = claim.paymentId || candidate.reference;
+            }
+          }
+          ['vehicleId', 'vehicle', 'vin', 'plate', 'tracker', 'phone', 'email', 'cloverCustomerId', 'recurringPaymentId'].forEach(field => {
+            if (!claim[field] && candidate[field]) claim[field] = candidate[field];
+          });
+          if (!claim.amount && candidate.amount) claim.amount = candidate.amount;
+          claim.notes = appendUniqueNote(claim.notes, 'Matched to ' + claim.customer + ' from exact ' + String(candidate.type || 'evidence').toLowerCase() + ' evidence ' + (candidate.reference || candidate.recurringPaymentId || '') + '.');
+          claim.updatedAt = now;
+          claim.updatedBy = user.name || user.username || 'Owner';
+          delete claim.matchCandidates;
+          appendAuditLog(data, user, alreadyMatched ? 'Claim customer match reconfirmed' : 'Claim customer match accepted', [claimId, claim.customer, candidate.type || 'Evidence', candidate.reference || candidate.recurringPaymentId || 'No reference', claim.vehicle || claim.vin || 'No vehicle linked']);
+          matchedClaim = { ...claim };
+          matchedCandidate = { ...candidate };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, alreadyMatched, claim: matchedClaim, candidate: matchedCandidate, version: await dataVersion() }));
+    }
+    if (url.pathname === '/api/payments' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to payment records.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const page = paginatedResource(scoped.payments || [], url, { searchFields: ['id', 'customer', 'vehicle', 'vin', 'plate', 'method', 'source', 'status', 'cloverPaymentId', 'stripePaymentIntentId', 'providerPaymentId'], defaultLimit: 75 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    const paymentResourceMatch = /^\/api\/payments\/([^/]+)$/.exec(url.pathname);
+    if (paymentResourceMatch && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Mechanic accounts do not have access to payment records.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const record = (scoped.payments || []).find(row => String(row.id || '') === decodeURIComponent(paymentResourceMatch[1]));
+      if (!record) return json(res, 404, { ok: false, error: 'Payment record was not found.' });
+      return json(res, 200, safeResourcePayload({ ok: true, record }), { 'Cache-Control': 'private, no-store' });
+    }
+    const paymentMatchCommand = /^\/api\/payments\/([^/]+)\/match$/.exec(url.pathname);
+    if (paymentMatchCommand && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can confirm a transaction customer match.' });
+      const paymentId = decodeURIComponent(paymentMatchCommand[1]);
+      const payload = await readJsonBody(req, 64 * 1024);
+      const recurringPaymentId = cleanResourceText(payload.recurringPaymentId, 240);
+      if (!recurringPaymentId) return json(res, 400, { ok: false, error: 'Choose the exact recurring plan before matching this transaction.' });
+      let matchedPayments = [];
+      let matchedProfile = null;
+      let alreadyMatched = false;
+      try {
+        await mutateLatestData('Match exact payment resource to recurring customer', async data => {
+          const payment = (data.payments || []).find(row => String(row.id || '') === paymentId);
+          if (!payment || !rowVisibleToUserOrganization(payment, user)) {
+            const error = new Error('Payment record was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(payment, payload);
+          const recurring = allRecurringRows(data).find(row => String(row.id || '') === recurringPaymentId);
+          if (!recurring || !rowVisibleToUserOrganization(recurring, user)) {
+            const error = new Error('The selected recurring plan was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          const profile = paymentCustomerMatchProfileForRecurring(data, recurring);
+          if (!profile) {
+            const error = new Error('The selected recurring plan does not have enough customer identity to accept this match.');
+            error.statusCode = 409;
+            throw error;
+          }
+          const linked = (data.payments || []).filter(row => row === payment || paymentRecordsMatch(row, payment));
+          alreadyMatched = linked.every(row => String(row.recurringPaymentId || '') === recurringPaymentId && normKey(row.customer) === normKey(profile.customer));
+          const now = new Date().toISOString();
+          linked.forEach(row => {
+            applyPaymentCustomerMatch(row, profile, 'Owner accepted exact recurring-plan match');
+            row.customerId = row.customerId || profile.customerId || '';
+            row.recurringPaymentId = recurringPaymentId;
+            row.updatedAt = now;
+            row.updatedBy = user.name || user.username || 'Owner';
+          });
+          appendAuditLog(data, user, alreadyMatched ? 'Payment customer match reconfirmed' : 'Payment customer match accepted', [paymentId, recurringPaymentId, profile.customer, profile.vehicle || profile.vin || 'No vehicle linked', linked.length + ' provider/source row(s) updated']);
+          matchedPayments = linked.map(row => ({ ...row }));
+          matchedProfile = { ...profile };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, alreadyMatched, matched: matchedPayments.length, payment: matchedPayments[0], profile: matchedProfile, version: await dataVersion() }));
+    }
+    if (url.pathname === '/api/payments/manual-result' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can record a manual payment result.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      const recurringPaymentId = cleanResourceText(payload.recurringPaymentId || payload.id, 240);
+      const operationId = cleanResourceText(payload.operationId || payload.idempotencyKey, 240);
+      const resultLabel = cleanResourceText(payload.result || payload.status, 120);
+      const amount = Number(payload.amount);
+      if (!recurringPaymentId) return json(res, 400, { ok: false, error: 'Choose the exact recurring customer before recording a payment result.' });
+      if (!operationId) return json(res, 400, { ok: false, error: 'A unique operation ID is required so a retry cannot create a second payment record.' });
+      if (!Number.isFinite(amount) || amount < 0 || amount > 100000) return json(res, 400, { ok: false, error: 'Enter a valid payment amount.' });
+      const paid = /^paid$/i.test(resultLabel);
+      const paymentNotFound = /payment not found/i.test(resultLabel);
+      const failedTwice = /^2x failed/i.test(resultLabel);
+      const failedOnce = /^1x failed/i.test(resultLabel);
+      const pending = /^pending$/i.test(resultLabel);
+      if (!paid && !paymentNotFound && !failedTwice && !failedOnce && !pending) return json(res, 400, { ok: false, error: 'Choose Paid, Pending, Payment not found, failed once, or failed twice.' });
+      let responseRecord = null;
+      let responseRecurring = null;
+      let duplicate = false;
+      try {
+        await mutateLatestData('Record exact recurring manual payment result', async data => {
+          data.payments = Array.isArray(data.payments) ? data.payments : [];
+          const existingOperation = data.payments.find(row => String(row.manualResultOperationId || '') === operationId);
+          if (existingOperation) {
+            duplicate = true;
+            responseRecord = { ...existingOperation };
+            responseRecurring = { ...(findRecurringRow(data, recurringPaymentId) || {}) };
+            return;
+          }
+          const recurring = findRecurringRow(data, recurringPaymentId);
+          if (!recurring || !rowVisibleToUserOrganization(recurring, user)) {
+            const error = new Error('Recurring customer was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(recurring, payload);
+          if (stripeChargeAttemptIsPending(recurring.stripeChargeAttempt) || /confirmation pending/i.test(String(recurring.status || ''))) {
+            const error = new Error('A provider charge is still being confirmed. Reconcile it before recording another result.');
+            error.statusCode = 409;
+            throw error;
+          }
+          const currentDue = recurringDateKey(recurring) || localDateKey();
+          if (paid) {
+            const existingPaid = stripeMigration.existingPaidPayment(data, recurring, currentDue);
+            if (existingPaid) {
+              const error = new Error('A paid payment already occupies this billing period. Review payment ' + (existingPaid.id || existingPaid.providerPaymentId || '') + ' instead of recording another one.');
+              error.statusCode = 409;
+              throw error;
+            }
+          }
+          const customerCandidates = (data.customers || []).filter(row => String(row.recurringPaymentId || '') === recurringPaymentId || recurring.customerId && String(row.id || '') === String(recurring.customerId));
+          const customer = customerCandidates.length === 1 ? customerCandidates[0] : {};
+          const rentalFile = (data.rentalFiles || []).find(row => String(row.id || '') === String(recurring.rentalFileId || '') || String(row.recurringPaymentId || '') === recurringPaymentId && rentalFiles.isActiveRentalFile(row)) || null;
+          const identity = recurringPaymentIdentity(data, recurring, payload);
+          const now = new Date().toISOString();
+          const retryCount = failedTwice ? 2 : failedOnce ? 1 : 0;
+          const status = paid ? 'Paid' : paymentNotFound ? 'Payment not found - check provider' : failedTwice ? '2x failed - contact customer' : failedOnce ? '1x failed - retrying' : 'Pending';
+          const method = cleanResourceText(payload.method || 'Manual payment result', 120);
+          const notes = cleanResourceText(payload.notes || payload.note, 2000);
+          const requestedNext = validCalendarDateKey(payload.nextRun);
+          const advancedNext = paid ? nextRecurringOccurrence(recurring, currentDue) : '';
+          const nextRun = paid
+            ? (requestedNext && requestedNext > currentDue ? requestedNext : advancedNext)
+            : (requestedNext || recurring.nextRun || '');
+          if (paid && !nextRun) {
+            const error = new Error('WheelsonAuto could not calculate the next recurring date. No payment result was saved.');
+            error.statusCode = 409;
+            throw error;
+          }
+          const paymentId = 'manual-result-' + crypto.createHash('sha256').update(operationId).digest('hex').slice(0, 24);
+          const payment = {
+            id: paymentId,
+            organizationId: recurring.organizationId || customer.organizationId || MAIN_ORG_ID,
+            manualResultOperationId: operationId,
+            recurringPaymentId,
+            rentalFileId: rentalFile && rentalFile.id || recurring.rentalFileId || '',
+            customerId: recurring.customerId || customer.id || '',
+            customerAccountId: recurring.customerAccountId || customer.customerAccountId || '',
+            customer: recurring.customer || customer.name || 'Unknown customer',
+            phone: recurring.phone || customer.phone || '',
+            email: recurring.email || customer.email || '',
+            ...identity,
+            date: businessLocaleString(),
+            createdAt: now,
+            amount,
+            method,
+            status,
+            tone: paid ? 'good' : failedTwice ? 'bad' : 'warn',
+            source: 'Owner-confirmed manual payment result',
+            notes,
+            retryCount,
+            scheduledDueDate: currentDue,
+            billingPeriodKey: stripeMigration.billingPeriodKey(currentDue),
+            paidOutsideApp: paid && /outside|cash|zelle|money order|cash app/i.test(method),
+            verifiedAt: paid ? now : '',
+            verifiedBy: paid ? (user.name || user.username || 'Owner') : ''
+          };
+          data.payments.unshift(payment);
+          const attempts = Array.isArray(recurring.paymentAttempts) ? recurring.paymentAttempts.slice() : [];
+          attempts.unshift({
+            id: 'attempt-' + paymentId,
+            recurringPaymentId,
+            rentalFileId: payment.rentalFileId,
+            paymentId,
+            customer: payment.customer,
+            date: payment.date,
+            createdAt: now,
+            amount,
+            result: status,
+            method,
+            notes,
+            ...identity
+          });
+          const recurringPatch = {
+            status: paid ? 'Active' : status,
+            tone: paid ? 'good' : failedTwice ? 'bad' : 'warn',
+            retryCount,
+            failedAttempts: retryCount,
+            nextRun,
+            lastPaymentAt: paid ? now : (recurring.lastPaymentAt || ''),
+            lastFailedAt: retryCount ? now : (recurring.lastFailedAt || ''),
+            lastPaymentNotFoundAt: paymentNotFound ? now : (recurring.lastPaymentNotFoundAt || ''),
+            lastManualRecordAt: now,
+            lastPaymentResult: status,
+            lastPaymentNote: notes,
+            paymentAttempts: attempts,
+            ...(failedTwice ? { autoChargeEnabled: false, autopayManagedBy: 'Paused - contact customer after two failures' } : {})
+          };
+          patchRecurringAdminState(data, recurringPaymentId, recurringPatch);
+          if (rentalFile) {
+            rentalFile.nextChargeDate = nextRun;
+            rentalFile.updatedAt = now;
+            rentalFile.updatedBy = user.name || user.username || 'Owner';
+            rentalFile.sourceRefs = Array.isArray(rentalFile.sourceRefs) ? rentalFile.sourceRefs : [];
+            if (!rentalFile.sourceRefs.some(reference => reference.collection === 'payments' && String(reference.id || '') === paymentId)) rentalFile.sourceRefs.push({ collection: 'payments', id: paymentId });
+          }
+          if (paid) ensurePaymentReceiptDocument(data, payment, { paymentProvider: 'internal', title: 'Manual payment receipt' });
+          appendAuditLog(data, user, paid ? 'Manual payment recorded as paid' : 'Manual payment result recorded', [payment.customer, moneyText(amount), status, identity.vehicle || identity.vin || 'No vehicle linked', 'Due ' + currentDue, nextRun ? 'Next ' + nextRun : 'Next date unchanged']);
+          responseRecord = { ...payment };
+          responseRecurring = { ...(findRecurringRow(data, recurringPaymentId) || {}) };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, duplicate ? 200 : 201, safeResourcePayload({ ok: true, duplicate, payment: responseRecord, recurring: responseRecurring, version: await dataVersion() }));
+    }
+    if (url.pathname === '/api/rentals' && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view Rental Files.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const records = rentalFiles.listForState(scoped);
+      return json(res, 200, { ok: true, records, count: records.length, validation: rentalFiles.validateState(scoped) });
+    }
+    if (url.pathname === '/api/rentals/backfill-completed-pickups' && req.method === 'POST') {
+      if (!isOwnerUser(user)) return json(res, 403, { ok: false, error: 'Only the owner can backfill historical Rental Files.' });
+      let result = null;
+      await mutateLatestData('Backfill unambiguous completed pickups into canonical Rental Files', async data => {
+        result = rentalFiles.backfillCompletedPickups(data, user);
+        if (result.created.length) appendAuditLog(data, user, 'Canonical Rental Files backfilled', [result.created.length + ' created', result.conflicts.length + ' left for review']);
+      });
+      return json(res, 200, { ok: true, ...result });
+    }
+    const rentalReturnMatch = /^\/api\/rentals\/([^/]+)\/return$/.exec(url.pathname);
+    if (rentalReturnMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can complete a vehicle return.' });
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (String(payload.confirmation || '') !== 'RETURN_RENTAL_VEHICLE') return json(res, 400, { ok: false, error: 'Confirm the physical vehicle return before ending the Rental File.' });
+      let result = null;
+      try {
+        await mutateLatestData('Complete canonical Rental File return', async data => {
+          result = rentalFiles.endRentalFile(data, decodeURIComponent(rentalReturnMatch[1]), payload, user);
+          if (!result.alreadyEnded) appendAuditLog(data, user, 'Rental File ended and vehicle returned', [
+            result.rentalFile.id,
+            result.rentalFile.customerName,
+            result.rentalFile.vehicleName,
+            result.rentalFile.endDate,
+            'Mileage ' + result.rentalFile.endingMileage,
+            result.rentalFile.endReason
+          ]);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error) });
+      }
+      return json(res, 200, { ok: true, alreadyEnded: result.alreadyEnded, rentalFile: rentalFiles.summarize(result.rentalFile), vehicle: result.vehicle && { id: result.vehicle.id, status: result.vehicle.status, mileage: result.vehicle.mileage } });
+    }
+    const rentalDetailMatch = /^\/api\/rentals\/([^/]+)$/.exec(url.pathname);
+    if (rentalDetailMatch && req.method === 'GET') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only owner or manager accounts can view a Rental File.' });
+      const scoped = stateForUserRead(await readData(), user);
+      const detail = rentalFiles.detailForState(scoped, decodeURIComponent(rentalDetailMatch[1]));
+      if (!detail) return json(res, 404, { ok: false, error: 'Rental File was not found.' });
+      return json(res, 200, safeResourcePayload({ ok: true, ...detail }), { 'Cache-Control': 'private, no-store' });
+    }
     if (url.pathname.startsWith('/api/vehicles/')) {
       const assignmentReviewMatch = /^\/api\/vehicles\/([^/]+)\/assignment-conflict$/.exec(url.pathname);
       if (assignmentReviewMatch && req.method === 'GET') {
@@ -26048,7 +27039,12 @@ const server = http.createServer(async (req, res) => {
         await writeData(data);
         return json(res, 200, { ok: true, ...result });
       } catch (error) {
-        return json(res, Number(error && error.statusCode || 400), { ok: false, error: String(error && error.message || error) });
+        return json(res, Number(error && error.statusCode || 400), {
+          ok: false,
+          error: String(error && error.message || error),
+          code: String(error && error.code || ''),
+          rentalFileId: String(error && error.rentalFileId || '')
+        });
       }
       }
       const assignmentAliasMatch = /^\/api\/vehicles\/([^/]+)\/assignment-alias$/.exec(url.pathname);
@@ -26144,7 +27140,7 @@ const server = http.createServer(async (req, res) => {
         .sort((left, right) => new Date(right.createdAt || right.date || 0).getTime() - new Date(left.createdAt || left.date || 0).getTime())
         .slice(0, limit);
       const messages = (redactStaffSecrets({ messages: scoped }).messages || []);
-      const revision = crypto.createHash('sha256').update(messages.map(row => [row.id, row.createdAt || row.date, row.status, row.body, row.notificationEmailStatus].join('|')).join('\n')).digest('hex').slice(0, 20);
+      const revision = platformMessageRevision(messages);
       return json(res, 200, { ok: true, revision, messages }, { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/state' && req.method === 'PUT') {
@@ -27422,7 +28418,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/api-providers' && req.method === 'GET') {
       const data = await readData();
-      return json(res, 200, { ok: true, providers: Array.isArray(data.apiProviders) ? data.apiProviders : [] });
+      return json(res, 200, { ok: true, providers: apiProviderRows(data) }, { 'Cache-Control': 'private, no-store' });
     }
     if (url.pathname === '/api/api-providers' && req.method === 'POST') {
       const payload = await readJsonBody(req);
@@ -27450,17 +28446,192 @@ const server = http.createServer(async (req, res) => {
       await writeData(data);
       return json(res, 200, { ok: true, provider, task: apiTask });
     }
+    if (url.pathname === '/api/tasks' && req.method === 'GET') {
+      const scoped = stateForUserRead(await readData(), user);
+      const page = paginatedResource(scoped.tasks || [], url, { searchFields: ['id', 'title', 'type', 'customer', 'vehicle', 'due', 'status', 'owner', 'notes'], defaultLimit: 100 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    if (url.pathname === '/api/maintenance' && req.method === 'GET') {
+      const scoped = stateForUserRead(await readData(), user);
+      const page = paginatedResource(scoped.maintenance || [], url, { searchFields: ['id', 'vehicle', 'customer', 'vin', 'licensePlate', 'plate', 'tracker', 'type', 'issue', 'due', 'nextDue', 'status', 'mechanicSignoff'], defaultLimit: 100 });
+      return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
+    }
+    if (url.pathname === '/api/maintenance' && req.method === 'POST') {
+      const payload = await readJsonBody(req, 128 * 1024);
+      let job = null;
+      let persistence = null;
+      try {
+        persistence = await mutateLatestData('Save exact maintenance job', async data => {
+          data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+          const requestedId = cleanResourceText(payload.id || '', 160);
+          const existing = requestedId ? data.maintenance.find(item => String(item.id || '') === requestedId) : null;
+          if (existing && !rowVisibleToUserOrganization(existing, user)) {
+            const error = new Error('Maintenance job was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          if (existing) assertResourceRevision(existing, payload);
+          const vehicleId = String(payload.vehicleId || existing && existing.vehicleId || '').trim();
+          const vehicle = (data.vehicles || []).find(item => String(item.id || '') === vehicleId);
+          if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) {
+            const error = new Error('Choose an exact fleet vehicle available to this account.');
+            error.statusCode = 404;
+            throw error;
+          }
+          job = cleanMaintenancePayload(payload, existing, vehicle, user, maintenanceCustomerForVehicle(data, vehicle, existing));
+          if (existing) Object.assign(existing, job);
+          else data.maintenance.unshift(job);
+          appendAuditLog(data, user, existing ? 'Maintenance job updated' : 'Maintenance job created', [job.vehicle, job.customer || 'In lot', job.type, job.status, job.due ? 'Due ' + job.due : 'No due date']);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      const responseJob = String(user.role || '').toLowerCase() === 'mechanic' ? scrubMechanicMoneyFields(job) : job;
+      return json(res, 200, safeResourcePayload({ ok: true, job: responseJob, version: persistence && persistence.version || await dataVersion() }));
+    }
+    const maintenanceCompletionMatch = /^\/api\/maintenance\/([^/]+)\/complete$/.exec(url.pathname);
+    if (maintenanceCompletionMatch && req.method === 'POST') {
+      const maintenanceId = decodeURIComponent(maintenanceCompletionMatch[1]);
+      const payload = await readJsonBody(req, 128 * 1024);
+      let job = null;
+      let vehicle = null;
+      let nextReminder = null;
+      let persistence = null;
+      try {
+        persistence = await mutateLatestData('Complete exact maintenance job', async data => {
+          data.maintenance = Array.isArray(data.maintenance) ? data.maintenance : [];
+          job = data.maintenance.find(item => String(item.id || '') === maintenanceId);
+          if (!job || !rowVisibleToUserOrganization(job, user)) {
+            const error = new Error('Maintenance job was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          assertResourceRevision(job, payload);
+          vehicle = (data.vehicles || []).find(item => String(item.id || '') === String(job.vehicleId || '')) || null;
+          if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) {
+            const error = new Error('The exact fleet vehicle for this maintenance job was not found.');
+            error.statusCode = 409;
+            throw error;
+          }
+          const completedAt = cleanResourceText(payload.completedAt || localDateKey(), 40);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(completedAt)) {
+            const error = new Error('Completed date must use YYYY-MM-DD.');
+            error.statusCode = 400;
+            throw error;
+          }
+          const mileageValue = payload.odometer === '' || payload.odometer == null ? Number(job.odometer || job.mileageAtService || vehicle.mileage || vehicle.odometer || 0) : Number(payload.odometer);
+          if (!Number.isFinite(mileageValue) || mileageValue < 0 || mileageValue > 99999999) {
+            const error = new Error('Completed mileage must be from 0 to 99,999,999.');
+            error.statusCode = 400;
+            throw error;
+          }
+          const mechanicSignoff = cleanResourceText(payload.mechanicSignoff || job.mechanicSignoff || user.name || user.username || '', 180);
+          if (!mechanicSignoff) {
+            const error = new Error('Mechanic sign-off is required before maintenance can be completed.');
+            error.statusCode = 400;
+            throw error;
+          }
+          const now = new Date().toISOString();
+          const monthly = isMonthlyMaintenanceJob(job);
+          Object.assign(job, {
+            status: 'Completed',
+            cost: cleanMaintenanceCost(payload.cost, job, user),
+            completedAt,
+            fixedAt: now,
+            odometer: mileageValue || '',
+            mileageAtService: mileageValue || '',
+            inspectionCondition: cleanResourceText(payload.inspectionCondition || job.inspectionCondition || 'Good', 120),
+            inspectionChecklist: cleanMaintenanceChecklist(payload.inspectionChecklist),
+            damageNotes: cleanResourceText(payload.damageNotes === undefined ? job.damageNotes : payload.damageNotes, 4000),
+            mechanicSignoff,
+            notes: cleanResourceText(payload.notes === undefined ? job.notes : payload.notes, 20000),
+            updatedAt: now,
+            updatedBy: cleanResourceText(user.name || user.username || user.role || 'Staff', 160)
+          });
+          if (mileageValue) {
+            vehicle.mileage = mileageValue;
+            vehicle.odometer = mileageValue;
+          }
+          if (monthly) {
+            vehicle.oilChangeDate = completedAt;
+            vehicle.lastMaintenanceAt = completedAt;
+            vehicle.lastInspectionCondition = job.inspectionCondition;
+            vehicle.lastInspectionChecklist = job.inspectionChecklist.join(', ');
+            vehicle.lastInspectionSignoff = mechanicSignoff;
+          }
+          vehicle.manuallyEditedAt = now;
+          vehicle.updatedAt = now;
+          vehicle.updatedBy = cleanResourceText(user.name || user.username || user.role || 'Staff', 160);
+          if (monthly) {
+            const nextDue = addMonths(completedAt, 1);
+            nextReminder = data.maintenance.find(item => item.id !== job.id && String(item.vehicleId || '') === String(job.vehicleId || '') && isMonthlyMaintenanceJob(item) && !/complete|fixed|closed/i.test(String(item.status || '')) && String(item.due || item.nextDue || '') === nextDue) || null;
+            if (!nextReminder) {
+              nextReminder = {
+                id: 'mnt-next-' + job.id + '-' + nextDue,
+                organizationId: rowOrganizationId(job),
+                vehicleId: job.vehicleId,
+                vehicle: job.vehicle,
+                customer: job.customer,
+                vin: job.vin || vehicle.vin || '',
+                licensePlate: job.licensePlate || vehicle.plate || vehicle.stock || '',
+                plate: job.plate || vehicle.plate || vehicle.stock || '',
+                tempTag: job.tempTag || vehicle.tempTag || '',
+                tracker: job.tracker || trackerName(vehicle),
+                type: job.type || 'Monthly inspection / oil change',
+                issue: 'Next monthly oil change / inspection',
+                cost: 0,
+                due: nextDue,
+                nextDue,
+                reminder: job.reminder || 'Remind customer when due',
+                notes: 'Automatically reset after ' + (job.vehicle || 'vehicle') + ' was marked done on ' + completedAt + '.',
+                status: 'Scheduled',
+                source: 'Automatic monthly reset',
+                previousMaintenanceId: job.id,
+                createdAt: now,
+                updatedAt: now,
+                updatedBy: cleanResourceText(user.name || user.username || user.role || 'Staff', 160)
+              };
+              data.maintenance.unshift(nextReminder);
+            }
+          }
+          appendAuditLog(data, user, 'Maintenance job completed', [job.vehicle, job.customer || 'In lot', job.type, 'Mileage ' + (mileageValue || 'not recorded'), mechanicSignoff, nextReminder ? 'Next due ' + (nextReminder.due || nextReminder.nextDue || '') : 'No recurring reminder']);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      const mechanic = String(user.role || '').toLowerCase() === 'mechanic';
+      return json(res, 200, safeResourcePayload({
+        ok: true,
+        job: mechanic ? scrubMechanicMoneyFields(job) : job,
+        vehicle: mechanic ? scrubMechanicMoneyFields(vehicle) : vehicle,
+        nextReminder: mechanic ? scrubMechanicMoneyFields(nextReminder) : nextReminder,
+        version: persistence && persistence.version || await dataVersion()
+      }));
+    }
     if (url.pathname === '/api/tasks' && req.method === 'POST') {
       const payload = await readJsonBody(req);
-      const data = await readData();
-      data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
-      const task = cleanTaskPayload(payload);
-      const existing = data.tasks.find(item => item.id === task.id);
-      if (existing) Object.assign(existing, task, { createdAt: existing.createdAt || task.createdAt });
-      else data.tasks.unshift(task);
-      await protectConcurrentLocalWrites(data, { preferIncoming: true });
-      await writeData(data);
-      return json(res, 200, { ok: true, task });
+      let task = null;
+      let persistence = null;
+      try {
+        persistence = await mutateLatestData('Save exact Dispatch task', async data => {
+          data.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          const requestedId = cleanResourceText(payload.id || '', 160);
+          const existing = requestedId ? data.tasks.find(item => String(item.id || '') === requestedId) : null;
+          if (existing && !rowVisibleToUserOrganization(existing, user)) {
+            const error = new Error('Dispatch task was not found.');
+            error.statusCode = 404;
+            throw error;
+          }
+          if (existing) assertResourceRevision(existing, payload);
+          task = cleanTaskPayload(payload, existing, user);
+          if (existing) Object.assign(existing, task);
+          else data.tasks.unshift(task);
+          appendAuditLog(data, user, existing ? 'Dispatch task updated' : 'Dispatch task created', [task.title, task.status, task.customer || 'No customer', task.vehicle || 'No vehicle']);
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, { ok: true, task: safeResourcePayload(task), version: persistence && persistence.version || await dataVersion() });
     }
     if (url.pathname === '/api/account/password' && req.method === 'POST') {
       const payload = await readJsonBody(req);

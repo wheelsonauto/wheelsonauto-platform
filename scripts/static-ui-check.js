@@ -511,7 +511,7 @@ const criticalActionRequirements = [
   ['Transaction match accept flow', 'apply-transaction-match', ['applyTransactionCandidate', 'Transaction match accepted', 'await save()', "tab='Transactions'", 'render()']],
   ['Clover reconciliation customer match flow', 'integrated-match-payment', ['/api/integrations/clover/payments/match', 'paymentId:button.dataset.id', "delete integrationUiCache.clover", 'await refreshData(true)', 'closeModal()']],
   ['Saved-card charge flow', 'charge-saved-card', ['/api/integrations/clover/manual-charge', 'Payment paid', 'Payment not found', 'await refreshData(true)']],
-  ['Maintenance completion flow', 'confirm-complete-maintenance', ['isMonthlyMaintenance', 'addMonthsKey', 'inspectionChecklist', 'lastInspectionChecklist', 'await save()', 'closeModal()', 'Maintenance()']],
+  ['Maintenance completion flow', 'confirm-complete-maintenance', ["/api/maintenance/'", "'/complete'", 'expectedUpdatedAt', 'inspectionChecklist', 'await refreshData(true)', 'closeModal()', 'Maintenance()']],
   ['Provider-neutral refund preparation flow', 'integrated-prepare-refund', ['/api/integrations/payments/refunds/prepare', 'amount:Number', 'await refreshData(true)', 'integratedOpenRefundRecord']],
   ['Provider-neutral refund execution flow', 'integrated-execute-refund', ['/api/integrations/payments/refunds/execute', 'confirmed:true', 'await refreshData(true)', 'closeModal()']],
   ['Late Stripe payment review flow', 'resolve-provider-migration-review', ['/api/payment-provider/review/resolve', 'stripePaymentIntentId', 'confirmed:true', 'await refreshData(true)', "tab='Active'", 'closeModal()']],
