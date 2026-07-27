@@ -1,6 +1,7 @@
 'use strict';
 
 const { decodeEncryptionKey } = require('./secure-document-store');
+const { productionHardeningRequired } = require('./production-hardening');
 
 function value(env, ...names) {
   for (const name of names) {
@@ -121,7 +122,7 @@ function productionEnvironmentReport(env = {}) {
   add('WOA_SESSION_SECRET', value(env, 'WOA_SESSION_SECRET', 'WOA_COOKIE_SECRET').length >= 32, 'Use a stable session secret of at least 32 characters.');
   add('PUBLIC_BASE_URL', validHttps(value(env, 'PUBLIC_BASE_URL')), 'Use the final HTTPS WheelsonAuto public origin.');
   add('WOA_ERROR_ALERTS_ENABLED', enabled(env, 'WOA_ERROR_ALERTS_ENABLED'), 'Enable failed-job, webhook, and autopay alerts.');
-  add('WOA_PRODUCTION_HARDENING_REQUIRED', enabled(env, 'WOA_PRODUCTION_HARDENING_REQUIRED'), 'Require all live runtime evidence before the service starts.');
+  add('WOA_PRODUCTION_HARDENING_REQUIRED', productionHardeningRequired(env), 'Require all live runtime evidence before the service starts.');
 
   const missing = checks.filter(check => !check.ready);
   return {
