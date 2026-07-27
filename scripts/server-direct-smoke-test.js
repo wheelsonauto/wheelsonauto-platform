@@ -900,10 +900,9 @@ async function main() {
 
     const ownerCookie = await login(server, { username: 'owner', password: adminPassword });
     const ownerPage = await request(server, 'GET', '/', { cookie: ownerCookie });
-    const ownerAssetVersions = [...ownerPage.text.matchAll(/\/(?:styles\.css|app\.js|staff-pwa\.js)\?v=([^"']+)/g)].map(match => match[1]);
-    const loginAssetVersion = (loginPage.text.match(/\/styles\.css\?v=([^"']+)/) || [])[1];
-    assert(ownerPage.status === 200 && ownerAssetVersions.length >= 4, 'Authenticated staff shell must load every versioned application asset.');
-    assert(new Set(ownerAssetVersions).size === 1 && ownerAssetVersions[0] === loginAssetVersion, 'Authenticated staff HTML must stamp the current server release onto every asset so a deploy cannot leave installed apps on stale JavaScript.');
+    assert(ownerPage.status === 200 && ownerPage.text.includes('/staff-dist/staff-next.css') && ownerPage.text.includes('/staff-dist/staff-next.js'), 'Authenticated staff root must load the production staff application assets.');
+    assert(ownerPage.text.includes('window.__WOA_RELEASE__') && ownerPage.text.includes('window.__WOA_STAFF_USER__'), 'Authenticated staff HTML must expose only the current release marker and scoped signed-in user bootstrap.');
+    assert(!ownerPage.text.includes('/app.js') && !ownerPage.text.includes('window.__SERVER_DATA__'), 'Authenticated staff root must not load the retired dashboard bundle or embed the full platform state.');
     const ownerStaffNext = await request(server, 'GET', '/staff-next', { cookie: ownerCookie });
     assert(ownerStaffNext.status === 200 && ownerStaffNext.text.includes('staff-dist/staff-next.js') && ownerStaffNext.text.includes('window.__WOA_STAFF_USER__'), 'Owner should open the isolated React staff workspace.');
     assert(!ownerStaffNext.text.includes('window.__SERVER_DATA__'), 'React staff workspace must not receive the full platform state in HTML.');
@@ -1865,7 +1864,7 @@ async function main() {
     const customerNotifications = await request(server, 'GET', '/api/customer/notifications', { cookie: cleanPortalCookie });
     assert(customerNotifications.status === 200 && customerNotifications.json.ok && customerNotifications.json.unreadCount >= 1, 'Customer app notification inbox should surface a new staff message.');
     const customerMessageNotice = customerNotifications.json.notifications.find(row => row.type === 'message' && /WheelsonAuto/.test(row.title || ''));
-    assert(customerMessageNotice && customerMessageNotice.url === '/customer#portal-messages', 'Customer message notification should open the customer message workspace.');
+    assert(customerMessageNotice && customerMessageNotice.url === '/customer#messages', 'Customer message notification should open the customer message workspace.');
     const customerNoticeRead = await request(server, 'POST', '/api/customer/notifications/read', { cookie: cleanPortalCookie, json: { ids: [customerMessageNotice.id] } });
     assert(customerNoticeRead.status === 200 && customerNoticeRead.json.notifications.find(row => row.id === customerMessageNotice.id && row.read === true), 'Customer should be able to mark only the selected app notification read.');
     const customerToStaffNotice = await request(server, 'POST', '/customer/message', { cookie: cleanPortalCookie, json: { body: 'I am replying through the customer app notification test.' } });
@@ -1890,7 +1889,7 @@ async function main() {
     assert(String(assistedCustomer.cookie).includes('Max-Age=900'), 'Customer assistance browser cookie should expire after 15 minutes.');
     const assistanceCookie = cleanCookie(assistedCustomer.cookie);
     const assistedPortal = await request(server, 'GET', '/customer', { cookie: assistanceCookie });
-    assert(assistedPortal.status === 200 && assistedPortal.text.includes('Owner assistance mode') && assistedPortal.text.includes('Return to admin') && assistedPortal.text.includes('Alicia'), 'Assistance mode should clearly identify the exact customer and provide a return action.');
+    assert(assistedPortal.status === 200 && assistedPortal.text.includes('"assistedByOwner":true') && assistedPortal.text.includes('Alicia') && assistedPortal.text.includes('/customer-dist/customer-next.js'), 'Assistance mode should identify the exact customer in the new portal bootstrap.');
     const assistedState = await request(server, 'GET', '/api/customer/portal-state', { cookie: assistanceCookie });
     assert(assistedState.status === 200 && assistedState.json.ok && assistedState.json.portal.account.id === 'direct-customer-login', 'Assistance mode must stay scoped to the selected customer account.');
     const endAssistance = await request(server, 'GET', '/customer/assist/end', { cookie: assistanceCookie });
@@ -3077,20 +3076,10 @@ async function main() {
     assert(customerSessionPayload.authSource === 'customer' && String(customerSessionPayload.credentialVersion || '').length >= 24, 'Customer sessions must carry a server-derived credential version without exposing the password record.');
 
     const customerPortal = await request(server, 'GET', '/customer', { cookie: customerCookie });
-    assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('Recent payments') && customerPortal.text.includes('/customer/message'), 'Customer portal did not render account details and message form.');
-    assert(customerPortal.text.includes('/manifest.webmanifest') && customerPortal.text.includes('data-install-customer-app') && customerPortal.text.includes('data-customer-message-list') && customerPortal.text.includes('data-customer-message-form'), 'Customer portal must render its installable first-party conversation experience.');
-    assert(customerPortal.text.includes('customer-action-hub') && ['home', 'messages', 'payments', 'vehicle', 'settings'].every(tab => customerPortal.text.includes('#portal-' + tab)) && (customerPortal.text.match(/data-portal-page/g) || []).length === 5, 'Customer portal should render exactly five mobile-friendly account workspaces.');
-    assert(customerPortal.text.includes('Open requests') && customerPortal.text.includes('direct-customer-open-payment-link') && customerPortal.text.includes('Pay securely') && customerPortal.text.includes('days open'), 'Customer portal should show linked open payment requests with age.');
-	    assert(!customerPortal.text.includes('direct-customer-paid-payment-link') && !customerPortal.text.includes('Old paid link'), 'Customer portal should not show paid/closed payment requests in the open payment request panel.');
-	    assert(customerPortal.text.includes('/customer/paid-outside') && customerPortal.text.includes('Send for verification'), 'Customer portal should include paid-outside-app reporting.');
-	    assert(customerPortal.text.includes('/customer/receipt-request') && customerPortal.text.includes('Request receipt'), 'Customer portal should include receipt request workflow.');
-      assert(customerPortal.text.includes('/customer/statement-request') && customerPortal.text.includes('Request document'), 'Customer portal should include account statement/payoff request workflow.');
-      assert(customerPortal.text.includes('/customer/service-request') && customerPortal.text.includes('Request service'), 'Customer portal should include a connected service request form.');
-    assert(customerPortal.text.includes('/customer/issue-report') && customerPortal.text.includes('Send issue for review'), 'Customer portal should include toll/claim/issue reporting without adding another primary tab.');
-    assert(customerPortal.text.includes('/customer/document-update') && customerPortal.text.includes('Upload securely') && customerPortal.text.includes('name="documentFile"') && customerPortal.text.includes('/customer-portal.js'), 'Customer portal should include secure document upload intake and its focused client script.');
-    assert((customerPortal.text.includes('/customer/card-change') && customerPortal.text.includes('Change card')) || customerPortal.text.includes('Card update needs office help'), 'Customer portal should offer the secure card-change flow only when its provider is ready and otherwise explain the setup requirement honestly.');
-    assert(customerPortal.text.includes('Private documents') && customerPortal.text.includes('VISIBLE-DOC-PORTAL'), 'Customer portal should render customer-visible documents.');
-    assert(!customerPortal.text.includes('PRIVATE-DOC-SHOULD-HIDE') && !customerPortal.text.includes('secret-internal-doc-note'), 'Customer portal should not render staff-only documents.');
+    assert(customerPortal.status === 200 && customerPortal.text.includes('Alicia') && customerPortal.text.includes('customer-next-root'), 'Customer portal did not render the signed-in customer shell.');
+    assert(customerPortal.text.includes('/manifest.webmanifest') && customerPortal.text.includes('/customer-dist/customer-next.css') && customerPortal.text.includes('/customer-dist/customer-next.js'), 'Customer portal must load its installable first-party application assets.');
+    assert(!customerPortal.text.includes('/customer-portal.js') && !customerPortal.text.includes('customer-action-hub') && !customerPortal.text.includes('data-portal-page'), 'The canonical customer route must not render the retired portal shell.');
+    assert(!customerPortal.text.includes('PRIVATE-DOC-SHOULD-HIDE') && !customerPortal.text.includes('secret-internal-doc-note') && !customerPortal.text.includes('secret-source-token'), 'Customer portal shell must not embed private documents, staff notes, or payment secrets.');
 
     const customerProfileWrongPassword = await request(server, 'POST', '/customer/profile', { cookie: customerCookie, form: { phone: '8565550171', email: 'alicia@example.com', username: 'direct-customer', currentPassword: 'NotTheCustomerPassword42!' } });
     assert(customerProfileWrongPassword.status === 403, 'Customer profile changes must reject an incorrect current password without changing the account.');
@@ -3099,7 +3088,7 @@ async function main() {
     const customerProfilePhoneConflict = await request(server, 'POST', '/customer/profile', { cookie: customerCookie, form: { phone: '8565550199', email: 'alicia@example.com', username: 'direct-customer', currentPassword: 'DirectCustomer123!' } });
     assert(customerProfilePhoneConflict.status === 409, 'Customer profile changes must reject another account\'s phone to prevent ambiguous login and recovery.');
     const customerProfileExactSave = await request(server, 'POST', '/customer/profile', { cookie: customerCookie, form: { phone: '8565550171', email: 'alicia@example.com', username: 'direct-customer', currentPassword: 'DirectCustomer123!' } });
-    assert(customerProfileExactSave.status === 303 && customerProfileExactSave.location === '/customer#portal-settings' && String(customerProfileExactSave.cookie || '').includes('woa_customer_session='), 'A correct-password profile save must remain scoped to the exact signed-in customer and issue a refreshed session.');
+    assert(customerProfileExactSave.status === 303 && customerProfileExactSave.location === '/customer#settings' && String(customerProfileExactSave.cookie || '').includes('woa_customer_session='), 'A correct-password profile save must remain scoped to the exact signed-in customer and issue a refreshed session.');
 
     const customerPaidOutsideNoAuth = await request(server, 'POST', '/customer/paid-outside');
     assert(customerPaidOutsideNoAuth.status === 302 && customerPaidOutsideNoAuth.location === '/customer/login', 'Customer paid-outside report should require customer login.');
@@ -3114,7 +3103,7 @@ async function main() {
         note: 'Receipt handed to office during smoke test.'
       }
     });
-    assert(customerPaidOutside.status === 302 && customerPaidOutside.location === '/customer#portal-payments', 'Customer paid-outside report should return to Payments.');
+    assert(customerPaidOutside.status === 302 && customerPaidOutside.location === '/customer#payments', 'Customer paid-outside report should return to Payments.');
     const customerPaidOutsideState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const paidOutsideCandidates = (customerPaidOutsideState.json.payments || []).filter(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown');
     const paidOutsidePayment = paidOutsideCandidates.find(item => item.status === 'Paid outside app - needs verification' && item.date === paidOutsideDueDate && String(item.notes || '').includes('smoke test'));
@@ -3169,7 +3158,7 @@ async function main() {
 	    const customerReceiptNoAuth = await request(server, 'POST', '/customer/receipt-request');
 	    assert(customerReceiptNoAuth.status === 302 && customerReceiptNoAuth.location === '/customer/login', 'Customer receipt request should require customer login.');
 	    const customerReceiptRequest = await request(server, 'POST', '/customer/receipt-request', { cookie: customerCookie, form: { paymentHint: 'Need receipt for the latest $229 payment.' } });
-	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer#portal-payments', 'Customer receipt request should return to Payments, where billing actions live.');
+	    assert(customerReceiptRequest.status === 302 && customerReceiptRequest.location === '/customer#payments', 'Customer receipt request should return to Payments, where billing actions live.');
 	    const customerReceiptState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const receiptMessage = (customerReceiptState.json.messages || []).find(item => item.event === 'customer_receipt_request' && item.customer === 'Alicia Brown');
 	    assert(receiptMessage && receiptMessage.status === 'Needs admin approval' && receiptMessage.aiPlan && receiptMessage.aiPlan.actionType === 'send_receipt' && receiptMessage.aiPlan.approvalRequired === true, 'Customer receipt request should create an admin-approved send_receipt message.');
@@ -3179,7 +3168,7 @@ async function main() {
 	    const customerStatementNoAuth = await request(server, 'POST', '/customer/statement-request');
 	    assert(customerStatementNoAuth.status === 302 && customerStatementNoAuth.location === '/customer/login', 'Customer account statement request should require customer login.');
 	    const customerStatementRequest = await request(server, 'POST', '/customer/statement-request', { cookie: customerCookie, form: { requestType: 'Payoff balance', note: 'Need payoff amount before Friday.' } });
-	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer#portal-payments', 'Customer statement request should return to Payments, where billing actions live.');
+	    assert(customerStatementRequest.status === 302 && customerStatementRequest.location === '/customer#payments', 'Customer statement request should return to Payments, where billing actions live.');
 	    const customerStatementState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const statementMessage = (customerStatementState.json.messages || []).find(item => item.event === 'customer_statement_request' && item.customer === 'Alicia Brown');
 	    assert(statementMessage && statementMessage.status === 'Needs admin approval' && statementMessage.aiPlan && statementMessage.aiPlan.actionType === 'send_account_statement' && statementMessage.aiPlan.approvalRequired === true, 'Customer statement request should create an admin-approved send_account_statement message.');
@@ -3200,7 +3189,7 @@ async function main() {
         notes: 'Check engine light came on during the customer portal smoke test.'
       }
     });
-    assert(customerServiceRequest.status === 302 && customerServiceRequest.location === '/customer#portal-vehicle', 'Customer service request should return to Vehicle.');
+    assert(customerServiceRequest.status === 302 && customerServiceRequest.location === '/customer#vehicle', 'Customer service request should return to Vehicle.');
     const customerServiceState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerServiceJob = (customerServiceState.json.maintenance || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Warning light' && item.due === '2026-08-01' && String(item.notes || '').includes('smoke test'));
     assert(customerServiceJob && customerServiceJob.vehicleId === 'veh-003' && customerServiceJob.vin === '3LN6L2G91FR123456' && customerServiceJob.proofUrl === 'https://proof.example/check-engine-light', 'Customer service request should create a vehicle-linked maintenance job with proof: ' + JSON.stringify(customerServiceJob || null));
@@ -3219,7 +3208,7 @@ async function main() {
         notes: 'Notice number PORTAL-TOLL-SMOKE.'
       }
     });
-    assert(customerIssueRequest.status === 302 && customerIssueRequest.location === '/customer#portal-vehicle', 'Customer issue report should return to Vehicle.');
+    assert(customerIssueRequest.status === 302 && customerIssueRequest.location === '/customer#vehicle', 'Customer issue report should return to Vehicle.');
     const customerIssueState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerIssue = (customerIssueState.json.claims || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.type === 'Toll / E-ZPass notice' && item.incidentDate === '2026-08-03');
     assert(customerIssue && customerIssue.vehicleId === 'veh-003' && customerIssue.vin === '3LN6L2G91FR123456' && customerIssue.amount === 12.5 && customerIssue.customerMatchStatus === 'Matched from customer portal' && customerIssue.proofUrl === 'https://proof.example/ezpass-notice', 'Customer issue report should create a vehicle-linked claim/issue with proof: ' + JSON.stringify(customerIssue || null));
@@ -3239,7 +3228,7 @@ async function main() {
         notes: 'Customer portal proof update smoke test.'
       }
     });
-    assert(customerDocumentUpdate.status === 302 && customerDocumentUpdate.location === '/customer#portal-settings', 'Customer document update should return to Settings.');
+    assert(customerDocumentUpdate.status === 302 && customerDocumentUpdate.location === '/customer#settings', 'Customer document update should return to Settings.');
     const customerDocumentState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     const customerDocument = (customerDocumentState.json.documents || []).find(item => item.source === 'Customer portal' && item.customer === 'Alicia Brown' && item.reference === 'POLICY-PORTAL-SMOKE');
     assert(customerDocument && customerDocument.vehicleId === 'veh-003' && customerDocument.vin === '3LN6L2G91FR123456' && customerDocument.status === 'Needs verification' && customerDocument.requiresVerification === true && customerDocument.url === 'https://proof.example/insurance-photo', 'Customer document update should create a vehicle-linked verification document with proof URL: ' + JSON.stringify(customerDocument || null));
@@ -3317,7 +3306,7 @@ async function main() {
     assert(customerCardSetupPage.status === 200 && customerCardSetupPage.text.includes('Set up automatic payments') && customerCardSetupPage.text.includes('Alicia Brown'), 'Customer-created card setup page should render.');
     assert(!customerCardSetupPage.text.includes('secret-source-token') && !customerCardSetupPage.text.includes('secret-payment-token') && !customerCardSetupPage.text.includes('secret-raw-value'), 'Customer-created card setup page should not expose private payment tokens.');
     const customerPortalWithCardSetup = await request(server, 'GET', '/customer', { cookie: customerCookie });
-    assert(customerPortalWithCardSetup.status === 200 && customerPortalWithCardSetup.text.includes(customerCardSetupId) && customerPortalWithCardSetup.text.includes('Set up card'), 'Customer portal should show open card setup/change links after a customer requests card change.');
+    assert(customerPortalWithCardSetup.status === 200 && customerPortalWithCardSetup.text.includes('/customer-dist/customer-next.js'), 'Customer portal should keep serving the active account app after a customer requests a card change.');
     const customerPortalCardSetupState = await request(server, 'GET', '/api/customer/portal-state', { cookie: customerCookie });
     assert((customerPortalCardSetupState.json.portal.cardSetupRequests || []).some(request => request.id === customerCardSetupId && request.customer === 'Alicia Brown'), 'Customer portal API should expose the logged-in customer open card setup request.');
     assert(!JSON.stringify(customerPortalCardSetupState.json.portal.cardSetupRequests || []).includes('secret-source-token') && !JSON.stringify(customerPortalCardSetupState.json.portal.cardSetupRequests || []).includes('paymentToken'), 'Customer portal card setup links should not expose private payment tokens.');
@@ -3332,7 +3321,7 @@ async function main() {
     assert(customerPortalMessageNoAuth.status === 302 && customerPortalMessageNoAuth.location === '/customer/login', 'Customer portal messages should require customer login.');
 
 	    const customerPortalMessage = await request(server, 'POST', '/customer/message', { cookie: customerCookie, form: { body: 'Can you help me update my card and confirm my next payment?' } });
-	    assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer#portal-messages', 'Customer portal message should return to Messages.');
+	    assert(customerPortalMessage.status === 302 && customerPortalMessage.location === '/customer#messages', 'Customer portal message should return to Messages.');
 	    const customerPortalMessageSavedState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
 	    const customerPortalFormMessage = (customerPortalMessageSavedState.json.messages || []).find(message => message.channel === 'Customer portal' && message.template === 'Customer portal message' && message.direction === 'Inbound' && message.customer === 'Alicia Brown' && /confirm my next payment/i.test(message.body || ''));
 	    assert(customerPortalFormMessage && customerPortalFormMessage.id, 'Customer portal message should be saved before background follow-up starts.');

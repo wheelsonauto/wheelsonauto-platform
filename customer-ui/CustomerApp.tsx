@@ -24,7 +24,7 @@ function routeFromHash(): Tab {
 
 function customerRouteHref(value: unknown) {
   const href = String(value || '').trim();
-  const match = href.match(/^\/customer#portal-(home|overview|messages|payments|vehicle|service|documents|issues|settings)$/i);
+  const match = href.match(/^\/customer#(?:portal-)?(home|overview|messages|payments|vehicle|service|documents|issues|settings)$/i);
   if (!match) return href || '#home';
   const section = match[1].toLowerCase();
   if (section === 'overview') return '#home';
@@ -43,6 +43,13 @@ function shortDate(value: unknown) {
   if (!raw) return 'Not set';
   const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T12:00:00` : raw);
   return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: parsed.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
+}
+
+function wholeNumber(value: unknown) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 'Not recorded';
+  const parsed = Number(raw.replace(/,/g, ''));
+  return Number.isFinite(parsed) ? Math.round(parsed).toLocaleString('en-US') : raw;
 }
 
 function localDateInputValue() {
@@ -89,7 +96,9 @@ function nextService(portal: CustomerPortal) {
 
 function PortalRow({ row, trailing }: { row: PortalRecord; trailing?: string }) {
   const title = row.title || row.type || row.vehicle || row.subject || row.method || row.status || 'Account item';
-  const detail = [row.status, row.date || row.createdAt || row.due || row.nextDue, row.notes || row.issue].filter(Boolean).join(' - ');
+  const detailDate = row.date || row.createdAt || row.due || row.nextDue;
+  const customerMessage = row.stripeCardSetupCustomerMessage || row.cardSetupCustomerMessage || row.customerMessage;
+  const detail = [row.status, detailDate ? shortDate(detailDate) : '', customerMessage || row.notes || row.issue].filter(Boolean).join(' - ');
   const link = row.portalDownloadUrl || row.portalUrl || row.url || '';
   const content = <><span><strong>{title}</strong><small>{detail || 'Open for details'}</small></span><b>{trailing || (row.amount != null ? money(row.amount) : '>')}</b></>;
   return link ? <a className="customer-row" href={link}>{content}</a> : <div className="customer-row">{content}</div>;
@@ -120,7 +129,7 @@ function HomePage({ portal, onNavigate }: { portal: CustomerPortal; onNavigate: 
       <button onClick={() => onNavigate('messages')}><span>Messages</span><strong>{portal.messages.length}</strong><small>WheelsonAuto conversation</small></button>
     </section>
     <section className="customer-home-grid">
-      <article className="customer-surface vehicle-glance"><header><div><span>My vehicle</span><h2>{vehicleName(portal)}</h2></div><button className="quiet-command" onClick={() => onNavigate('vehicle')}>Details</button></header><dl className="customer-facts"><div><dt>VIN</dt><dd>{portal.vehicle.vin || summaryValue(portal, 'vin', 'Not linked') as string}</dd></div><div><dt>Tag</dt><dd>{portal.vehicle.plate || portal.vehicle.stock || summaryValue(portal, 'tag', 'Not linked') as string}</dd></div><div><dt>Mileage</dt><dd>{portal.vehicle.mileage || portal.vehicle.currentMileage || 'Not recorded'}</dd></div><div><dt>Status</dt><dd>{portal.vehicle.status || 'Not set'}</dd></div></dl></article>
+      <article className="customer-surface vehicle-glance"><header><div><span>My vehicle</span><h2>{vehicleName(portal)}</h2></div><button className="quiet-command" onClick={() => onNavigate('vehicle')}>Details</button></header><dl className="customer-facts"><div><dt>VIN</dt><dd>{portal.vehicle.vin || summaryValue(portal, 'vin', 'Not linked') as string}</dd></div><div><dt>Tag</dt><dd>{portal.vehicle.plate || portal.vehicle.stock || summaryValue(portal, 'tag', 'Not linked') as string}</dd></div><div><dt>Mileage</dt><dd>{wholeNumber(portal.vehicle.mileage || portal.vehicle.currentMileage)}</dd></div><div><dt>Status</dt><dd>{portal.vehicle.status || 'Not set'}</dd></div></dl></article>
       <article className="customer-surface"><header><div><span>Needs attention</span><h2>Account items</h2></div></header>{attention.length ? <div className="customer-list">{attention.map((row, index) => <PortalRow key={row.id || index} row={row} />)}</div> : <Empty>Your account is caught up.</Empty>}</article>
     </section>
   </main>;
@@ -239,6 +248,7 @@ function NotificationCenter({ rows, unread, onRead }: { rows: CustomerNotificati
 }
 
 export function CustomerApp() {
+  const bootstrap = (window as typeof window & { __WOA_CUSTOMER_ACCOUNT__?: { name?: string; assistedByOwner?: boolean; assistedByOwnerName?: string } }).__WOA_CUSTOMER_ACCOUNT__ || {};
   const [tab, setTab] = useState<Tab>(routeFromHash());
   const [portal, setPortal] = useState<CustomerPortal>(emptyPortal);
   const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
@@ -258,6 +268,10 @@ export function CustomerApp() {
     onHash(); window.addEventListener('hashchange', onHash); return () => window.removeEventListener('hashchange', onHash);
   }, []);
   useEffect(() => {
+    if (!('serviceWorker' in navigator) || !['https:', 'http:'].includes(window.location.protocol)) return;
+    void navigator.serviceWorker.register('/service-worker.js', { scope: '/customer', updateViaCache: 'none' }).catch(() => undefined);
+  }, []);
+  useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal); void refreshNotifications(controller.signal);
     const events = new EventSource('/api/customer/events');
@@ -273,7 +287,7 @@ export function CustomerApp() {
   if (loading) return <main className="customer-loading"><span /><strong>Opening your WheelsonAuto account</strong></main>;
   return <div className={`customer-next-shell tab-${tab}`}>
     <aside className="customer-rail"><button className="customer-brand" onClick={() => navigate('home')}><strong>Wheels<span>On</span>Auto</strong><small>My account</small></button><nav>{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => navigate(item.id)}><i>{item.mark}</i><span>{item.label}</span>{item.id === 'messages' && portal.messages.length ? <b>{portal.messages.length}</b> : null}</button>)}</nav><footer><a href="/customer/logout">Log out</a></footer></aside>
-    <section className="customer-stage"><header className="customer-topbar"><div><small>WheelsonAuto</small><strong>{tabs.find(item => item.id === tab)?.label}</strong></div><span>{firstName(portal)}</span><NotificationCenter rows={notifications} unread={unread} onRead={markRead} /></header>{error ? <div className="customer-global-error">{error}<button onClick={() => void refresh()}>Retry</button></div> : null}<section className="customer-workspace">
+    <section className={`customer-stage${bootstrap.assistedByOwner ? ' assisted' : ''}`}><header className="customer-topbar"><div><small>WheelsonAuto</small><strong>{tabs.find(item => item.id === tab)?.label}</strong></div><span>{firstName(portal)}</span><NotificationCenter rows={notifications} unread={unread} onRead={markRead} /></header>{bootstrap.assistedByOwner ? <aside className="customer-assistance-banner" role="status"><span><strong>Owner assistance mode</strong><small>{bootstrap.assistedByOwnerName || 'Owner admin'} is viewing {bootstrap.name || 'this customer'} for support. This audited session expires in 15 minutes.</small></span><a href="/customer/assist/end">Return to admin</a></aside> : null}{error ? <div className="customer-global-error">{error}<button onClick={() => void refresh()}>Retry</button></div> : null}<section className="customer-workspace">
       {tab === 'home' ? <HomePage portal={portal} onNavigate={navigate} /> : null}
       {tab === 'messages' ? <MessagesPage portal={portal} onPortal={setPortal} onBack={() => navigate('home')} /> : null}
       {tab === 'payments' ? <PaymentsPage portal={portal} /> : null}

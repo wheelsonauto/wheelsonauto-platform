@@ -338,9 +338,10 @@ async function main() {
     assert(!Object.prototype.hasOwnProperty.call(mechanicState.json, 'recurringPayments'), 'Mechanic state should not include recurring payments.');
 
     const managerHome = await request(base, 'GET', '/', { cookie: managerCookie });
-    assert(managerHome.status === 200 && managerHome.text.includes('Smoke test manager message.'), 'Manager initial page state should include messages.');
+    assert(managerHome.status === 200 && managerHome.text.includes('/staff-dist/staff-next.js') && managerHome.text.includes('"role":"Manager"'), 'Manager should open the scoped production staff application.');
+    assert(!managerHome.text.includes('Smoke test manager message.') && !managerHome.text.includes('window.__SERVER_DATA__'), 'Manager staff HTML must not embed message history or the full platform state.');
     const mechanicHome = await request(base, 'GET', '/', { cookie: mechanicCookie });
-    assert(mechanicHome.status === 200, 'Mechanic initial page should load.');
+    assert(mechanicHome.status === 200 && mechanicHome.text.includes('/staff-dist/staff-next.js') && mechanicHome.text.includes('"role":"Mechanic"'), 'Mechanic should open the scoped production staff application.');
     assert(!mechanicHome.text.includes('Smoke test manager message.'), 'Mechanic initial page state should not include message history.');
 
     const beforeState = await request(base, 'GET', '/api/state', { cookie: ownerCookie });

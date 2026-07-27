@@ -1,9 +1,9 @@
 'use strict';
 
-const SHELL_CACHE = 'wheelsonauto-customer-shell-v8';
+const SHELL_CACHE = 'wheelsonauto-customer-shell-v10';
 const SHELL_ASSETS = [
-  '/styles.css',
-  '/customer-portal.js',
+  '/customer-dist/customer-next.css',
+  '/customer-dist/customer-next.js',
   '/manifest.webmanifest'
 ];
 
@@ -21,6 +21,7 @@ self.addEventListener('activate', event => {
 
 function isPrivateRequest(url) {
   return url.pathname === '/customer'
+    || url.pathname === '/customer-next'
     || url.pathname.startsWith('/api/')
     || url.pathname.startsWith('/customer/document')
     || url.pathname.startsWith('/customer/message')
@@ -31,19 +32,22 @@ function isPrivateRequest(url) {
     || url.pathname.startsWith('/pay/');
 }
 
+function isCustomerShellAsset(url) {
+  return SHELL_ASSETS.includes(url.pathname) || url.pathname.startsWith('/customer-dist/');
+}
+
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || isPrivateRequest(url)) return;
-  if (!SHELL_ASSETS.includes(url.pathname)) return;
+  if (!isCustomerShellAsset(url)) return;
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      const fresh = fetch(event.request).then(response => {
+    fetch(event.request)
+      .then(response => {
         if (response.ok) caches.open(SHELL_CACHE).then(cache => cache.put(event.request, response.clone()));
         return response;
-      }).catch(() => cached);
-      return cached || fresh;
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });
 

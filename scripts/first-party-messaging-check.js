@@ -17,6 +17,13 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.webmanifes
 const staffWorker = fs.readFileSync(path.join(root, 'staff-service-worker.js'), 'utf8');
 const staffPwa = fs.readFileSync(path.join(root, 'staff-pwa.js'), 'utf8');
 const staffManifest = JSON.parse(fs.readFileSync(path.join(root, 'staff-manifest.webmanifest'), 'utf8'));
+const customerShell = fs.readFileSync(path.join(root, 'customer-ui', 'CustomerApp.tsx'), 'utf8');
+const customerApi = fs.readFileSync(path.join(root, 'customer-ui', 'api.ts'), 'utf8');
+const customerStyles = fs.readFileSync(path.join(root, 'customer-ui', 'customer-next.css'), 'utf8');
+const staffShell = fs.readFileSync(path.join(root, 'staff-ui', 'StaffApp.tsx'), 'utf8');
+const staffMessages = fs.readFileSync(path.join(root, 'staff-ui', 'messages', 'MessagesPage.tsx'), 'utf8');
+const staffApi = fs.readFileSync(path.join(root, 'staff-ui', 'api.ts'), 'utf8');
+const staffStyles = fs.readFileSync(path.join(root, 'staff-ui', 'staff-next.css'), 'utf8');
 
 const account = {
   id: 'customer-account-1',
@@ -74,7 +81,8 @@ assert.strictEqual(staffManifest.scope, '/', 'Staff install must keep login, rec
 assert(staffManifest.start_url.startsWith('/login'), 'The staff app must start at secure staff login instead of the customer portal.');
 assert.strictEqual(staffManifest.display, 'standalone', 'The installed staff app must not show browser address-bar chrome.');
 assert(staffPwa.includes("register('/staff-service-worker.js'") && staffPwa.includes("updateViaCache: 'none'"), 'Staff pages must register the root-scoped standalone app shell and bypass stale HTTP cache when checking its worker.');
-assert(staffWorker.includes("wheelsonauto-staff-shell-v8") && staffWorker.includes("fetch(event.request)") && staffWorker.includes(".catch(() => caches.match(event.request))"), 'The installed staff shell must prefer current network assets while retaining an offline fallback in the current cache generation.');
+assert(staffWorker.includes("wheelsonauto-staff-shell-v10") && staffWorker.includes("fetch(event.request)") && staffWorker.includes(".catch(() => caches.match(event.request))"), 'The installed staff shell must prefer current network assets while retaining an offline fallback in the current cache generation.');
+assert(worker.includes("wheelsonauto-customer-shell-v10") && worker.includes("fetch(event.request)") && worker.includes(".catch(() => caches.match(event.request))"), 'The installed customer shell must prefer current network assets while retaining an offline fallback in the current cache generation.');
 assert(staffWorker.includes("'/staff-manifest.webmanifest'") && !staffWorker.includes("url.pathname.startsWith('/api/')"), 'The staff worker must cache only public shell assets and never cache private APIs.');
 assert(worker.includes("key.startsWith('wheelsonauto-customer-shell-')") && staffWorker.includes("key.startsWith('wheelsonauto-staff-shell-')"), 'Customer and staff workers must clean only their own cache families.');
 
@@ -102,52 +110,37 @@ async function run() {
 
   assert.strictEqual(manifest.scope, '/customer');
   assert.strictEqual(manifest.display, 'standalone');
-  assert.strictEqual(manifest.start_url, '/customer#portal-home', 'The installed customer app must open the current Home tab.');
+  assert.strictEqual(manifest.start_url, '/customer#home', 'The installed customer app must open the current Home tab.');
   assert.deepStrictEqual(manifest.shortcuts.map(item => item.url), [
-    '/customer#portal-messages',
-    '/customer#portal-payments',
-    '/customer#portal-vehicle',
-    '/customer#portal-settings'
+    '/customer#messages',
+    '/customer#payments',
+    '/customer#vehicle',
+    '/customer#settings'
   ], 'Installed customer shortcuts must match the current five-tab account structure.');
   assert(worker.includes("url.pathname === '/customer'"), 'Service worker must explicitly exclude authenticated customer HTML from caching.');
   assert(worker.includes("url.pathname.startsWith('/api/')"), 'Service worker must never cache private API responses.');
-  assert(client.includes("fetch('/customer/message'"), 'Customer replies must submit in place without a full-page reload.');
-  assert(client.includes("id: 'customer-pending-' + Date.now()") && client.includes("status: 'Sending'") && client.includes("pending.status = 'Not sent'"), 'Customer replies must appear immediately and remain retryable when delivery fails.');
-  assert(client.includes("fetch('/api/customer/portal-state'"), 'Customer conversation must poll its scoped portal state for replies.');
-  assert(client.includes("}, 2500)"), 'Customer conversations must refresh quickly enough to behave like a live in-app thread.');
-  assert(client.includes('function showLiveAlert(item)'), 'Customer app updates must appear inside the app without requiring device-notification permission.');
-  assert(client.includes('window.setInterval(refresh, 5000)'), 'Customer payment, message, application, and service alerts must refresh automatically.');
-  assert(client.includes('function setupMobileKeyboard()') && client.includes("document.body.classList.toggle('customer-keyboard-open'"), 'The customer app must move its bottom navigation out of the way when the phone keyboard opens.');
-  assert(client.includes("document.body.classList.toggle('customer-message-keyboard-open'") && !client.includes("target.scrollIntoView({ block: 'nearest'"), 'Opening the customer message keyboard must lock only the conversation viewport without forcing the whole page to scroll.');
-  assert(client.includes('function setupSettingsNavigation()') && client.includes('data-customer-settings-back'), 'Customer Settings must use focused native-app screens with a Back control.');
-  assert(client.includes("navigator.serviceWorker.register('/service-worker.js'"), 'Customer portal must register the installable app shell.');
-  assert(staff.includes("preferred=portalReady?'Customer portal'"), 'Staff replies must prefer the secure customer app when the customer login is ready.');
-  assert(staff.includes("providerLabel='Customer app live'"), 'Staff inbox must present the first-party app as the primary channel.');
-  assert(staff.includes('function renderFocusedMessagesDirect(){'), 'Direct list-to-conversation navigation must use the focused message render guard.');
-  const focusedReply = staff.slice(staff.indexOf('function messageFocusedReply('), staff.indexOf('function messageFocusedConversation('));
-  const focusedConversation = staff.slice(staff.indexOf('function messageFocusedConversation('), staff.indexOf('function messageFocusedTabs('));
-  assert(staff.includes('function messageIsConversationRecord(') && staff.includes("source==='WheelsonAuto email notification'") && staff.includes("event==='customer_message'"), 'Owner email notifications and audit records must stay out of customer chat threads.');
-  assert(!focusedReply.includes('SMS unavailable') && !focusedReply.includes('Sensitive payment and account changes') && !focusedReply.includes('Full composer'), 'The focused reply composer must not waste space on provider warnings or a duplicate composer action.');
-  assert(!focusedConversation.includes('message-context-strip') && !focusedConversation.includes("VIN '+ctx.vin") && !focusedConversation.includes("Tracker '+ctx.tracker"), 'The open conversation must not repeat VIN, tag, tracker, amount, or pickup status above the actual messages.');
-  assert(staff.includes('__woaPerformanceRenderMemo={};\n  try{\n    MessagesFocused();'), 'Direct message renders must reuse the per-render customer, vehicle, payment, and thread memo.');
-  assert((staff.match(/renderFocusedMessagesDirect\(\)/g) || []).length >= 3, 'Opening and closing a mobile conversation must both use the guarded message renderer.');
+  assert(customerApi.includes("fetch('/customer/message'") && customerApi.includes("fetch('/api/customer/portal-state'"), 'Customer replies and refreshes must use scoped first-party endpoints without a full-page reload.');
+  assert(customerShell.includes("new EventSource('/api/customer/events')") && customerShell.includes("events.addEventListener('platform'"), 'Customer account updates must arrive through its authenticated live event stream.');
+  assert(customerShell.includes('setBody(\'\'); onPortal(result.portal)') && customerShell.includes('Message could not be sent.'), 'Customer replies must update the open conversation from the send response and retain a clear failure state.');
+  assert(customerShell.includes('customer-message-page') && customerShell.includes('customer-message-back') && customerShell.includes('settings-open'), 'Customer Messages and Settings must use focused native-app screens with Back controls.');
+  const customerConversation = customerShell.slice(customerShell.indexOf('function MessagesPage('), customerShell.indexOf('function PaymentsPage('));
+  assert(!/VIN|Tracker|Payment amount|Pending pickup/.test(customerConversation), 'The customer conversation must show the conversation, not repeated vehicle and payment metadata.');
+  assert(customerShell.includes('function NotificationCenter(') && customerShell.includes("navigator.serviceWorker.register('/service-worker.js'"), 'Customer in-app alerts and installable app registration must remain active.');
+  assert(customerStyles.includes('.customer-message-page { position: fixed') && customerStyles.includes('height: 100dvh') && customerStyles.includes('padding-bottom: 0'), 'The customer phone conversation must stay inside the visible keyboard viewport without hiding its composer behind bottom navigation.');
+  assert(staffMessages.includes("new EventSource('/api/events')") && staffMessages.includes("includes('messages')"), 'The staff inbox must react to authenticated message events instead of polling the full platform.');
+  assert(staffApi.includes("fetch('/api/messages/feed?limit=800'") && staffApi.includes("fetch('/api/messages/send'"), 'The staff inbox must use its lightweight feed and dedicated send endpoint.');
+  assert(staffMessages.includes("availableChannels(selected)") && staffMessages.includes("channels.push('Customer portal')"), 'Staff replies must prefer the secure customer app whenever that account exists.');
+  assert(staffMessages.includes("return customerAccountId ? `account:${customerAccountId}`") && staffMessages.includes("setMessages(current => current.some(message => message.id === result.message.id)") && staffMessages.includes('void refresh();'), 'Staff messages must keep one portal customer in one thread and show successful sends before the background feed refresh.');
+  assert(staffMessages.includes('Star prepared a draft. Review it before sending.') && staffMessages.includes('draftStarReply(selected.latest)'), 'Star must prepare a reviewable draft instead of silently sending customer replies.');
+  assert(staffMessages.includes('setSelectedKey(\'\')') && staffMessages.includes('Back to conversations'), 'Opening and closing a phone conversation must use one focused list-to-thread flow.');
+  assert(!/VIN|Tracker|Payment amount|Pending pickup/.test(staffMessages), 'The open staff conversation must not repeat vehicle, tracker, payment, or pickup metadata.');
   assert(source.includes("url.pathname === '/api/messages/feed'"), 'Staff conversations need a small authenticated feed instead of repeatedly downloading the full platform state.');
   assert(source.includes('scheduleCustomerPortalMessageFollowUp(message.id)'), 'Customer message AI and owner-email follow-up must run after the inbound message is safely saved.');
   assert(source.includes("id: 'msg-ai-queued-'") && source.includes('portalQueuedStarDraftId'), 'A saved customer message must expose an immediate internal Star placeholder while the full draft is prepared.');
   assert(source.includes("record.notificationEmailStatus = 'Queued'"), 'Customer-app delivery must not wait for its optional email notification.');
-  assert(staff.includes("fetch('/api/messages/feed?limit=800'"), 'The staff inbox must poll its dedicated live feed.');
-  assert(staff.includes('focusedMessageDraftSnapshot()') && staff.includes('restoreFocusedMessageDraft(snapshot)'), 'Live staff refresh must preserve the reply being typed.');
-  assert(staff.includes('upsertLiveMessageRecord(sent.message)') && !staff.includes('if(threadMode)pendingThreadReplyDraft=null;await refreshData(true);'), 'A successful staff send must render from the response instead of blocking on a full dashboard refresh.');
-  assert(staff.includes("source:'WheelsonAuto local pending'") && staff.includes('__woaMessageSendInFlight=messageDeliveryId') && staff.includes("insertAdjacentHTML('beforeend',messageFocusedBubble(optimisticMessage))"), 'Staff replies must appear optimistically while the durable server write completes.');
-  assert(staffPwa.includes('window.setInterval(refreshNotifications, 5000)'), 'Staff app alerts must refresh without reopening the platform.');
-  assert(styles.includes('.customer-chat-messages') && styles.includes('@media(max-width:760px)'), 'Conversation layout must include compact mobile styling.');
-  assert(styles.includes('.customer-app-header{height:54px;grid-template-columns:minmax(0,1fr) 40px'), 'The customer phone header must reserve separate non-overlapping lanes for identity and alerts.');
-  assert(styles.includes('.customer-app-body.customer-keyboard-open .customer-app-tabs.customer-action-hub') && styles.includes('--customer-live-viewport-height'), 'The customer message composer must remain reachable above the phone keyboard and bottom navigation.');
-  assert(styles.includes('.admin-shell .topbar.compact-title{') && styles.includes('backdrop-filter:blur(14px)'), 'The staff header must use the same compact glass surface language as the customer/login app.');
-  assert(styles.includes('.view-messages:has(.message-inbox-shell.message-mobile-thread-open)>.message-focused-tabs{display:none!important}'), 'Message workspace tabs must hide while the phone is inside a conversation and return after Back.');
-  assert(styles.includes('.message-inbox-shell.message-mobile-thread-open .message-recipient-details{display:none!important}'), 'Open mobile conversations must hide the optional delivery selector so the reply box stays compact.');
-  assert(styles.includes('.admin-shell>.main{padding-top:calc(8px + env(safe-area-inset-top))!important}'), 'Every staff phone screen must remain below the iPhone camera and status area.');
-  assert(styles.includes('body.customer-message-keyboard-open #portal-messages') && styles.includes('body.customer-message-keyboard-open .customer-chat{height:100%!important'), 'The customer conversation must fit the visible keyboard viewport without scrolling the entire portal.');
+  assert(staffShell.includes("new EventSource('/api/events')") && staffShell.includes('loadNotifications(controller.signal)'), 'Staff alerts must update in-app without reopening the platform.');
+  assert(staffStyles.includes('env(safe-area-inset-top)') && staffStyles.includes('body:has(.next-messages.has-thread) .staff-topbar,body:has(.next-messages.has-thread) .staff-mobile-nav{display:none}') && staffStyles.includes('grid-template-rows:minmax(0,1fr);padding-top:env(safe-area-inset-top)'), 'Staff phone conversations must stay below the camera area and hide duplicate chrome while replying.');
+  assert(staffStyles.includes('.next-messages{width:min(1620px,100%)') && staffStyles.includes('grid-template-columns:minmax(300px,390px) minmax(0,1fr)'), 'The staff inbox must use a balanced desktop list-and-conversation layout.');
   assert(!source.includes("providerEvidenceMissing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block provider proof collection.');
   assert(!source.includes("missing.push('Telnyx signed SMS delivery and inbound reply proof')"), 'Optional carrier SMS must not block live Stripe readiness.');
   assert(source.includes('WOA_OPTIONAL_CARRIER_SMS_ENABLED') && source.includes("? 'wheelsonauto'"), 'Legacy Telnyx or Twilio environment values must not reactivate carrier SMS unless the owner explicitly enables it.');

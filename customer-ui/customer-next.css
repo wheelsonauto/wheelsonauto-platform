@@ -42,6 +42,12 @@ a { color: inherit; }
 .customer-rail footer a { color: #7f848c; font-size: 10px; text-decoration: none; }
 
 .customer-stage { min-width: 0; min-height: 0; display: grid; grid-template-rows: 57px minmax(0, 1fr); }
+.customer-stage.assisted { grid-template-rows: 57px auto minmax(0, 1fr); }
+.customer-assistance-banner { z-index: 10; min-width: 0; display: flex; align-items: center; gap: 16px; padding: 9px 22px; border-bottom: 1px solid rgba(219, 201, 134, 0.24); background: rgba(219, 201, 134, 0.08); }
+.customer-assistance-banner > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.customer-assistance-banner strong { color: #e6d9aa; font-size: 10px; }
+.customer-assistance-banner small { color: #9f9b89; font-size: 9px; line-height: 1.35; }
+.customer-assistance-banner a { flex: 0 0 auto; padding: 7px 10px; border: 1px solid rgba(219, 201, 134, 0.32); border-radius: 5px; color: #e3d7ac; font-size: 9px; font-weight: 760; text-decoration: none; }
 .customer-topbar { z-index: 11; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 22px; border-bottom: 1px solid var(--customer-line); background: rgba(12, 14, 17, 0.96); }
 .customer-topbar > div:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
 .customer-topbar > div:first-child small { color: #757a83; font-size: 8px; font-weight: 700; text-transform: uppercase; }
@@ -203,6 +209,10 @@ a.customer-row:hover { background: rgba(255, 255, 255, 0.025); }
   .customer-next-shell { display: block; }
   .customer-rail { display: none; }
   .customer-stage { height: 100%; grid-template-rows: calc(48px + env(safe-area-inset-top)) minmax(0, 1fr); padding-bottom: calc(58px + env(safe-area-inset-bottom)); }
+  .customer-stage.assisted { grid-template-rows: calc(48px + env(safe-area-inset-top)) auto minmax(0, 1fr); }
+  .customer-assistance-banner { gap: 9px; padding: 7px 10px; }
+  .customer-assistance-banner small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .customer-assistance-banner a { padding: 6px 8px; }
   .customer-topbar { height: calc(48px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 12px 0; background: #0c0e11; }
   .customer-topbar > div:first-child small, .customer-topbar > span { display: none; }
   .customer-topbar > div:first-child strong { font-size: 15px; }

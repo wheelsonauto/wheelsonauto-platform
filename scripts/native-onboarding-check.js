@@ -244,8 +244,13 @@ async function main() {
     assert(customerEmailLogin.status === 302 && String(customerEmailLogin.cookie).includes('woa_customer_session='), 'Customer should be able to log in with the account email.');
     const customerPhoneLogin = await request(server, 'POST', '/customer/login', { form: { username: '(856) 555-0107', password: customerPassword } });
     assert(customerPhoneLogin.status === 302 && String(customerPhoneLogin.cookie).includes('woa_customer_session='), 'Customer should be able to log in with the account phone number.');
-    const customerPortal = await request(server, 'GET', '/customer', { cookie: String(customerEmailLogin.cookie).split(';')[0] });
-    assert(customerPortal.status === 200 && /Applications/.test(customerPortal.text) && /My requests/.test(customerPortal.text) && />Continue</.test(customerPortal.text) && /2016 Ford Focus/.test(customerPortal.text) && /#portal-vehicle/.test(customerPortal.text), 'Pending applicant portal should keep the selected car and continuation step inside the Vehicle workspace.');
+    const signedInCustomerCookie = String(customerEmailLogin.cookie).split(';')[0];
+    const customerPortal = await request(server, 'GET', '/customer', { cookie: signedInCustomerCookie });
+    assert(customerPortal.status === 200 && customerPortal.text.includes('/customer-dist/customer-next.js') && !customerPortal.text.includes('#portal-vehicle'), 'Pending applicant should open the current customer account app rather than the retired portal.');
+    const customerPortalState = await request(server, 'GET', '/api/customer/portal-state', { cookie: signedInCustomerCookie });
+    const pendingPortalApplication = (customerPortalState.json.portal.applications || []).find(row => row.id === applicationId);
+    const pendingPortalSession = (customerPortalState.json.portal.onboardingSessions || []).find(row => row.applicationId === applicationId);
+    assert(customerPortalState.status === 200 && customerPortalState.json.ok && pendingPortalApplication && /2016 Ford Focus/.test(pendingPortalApplication.vehicle || '') && pendingPortalSession && pendingPortalSession.portalUrl === '/customer/onboarding/' + onboardingId, 'Pending applicant portal state should keep the selected car and exact continuation step inside the Vehicle workspace.');
 
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     saved.applications.unshift({

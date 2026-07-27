@@ -3,7 +3,7 @@
   "name": "My WheelsonAuto",
   "short_name": "WheelsonAuto",
   "description": "Secure WheelsonAuto customer account, payments, service, documents, and messages.",
-  "start_url": "/customer#portal-home",
+  "start_url": "/customer#home",
   "scope": "/customer",
   "display": "standalone",
   "orientation": "portrait-primary",
@@ -27,22 +27,22 @@
     {
       "name": "Messages",
       "short_name": "Messages",
-      "url": "/customer#portal-messages"
+      "url": "/customer#messages"
     },
     {
       "name": "Payments",
       "short_name": "Payments",
-      "url": "/customer#portal-payments"
+      "url": "/customer#payments"
     },
     {
       "name": "Vehicle",
       "short_name": "Vehicle",
-      "url": "/customer#portal-vehicle"
+      "url": "/customer#vehicle"
     },
     {
       "name": "Settings",
       "short_name": "Settings",
-      "url": "/customer#portal-settings"
+      "url": "/customer#settings"
     }
   ]
 }

@@ -404,10 +404,11 @@ const STATE_BACKUP_DEDICATED_KEY_CONFIGURED = !!String(process.env.WOA_STATE_BAC
 const RESEND_API_KEY = process.env.RESEND_API_KEY || process.env.WOA_RESEND_API_KEY || '';
 const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || process.env.WOA_RESEND_WEBHOOK_SECRET || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || process.env.WOA_SENDGRID_API_KEY || '';
-const ASSET_VERSION = 'platform-20260727-rental-relations-353';
+const ASSET_VERSION = 'platform-20260727-next-workspaces-354';
 const BROWSER_ICON_LINKS = '<link rel="icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=64"><link rel="apple-touch-icon" href="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180">';
 const CSS_LINK = '<link rel="stylesheet" href="/styles.css?v=' + ASSET_VERSION + '">';
 const STAFF_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WOA Staff"><link rel="manifest" href="/staff-manifest.webmanifest"><script defer src="/staff-pwa.js?v=' + ASSET_VERSION + '"></script>';
+const CUSTOMER_PWA_HEAD = '<meta name="theme-color" content="#0b0d10"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="WheelsonAuto"><link rel="manifest" href="/manifest.webmanifest">';
 const STATIC_ASSET_NAMES = new Set(['styles.css', 'app.js', 'card-setup.js', 'customer-portal.js', 'native-site.css', 'native-site-client.js', 'manifest.webmanifest', 'service-worker.js', 'staff-manifest.webmanifest', 'staff-pwa.js', 'staff-service-worker.js', 'staff-dist/staff-next.js', 'staff-dist/staff-next.css', 'customer-dist/customer-next.js', 'customer-dist/customer-next.css']);
 const staticAssetCache = new Map();
 const AUTO_SYNC_MS = Math.max(30000, Number(process.env.WOA_AUTO_SYNC_MS || 60000));
@@ -4264,7 +4265,7 @@ function scheduleCustomerPortalEmailNotification(recordId) {
             'You have a new secure message from WheelsonAuto:',
             record.body || '',
             '',
-            'Open your account: ' + PUBLIC_BASE_URL + '/customer#portal-messages'
+            'Open your account: ' + PUBLIC_BASE_URL + '/customer#messages'
           ].join('\n'), {
             customer: record.customer,
             ownerCopy: false,
@@ -6725,7 +6726,7 @@ async function approveAiMessage(data, payload = {}) {
         'You have a new secure message from WheelsonAuto:',
         draft.body,
         '',
-        'Open your account: ' + PUBLIC_BASE_URL + '/customer#portal-messages'
+        'Open your account: ' + PUBLIC_BASE_URL + '/customer#messages'
       ].join('\n'), {
         customer: draft.customer,
         ownerCopy: false,
@@ -10087,7 +10088,7 @@ function customerExperiencePath(req, tab = 'home') {
     const source = new URL(String(req && req.headers && req.headers.referer || ''));
     if (source.pathname === '/customer-next') return '/customer-next#' + section;
   } catch {}
-  return '/customer#portal-' + section;
+  return '/customer#' + section;
 }
 function customerLoginPage(message = '', next = '') {
   const returnPath = safeCustomerLoginReturn(next);
@@ -10578,18 +10579,18 @@ function customerAppNotifications(data, account) {
   const portal = customerPortalState(data, account);
   const notices = [];
   (portal.messages || []).filter(row => recentAppNotification(row, 30) && /outbound|staff|wheelsonauto/i.test(String(row.direction || 'Outbound'))).forEach(row => {
-    notices.push(appNotificationItem('message', row, 'New message from WheelsonAuto', row.body || row.subject || 'Open your messages to read the update.', { tone: 'blue', url: '/customer#portal-messages' }));
+    notices.push(appNotificationItem('message', row, 'New message from WheelsonAuto', row.body || row.subject || 'Open your messages to read the update.', { tone: 'blue', url: '/customer#messages' }));
   });
   (portal.payments || []).filter(row => recentAppNotification(row, 21) && /paid|fail|declin|not found|pending/i.test(String(row.status || ''))).forEach(row => {
     const paid = /paid|succeeded|complete/i.test(String(row.status || ''));
-    notices.push(appNotificationItem('payment', row, paid ? 'Payment received' : 'Payment update', [moneyText(row.amount || 0), row.status || 'Updated'].join(' - '), { tone: paid ? 'good' : 'warn', url: '/customer#portal-payments' }));
+    notices.push(appNotificationItem('payment', row, paid ? 'Payment received' : 'Payment update', [moneyText(row.amount || 0), row.status || 'Updated'].join(' - '), { tone: paid ? 'good' : 'warn', url: '/customer#payments' }));
   });
   (portal.applications || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
     const stage = row.stage || row.status || 'Submitted';
-    notices.push(appNotificationItem('application', row, 'Application ' + String(stage).toLowerCase(), row.vehicle || 'Open your account for the latest application step.', { tone: /approved|paid|scheduled/i.test(stage) ? 'good' : 'warn', url: '/customer#portal-vehicle' }));
+    notices.push(appNotificationItem('application', row, 'Application ' + String(stage).toLowerCase(), row.vehicle || 'Open your account for the latest application step.', { tone: /approved|paid|scheduled/i.test(stage) ? 'good' : 'warn', url: '/customer#vehicle' }));
   });
   (portal.maintenance || []).filter(row => recentAppNotification(row, 45)).forEach(row => {
-    notices.push(appNotificationItem('service', row, 'Service update', [row.vehicle || portal.summary && portal.summary.vehicle || 'Vehicle', row.issue || row.type || row.status || 'Maintenance'].join(' - '), { tone: /complete|fixed/i.test(String(row.status || '')) ? 'good' : 'warn', url: '/customer#portal-vehicle' }));
+    notices.push(appNotificationItem('service', row, 'Service update', [row.vehicle || portal.summary && portal.summary.vehicle || 'Vehicle', row.issue || row.type || row.status || 'Maintenance'].join(' - '), { tone: /complete|fixed/i.test(String(row.status || '')) ? 'good' : 'warn', url: '/customer#vehicle' }));
   });
   return appNotificationSortLimit(notices);
 }
@@ -12595,21 +12596,23 @@ function staffNextHtml(user = {}) {
     companyName: String(user.companyName || '')
   };
   const bootstrap = JSON.stringify(safeUser).replace(/</g, '\\u003c');
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090b0e"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto Staff</title>'
-    + BROWSER_ICON_LINKS
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><title>WheelsonAuto Staff</title>'
+    + BROWSER_ICON_LINKS + STAFF_PWA_HEAD
     + '<link rel="stylesheet" href="/staff-dist/staff-next.css"><script>window.__WOA_STAFF_USER__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/staff-dist/staff-next.js"></script></head><body><div id="staff-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening staff workspace...</main></div></body></html>';
 }
-function customerNextHtml(account = {}) {
+function customerNextHtml(account = {}, sessionUser = {}) {
   const safeAccount = {
     id: String(account.id || ''),
     name: String(account.name || account.customer || ''),
     username: String(account.username || ''),
-    email: String(account.email || '')
+    email: String(account.email || ''),
+    assistedByOwner: sessionUser.assistedByOwner === true,
+    assistedByOwnerName: sessionUser.assistedByOwner === true ? String(sessionUser.assistedByOwnerName || 'Owner admin') : ''
   };
   const bootstrap = JSON.stringify(safeAccount).replace(/</g, '\\u003c');
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090b0e"><meta name="robots" content="noindex,nofollow"><title>My WheelsonAuto</title>'
-    + BROWSER_ICON_LINKS
-    + '<link rel="stylesheet" href="/customer-dist/customer-next.css"><script>window.__WOA_CUSTOMER_ACCOUNT__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/customer-dist/customer-next.js"></script></head><body><div id="customer-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening your WheelsonAuto account...</main></div></body></html>';
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><title>My WheelsonAuto</title>'
+    + BROWSER_ICON_LINKS + CUSTOMER_PWA_HEAD
+    + '<link rel="stylesheet" href="/customer-dist/customer-next.css?v=' + ASSET_VERSION + '"><script>window.__WOA_CUSTOMER_ACCOUNT__=' + bootstrap + ';window.__WOA_RELEASE__=' + JSON.stringify(ASSET_VERSION) + ';</script><script type="module" src="/customer-dist/customer-next.js?v=' + ASSET_VERSION + '"></script></head><body><div id="customer-next-root"><main style="height:100%;display:grid;place-items:center;background:#090b0e;color:#ddd;font:15px system-ui">Opening your WheelsonAuto account...</main></div></body></html>';
 }
 function acceptedEncodingQuality(header, encoding) {
   const target = String(encoding || '').trim().toLowerCase();
@@ -17732,7 +17735,7 @@ function publicPayHtml(data, request, message = '') {
   const provider = paymentProviderLabel(request.paymentProvider);
   const paymentReady = normalizedPaymentProvider(request.paymentProvider) !== 'stripe' || stripeMoneyActionsArmed() && controlledStripePilotMoneyActionReview(data, request).allowed;
   const providerNotice = paymentReady ? '' : '<div class="notice" style="margin-top:12px">This Stripe payment link is not live yet. WheelsonAuto will send a fresh secure link after production launch checks are complete.</div>';
-  const returnUrl = request.onboardingReturnUrl || (request.customerAccountId ? '/customer#portal-payments' : 'https://www.wheelsonauto.com/');
+  const returnUrl = request.onboardingReturnUrl || (request.customerAccountId ? '/customer#payments' : 'https://www.wheelsonauto.com/');
   const returnLabel = request.customerAccountId ? 'Back to my account' : 'Back to WheelsonAuto';
   return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WheelsonAuto Payment</title>' + BROWSER_ICON_LINKS + CSS_LINK + '</head><body><div class="public-shell"><div class="public-hero"><div class="public-head"><a class="public-brand brand-link" href="https://www.wheelsonauto.com/"><img class="brand-logo" src="https://www.wheelsonauto.com/cdn/shop/files/wheelsLOGO.png?v=1772299505&width=180" alt="WheelsonAuto logo"><div><strong>WheelsonAuto</strong><div class="small">Secure online payment</div></div></a></div><h1>Complete your WheelsonAuto payment</h1><p>This payment opens on ' + escapeHtml(provider) + ' secure checkout. WheelsonAuto never stores your card or bank details.</p></div><main class="public-main"><section class="card section"><div class="grid two"><div class="item"><strong>Customer</strong><div>' + safeName + '</div><div class="muted">' + vehicle + '</div></div><div class="item"><strong>Amount due</strong><div class="money">' + amount + '</div><div class="muted">' + escapeHtml(request.frequency || 'Recurring payment') + '</div></div></div>' + (message ? '<div class="notice" style="margin-top:12px">' + escapeHtml(message) + '</div>' : '') + providerNotice + '<form method="POST" action="/api/public/payment-links/' + encodeURIComponent(request.id) + '/checkout" style="margin-top:14px"><button class="btn primary" type="submit"' + (paymentReady ? '' : ' disabled') + '>Pay securely with ' + escapeHtml(provider) + '</button><a class="btn" href="' + escapeHtml(returnUrl) + '">' + escapeHtml(returnLabel) + '</a></form></section></main></div></body></html>';
 }
@@ -22706,7 +22709,7 @@ const server = http.createServer(async (req, res) => {
           await writeData(data);
         }
         const duplicateSession = (data.onboardingSessions || []).find(row => row.applicationId === duplicateApplication.id && !/replaced|cancelled|expired/i.test(String(row.status || '')));
-        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), onboardingUrl: duplicateSession ? '/customer/onboarding/' + encodeURIComponent(duplicateSession.id) : '/customer#portal-vehicle', loginUrl: '/customer#portal-vehicle' });
+        return json(res, 200, { ok: true, duplicate: true, message: 'This application was already received.', application: publicApplicationSummary(duplicateApplication), customerAccount: safeCustomerAccount(duplicateAccount), onboardingUrl: duplicateSession ? '/customer/onboarding/' + encodeURIComponent(duplicateSession.id) : '/customer#vehicle', loginUrl: '/customer#vehicle' });
       }
       if (!nativeSite.publishedVehicles(data).some(vehicle => vehicle.id === selectedVehicle.id)) return json(res, 409, { ok: false, error: 'That vehicle is not currently available for an online application.' });
       const pricing = onboarding.pricingSnapshot(selectedVehicle);
@@ -22823,7 +22826,7 @@ const server = http.createServer(async (req, res) => {
       });
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: '/customer/onboarding/' + encodeURIComponent(session.id), loginUrl: '/customer#portal-vehicle' });
+      return json(res, 201, { ok: true, application: publicApplicationSummary(app), customerAccount: safeCustomerAccount(customerAccount), onboardingUrl: '/customer/onboarding/' + encodeURIComponent(session.id), loginUrl: '/customer#vehicle' });
     }
     if (/^\/api\/public\/onboarding\/[^/]+\/pickup-availability$/.test(url.pathname) && req.method === 'GET') {
       const availabilityRate = await publicActionLimit(req, 'onboarding-availability', PUBLIC_SECURE_LINK_LIMIT * 2, PUBLIC_SECURE_LINK_WINDOW_MS);
@@ -23815,7 +23818,7 @@ const server = http.createServer(async (req, res) => {
       const next = safeCustomerLoginReturn(url.searchParams.get('next') || '');
       const data = await readData();
       const signedInAccount = activeCustomerSessionAccount(data, customerSessionUser(req));
-      if (signedInAccount) return send(res, 302, '', 'text/plain', { Location: next || '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
+      if (signedInAccount) return send(res, 302, '', 'text/plain', { Location: next || '/customer#vehicle', 'Cache-Control': 'no-store' });
       return send(res, 200, customerRegisterPage('', next), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/register' && req.method === 'POST') {
@@ -23858,7 +23861,7 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog(data, customerLoginUser(account), 'Customer account created before application', [email, phone, next || 'Customer portal']);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return send(res, 303, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: next || '/customer#portal-vehicle', 'Cache-Control': 'no-store' });
+      return send(res, 303, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', customerSessionCookie(account)), Location: next || '/customer#vehicle', 'Cache-Control': 'no-store' });
     }
     if (url.pathname === '/customer/login' && req.method === 'GET') return send(res, 200, customerLoginPage('', url.searchParams.get('next') || ''), 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
     if (url.pathname === '/customer/login' && req.method === 'POST') {
@@ -24195,10 +24198,10 @@ const server = http.createServer(async (req, res) => {
       const messageRate = await publicActionLimit(req, 'customer-portal-message', 20, 10 * 60 * 1000);
       if (!messageRate.allowed) return wantsJson
         ? json(res, 429, { ok: false, error: 'Too many messages were submitted. Wait a moment and try again.' })
-        : send(res, 303, '', 'text/plain', { Location: '/customer#portal-messages', 'Retry-After': String(messageRate.retryAfterSeconds) });
+        : send(res, 303, '', 'text/plain', { Location: '/customer#messages', 'Retry-After': String(messageRate.retryAfterSeconds) });
       const payload = wantsJson ? await readJsonBody(req) : Object.fromEntries(new URLSearchParams(await readBody(req, 64 * 1024)));
       const body = String(payload.body || '').trim().slice(0, 1200);
-      if (!body) return wantsJson ? json(res, 400, { ok: false, error: 'Type a message first.' }) : send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
+      if (!body) return wantsJson ? json(res, 400, { ok: false, error: 'Type a message first.' }) : send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
       const data = await readData();
       const account = activeCustomerSessionAccount(data, customerUser);
       if (!account) return wantsJson
@@ -24274,7 +24277,7 @@ const server = http.createServer(async (req, res) => {
 	      await writeData(data);
 	      scheduleCustomerPortalMessageFollowUp(message.id);
 	      if (wantsJson) return json(res, 201, { ok: true, message: stripCustomerPortalMessage(message), portal: customerPortalState(data, account) });
-	      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-messages' });
+	      return send(res, 302, '', 'text/plain', { Location: '/customer#messages' });
 	    }
 	    if (url.pathname === '/customer/receipt-request' && req.method === 'POST') {
 	      const customerUser = customerSessionUser(req);
@@ -24896,7 +24899,7 @@ const server = http.createServer(async (req, res) => {
         throw error;
       }
       if (jsonUpload) return json(res, 201, { ok: true, message: 'Document uploaded securely for WheelsonAuto verification.', document: { id: document.id, type: document.type, status: document.status, originalName: document.originalName, portalDownloadUrl: '/customer/documents/' + encodeURIComponent(document.id) } });
-      return send(res, 302, '', 'text/plain', { Location: '/customer#portal-settings' });
+      return send(res, 302, '', 'text/plain', { Location: '/customer#settings' });
     }
     if (url.pathname.startsWith('/customer/documents/') && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -25047,9 +25050,9 @@ const server = http.createServer(async (req, res) => {
       const session = (data.onboardingSessions || []).find(row => row.id === sessionId && rowOrganizationId(row) === (account.organizationId || MAIN_ORG_ID));
       const application = session && (data.applications || []).find(row => row.id === session.applicationId);
       const accountApplicationIds = new Set([account.applicationId, ...(Array.isArray(account.applicationIds) ? account.applicationIds : [])].filter(Boolean));
-      if (!session || !application || onboarding.applicationBlocksOnboarding(application) || application.customerAccountId !== account.id && !accountApplicationIds.has(application.id)) return send(res, 404, paymentResultHtml('Application not found', 'This onboarding file is not attached to your customer account.', '/customer#portal-vehicle', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
+      if (!session || !application || onboarding.applicationBlocksOnboarding(application) || application.customerAccountId !== account.id && !accountApplicationIds.has(application.id)) return send(res, 404, paymentResultHtml('Application not found', 'This onboarding file is not attached to your customer account.', '/customer#vehicle', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
       const vehicle = onboarding.findPublicVehicle(data, session.onlineVehicleId || application.onlineVehicleId);
-      if (!vehicle) return send(res, 404, paymentResultHtml('Vehicle file not found', 'Contact WheelsonAuto so the selected vehicle can be restored to this application.', '/customer#portal-vehicle', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
+      if (!vehicle) return send(res, 404, paymentResultHtml('Vehicle file not found', 'Contact WheelsonAuto so the selected vehicle can be restored to this application.', '/customer#vehicle', 'Back to my account'), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store' });
       const rawToken = crypto.randomBytes(28).toString('hex');
       const now = new Date();
       session.tokenHash = onboarding.tokenHash(rawToken);
@@ -25063,7 +25066,7 @@ const server = http.createServer(async (req, res) => {
       appendCustomerPortalAudit(data, account, 'Customer opened onboarding from portal', [application.id, session.id, application.vehicle || nativeSite.vehicleTitle(vehicle)]);
       await protectConcurrentLocalWrites(data, { preferIncoming: true });
       await writeData(data);
-      return send(res, 200, nativeSite.onboardingHtml(data, renderSession, application, vehicle, template, contract.body, requestBaseUrl(req), { ...nativeRenderOptions(req), homePath: '/customer#portal-vehicle' }), 'text/html; charset=utf-8', ONBOARDING_CAMERA_RESPONSE_HEADERS);
+      return send(res, 200, nativeSite.onboardingHtml(data, renderSession, application, vehicle, template, contract.body, requestBaseUrl(req), { ...nativeRenderOptions(req), homePath: '/customer#vehicle' }), 'text/html; charset=utf-8', ONBOARDING_CAMERA_RESPONSE_HEADERS);
     }
     if (url.pathname === '/customer' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -25071,8 +25074,7 @@ const server = http.createServer(async (req, res) => {
       const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
       if (!customerUser && !account) return send(res, 302, '', 'text/plain', { Location: '/customer/login' });
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login' });
-      const portalHtml = customerPortalAssistanceHtml(customerPortalHtml(account, customerPortalState(data, account)), customerUser || {});
-      return send(res, 200, portalHtml, 'text/html; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 200, customerNextHtml(account, customerUser || {}), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
     if (url.pathname === '/customer-next' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -25080,7 +25082,7 @@ const server = http.createServer(async (req, res) => {
       const account = customerUser ? activeCustomerSessionAccount(data, customerUser) : localCustomerPreviewAccount(req, data);
       if (!customerUser && !account) return send(res, 302, '', 'text/plain', { Location: '/customer/login?next=' + encodeURIComponent('/customer-next') });
       if (!account) return send(res, 302, '', 'text/plain', { 'Set-Cookie': sessionSetCookie('woa_customer_session', '', { maxAge: 0 }), Location: '/customer/login?next=' + encodeURIComponent('/customer-next') });
-      return send(res, 200, customerNextHtml(account), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+      return send(res, 200, customerNextHtml(account, customerUser || {}), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
     if (url.pathname === '/api/customer/portal-state' && req.method === 'GET') {
       const customerUser = customerSessionUser(req);
@@ -25245,8 +25247,12 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname.startsWith('/api/')) return json(res, 401, { ok: false, error: 'Authentication required.' });
       return send(res, 200, loginPage('', await readData()));
     }
-    if (url.pathname === '/staff-next' && req.method === 'GET') {
+    if ((url.pathname === '/' || url.pathname === '/staff-next') && req.method === 'GET') {
       return send(res, 200, staffNextHtml(user), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+    }
+    if (url.pathname === '/staff-legacy' && req.method === 'GET') {
+      if (!isOwnerUser(user)) return send(res, 403, 'Only the owner can open the emergency legacy workspace.', 'text/plain; charset=utf-8', { 'Cache-Control': 'no-store' });
+      return send(res, 200, await appHtml({ publicMode: false, user }), 'text/html; charset=utf-8', { 'Cache-Control': 'private, no-store', 'X-Robots-Tag': 'noindex, nofollow' });
     }
     if (url.pathname.startsWith('/api/') && !apiAllowedForUser(user, url.pathname)) return json(res, 403, { ok: false, error: 'This account does not have access to that action.' });
     if ((url.pathname === '/api/app-notifications' && req.method === 'GET') || (url.pathname === '/api/app-notifications/read' && req.method === 'POST')) {

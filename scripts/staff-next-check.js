@@ -28,7 +28,8 @@ const entryPath = path.join(dist, 'staff-next.js');
 const cssPath = path.join(dist, 'staff-next.css');
 
 assert(fs.existsSync(entryPath) && fs.existsSync(cssPath), 'Build the React staff module before running this check.');
-assert(server.includes("url.pathname === '/staff-next'"), 'Authenticated staff-next route is missing.');
+assert(server.includes("(url.pathname === '/' || url.pathname === '/staff-next')") && server.includes('staffNextHtml(user)'), 'The authenticated staff root is not cut over to the new role workspace.');
+assert(server.includes("url.pathname === '/staff-legacy'") && server.includes('Only the owner can open the emergency legacy workspace.'), 'The guarded owner-only emergency legacy route is missing.');
 assert(server.includes('WOA_LOCAL_STAFF_PREVIEW_ROLE') && server.includes("requestedRole === 'mechanic'"), 'Isolated role preview support is missing.');
 assert(!server.slice(server.indexOf("url.pathname === '/staff-next'"), server.indexOf("url.pathname.startsWith('/api/')", server.indexOf("url.pathname === '/staff-next'"))).includes('mechanic'), 'The shared staff shell must not block mechanic accounts.');
 assert(shell.includes("roleWorkspaceAccess"), 'Role-scoped navigation is missing from the staff app.');

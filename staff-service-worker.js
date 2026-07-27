@@ -1,9 +1,9 @@
 'use strict';
 
-const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v8';
+const STAFF_SHELL_CACHE = 'wheelsonauto-staff-shell-v10';
 const STAFF_SHELL_ASSETS = [
-  '/styles.css',
-  '/app.js',
+  '/staff-dist/staff-next.css',
+  '/staff-dist/staff-next.js',
   '/staff-pwa.js',
   '/staff-manifest.webmanifest'
 ];
@@ -21,7 +21,7 @@ self.addEventListener('activate', event => {
 });
 
 function isStaffShellAsset(url) {
-  return url.origin === self.location.origin && STAFF_SHELL_ASSETS.includes(url.pathname);
+  return url.origin === self.location.origin && (STAFF_SHELL_ASSETS.includes(url.pathname) || url.pathname.startsWith('/staff-dist/'));
 }
 
 self.addEventListener('fetch', event => {

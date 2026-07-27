@@ -7,11 +7,12 @@ function timeValue(message: MessageRecord): number {
 }
 
 function contactKey(message: MessageRecord): string {
+  const customerAccountId = String(message.customerAccountId || '').trim();
   const customerId = String(message.customerId || '').trim();
   const phone = String(message.phone || '').replace(/\D/g, '').slice(-10);
   const email = String(message.email || '').trim().toLowerCase();
   const name = String(message.customer || 'Unknown customer').trim().toLowerCase();
-  return customerId ? `customer:${customerId}` : phone ? `phone:${phone}` : email ? `email:${email}` : `name:${name}`;
+  return customerAccountId ? `account:${customerAccountId}` : phone ? `phone:${phone}` : email ? `email:${email}` : customerId ? `customer:${customerId}` : `name:${name}`;
 }
 
 function buildThreads(messages: MessageRecord[]): MessageThread[] {
@@ -132,9 +133,12 @@ export function MessagesPage() {
         body: text,
         deliveryId: crypto.randomUUID()
       });
+      setMessages(current => current.some(message => message.id === result.message.id)
+        ? current.map(message => message.id === result.message.id ? result.message : message)
+        : [...current, result.message]);
       setBody('');
       setNotice(result.sent ? 'Message sent' : result.warning || 'Message saved');
-      await refresh();
+      void refresh();
     } catch (requestError) {
       setError((requestError as Error).message);
     } finally {

@@ -33,6 +33,9 @@ export type PortalRecord = {
   provider?: string;
   paymentProvider?: string;
   cardLast4?: string;
+  stripeCardSetupCustomerMessage?: string;
+  cardSetupCustomerMessage?: string;
+  customerMessage?: string;
   source?: string;
   notes?: string;
   issue?: string;
