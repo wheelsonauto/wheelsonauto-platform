@@ -107,6 +107,12 @@ async function main() {
   assert.strictEqual(environment.WOA_POSTGRES_RUNTIME_PROOF_CONFIRM, '1');
   assert.strictEqual(environment.UNRELATED, 'preserved');
 
+  const organizationEnvironment = runner.runtimeEnvironment({
+    DATABASE_URL: 'postgresql://owner:secret@private-db.internal/wheelsonauto_prod',
+    WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID: 'org-wheelsonauto'
+  }, target);
+  assert.strictEqual(organizationEnvironment.WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID, 'org-wheelsonauto', 'The runner must preserve the exact production organization selected by startup.');
+
   await assert.rejects(
     () => runner.main({}),
     /WOA_POSTGRES_RECOVERY_DRILL_CONFIRM/,

@@ -27,6 +27,7 @@ const accountRecovery = require('./account-recovery');
 const rentalFiles = require('./rental-file');
 const starTools = require('./star-tools');
 const productionHardening = require('./production-hardening');
+const postgresRecoveryDrill = require('./scripts/run-postgres-recovery-drill');
 
 const ROOT = __dirname;
 const DATA_DIR = process.env.DATA_DIR || ROOT;
@@ -13152,6 +13153,41 @@ async function collectFoundationReadinessForProductionStartup() {
   if (missing.length) console.warn('Staged production foundation check found ' + missing.length + ' incomplete safeguard' + (missing.length === 1 ? '' : 's') + '.');
   else console.log('Production foundation safeguards are ready for hardened startup.');
   return { skipped: false, ready: missing.length === 0, missing };
+}
+async function refreshRecoveryDrillForProductionStartup() {
+  if (!WOA_LIVE_RENDER_PRODUCTION || STATE_REPOSITORY.kind !== 'postgres') {
+    return { skipped: true, reason: 'Not the exact PostgreSQL-backed WheelsonAuto live Render service.' };
+  }
+  const expectedFingerprint = recoveryDrillConfigurationFingerprint();
+  const before = await STATE_REPOSITORY.health({
+    recoveryDrillConfigurationFingerprint: expectedFingerprint,
+    recoveryDrillMaxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
+  });
+  const existing = currentRecoveryDrillEvidence(before);
+  if (existing.ready) return { skipped: true, reason: 'Current controlled recovery proof is already valid.', recoveryDrill: existing };
+
+  console.log('Refreshing the controlled PostgreSQL recovery proof in the isolated drill database.');
+  try {
+    await postgresRecoveryDrill.main({
+      ...process.env,
+      WOA_POSTGRES_RECOVERY_DRILL_CONFIRM: postgresRecoveryDrill.CONFIRMATION_PHRASE,
+      WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID: MAIN_ORG_ID
+    });
+    const after = await STATE_REPOSITORY.health({
+      recoveryDrillConfigurationFingerprint: expectedFingerprint,
+      recoveryDrillMaxAgeMs: WOA_RECOVERY_DRILL_VALIDATION_MAX_AGE_MS
+    });
+    const refreshed = currentRecoveryDrillEvidence(after);
+    if (!refreshed.ready) {
+      throw new Error(refreshed.error || 'The controlled PostgreSQL recovery drill completed without a current signed proof.');
+    }
+    console.log('Controlled PostgreSQL recovery proof is current for this database-safety contract.');
+    return { skipped: false, recoveryDrill: refreshed };
+  } catch (error) {
+    if (WOA_PRODUCTION_HARDENING_REQUIRED) throw error;
+    console.warn('Staged production could not refresh the controlled PostgreSQL recovery proof: ' + String(error && error.message || error));
+    return { skipped: false, failed: true, error: String(error && error.message || error).slice(0, 500) };
+  }
 }
 function stripeLiveWebhookEvidence(data = {}) {
   const stripeState = data && data.integrations && data.integrations.stripe || {};
@@ -29691,6 +29727,7 @@ if (require.main === module) {
     .then(() => assertDataBackendTransition())
     .then(() => preparePrivateArtifactsForProductionStartup())
     .then(() => verifyStripeReadinessForProductionStartup())
+    .then(() => refreshRecoveryDrillForProductionStartup())
     .then(() => collectFoundationReadinessForProductionStartup())
     .then(() => assertProductionInfrastructure())
     .then(() => server.listen(PORT, HOST, () => {

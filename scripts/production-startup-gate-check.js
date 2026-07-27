@@ -64,6 +64,9 @@ async function main() {
   const serverSource = await fs.readFile(path.join(root, 'server.js'), 'utf8');
   assert.match(serverSource, /const startupMissing = preflight\.providerProofCollection[\s\S]*?preflight\.providerProofCollection\.missing/, 'Runtime startup must be gated by durable foundation readiness, not expiring provider evidence.');
   assert.match(serverSource, /stripeLaunchLocked:\s*!preflight\.readyForLiveStripe/, 'An available runtime must keep Stripe launch locked while provider or cutover evidence is incomplete.');
+  assert.match(serverSource, /refreshRecoveryDrillForProductionStartup[\s\S]*?WOA_LIVE_RENDER_PRODUCTION[\s\S]*?STATE_REPOSITORY\.kind !== 'postgres'/, 'Only the exact PostgreSQL-backed WheelsonAuto production service may refresh recovery proof at startup.');
+  assert.match(serverSource, /WOA_POSTGRES_RECOVERY_DRILL_CONFIRM:\s*postgresRecoveryDrill\.CONFIRMATION_PHRASE/, 'The automated production refresh must still use the guarded isolated-drill confirmation contract.');
+  assert.match(serverSource, /WOA_POSTGRES_RUNTIME_PROOF_ORGANIZATION_ID:\s*MAIN_ORG_ID/, 'Recovery proof must be written to the same organization used by production readiness.');
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-production-startup-gate-'));
   try {
     const result = spawnSync(process.execPath, ['server.js'], {
