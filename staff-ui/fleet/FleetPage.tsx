@@ -11,7 +11,7 @@ function title(vehicle: VehicleRecord) {
 type Filter = 'all' | 'available' | 'assigned' | 'service';
 const filters: readonly Filter[] = ['all', 'available', 'assigned', 'service'];
 
-export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) => void }) {
+export function FleetPage({ role, onNavigate, onOpenRental }: { role: 'owner' | 'manager' | 'mechanic'; onNavigate: (workspace: string) => void; onOpenRental: (rentalId: string) => void }) {
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [draft, setDraft] = useState<VehicleRecord | null>(null);
@@ -86,7 +86,11 @@ export function FleetPage({ onOpenRental }: { onOpenRental: (rentalId: string) =
       </div>
     </section>
     <section className="operations-detail">
-      {!draft ? <div className="detail-empty"><strong>Select a vehicle</strong><span>Identity, assignment, and condition stay together.</span></div> : <form onSubmit={submit}>
+      {!draft ? <div className="detail-empty"><strong>Select a vehicle</strong><span>Identity, assignment, and condition stay together.</span></div> : role === 'mechanic' ? <section className="read-only-detail mechanic-vehicle-detail">
+        <header className="detail-header"><button type="button" className="detail-back" onClick={() => { setDraft(null); setSelectedId(''); }}>Back</button><div><span>Vehicle reference</span><h2>{title(draft)}</h2></div><em className={`status-chip ${statusTone(draft.status)}`}>{draft.status || 'Unclassified'}</em></header>
+        <div className="detail-scroll"><div className="read-only-facts"><div><span>VIN</span><strong>{draft.vin || 'Missing'}</strong></div><div><span>Tag / stock</span><strong>{draft.plate || draft.stock || draft.tempTag || 'Missing'}</strong></div><div><span>Tracker</span><strong>{draft.tracker || 'Not linked'}</strong></div><div><span>Mileage</span><strong>{draft.mileage ? `${Number(draft.mileage).toLocaleString()} mi` : 'Not recorded'}</strong></div><div><span>Current renter</span><strong>{draft.currentCustomer || 'Unassigned'}</strong></div><div><span>Location</span><strong>{draft.location || 'Not recorded'}</strong></div></div>{draft.notes ? <article className="read-only-note"><span>Vehicle notes</span><p>{draft.notes}</p></article> : null}</div>
+        <footer className="detail-actions"><button type="button" className="primary-command" onClick={() => onNavigate('maintenance')}>Open maintenance</button><button type="button" className="secondary-command" onClick={() => onNavigate('dispatch')}>Open work queue</button></footer>
+      </section> : <form onSubmit={submit}>
         <header className="detail-header"><button type="button" className="detail-back" onClick={() => { setDraft(null); setSelectedId(''); }}>Back</button><div><span>Vehicle file</span><h2>{title(draft)}</h2></div><em className={`status-chip ${statusTone(draft.status)}`}>{draft.status || 'Unclassified'}</em></header>
         <div className="detail-scroll">
           {error ? <div className="inline-alert error">{error}</div> : null}{notice ? <div className="inline-alert">{notice}</div> : null}

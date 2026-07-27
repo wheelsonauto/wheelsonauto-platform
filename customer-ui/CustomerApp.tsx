@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { loadCustomerNotifications, loadCustomerPortal, markCustomerNotificationsRead, sendCustomerMessage, uploadCustomerDocument } from './api';
 import type { CustomerNotification, CustomerPortal, PortalRecord } from './types';
+import { useSwipeTabs } from '../staff-ui/useSwipeTabs';
 
 type Tab = 'home' | 'messages' | 'payments' | 'vehicle' | 'settings';
 type SettingsSection = 'profile' | 'documents' | 'feedback' | 'security';
@@ -12,6 +13,7 @@ const tabs: Array<{ id: Tab; label: string; mark: string }> = [
   { id: 'vehicle', label: 'Vehicle', mark: 'V' },
   { id: 'settings', label: 'Settings', mark: 'S' }
 ];
+const tabIds: readonly Tab[] = tabs.map(tab => tab.id);
 
 const emptyPortal: CustomerPortal = {
   account: {}, summary: {}, application: {}, applications: [], onboardingSessions: [], availableVehicles: [], customer: {}, contract: {}, recurring: {}, vehicle: {}, vehicles: [], payments: [], maintenance: [], claims: [], messages: [], documents: [], paymentRequests: [], cardSetupRequests: [], generatedAt: ''
@@ -255,6 +257,8 @@ export function CustomerApp() {
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const navigate = (next: Tab) => { setTab(next); history.replaceState(null, '', `#${next}`); };
+  const tabSwipe = useSwipeTabs(tabIds, tab, navigate, () => window.matchMedia('(max-width: 720px)').matches);
   const refresh = async (signal?: AbortSignal) => {
     try { const next = await loadCustomerPortal(signal); setPortal(next); setError(''); }
     catch (reason) { if (!(reason instanceof DOMException && reason.name === 'AbortError')) setError(reason instanceof Error ? reason.message : 'Account could not be refreshed.'); }
@@ -278,7 +282,6 @@ export function CustomerApp() {
     events.addEventListener('platform', () => { void refresh(); void refreshNotifications(); });
     return () => { controller.abort(); events.close(); };
   }, []);
-  const navigate = (next: Tab) => { setTab(next); history.replaceState(null, '', `#${next}`); };
   const markRead = async (rows: CustomerNotification[]) => {
     const ids = rows.map(row => row.id); if (!ids.length) return;
     setNotifications(current => current.map(row => ids.includes(row.id) ? { ...row, read: true } : row)); setUnread(current => Math.max(0, current - ids.length));
@@ -287,7 +290,7 @@ export function CustomerApp() {
   if (loading) return <main className="customer-loading"><span /><strong>Opening your WheelsonAuto account</strong></main>;
   return <div className={`customer-next-shell tab-${tab}`}>
     <aside className="customer-rail"><button className="customer-brand" onClick={() => navigate('home')}><strong>Wheels<span>On</span>Auto</strong><small>My account</small></button><nav>{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => navigate(item.id)}><i>{item.mark}</i><span>{item.label}</span>{item.id === 'messages' && portal.messages.length ? <b>{portal.messages.length}</b> : null}</button>)}</nav><footer><a href="/customer/logout">Log out</a></footer></aside>
-    <section className={`customer-stage${bootstrap.assistedByOwner ? ' assisted' : ''}`}><header className="customer-topbar"><div><small>WheelsonAuto</small><strong>{tabs.find(item => item.id === tab)?.label}</strong></div><span>{firstName(portal)}</span><NotificationCenter rows={notifications} unread={unread} onRead={markRead} /></header>{bootstrap.assistedByOwner ? <aside className="customer-assistance-banner" role="status"><span><strong>Owner assistance mode</strong><small>{bootstrap.assistedByOwnerName || 'Owner admin'} is viewing {bootstrap.name || 'this customer'} for support. This audited session expires in 15 minutes.</small></span><a href="/customer/assist/end">Return to admin</a></aside> : null}{error ? <div className="customer-global-error">{error}<button onClick={() => void refresh()}>Retry</button></div> : null}<section className="customer-workspace">
+    <section className={`customer-stage${bootstrap.assistedByOwner ? ' assisted' : ''}`}><header className="customer-topbar"><div><small>WheelsonAuto</small><strong>{tabs.find(item => item.id === tab)?.label}</strong></div><span>{firstName(portal)}</span><NotificationCenter rows={notifications} unread={unread} onRead={markRead} /></header>{bootstrap.assistedByOwner ? <aside className="customer-assistance-banner" role="status"><span><strong>Owner assistance mode</strong><small>{bootstrap.assistedByOwnerName || 'Owner admin'} is viewing {bootstrap.name || 'this customer'} for support. This audited session expires in 15 minutes.</small></span><a href="/customer/assist/end">Return to admin</a></aside> : null}{error ? <div className="customer-global-error">{error}<button onClick={() => void refresh()}>Retry</button></div> : null}<section className="customer-workspace customer-swipe-zone" {...tabSwipe}>
       {tab === 'home' ? <HomePage portal={portal} onNavigate={navigate} /> : null}
       {tab === 'messages' ? <MessagesPage portal={portal} onPortal={setPortal} onBack={() => navigate('home')} /> : null}
       {tab === 'payments' ? <PaymentsPage portal={portal} /> : null}

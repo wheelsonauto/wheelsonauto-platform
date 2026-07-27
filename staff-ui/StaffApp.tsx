@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { loadNotifications, prewarmStaffFeeds } from './api';
 
 const DashboardPage = lazy(() => import('./dashboard/DashboardPage').then(module => ({ default: module.DashboardPage })));
+const ManagerDashboardPage = lazy(() => import('./dashboard/ManagerDashboardPage').then(module => ({ default: module.ManagerDashboardPage })));
 const ServiceDashboardPage = lazy(() => import('./dashboard/ServiceDashboardPage').then(module => ({ default: module.ServiceDashboardPage })));
 const loadFleetModule = () => import('./fleet/FleetPage');
 const loadCustomersModule = () => import('./customers/CustomersPage');
@@ -12,6 +13,7 @@ const loadApplicationsModule = () => import('./applications/ApplicationsPage');
 const loadDispatchModule = () => import('./dispatch/DispatchPage');
 const loadMaintenanceModule = () => import('./maintenance/MaintenancePage');
 const loadAccountingModule = () => import('./accounting/AccountingPage');
+const loadManagerReportsModule = () => import('./reports/ManagerReportsPage');
 const loadSettingsModule = () => import('./settings/SettingsPage');
 const loadRentalModule = () => import('./rentals/RentalFilePage');
 const FleetPage = lazy(() => loadFleetModule().then(module => ({ default: module.FleetPage })));
@@ -22,12 +24,13 @@ const MessagesPage = lazy(() => loadMessagesModule().then(module => ({ default: 
 const DispatchPage = lazy(() => loadDispatchModule().then(module => ({ default: module.DispatchPage })));
 const MaintenancePage = lazy(() => loadMaintenanceModule().then(module => ({ default: module.MaintenancePage })));
 const AccountingPage = lazy(() => loadAccountingModule().then(module => ({ default: module.AccountingPage })));
+const ManagerReportsPage = lazy(() => loadManagerReportsModule().then(module => ({ default: module.ManagerReportsPage })));
 const SystemsPage = lazy(() => import('./systems/SystemsPage').then(module => ({ default: module.SystemsPage })));
 const MorePage = lazy(() => loadMoreModule().then(module => ({ default: module.MorePage })));
 const SettingsPage = lazy(() => loadSettingsModule().then(module => ({ default: module.SettingsPage })));
 const RentalFilePage = lazy(() => loadRentalModule().then(module => ({ default: module.RentalFilePage })));
 
-type Workspace = 'dashboard' | 'fleet' | 'customers' | 'payments' | 'applications' | 'messages' | 'dispatch' | 'maintenance' | 'accounting' | 'systems' | 'more' | 'settings' | 'rental';
+type Workspace = 'dashboard' | 'fleet' | 'customers' | 'payments' | 'applications' | 'messages' | 'dispatch' | 'maintenance' | 'accounting' | 'reports' | 'systems' | 'more' | 'settings' | 'rental';
 type NavItem = { id: Workspace; label: string; mark: string };
 type StaffRole = 'owner' | 'manager' | 'mechanic';
 
@@ -60,12 +63,12 @@ const ownerMobileItems: NavItem[] = [
 
 const workspaceNames = new Map<Workspace, string>([
   ...ownerNavGroups.flatMap(group => group.items.map(item => [item.id, item.label] as [Workspace, string])),
-  ['more', 'More'], ['settings', 'Settings'], ['rental', 'Rental File']
+  ['reports', 'Reports'], ['more', 'More'], ['settings', 'Settings'], ['rental', 'Rental File']
 ]);
 
 const roleWorkspaceAccess: Record<StaffRole, Set<Workspace>> = {
-  owner: new Set(workspaceNames.keys()),
-  manager: new Set(['dashboard', 'fleet', 'customers', 'payments', 'applications', 'messages', 'dispatch', 'maintenance', 'accounting', 'more', 'settings', 'rental']),
+  owner: new Set(Array.from(workspaceNames.keys()).filter((workspace) => workspace !== 'reports')),
+  manager: new Set(['dashboard', 'fleet', 'customers', 'applications', 'messages', 'dispatch', 'maintenance', 'reports', 'more', 'settings', 'rental']),
   mechanic: new Set(['dashboard', 'fleet', 'dispatch', 'maintenance', 'more', 'settings'])
 };
 
@@ -84,6 +87,22 @@ function navigationForRole(role: StaffRole) {
     { label: 'Shop', items: [
       { id: 'fleet', label: 'Vehicles', mark: '◇' },
       { id: 'maintenance', label: 'Maintenance', mark: '+' }
+    ] as NavItem[] }
+  ];
+  if (role === 'manager') return [
+    { label: 'Daily', items: [
+      { id: 'dashboard', label: 'Manager home', mark: '▦' },
+      { id: 'messages', label: 'Messages', mark: '□' }
+    ] as NavItem[] },
+    { label: 'Business', items: [
+      { id: 'fleet', label: 'Fleet', mark: '◇' },
+      { id: 'customers', label: 'Customers', mark: '○' },
+      { id: 'applications', label: 'Applications', mark: '◫' }
+    ] as NavItem[] },
+    { label: 'Operations', items: [
+      { id: 'dispatch', label: 'Dispatch', mark: '✓' },
+      { id: 'maintenance', label: 'Maintenance', mark: '+' },
+      { id: 'reports', label: 'Reports', mark: '∑' }
     ] as NavItem[] }
   ];
   return ownerNavGroups.map(group => ({ ...group, items: group.items.filter(item => allowed.has(item.id)) })).filter(group => group.items.length);
@@ -146,10 +165,11 @@ export function StaffApp() {
   }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      void Promise.allSettled([
-        loadFleetModule(), loadCustomersModule(), loadPaymentsModule(), loadMessagesModule(), loadMoreModule(),
-        loadApplicationsModule(), loadDispatchModule(), loadMaintenanceModule(), loadAccountingModule(), loadSettingsModule(), loadRentalModule()
-      ]);
+      const modules: Promise<unknown>[] = [loadFleetModule(), loadMoreModule(), loadDispatchModule(), loadMaintenanceModule(), loadSettingsModule()];
+      if (role !== 'mechanic') modules.push(loadCustomersModule(), loadMessagesModule(), loadApplicationsModule(), loadRentalModule());
+      if (role === 'owner') modules.push(loadPaymentsModule(), loadAccountingModule());
+      if (role === 'manager') modules.push(loadManagerReportsModule());
+      void Promise.allSettled(modules);
       prewarmStaffFeeds(role);
     }, 250);
     return () => window.clearTimeout(timer);
@@ -163,22 +183,24 @@ export function StaffApp() {
     history.replaceState(null, '', `#${next}${nextRecordId ? `/${encodeURIComponent(nextRecordId)}` : ''}`);
   };
   const openRental = (id: string) => { if (id) open('rental', id); };
-  const heading = role === 'mechanic' && workspace === 'dashboard' ? 'Service home' : workspaceNames.get(workspace) || 'WheelsonAuto';
+  const heading = workspace === 'dashboard' && role === 'mechanic' ? 'Service home' : workspace === 'dashboard' && role === 'manager' ? 'Manager home' : workspaceNames.get(workspace) || 'WheelsonAuto';
   const navigationWorkspace = workspace === 'rental' ? returnWorkspace : workspace;
   const mobileContextBack = workspace !== 'rental' && !mobileItems.some(item => item.id === workspace);
   const initials = useMemo(() => String(user.name || user.username || 'Staff').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase(), [user.name, user.username]);
 
-  return <div className="staff-app-shell">
+  const roleLabel = role === 'owner' ? 'Operations' : role === 'manager' ? 'Management' : 'Service';
+
+  return <div className={`staff-app-shell role-${role}`}>
     <aside className="staff-rail">
-      <button className="staff-brand" onClick={() => open('dashboard')} aria-label="Open dashboard"><strong>Wheels<span>On</span>Auto</strong><small>Operations</small></button>
+      <button className="staff-brand" onClick={() => open('dashboard')} aria-label="Open dashboard"><strong>Wheels<span>On</span>Auto</strong><small>{roleLabel}</small></button>
       <DesktopNavigation active={navigationWorkspace} groups={navGroups} onChange={open} />
       <footer><button className="staff-profile" onClick={() => open('settings')}><i>{initials}</i><span><strong>{user.name || user.username || 'Staff'}</strong><small>{user.role || 'Staff'}</small></span><b aria-hidden="true">›</b></button></footer>
     </aside>
     <section className="staff-stage">
       <header className="staff-topbar"><div>{mobileContextBack ? <button className="mobile-context-back" onClick={() => open('more')} aria-label="Back to More">‹</button> : null}<span>WheelsonAuto</span><strong>{heading}</strong></div><button className="notification-command" onClick={() => open('dashboard')} aria-label={`${unread} unread notifications`}><span aria-hidden="true">◦</span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button></header>
       <section className="staff-app-workspace" aria-live="polite"><Suspense fallback={<div className="workspace-loading"><span /><strong>Opening {heading}</strong></div>}>
-        {workspace === 'dashboard' ? role === 'mechanic' ? <ServiceDashboardPage onNavigate={open} /> : <DashboardPage onNavigate={open} /> : null}
-        {workspace === 'fleet' ? <FleetPage onOpenRental={openRental} /> : null}
+        {workspace === 'dashboard' ? role === 'mechanic' ? <ServiceDashboardPage onNavigate={open} /> : role === 'manager' ? <ManagerDashboardPage onNavigate={open} /> : <DashboardPage onNavigate={open} /> : null}
+        {workspace === 'fleet' ? <FleetPage role={role} onNavigate={open} onOpenRental={openRental} /> : null}
         {workspace === 'customers' ? <CustomersPage onNavigate={open} onOpenRental={openRental} /> : null}
         {workspace === 'payments' ? <PaymentsPage onOpenRental={openRental} /> : null}
         {workspace === 'applications' ? <ApplicationsPage onOpenRental={openRental} /> : null}
@@ -186,6 +208,7 @@ export function StaffApp() {
         {workspace === 'dispatch' ? <DispatchPage /> : null}
         {workspace === 'maintenance' ? <MaintenancePage /> : null}
         {workspace === 'accounting' ? <AccountingPage /> : null}
+        {workspace === 'reports' ? <ManagerReportsPage onNavigate={open} /> : null}
         {workspace === 'systems' ? <SystemsPage /> : null}
         {workspace === 'more' ? <MorePage role={role} onNavigate={open} /> : null}
         {workspace === 'settings' ? <SettingsPage role={role} onNavigate={open} /> : null}

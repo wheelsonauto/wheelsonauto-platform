@@ -140,8 +140,8 @@ export function loadAutopay(signal?: AbortSignal, force = false): Promise<PagedF
 export function prewarmStaffFeeds(role: string) {
   const normalized = role.toLowerCase();
   const requests: Promise<unknown>[] = [loadVehicles(), loadTasks(), loadMaintenance()];
-  if (normalized !== 'mechanic') requests.push(loadCustomers(), loadPayments(), loadMessageFeed(), loadApplications());
-  if (normalized === 'owner') requests.push(loadAutopay());
+  if (normalized !== 'mechanic') requests.push(loadCustomers(), loadMessageFeed(), loadApplications());
+  if (normalized === 'owner') requests.push(loadPayments(), loadAutopay());
   void Promise.allSettled(requests);
 }
 

@@ -11,13 +11,15 @@ function swipeBlocked(target: EventTarget | null) {
   return target instanceof Element && !!target.closest(swipeBlockedSelector);
 }
 
-export function useSwipeTabs<T extends string>(items: readonly T[], active: T, onChange: (next: T) => void) {
+export function useSwipeTabs<T extends string>(items: readonly T[], active: T, onChange: (next: T) => void, enabled: boolean | (() => boolean) = true) {
   const start = useRef<{ id: number; x: number; y: number } | null>(null);
   const mouseStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClickUntil = useRef(0);
 
+  const swipeEnabled = () => typeof enabled === 'function' ? enabled() : enabled;
+
   function finishSwipe(origin: { x: number; y: number } | null, x: number, y: number) {
-    if (!origin || Date.now() < suppressClickUntil.current) return false;
+    if (!swipeEnabled() || !origin || Date.now() < suppressClickUntil.current) return false;
     const deltaX = x - origin.x;
     const deltaY = y - origin.y;
     if (Math.abs(deltaX) < 44 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return false;
@@ -31,7 +33,7 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
 
   return {
     onPointerDown(event: ReactPointerEvent<HTMLElement>) {
-      if (!event.isPrimary || swipeBlocked(event.target)) {
+      if (!swipeEnabled() || !event.isPrimary || swipeBlocked(event.target)) {
         start.current = null;
         return;
       }
@@ -51,7 +53,7 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
       }
     },
     onMouseDown(event: ReactMouseEvent<HTMLElement>) {
-      if (swipeBlocked(event.target)) {
+      if (!swipeEnabled() || swipeBlocked(event.target)) {
         mouseStart.current = null;
         return;
       }
@@ -66,7 +68,7 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
       }
     },
     onWheel(event: ReactWheelEvent<HTMLElement>) {
-      if (swipeBlocked(event.target) || Date.now() < suppressClickUntil.current || Math.abs(event.deltaX) < 35 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      if (!swipeEnabled() || swipeBlocked(event.target) || Date.now() < suppressClickUntil.current || Math.abs(event.deltaX) < 35 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
       const current = Math.max(0, items.indexOf(active));
       const next = event.deltaX > 0 ? Math.min(items.length - 1, current + 1) : Math.max(0, current - 1);
       if (next === current) return;

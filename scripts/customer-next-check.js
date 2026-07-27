@@ -31,6 +31,7 @@ assert(shell.includes("navigator.serviceWorker.register('/service-worker.js'"), 
 assert(shell.includes('Owner assistance mode') && shell.includes('/customer/assist/end') && shell.includes('This audited session expires in 15 minutes.'), 'Owner customer assistance must remain visible, audited, short-lived, and easy to exit in the new portal.');
 assert(["'home'", "'messages'", "'payments'", "'vehicle'", "'settings'"].every(tab => shell.includes(tab)), 'The five customer workspaces are incomplete.');
 assert(shell.includes('customer-message-page') && shell.includes('customer-message-back') && shell.includes('settings-open'), 'Focused mobile conversation/back and settings detail flows are missing.');
+assert(shell.includes('useSwipeTabs(tabIds, tab, navigate') && shell.includes("matchMedia('(max-width: 720px)')") && shell.includes('customer-swipe-zone'), 'Customer mobile workspaces must support protected horizontal tab gestures without changing desktop behavior.');
 assert(shell.includes('row.stripeCardSetupCustomerMessage') && shell.includes('row.cardSetupCustomerMessage'), 'Customer-safe card retry guidance must render in the replacement portal.');
 assert(['/customer/card-change', '/customer/receipt-request', '/customer/statement-request', '/customer/paid-outside'].every(action => shell.includes(action)), 'Customer payment support actions are incomplete.');
 assert(shell.includes('payment-support-actions') && shell.includes('<details'), 'Secondary payment actions must stay inside one compact disclosure.');
@@ -40,8 +41,9 @@ assert(css.includes('env(safe-area-inset-top)') && css.includes('env(safe-area-i
 assert(css.includes('height: 100dvh') && css.includes('.tab-messages .customer-bottom-nav'), 'The mobile keyboard-safe conversation layout is incomplete.');
 assert(css.includes('.customer-avatar { width: 35px; height: 35px; flex: 0 0 35px;') && css.includes('header > div:not(.customer-avatar)'), 'The customer conversation identity must keep a fixed avatar and let only the copy grow.');
 assert(css.includes('.settings-page.settings-open .settings-detail'), 'Mobile settings must use focused list-to-detail navigation.');
+assert(css.includes('.customer-swipe-zone { touch-action: pan-y; }'), 'Customer tab gestures must preserve vertical page scrolling.');
 assert(!css.includes('overflow-x: auto'), 'Customer pages must not rely on horizontal scrolling.');
 assert(fs.statSync(entryPath).size < 235 * 1024, 'React customer JavaScript exceeds the 235 KB uncompressed budget.');
 assert(fs.statSync(cssPath).size < 30 * 1024, 'React customer CSS exceeds the 30 KB uncompressed budget.');
 
-console.log('Customer-next check passed: five scoped workspaces, live events, private commands, safe mobile conversation, focused settings, and bundle budgets are verified.');
+console.log('Customer-next check passed: five scoped workspaces, protected mobile tab gestures, live events, private commands, safe mobile conversation, focused settings, and bundle budgets are verified.');
