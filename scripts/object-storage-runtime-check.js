@@ -9,6 +9,16 @@ const encryptedStateBackup = require('../encrypted-state-backup');
 
 const MINIO_IMAGE = 'minio/minio:RELEASE.2025-09-07T16-13-09Z';
 const MINIO_CLIENT_IMAGE = 'minio/mc:RELEASE.2025-08-13T08-35-41Z';
+const CI_MINIO_IMAGES = [
+  String(process.env.WOA_CI_MINIO_IMAGE || '').trim(),
+  'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z',
+  MINIO_IMAGE
+].filter((image, index, values) => image && values.indexOf(image) === index);
+const CI_MINIO_CLIENT_IMAGES = [
+  String(process.env.WOA_CI_MINIO_CLIENT_IMAGE || '').trim(),
+  'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z',
+  MINIO_CLIENT_IMAGE
+].filter((image, index, values) => image && values.indexOf(image) === index);
 const CI_ACCESS_KEY = 'wheelsonauto_ci_access';
 const CI_SECRET_KEY = 'wheelsonauto_ci_secret_2026';
 
@@ -126,18 +136,29 @@ async function startIsolatedS3() {
 }
 
 async function startGitHubMinio() {
-  const container = 'wheelsonauto-minio-ci-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
-  const started = dockerCommand([
-    'run', '--detach', '--rm', '--name', container,
-    '--publish', '127.0.0.1::9000',
-    '--env', 'MINIO_ROOT_USER=' + CI_ACCESS_KEY,
-    '--env', 'MINIO_ROOT_PASSWORD=' + CI_SECRET_KEY,
-    MINIO_IMAGE,
-    'server', '/data', '--address', ':9000', '--console-address', ':9001'
-  ]);
-  if (started.status !== 0) throw new Error('GitHub MinIO runtime container failed to start: ' + String(started.stderr || started.stdout || '').trim());
-  ciMinioContainer = container;
+  const failures = [];
+  let selectedImage = '';
+  for (const image of CI_MINIO_IMAGES) {
+    const container = 'wheelsonauto-minio-ci-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+    const started = dockerCommand([
+      'run', '--detach', '--rm', '--name', container,
+      '--publish', '127.0.0.1::9000',
+      '--env', 'MINIO_ROOT_USER=' + CI_ACCESS_KEY,
+      '--env', 'MINIO_ROOT_PASSWORD=' + CI_SECRET_KEY,
+      image,
+      'server', '/data', '--address', ':9000', '--console-address', ':9001'
+    ]);
+    if (started.status !== 0) {
+      failures.push(image + ': ' + String(started.stderr || started.stdout || '').trim());
+      continue;
+    }
+    ciMinioContainer = container;
+    selectedImage = image;
+    break;
+  }
+  if (!ciMinioContainer) throw new Error('GitHub MinIO runtime container failed across approved registries: ' + failures.join(' | '));
   try {
+    const container = ciMinioContainer;
     const portResult = dockerCommand(['port', container, '9000/tcp'], { timeout: 30000 });
     if (portResult.status !== 0) throw new Error('GitHub MinIO runtime container did not publish its test port.');
     const match = String(portResult.stdout || '').match(/127\.0\.0\.1:(\d+)/);
@@ -165,15 +186,24 @@ async function startGitHubMinio() {
     pathStyle = true;
     allowHttp = true;
     confirmed = true;
-    const createBucket = dockerCommand([
-      'run', '--rm',
-      '--network', 'container:' + container,
-      '--env', 'MC_HOST_local=http://' + CI_ACCESS_KEY + ':' + CI_SECRET_KEY + '@127.0.0.1:9000',
-      MINIO_CLIENT_IMAGE,
-      'mb', '--ignore-existing', 'local/' + bucket
-    ]);
-    if (createBucket.status !== 0) throw new Error('GitHub MinIO runtime bucket could not be created: ' + String(createBucket.stderr || createBucket.stdout || '').trim());
-    console.log('GitHub MinIO S3-compatible runtime container is ready for encrypted object-storage checks.');
+    const clientFailures = [];
+    let selectedClientImage = '';
+    for (const clientImage of CI_MINIO_CLIENT_IMAGES) {
+      const createBucket = dockerCommand([
+        'run', '--rm',
+        '--network', 'container:' + container,
+        '--env', 'MC_HOST_local=http://' + CI_ACCESS_KEY + ':' + CI_SECRET_KEY + '@127.0.0.1:9000',
+        clientImage,
+        'mb', '--ignore-existing', 'local/' + bucket
+      ]);
+      if (createBucket.status === 0) {
+        selectedClientImage = clientImage;
+        break;
+      }
+      clientFailures.push(clientImage + ': ' + String(createBucket.stderr || createBucket.stdout || '').trim());
+    }
+    if (!selectedClientImage) throw new Error('GitHub MinIO runtime bucket could not be created across approved registries: ' + clientFailures.join(' | '));
+    console.log('GitHub MinIO S3-compatible runtime container is ready via ' + selectedImage + ' and ' + selectedClientImage + '.');
   } catch (error) {
     stopCiMinio();
     throw error;

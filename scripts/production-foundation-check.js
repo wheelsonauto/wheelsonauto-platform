@@ -349,12 +349,17 @@ async function main() {
       && !onboardingLinkRouteSource.includes('assertStripeMoneyActionsArmed()'), 'Creating a Stripe onboarding link must allow protected Identity and SetupIntent proof collection without arming any charge, refund, dispute, autopay, or cutover money action.');
     assert(postgresRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && postgresRuntimeCheckSource.includes("'postgres:18-alpine'")
+      && postgresRuntimeCheckSource.includes("'public.ecr.aws/docker/library/postgres:18-alpine'")
+      && postgresRuntimeCheckSource.includes("'mirror.gcr.io/library/postgres:18-alpine'")
       && postgresRuntimeCheckSource.includes("'pg_isready'")
+      && postgresRuntimeCheckSource.includes("SHOW server_version_num")
       && postgresRuntimeCheckSource.includes('startGitHubPostgres()'), 'The main production gate must start and test against an isolated real PostgreSQL container instead of silently skipping transactional recovery checks.');
     assert(postgresRuntimeCheckSource.includes('WOA_TEST_DATABASE_SSL_MODE') && postgresRuntimeCheckSource.includes('sslMode: databaseSslMode'), 'The PostgreSQL runtime check must support the isolated CI database without weakening production TLS defaults.');
     assert(objectStorageRuntimeCheckSource.includes("process.env.GITHUB_ACTIONS === 'true'")
       && objectStorageRuntimeCheckSource.includes("'minio/minio:RELEASE.2025-09-07T16-13-09Z'")
       && objectStorageRuntimeCheckSource.includes("'minio/mc:RELEASE.2025-08-13T08-35-41Z'")
+      && objectStorageRuntimeCheckSource.includes("'quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z'")
+      && objectStorageRuntimeCheckSource.includes("'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'")
       && objectStorageRuntimeCheckSource.includes('startGitHubMinio()')
       && objectStorageRuntimeCheckSource.includes('publicReadBlocked === true')
       && objectStorageRuntimeCheckSource.includes('immutableWriteProtected === true')

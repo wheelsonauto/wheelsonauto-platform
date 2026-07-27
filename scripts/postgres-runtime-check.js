@@ -10,6 +10,12 @@ let databaseUrl = String(process.env.WOA_TEST_DATABASE_URL || '').trim();
 let databaseSslMode = String(process.env.WOA_TEST_DATABASE_SSL_MODE || '').trim().toLowerCase();
 let confirmed = process.env.WOA_POSTGRES_RUNTIME_TEST_CONFIRM === '1';
 let ciPostgresContainer = '';
+const CI_POSTGRES_IMAGES = [
+  String(process.env.WOA_CI_POSTGRES_IMAGE || '').trim(),
+  'public.ecr.aws/docker/library/postgres:18-alpine',
+  'mirror.gcr.io/library/postgres:18-alpine',
+  'postgres:18-alpine'
+].filter((image, index, values) => image && values.indexOf(image) === index);
 const recoveryProofRequested = process.env.WOA_POSTGRES_RUNTIME_PROOF_RECORD === '1';
 const recoveryProofConfirmed = process.env.WOA_POSTGRES_RUNTIME_PROOF_CONFIRM === '1';
 const recoveryProofDatabaseUrl = String(process.env.WOA_POSTGRES_RUNTIME_PROOF_DATABASE_URL || process.env.DATABASE_URL || '').trim();
@@ -52,18 +58,23 @@ async function waitForHostPostgres(url) {
 }
 
 async function startGitHubPostgres() {
-  const container = 'wheelsonauto-postgres-ci-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
-  const started = dockerCommand([
-    'run', '--detach', '--rm', '--name', container,
-    '--publish', '127.0.0.1::5432',
-    '--env', 'POSTGRES_DB=wheelsonauto_ci',
-    '--env', 'POSTGRES_USER=wheelsonauto_ci',
-    '--env', 'POSTGRES_PASSWORD=wheelsonauto_ci',
-    'postgres:18-alpine'
-  ]);
-  if (started.status !== 0) throw new Error('GitHub PostgreSQL runtime container failed to start: ' + String(started.stderr || started.stdout || '').trim());
-  ciPostgresContainer = container;
-  try {
+  const failures = [];
+  for (const image of CI_POSTGRES_IMAGES) {
+    const container = 'wheelsonauto-postgres-ci-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+    const started = dockerCommand([
+      'run', '--detach', '--rm', '--name', container,
+      '--publish', '127.0.0.1::5432',
+      '--env', 'POSTGRES_DB=wheelsonauto_ci',
+      '--env', 'POSTGRES_USER=wheelsonauto_ci',
+      '--env', 'POSTGRES_PASSWORD=wheelsonauto_ci',
+      image
+    ]);
+    if (started.status !== 0) {
+      failures.push(image + ': ' + String(started.stderr || started.stdout || '').trim());
+      continue;
+    }
+    ciPostgresContainer = container;
+    try {
     const portResult = dockerCommand(['port', container, '5432/tcp'], { timeout: 30000, quiet: true });
     if (portResult.status !== 0) throw new Error('GitHub PostgreSQL runtime container did not publish its test port.');
     const match = String(portResult.stdout || '').match(/127\.0\.0\.1:(\d+)/);
@@ -81,12 +92,21 @@ async function startGitHubPostgres() {
     databaseUrl = 'postgresql://wheelsonauto_ci:wheelsonauto_ci@127.0.0.1:' + match[1] + '/wheelsonauto_ci';
     databaseSslMode = 'disable';
     await waitForHostPostgres(databaseUrl);
+    const versionClient = new Client({ connectionString: databaseUrl, ssl: false, connectionTimeoutMillis: 3000 });
+    await versionClient.connect();
+    const versionResult = await versionClient.query('SHOW server_version_num');
+    await versionClient.end();
+    const versionNumber = Number(versionResult.rows[0] && versionResult.rows[0].server_version_num || 0);
+    if (versionNumber < 180000 || versionNumber >= 190000) throw new Error('GitHub PostgreSQL runtime must be major version 18.');
     confirmed = true;
-    console.log('GitHub PostgreSQL 18 runtime container is ready for transactional recovery checks.');
-  } catch (error) {
-    stopCiPostgres();
-    throw error;
+    console.log('GitHub PostgreSQL 18 runtime container is ready for transactional recovery checks via ' + image + '.');
+    return;
+    } catch (error) {
+      failures.push(image + ': ' + String(error && error.message || error));
+      stopCiPostgres();
+    }
   }
+  throw new Error('GitHub PostgreSQL runtime container failed across approved registries: ' + failures.join(' | '));
 }
 
 function databaseTargetIdentity(value) {
