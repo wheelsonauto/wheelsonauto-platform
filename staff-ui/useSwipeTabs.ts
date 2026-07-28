@@ -13,7 +13,6 @@ function swipeBlocked(target: EventTarget | null) {
 
 export function useSwipeTabs<T extends string>(items: readonly T[], active: T, onChange: (next: T) => void, enabled: boolean | (() => boolean) = true) {
   const start = useRef<{ id: number; x: number; y: number } | null>(null);
-  const mouseStart = useRef<{ x: number; y: number } | null>(null);
   const suppressClickUntil = useRef(0);
 
   const swipeEnabled = () => typeof enabled === 'function' ? enabled() : enabled;
@@ -33,12 +32,12 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
 
   return {
     onPointerDown(event: ReactPointerEvent<HTMLElement>) {
+      if (event.isPrimary) suppressClickUntil.current = 0;
       if (!swipeEnabled() || !event.isPrimary || swipeBlocked(event.target)) {
         start.current = null;
         return;
       }
       start.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
     },
     onPointerCancel() {
       start.current = null;
@@ -47,21 +46,6 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
       const origin = start.current;
       start.current = null;
       if (!origin || event.pointerId !== origin.id) return;
-      if (finishSwipe(origin, event.clientX, event.clientY)) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    },
-    onMouseDown(event: ReactMouseEvent<HTMLElement>) {
-      if (!swipeEnabled() || swipeBlocked(event.target)) {
-        mouseStart.current = null;
-        return;
-      }
-      mouseStart.current = { x: event.clientX, y: event.clientY };
-    },
-    onMouseUp(event: ReactMouseEvent<HTMLElement>) {
-      const origin = mouseStart.current;
-      mouseStart.current = null;
       if (finishSwipe(origin, event.clientX, event.clientY)) {
         event.preventDefault();
         event.stopPropagation();

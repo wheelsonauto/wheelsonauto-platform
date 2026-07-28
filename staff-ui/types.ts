@@ -282,8 +282,12 @@ export type NotificationRecord = {
   message?: string;
   type?: string;
   tone?: string;
+  at?: string;
   date?: string;
   createdAt?: string;
+  view?: string;
+  tab?: string;
+  url?: string;
   read?: boolean;
 };
 

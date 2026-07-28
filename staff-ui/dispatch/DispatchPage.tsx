@@ -132,18 +132,18 @@ export function DispatchPage() {
 
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index swipe-zone" {...filterSwipe}>
-      <header className="workspace-title"><div><span>Operations</span><h1>Dispatch</h1></div><button className="primary-command" onClick={openNew}>New task</button></header>
+      <header className="workspace-title"><div><span>Operations</span><h1>Dispatch</h1></div><button type="button" className="primary-command" onClick={openNew}>New task</button></header>
       <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Task status">
-        <button role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
-        <button role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
-        <button role="tab" aria-selected={filter === 'done'} className={filter === 'done' ? 'active' : ''} onClick={() => setFilter('done')}><span>Done</span><strong>{counts.done}</strong></button>
+        <button type="button" role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
+        <button type="button" role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
+        <button type="button" role="tab" aria-selected={filter === 'done'} className={filter === 'done' ? 'active' : ''} onClick={() => setFilter('done')}><span>Done</span><strong>{counts.done}</strong></button>
       </div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search tasks, customers, vehicles" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       <div className="record-list">
         {loading ? <div className="empty-state">Loading tasks...</div> : null}
         {!loading && !visible.length ? <div className="empty-state">No tasks match this view.</div> : null}
-        {visible.map(task => <button key={task.id} className={task.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(task.id)}>
+        {visible.map(task => <button type="button" key={task.id} className={task.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(task.id)} aria-label={`Open ${task.title || task.type || 'task'}`}>
           <span className={`status-line ${taskTone(task)}`} aria-hidden="true" />
           <span className="record-main"><strong>{task.title || task.type || 'Task'}</strong><span>{[task.customer, task.vehicle].filter(Boolean).join(' | ') || 'Internal work'}</span></span>
           <span className="record-side"><b>{task.status || 'Open'}</b><time>{task.due || 'No due date'}</time></span>

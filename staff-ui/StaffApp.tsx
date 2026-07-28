@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { loadNotifications, prewarmStaffFeeds } from './api';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { loadNotifications, markNotificationsRead, prewarmStaffFeeds } from './api';
+import type { NotificationFeed, NotificationRecord } from './types';
 
 const DashboardPage = lazy(() => import('./dashboard/DashboardPage').then(module => ({ default: module.DashboardPage })));
 const ManagerDashboardPage = lazy(() => import('./dashboard/ManagerDashboardPage').then(module => ({ default: module.ManagerDashboardPage })));
@@ -33,6 +34,30 @@ const RentalFilePage = lazy(() => loadRentalModule().then(module => ({ default: 
 type Workspace = 'dashboard' | 'fleet' | 'customers' | 'payments' | 'applications' | 'messages' | 'dispatch' | 'maintenance' | 'accounting' | 'reports' | 'systems' | 'more' | 'settings' | 'rental';
 type NavItem = { id: Workspace; label: string; mark: string };
 type StaffRole = 'owner' | 'manager' | 'mechanic';
+export type StaffTheme = 'dark' | 'light';
+
+const staffThemeKey = 'wheelsonauto-staff-theme';
+
+function initialStaffTheme(): StaffTheme {
+  try { return localStorage.getItem(staffThemeKey) === 'light' ? 'light' : 'dark'; }
+  catch { return 'dark'; }
+}
+
+function notificationRows(feed: NotificationFeed): NotificationRecord[] {
+  return feed.notifications || feed.notices || feed.items || [];
+}
+
+function notificationUnread(feed: NotificationFeed, rows = notificationRows(feed)): number {
+  return Number(feed.unreadCount ?? feed.unread ?? rows.filter(row => !row.read).length);
+}
+
+function notificationTime(row: NotificationRecord): string {
+  const value = row.at || row.createdAt || row.date;
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
+}
 
 const ownerNavGroups: Array<{ label: string; items: NavItem[] }> = [
   { label: 'Daily', items: [
@@ -145,10 +170,18 @@ export function StaffApp() {
   const [workspace, setWorkspace] = useState<Workspace>(initialRoute.workspace);
   const [recordId, setRecordId] = useState(initialRoute.recordId);
   const [returnWorkspace, setReturnWorkspace] = useState<Workspace>('customers');
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [unread, setUnread] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [theme, setTheme] = useState<StaffTheme>(initialStaffTheme);
+  const notificationCenterRef = useRef<HTMLDivElement>(null);
   const navGroups = useMemo(() => navigationForRole(role), [role]);
   const mobileItems = useMemo(() => mobileNavigationForRole(role), [role]);
 
+  useEffect(() => {
+    try { localStorage.setItem(staffThemeKey, theme); } catch { /* Theme still applies for this session. */ }
+  }, [theme]);
   useEffect(() => {
     const onHash = () => {
       const route = routeFromHash();
@@ -160,9 +193,28 @@ export function StaffApp() {
   }, [allowedWorkspaces]);
   useEffect(() => {
     const controller = new AbortController();
-    const refresh = (force = false) => loadNotifications(controller.signal, force).then(feed => setUnread(Number(feed.unreadCount ?? feed.unread ?? (feed.notifications || feed.notices || feed.items || []).filter(row => !row.read).length))).catch(() => undefined);
+    const refresh = (force = false) => loadNotifications(controller.signal, force).then(feed => {
+      const rows = notificationRows(feed);
+      setNotifications(rows);
+      setUnread(notificationUnread(feed, rows));
+    }).catch(() => undefined);
     void refresh(); const events = new EventSource('/api/events'); events.addEventListener('platform', () => void refresh(true)); return () => { controller.abort(); events.close(); };
   }, []);
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!notificationCenterRef.current?.contains(event.target as Node)) setNotificationsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNotificationsOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [notificationsOpen]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const modules: Promise<unknown>[] = [loadFleetModule(), loadMoreModule(), loadDispatchModule(), loadMaintenanceModule(), loadSettingsModule()];
@@ -183,6 +235,41 @@ export function StaffApp() {
     history.replaceState(null, '', `#${next}${nextRecordId ? `/${encodeURIComponent(nextRecordId)}` : ''}`);
   };
   const openRental = (id: string) => { if (id) open('rental', id); };
+  const applyNotificationFeed = (feed: NotificationFeed) => {
+    const rows = notificationRows(feed);
+    setNotifications(rows);
+    setUnread(notificationUnread(feed, rows));
+  };
+  const toggleNotifications = () => {
+    const next = !notificationsOpen;
+    setNotificationsOpen(next);
+    if (!next) return;
+    setNotificationsLoading(true);
+    void loadNotifications(undefined, true).then(applyNotificationFeed).catch(() => undefined).finally(() => setNotificationsLoading(false));
+  };
+  const targetForNotification = (row: NotificationRecord): Workspace => {
+    const hint = [row.type, row.view, row.tab, row.url, row.title].filter(Boolean).join(' ').toLowerCase();
+    const preferred: Workspace = /message|inbox/.test(hint) ? 'messages'
+      : /payment|charge|card|refund|dispute/.test(hint) ? 'payments'
+        : /application|applicant|onboard|pickup/.test(hint) ? 'applications'
+          : /service|maintenance|inspection/.test(hint) ? 'maintenance'
+            : /vehicle|fleet|assignment/.test(hint) ? 'fleet'
+              : /task|dispatch|claim|issue/.test(hint) ? 'dispatch'
+                : 'dashboard';
+    return allowedWorkspaces.has(preferred) ? preferred : 'dashboard';
+  };
+  const openNotification = (row: NotificationRecord) => {
+    setNotifications(current => current.map(item => item.id === row.id ? { ...item, read: true } : item));
+    if (!row.read) setUnread(current => Math.max(0, current - 1));
+    setNotificationsOpen(false);
+    open(targetForNotification(row));
+    if (!row.read) void markNotificationsRead([row.id]).then(applyNotificationFeed).catch(() => undefined);
+  };
+  const markAllNotificationsRead = () => {
+    setNotifications(current => current.map(item => ({ ...item, read: true })));
+    setUnread(0);
+    void markNotificationsRead([], true).then(applyNotificationFeed).catch(() => undefined);
+  };
   const heading = workspace === 'dashboard' && role === 'mechanic' ? 'Service home' : workspace === 'dashboard' && role === 'manager' ? 'Manager home' : workspaceNames.get(workspace) || 'WheelsonAuto';
   const navigationWorkspace = workspace === 'rental' ? returnWorkspace : workspace;
   const mobileContextBack = workspace !== 'rental' && !mobileItems.some(item => item.id === workspace);
@@ -190,14 +277,14 @@ export function StaffApp() {
 
   const roleLabel = role === 'owner' ? 'Operations' : role === 'manager' ? 'Management' : 'Service';
 
-  return <div className={`staff-app-shell role-${role}`}>
+  return <div className={`staff-app-shell role-${role} theme-${theme}`}>
     <aside className="staff-rail">
       <button className="staff-brand" onClick={() => open('dashboard')} aria-label="Open dashboard"><strong>Wheels<span>On</span>Auto</strong><small>{roleLabel}</small></button>
       <DesktopNavigation active={navigationWorkspace} groups={navGroups} onChange={open} />
       <footer><button className="staff-profile" onClick={() => open('settings')}><i>{initials}</i><span><strong>{user.name || user.username || 'Staff'}</strong><small>{user.role || 'Staff'}</small></span><b aria-hidden="true">›</b></button></footer>
     </aside>
     <section className="staff-stage">
-      <header className="staff-topbar"><div>{mobileContextBack ? <button className="mobile-context-back" onClick={() => open('more')} aria-label="Back to More">‹</button> : null}<span>WheelsonAuto</span><strong>{heading}</strong></div><button className="notification-command" onClick={() => open('dashboard')} aria-label={`${unread} unread notifications`}><span aria-hidden="true">◦</span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button></header>
+      <header className="staff-topbar"><div>{mobileContextBack ? <button type="button" className="mobile-context-back" onClick={() => open('more')} aria-label="Back to More">‹</button> : null}<span>WheelsonAuto</span><strong>{heading}</strong></div><div className="notification-center" ref={notificationCenterRef}><button type="button" className={`notification-command${notificationsOpen ? ' active' : ''}`} onClick={toggleNotifications} aria-label={`${unread} unread notifications`} aria-expanded={notificationsOpen} aria-controls="staff-notification-panel"><span aria-hidden="true">◦</span>{unread ? <b>{unread > 99 ? '99+' : unread}</b> : null}</button>{notificationsOpen ? <section className="notification-panel" id="staff-notification-panel" aria-label="Notifications"><header><div><strong>Notifications</strong><span>{unread ? `${unread} unread` : 'All caught up'}</span></div>{unread ? <button type="button" onClick={markAllNotificationsRead}>Mark all read</button> : null}</header><div className="notification-list">{notificationsLoading && !notifications.length ? <div className="notification-empty"><strong>Loading updates</strong></div> : notifications.length ? notifications.map(row => <button type="button" key={row.id} className={row.read ? 'read' : ''} onClick={() => openNotification(row)}><i className={`tone-${row.tone || 'blue'}`} aria-hidden="true" /><span><strong>{row.title || 'WheelsonAuto update'}</strong><small>{row.body || row.message || 'Open for details.'}</small>{notificationTime(row) ? <time>{notificationTime(row)}</time> : null}</span>{!row.read ? <b aria-label="Unread" /> : null}</button>) : <div className="notification-empty"><strong>No notifications</strong><span>New activity will appear here automatically.</span></div>}</div></section> : null}</div></header>
       <section className="staff-app-workspace" aria-live="polite"><Suspense fallback={<div className="workspace-loading"><span /><strong>Opening {heading}</strong></div>}>
         {workspace === 'dashboard' ? role === 'mechanic' ? <ServiceDashboardPage onNavigate={open} /> : role === 'manager' ? <ManagerDashboardPage onNavigate={open} /> : <DashboardPage onNavigate={open} /> : null}
         {workspace === 'fleet' ? <FleetPage role={role} onNavigate={open} onOpenRental={openRental} /> : null}
@@ -211,7 +298,7 @@ export function StaffApp() {
         {workspace === 'reports' ? <ManagerReportsPage onNavigate={open} /> : null}
         {workspace === 'systems' ? <SystemsPage /> : null}
         {workspace === 'more' ? <MorePage role={role} onNavigate={open} /> : null}
-        {workspace === 'settings' ? <SettingsPage role={role} onNavigate={open} /> : null}
+        {workspace === 'settings' ? <SettingsPage role={role} theme={theme} onThemeChange={setTheme} onNavigate={open} /> : null}
         {workspace === 'rental' ? <RentalFilePage rentalId={recordId} onBack={() => open(returnWorkspace === 'rental' ? 'customers' : returnWorkspace)} /> : null}
       </Suspense></section>
     </section>

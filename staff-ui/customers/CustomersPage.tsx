@@ -53,15 +53,19 @@ export function CustomersPage({ onNavigate, onOpenRental }: { onNavigate: (works
   };
 
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
+  const openCustomer = (customer: CustomerRecord) => {
+    setSelectedId(customer.id);
+    setDraft({ ...customer });
+  };
 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Connected customer files</span><h1>Customers</h1></div></header>
-      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Customer status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search customer, vehicle, VIN, tag" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       <div className="record-list">{loading ? <div className="empty-state">Loading customers...</div> : null}{!loading && !visible.length ? <div className="empty-state">No customers match this view.</div> : null}
-        {visible.map(customer => <button key={customer.id} className={customer.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(customer.id)}><span className={`status-line ${statusTone(customer.status || customer.stage)}`} /><span className="record-main"><strong>{customer.name || 'Unnamed customer'}</strong><span>{customer.vehicle || customer.email || customer.phone || 'Customer file'}</span></span><span className="record-side"><b>{customer.status || customer.stage || 'Active'}</b><time>{customer.nextRun ? `Due ${shortDate(customer.nextRun)}` : customer.amount ? money(customer.amount) : ''}</time></span></button>)}
+        {visible.map(customer => <button type="button" key={customer.id} className={customer.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => openCustomer(customer)} aria-label={`Open ${customer.name || 'customer'} file`}><span className={`status-line ${statusTone(customer.status || customer.stage)}`} /><span className="record-main"><strong>{customer.name || 'Unnamed customer'}</strong><span>{customer.vehicle || customer.email || customer.phone || 'Customer file'}</span></span><span className="record-side"><b>{customer.status || customer.stage || 'Active'}</b><time>{customer.nextRun ? `Due ${shortDate(customer.nextRun)}` : customer.amount ? money(customer.amount) : ''}</time></span></button>)}
       </div>
     </section>
     <section className="operations-detail">{!draft ? <div className="detail-empty"><strong>Select a customer</strong><span>Contact, vehicle, and payment context stay in one file.</span></div> : <form onSubmit={submit}>

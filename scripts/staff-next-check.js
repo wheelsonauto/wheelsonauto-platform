@@ -46,6 +46,9 @@ assert(shell.includes("manager: new Set(['dashboard', 'fleet', 'customers', 'app
 assert(more.includes("!['payments', 'accounting', 'systems'].includes(item.id)"), 'Manager More navigation must not expose owner money or provider workspaces.');
 assert(fleet.includes("role === 'mechanic'") && fleet.includes('read-only-detail mechanic-vehicle-detail') && fleet.includes('Open maintenance') && fleet.includes('Open work queue'), 'Mechanic vehicle files must be readable and useful without showing a save action that the backend rejects.');
 assert(settings.includes('Live protected workspace') && !settings.includes('No production cutover yet'), 'Role settings must describe the current protected platform instead of a retired preview.');
+assert(shell.includes("wheelsonauto-staff-theme") && shell.includes('theme-${theme}') && shell.includes('onThemeChange={setTheme}') && settings.includes('Light appearance') && settings.includes('Use light appearance'), 'Persistent staff light/dark appearance controls are incomplete.');
+assert(api.includes("'/api/app-notifications/read'") && api.includes('markNotificationsRead') && shell.includes('notification-panel') && shell.includes('openNotification') && shell.includes('Mark all read'), 'The staff notification command must open, route, and mark real notifications instead of redirecting to Dashboard.');
+assert(shell.includes("document.addEventListener('pointerdown', closeOnOutside)") && shell.includes("event.key === 'Escape'") && css.includes('.notification-panel') && css.includes('100dvh'), 'The staff notification panel is missing reliable dismissal or phone-safe layout.');
 assert(server.includes('generatedStaffChunk') && server.includes("/^staff-dist\\/staff-[a-z0-9_-]+\\.js$/i"), 'Generated React workspace chunks are not safely allowlisted by the server.');
 assert(!server.includes('/staff-dist/staff-next.js?v='), 'The staff entry must have one canonical module URL so lazy chunks do not initialize a second React runtime.');
 assert(shell.includes("id: 'dashboard'") && shell.includes("id: 'fleet'") && shell.includes("id: 'customers'") && shell.includes("id: 'messages'") && shell.includes("id: 'more'"), 'The five-item mobile information architecture is incomplete.');
@@ -62,6 +65,10 @@ assert(['customers', 'vehicles', 'payments', 'recurringPayments', 'tasks', 'main
 assert(stateRepository.includes("SELECT version, checksum FROM woa_state WHERE organization_id = $1"), 'PostgreSQL version checks must not load the full JSONB state.');
 assert(payments.includes('Promise.all([') && payments.includes('loadPayments(signal, force)') && payments.includes('loadAutopay(signal, force)'), 'Payments must load its independent feeds concurrently.');
 assert(swipeTabs.includes('Math.abs(deltaX) < 44') && swipeTabs.includes('swipeBlockedSelector') && swipeTabs.includes('event.stopPropagation()') && [fleet, customers, payments, applications, dispatch, maintenance].every(source => source.includes('useSwipeTabs') && source.includes('swipe-zone')) && css.includes('.swipe-tabs,.swipe-zone{touch-action:pan-y'), 'Full-surface mobile upper-tab swipe navigation is incomplete.');
+assert(!swipeTabs.includes('setPointerCapture') && !swipeTabs.includes('onMouseDown') && !swipeTabs.includes('onMouseUp') && swipeTabs.includes('suppressClickUntil.current = 0'), 'Swipe navigation must not capture phone taps, duplicate pointer events, or suppress a real follow-up tap.');
+assert(fleet.includes('const openVehicle = (vehicle: VehicleRecord)') && customers.includes('const openCustomer = (customer: CustomerRecord)'), 'Fleet and customer rows must open their detail draft synchronously on the first tap.');
+assert([fleet, customers, payments, applications, dispatch, maintenance, systems].every(source => source.includes('type="button"') && source.includes('record-row')), 'Every staff record list must expose explicit non-submit detail buttons.');
+assert(css.includes(".record-row:after{content:'›'") && css.includes('.record-row:focus-visible') && css.includes('.swipe-tabs button{position:relative;z-index:1;pointer-events:auto'), 'Record rows and visible swipe tabs are missing reliable tap affordances.');
 assert(api.includes("'/api/api-providers'") && systems.includes('Provider status is evidence-based and never guessed.'), 'Owner Systems must expose honest provider evidence.');
 assert(server.includes('providers: apiProviderRows(data)'), 'Systems must receive computed provider truth instead of only manually saved setup rows.');
 assert(api.includes('/api/rentals/${encodeURIComponent(id)}') && api.includes('RETURN_RENTAL_VEHICLE') && rentals.includes('completeRentalReturn'), 'The canonical Rental File detail and physical-return workflow are incomplete.');
@@ -83,7 +90,9 @@ const totalJs = jsFiles.reduce((sum, file) => sum + fs.statSync(path.join(dist, 
 assert(chunkFiles.length >= 9, 'Expected lazy workspace chunks were not generated.');
 assert(fs.statSync(entryPath).size < 230 * 1024, 'React staff entry exceeds the 230 KB uncompressed shell budget.');
 assert(chunkFiles.every(file => fs.statSync(path.join(dist, file)).size < 20 * 1024), 'A lazy workspace exceeds the 20 KB uncompressed module budget.');
-assert(totalJs < 320 * 1024, 'Total React staff JavaScript exceeds the 320 KB uncompressed product budget.');
-assert(fs.statSync(cssPath).size < 36 * 1024, 'React staff CSS exceeds the 36 KB uncompressed multi-workspace budget.');
+assert(totalJs < 324 * 1024, 'Total React staff JavaScript exceeds the 324 KB uncompressed product budget.');
+assert(css.includes('.staff-app-shell.theme-light') && css.includes('.theme-toggle-row'), 'The staff light appearance is missing complete shell and toggle styling.');
+assert(css.includes('.theme-light .resource-workspace:not(.has-detail) .operations-index{background:#f8f9fa}'), 'The wide resource list must not retain its dark background in light appearance.');
+assert(fs.statSync(cssPath).size < 47 * 1024, 'React staff CSS exceeds the 47 KB uncompressed multi-workspace, notification, and dual-theme budget.');
 
 console.log('Staff-next check passed: role-scoped workspaces, manager reports, mechanic read-only vehicle files, scoped APIs, live events, mobile detail flow, safe generated assets, and product bundle budgets are verified.');

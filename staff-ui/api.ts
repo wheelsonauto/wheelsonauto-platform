@@ -241,6 +241,17 @@ export function loadNotifications(signal?: AbortSignal, force = false): Promise<
   return loadCachedJson<NotificationFeed>('/api/app-notifications', signal, force);
 }
 
+export async function markNotificationsRead(ids: string[] = [], all = false): Promise<NotificationFeed> {
+  const response = await fetch('/api/app-notifications/read', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(all ? { all: true } : { ids })
+  });
+  const result = await parseJson<NotificationFeed>(response);
+  invalidateCachedPaths('/api/app-notifications');
+  return result;
+}
+
 async function patchResource<T>(path: string, payload: Record<string, unknown>, invalidate: string[]): Promise<{ ok: boolean; record: T; version: string }> {
   const response = await fetch(path, {
     method: 'PATCH',

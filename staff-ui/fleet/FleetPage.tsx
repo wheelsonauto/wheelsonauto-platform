@@ -66,18 +66,22 @@ export function FleetPage({ role, onNavigate, onOpenRental }: { role: 'owner' | 
   };
 
   const filterSwipe = useSwipeTabs(filters, filter, setFilter);
+  const openVehicle = (vehicle: VehicleRecord) => {
+    setSelectedId(vehicle.id);
+    setDraft({ ...vehicle });
+  };
 
   return <main className={`operations-workspace resource-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index swipe-zone" {...filterSwipe}>
       <header className="workspace-title"><div><span>Inventory and assignments</span><h1>Fleet</h1></div></header>
-      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status">{filters.map(key => <button role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key === 'all' ? 'All' : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
+      <div className="compact-metrics four swipe-tabs" role="tablist" aria-label="Fleet status">{filters.map(key => <button type="button" role="tab" aria-selected={filter === key} key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}><span>{key === 'all' ? 'All' : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key]}</strong></button>)}</div>
       <label className="workspace-search"><span aria-hidden="true">/</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search vehicle, VIN, tag, tracker, customer" /></label>
       {error && !draft ? <div className="inline-alert error">{error}</div> : null}
       {!loading && visible.length ? <div className="record-table-head vehicle-table-head"><span /><span>Vehicle</span><span>Assignment</span><span>Status / mileage</span></div> : null}
       <div className="record-list vehicle-records">
         {loading ? <div className="empty-state">Loading fleet...</div> : null}
         {!loading && !visible.length ? <div className="empty-state">No vehicles match this view.</div> : null}
-        {visible.map(vehicle => <button key={vehicle.id} className={vehicle.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(vehicle.id)}>
+        {visible.map(vehicle => <button type="button" key={vehicle.id} className={vehicle.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => openVehicle(vehicle)} aria-label={`Open ${title(vehicle)} vehicle file`}>
           <span className={`status-line ${statusTone(vehicle.status)}`} />
           <span className="record-main"><strong>{title(vehicle)}</strong><span>{[vehicle.plate || vehicle.stock, vehicle.vin].filter(Boolean).join(' | ') || 'Identity review needed'}</span></span>
           <span className="record-context"><strong>{vehicle.currentCustomer || 'Unassigned'}</strong><span>{vehicle.tracker || vehicle.location || 'Tracker not linked'}</span></span>
