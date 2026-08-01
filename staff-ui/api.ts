@@ -179,6 +179,135 @@ export async function createAutopay(input: CreateAutopayInput): Promise<{ ok: bo
   return result;
 }
 
+export async function chargeSavedCard(input: { recurringPaymentId: string; amount: number; nextRun?: string; note?: string }): Promise<{ ok: boolean; payment: PaymentRecord; charge?: Record<string, unknown> }> {
+  const response = await fetch('/api/integrations/payments/manual-charge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; payment: PaymentRecord; charge?: Record<string, unknown> }>(response);
+  invalidateCachedPaths('/api/payments', '/api/recurring-payments', '/api/customers', '/api/app-notifications');
+  return result;
+}
+
+export async function recordManualPaymentResult(input: {
+  recurringPaymentId: string;
+  expectedUpdatedAt?: string;
+  operationId: string;
+  result: string;
+  amount: number;
+  method: string;
+  nextRun?: string;
+  notes?: string;
+}): Promise<{ ok: boolean; duplicate?: boolean; payment: PaymentRecord; recurring: RecurringPaymentRecord }> {
+  const response = await fetch('/api/payments/manual-result', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; duplicate?: boolean; payment: PaymentRecord; recurring: RecurringPaymentRecord }>(response);
+  invalidateCachedPaths('/api/payments', '/api/recurring-payments', '/api/customers', '/api/app-notifications');
+  return result;
+}
+
+export async function createPaymentLink(input: {
+  recurringPaymentId: string;
+  customer?: string;
+  phone?: string;
+  email?: string;
+  vehicle?: string;
+  amount: number;
+  frequency?: string;
+  reason?: string;
+  note?: string;
+}): Promise<{ ok: boolean; paymentLink: { id: string; url: string; checkoutHref?: string } }> {
+  const response = await fetch('/api/payment-links', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; paymentLink: { id: string; url: string; checkoutHref?: string } }>(response);
+  invalidateCachedPaths('/api/recurring-payments', '/api/app-notifications');
+  return result;
+}
+
+export async function createReplacementCardSetup(row: RecurringPaymentRecord, provider: 'stripe' | 'clover', note = ''): Promise<{ ok: boolean; autopay: RecurringPaymentRecord; setupLink: { id: string; url: string } }> {
+  const response = await fetch('/api/card-setup-requests', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      id: row.id,
+      recurringPaymentId: row.id,
+      reactivateExisting: true,
+      cardOnlyUpdate: true,
+      paymentProvider: provider,
+      customer: row.customer,
+      phone: row.phone,
+      email: row.email,
+      vehicle: row.vehicle,
+      vehicleId: row.vehicleId,
+      vin: row.vin,
+      licensePlate: row.licensePlate,
+      plate: row.plate,
+      tempTag: row.tempTag,
+      tracker: row.tracker,
+      amount: Number(row.amount || 0),
+      frequency: row.frequency || 'Weekly',
+      nextRun: row.nextRun,
+      chargeTime: row.chargeTime || '18:00',
+      reason: 'Change card on file',
+      notes: [row.notes, note].filter(Boolean).join('\n')
+    })
+  });
+  const result = await parseJson<{ ok: boolean; autopay: RecurringPaymentRecord; setupLink: { id: string; url: string } }>(response);
+  invalidateCachedPaths('/api/recurring-payments', '/api/customers', '/api/app-notifications');
+  return result;
+}
+
+export async function updateAutopay(input: {
+  recurringPaymentId: string;
+  nextRun: string;
+  frequency: string;
+  amount: number;
+  status: string;
+  chargeTime: string;
+  retryRule?: string;
+  autopayManagedBy?: string;
+  note?: string;
+  autoChargeEnabled?: boolean;
+}): Promise<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; autoChargeEnabled: boolean }> {
+  const response = await fetch('/api/recurring-payments/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input)
+  });
+  const result = await parseJson<{ ok: boolean; nextRun: string; frequency: string; amount: number; status: string; autoChargeEnabled: boolean }>(response);
+  invalidateCachedPaths('/api/recurring-payments', '/api/customers', '/api/payments', '/api/app-notifications');
+  return result;
+}
+
+export async function removeAutopay(recurringPaymentId: string, note: string): Promise<{ ok: boolean; removedAt: string }> {
+  const response = await fetch('/api/recurring-payments/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ recurringPaymentId, note })
+  });
+  const result = await parseJson<{ ok: boolean; removedAt: string }>(response);
+  invalidateCachedPaths('/api/recurring-payments', '/api/customers', '/api/payments', '/api/app-notifications');
+  return result;
+}
+
+export async function deleteCardSetup(recurringPaymentId: string): Promise<{ ok: boolean; deletedRecurring: number; deletedRequests: number }> {
+  const response = await fetch('/api/card-setup-requests/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ recurringPaymentId })
+  });
+  const result = await parseJson<{ ok: boolean; deletedRecurring: number; deletedRequests: number }>(response);
+  invalidateCachedPaths('/api/recurring-payments', '/api/customers', '/api/app-notifications');
+  return result;
+}
+
 export async function loadRentals(signal?: AbortSignal): Promise<{ ok: boolean; records: RentalRecord[]; count: number }> {
   const response = await fetch('/api/rentals', { headers: { Accept: 'application/json' }, cache: 'no-store', signal });
   return parseJson(response);
@@ -269,6 +398,28 @@ export function updateVehicle(id: string, payload: Partial<VehicleRecord> & { ex
 
 export function updateCustomer(id: string, payload: Partial<CustomerRecord> & { expectedUpdatedAt?: string }) {
   return patchResource<CustomerRecord>(`/api/customers/${encodeURIComponent(id)}`, payload, ['/api/customers', '/api/app-notifications']);
+}
+
+export async function assignCustomerVehicle(customerId: string, input: { vehicleId: string; expectedUpdatedAt?: string; reason: string }): Promise<{ ok: boolean; unchanged: boolean; customer: CustomerRecord; vehicle: VehicleRecord; previousVehicle?: VehicleRecord; propagated: string[] }> {
+  const response = await fetch(`/api/customers/${encodeURIComponent(customerId)}/vehicle-assignment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ ...input, confirmation: 'ASSIGN_EXACT_CUSTOMER_VEHICLE' })
+  });
+  const result = await parseJson<{ ok: boolean; unchanged: boolean; customer: CustomerRecord; vehicle: VehicleRecord; previousVehicle?: VehicleRecord; propagated: string[] }>(response);
+  invalidateCachedPaths('/api/customers', '/api/vehicles', '/api/recurring-payments', '/api/payments', '/api/rentals', '/api/app-notifications');
+  return result;
+}
+
+export async function updateVehicleState(id: string, input: { status: 'online' | 'offline' | 'ready' | 'prep' | 'service' | 'returned'; expectedUpdatedAt?: string }): Promise<{ ok: boolean; record: VehicleRecord; setupRequired?: boolean }> {
+  const response = await fetch(`/api/vehicles/${encodeURIComponent(id)}/state`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ ...input, confirmation: 'CHANGE_EXACT_VEHICLE_STATE' })
+  });
+  const result = await parseJson<{ ok: boolean; record: VehicleRecord; setupRequired?: boolean }>(response);
+  invalidateCachedPaths('/api/vehicles', '/api/customers', '/api/applications/live-feed', '/api/app-notifications');
+  return result;
 }
 
 export async function saveMaintenance(job: Partial<MaintenanceRecord> & { id: string; vehicleId: string; expectedUpdatedAt?: string }): Promise<{ ok: boolean; job: MaintenanceRecord; version: string }> {

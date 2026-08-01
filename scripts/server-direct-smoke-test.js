@@ -972,6 +972,8 @@ async function main() {
       { id: 'veh-direct-dispute-car', year: 2025, make: 'Direct', model: 'Dispute Car', vin: 'DIRECTDISPUTEVIN', plate: 'DIR-DSP', tempTag: 'TMP-DSP', tracker: 'TRK-DSP', currentCustomer: 'Direct Dispute Customer', status: 'Rented' },
       { id: 'veh-direct-manual-result', year: 2025, make: 'Direct', model: 'Manual Result Car', vin: 'DIRECTMANUALRESULT', plate: 'DIR-MAN', tracker: 'TRK-MAN', currentCustomer: 'Direct Manual Result Customer', status: 'Rented' },
       { id: 'veh-direct-resource-retire', year: 2023, make: 'Direct', model: 'Retire Resource Car', vin: 'DIRECTRETIREVIN01', plate: 'DIR-RET', tracker: 'TRK-RET', status: 'Ready' },
+      { id: 'veh-direct-state-command', organizationId: 'org-wheelsonauto', year: 2024, make: 'Direct', model: 'State Command Car', vin: 'DIRECTSTATECOMMAND', plate: 'DIR-STA', tracker: 'TRK-STA', status: 'Ready' },
+      { id: 'veh-direct-assignment-command', organizationId: 'org-wheelsonauto', year: 2024, make: 'Direct', model: 'Assignment Command Car', vin: 'DIRECTASSIGNCOMMAND', plate: 'DIR-ASG', tracker: 'TRK-ASG', status: 'Ready' },
       { id: 'veh-direct-pickup-car', organizationId: 'org-wheelsonauto', year: 2026, make: 'Direct', model: 'Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', tracker: 'TRK-PUP', currentCustomer: 'Direct Pickup Customer', status: 'Pending pickup', mileage: 41000 },
       { id: 'veh-signal-text-car', year: 2024, make: 'Signal', model: 'Text Car', vin: 'SIGNALVIN123456789', plate: 'SIG-77', tempTag: 'TMP-SIG', tracker: 'TRK-SIG', currentCustomer: 'Signal Match Person', status: 'Rented' }
     );
@@ -1016,6 +1018,7 @@ async function main() {
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', pickupAppointmentId: 'pickup-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', vin: 'DIRECTPICKUPVIN001', plate: 'DIR-PUP', amount: 229, status: 'Scheduled', nextRun: '2026-07-27', paymentDay: 'Monday', paymentProvider: 'clover', cloverPaymentSource: 'src-direct-pickup-card', autoChargeEnabled: true });
     duplicateState.customers.unshift({ id: 'cus-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', recurringPaymentId: 'rec-direct-pickup', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Approved - awaiting pickup' });
     duplicateState.customers.unshift({ id: 'cus-direct-manual-result', organizationId: 'org-wheelsonauto', recurringPaymentId: 'rec-direct-manual-result', name: 'Direct Manual Result Customer', phone: '3135550151', email: 'direct-manual-result@example.com', vehicleId: 'veh-direct-manual-result', vehicle: '2025 Direct Manual Result Car', status: 'Active' });
+    duplicateState.customers.unshift({ id: 'cus-direct-assignment-command', organizationId: 'org-wheelsonauto', name: 'Direct Assignment Command Customer', phone: '3135550152', email: 'direct-assignment-command@example.com', status: 'Active' });
     duplicateState.contracts.unshift({ id: 'con-direct-pickup', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onboardingSessionId: 'onboard-direct-calendar', customer: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', vehicle: '2026 Direct Pickup Car', status: 'Signed - awaiting pickup' });
     duplicateState.applications.unshift({ id: 'application-direct-calendar', organizationId: 'org-wheelsonauto', name: 'Direct Pickup Customer', vehicleId: 'veh-direct-pickup-car', onlineVehicleId: 'online-direct-pickup', status: 'Approved - pickup confirmed', stage: 'Ready for pickup', pricingSnapshot: { weeklyPayment: 229, downPayment: 485 } });
     duplicateState.onboardingSessions.unshift({ id: 'onboard-direct-calendar', organizationId: 'org-wheelsonauto', applicationId: 'application-direct-calendar', onlineVehicleId: 'online-direct-pickup', status: 'Pickup confirmed', finalReviewStatus: 'Approved', insuranceOption: 'help_at_pickup' });
@@ -1026,6 +1029,8 @@ async function main() {
     );
     duplicateState.onlineVehicles.unshift({ id: 'online-direct-autopay-file', organizationId: 'org-wheelsonauto', title: '2026 Direct Autopay File Car', vin: 'DIRECTAUTOPAYFILEVIN', plate: 'DIR-AUTO', weeklyPayment: 123, downPayment: 0, published: true, availability: 'Available' });
     duplicateState.onlineVehicles.unshift({ id: 'online-direct-resource-retire', organizationId: 'org-wheelsonauto', platformVehicleId: 'veh-direct-resource-retire', title: '2023 Direct Retire Resource Car', vin: 'DIRECTRETIREVIN01', plate: 'DIR-RET', weeklyPayment: 125, downPayment: 0, published: true, availability: 'Available' });
+    duplicateState.onlineVehicles.unshift({ id: 'online-direct-state-command', organizationId: 'org-wheelsonauto', platformVehicleId: 'veh-direct-state-command', title: '2024 Direct State Command Car', vin: 'DIRECTSTATECOMMAND', plate: 'DIR-STA', weeklyPayment: 125, downPayment: 0, published: false, availability: 'Ready' });
+    duplicateState.onlineVehicles.unshift({ id: 'online-direct-assignment-command', organizationId: 'org-wheelsonauto', platformVehicleId: 'veh-direct-assignment-command', title: '2024 Direct Assignment Command Car', vin: 'DIRECTASSIGNCOMMAND', plate: 'DIR-ASG', weeklyPayment: 125, downPayment: 0, published: true, availability: 'Available' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-draft-portal', customer: 'Direct Draft Portal Customer', phone: '3135550188', email: 'direct-draft-portal@example.com', vehicle: 'Direct Draft Portal Car', amount: 77, status: 'Active' });
     duplicateState.recurringPayments.unshift({ id: 'rec-direct-missing-portal-draft', customer: 'Direct Missing Portal Draft Customer', phone: '3135550189', email: 'direct-missing-portal@example.com', vehicle: 'Direct Missing Portal Draft Car', amount: 79, status: 'Active' });
     duplicateState.customerAccounts.unshift({ id: 'direct-draft-portal-login', name: 'Direct Draft Portal Customer', customer: 'Direct Draft Portal Customer', username: 'direct-draft-portal', phone: '3135550188', email: 'direct-draft-portal@example.com', status: 'Active', recurringPaymentId: 'rec-direct-draft-portal' });
@@ -1162,6 +1167,38 @@ async function main() {
     const manualResultState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
     assert(manualResultState.json.payments.filter(row => row.manualResultOperationId === 'direct-manual-result-paid-1').length === 1, 'Manual result idempotency must leave only one paid record.');
     assert(manualResultState.json.documents.some(row => row.paymentId === manualPaymentResult.json.payment.id && row.documentKind === 'payment_receipt'), 'A paid manual result must create its linked receipt record.');
+    const stateCommandDetail = await request(server, 'GET', '/api/vehicles/veh-direct-state-command', { cookie: ownerCookie });
+    const stateCommandOnline = await request(server, 'POST', '/api/vehicles/veh-direct-state-command/state', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: stateCommandDetail.json.record.updatedAt || '', confirmation: 'CHANGE_EXACT_VEHICLE_STATE', status: 'online' }
+    });
+    assert(stateCommandOnline.status === 200 && stateCommandOnline.json.record.status === 'Online' && stateCommandOnline.json.record.publishedOnline === true && stateCommandOnline.json.record.onlineAvailability === 'Available', 'Publishing a ready vehicle must atomically set Fleet and website inventory online.');
+    const stateCommandOffline = await request(server, 'POST', '/api/vehicles/veh-direct-state-command/state', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: stateCommandOnline.json.record.updatedAt || '', confirmation: 'CHANGE_EXACT_VEHICLE_STATE', status: 'offline' }
+    });
+    assert(stateCommandOffline.status === 200 && stateCommandOffline.json.record.status === 'Offline' && stateCommandOffline.json.record.publishedOnline === false && stateCommandOffline.json.record.onlineAvailability === 'Offline', 'Taking a vehicle offline must atomically unpublish its website inventory row.');
+    const assignmentCustomerDetail = await request(server, 'GET', '/api/customers/cus-direct-assignment-command', { cookie: ownerCookie });
+    const assignmentPreState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const assignmentPreRentals = (assignmentPreState.json.rentalFiles || []).filter(row => !/returned|ended|closed|history|cancelled/i.test(String(row.status || row.lifecycle || '')) && (String(row.customerId || '') === 'cus-direct-assignment-command' || String(row.customerName || row.customer || '').toLowerCase() === 'direct assignment command customer'));
+    const assignmentPreVehicles = assignmentPreState.json.vehicles.filter(row => String(row.id || '') !== 'veh-direct-assignment-command' && (
+      String(row.id || '') === String(assignmentCustomerDetail.json.record.vehicleId || '')
+      || assignmentPreRentals.some(file => String(file.vehicleId || '') === String(row.id || ''))
+      || stateRepository.sameApprovedAssignmentCustomer(assignmentPreState.json, row.id, row.currentCustomer, 'Direct Assignment Command Customer')
+    ));
+    const assignmentCommand = await request(server, 'POST', '/api/customers/cus-direct-assignment-command/vehicle-assignment', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: assignmentCustomerDetail.json.record.updatedAt || '', confirmation: 'ASSIGN_EXACT_CUSTOMER_VEHICLE', vehicleId: 'veh-direct-assignment-command', reason: 'Direct exact assignment command test.' }
+    });
+    assert(assignmentCommand.status === 200 && assignmentCommand.json.customer.vehicleId === 'veh-direct-assignment-command' && assignmentCommand.json.vehicle.currentCustomer === 'Direct Assignment Command Customer' && assignmentCommand.json.vehicle.status === 'Rented', 'Exact customer assignment must update both the customer file and Fleet status. Received: ' + JSON.stringify(assignmentCommand.json) + ' Pre-state: ' + JSON.stringify({ customer: assignmentCustomerDetail.json.record, vehicles: assignmentPreVehicles }));
+    const assignedCommandState = await request(server, 'GET', '/api/state', { cookie: ownerCookie });
+    const assignedCommandListing = assignedCommandState.json.onlineVehicles.find(row => row.id === 'online-direct-assignment-command');
+    assert(assignedCommandListing && assignedCommandListing.published === false && assignedCommandListing.availability === 'Rented', 'Assigning a vehicle must remove its exact listing from public inventory.');
+    const conflictingAssignment = await request(server, 'POST', '/api/customers/cus-direct-assignment-command/vehicle-assignment', {
+      cookie: ownerCookie,
+      json: { expectedUpdatedAt: assignmentCommand.json.customer.updatedAt || '', confirmation: 'ASSIGN_EXACT_CUSTOMER_VEHICLE', vehicleId: 'veh-direct-manual-result', reason: 'This occupied vehicle must be rejected.' }
+    });
+    assert(conflictingAssignment.status === 409 && /already assigned|recurring payment plan/i.test(conflictingAssignment.json.error || ''), 'A customer assignment must not steal a vehicle already assigned to another active renter.');
     const retireVehicleDetail = await request(server, 'GET', '/api/vehicles/veh-direct-resource-retire', { cookie: ownerCookie });
     const retireVehicle = await request(server, 'POST', '/api/vehicles/veh-direct-resource-retire/retire', { cookie: ownerCookie, json: { expectedUpdatedAt: retireVehicleDetail.json.record.updatedAt || '', confirmation: 'REMOVE_VEHICLE' } });
     assert(retireVehicle.status === 200 && retireVehicle.json.record.status === 'Removed', 'An unassigned vehicle should be removed through its scoped resource command.');

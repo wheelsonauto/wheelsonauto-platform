@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { loadTasks, saveTask } from '../api';
 import type { TaskRecord } from '../types';
 import { useSwipeTabs } from '../useSwipeTabs';
+import { useViewedRecords } from '../useViewedRecords';
 
 type Filter = 'open' | 'due' | 'done';
 const filters: readonly Filter[] = ['open', 'due', 'done'];
@@ -86,6 +87,7 @@ export function DispatchPage() {
     due: tasks.filter(task => !isClosed(task) && !!task.due && task.due <= todayKey()).length,
     done: tasks.filter(isClosed).length
   }), [tasks]);
+  const viewed = useViewedRecords('dispatch', tasks, !loading);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -132,7 +134,7 @@ export function DispatchPage() {
 
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index swipe-zone" {...filterSwipe}>
-      <header className="workspace-title"><div><span>Operations</span><h1>Dispatch</h1></div><button type="button" className="primary-command" onClick={openNew}>New task</button></header>
+      <header className="workspace-title"><div><span>Operations</span><h1>Dispatch</h1></div><div className="workspace-head-actions">{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}<button type="button" className="primary-command" onClick={openNew}>New task</button></div></header>
       <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Task status">
         <button type="button" role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
         <button type="button" role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
@@ -143,8 +145,8 @@ export function DispatchPage() {
       <div className="record-list">
         {loading ? <div className="empty-state">Loading tasks...</div> : null}
         {!loading && !visible.length ? <div className="empty-state">No tasks match this view.</div> : null}
-        {visible.map(task => <button type="button" key={task.id} className={task.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => setSelectedId(task.id)} aria-label={`Open ${task.title || task.type || 'task'}`}>
-          <span className={`status-line ${taskTone(task)}`} aria-hidden="true" />
+        {visible.map(task => <button type="button" key={task.id} className={`${task.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(task.id) ? ' unread-record' : ''}`} onClick={() => { viewed.markViewed(task.id); setSelectedId(task.id); }} aria-label={`Open ${task.title || task.type || 'task'}`}>
+          {viewed.unreadIds.has(task.id) ? <span className="record-unread-dot" aria-label="Unviewed" /> : <span className={`status-line ${taskTone(task)}`} aria-hidden="true" />}
           <span className="record-main"><strong>{task.title || task.type || 'Task'}</strong><span>{[task.customer, task.vehicle].filter(Boolean).join(' | ') || 'Internal work'}</span></span>
           <span className="record-side"><b>{task.status || 'Open'}</b><time>{task.due || 'No due date'}</time></span>
         </button>)}

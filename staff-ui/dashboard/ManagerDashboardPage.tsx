@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadApplications, loadCustomers, loadMaintenance, loadNotifications, loadTasks, loadVehicles } from '../api';
 import type { ApplicationItem, CustomerRecord, MaintenanceRecord, NotificationRecord, TaskRecord, VehicleRecord } from '../types';
 import { dateTime, statusTone } from '../ui';
+import { useSwipeTabs } from '../useSwipeTabs';
+import { ApplicationsPage } from '../applications/ApplicationsPage';
 
 type ManagerState = {
   customers: CustomerRecord[];
@@ -23,7 +25,10 @@ function isOpen(status = '') {
   return !/done|closed|complete|fixed|cancelled|denied|removed/i.test(status);
 }
 
-export function ManagerDashboardPage({ onNavigate }: { onNavigate: (workspace: string) => void }) {
+type ManagerDashboardSection = 'overview' | 'applications';
+const managerDashboardSections: readonly ManagerDashboardSection[] = ['overview', 'applications'];
+
+export function ManagerDashboardPage({ onNavigate, onOpenRental, section, onSectionChange }: { onNavigate: (workspace: string, recordId?: string) => void; onOpenRental: (rentalId: string) => void; section: ManagerDashboardSection; onSectionChange: (section: ManagerDashboardSection) => void }) {
   const [state, setState] = useState<ManagerState>(emptyState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -69,8 +74,11 @@ export function ManagerDashboardPage({ onNavigate }: { onNavigate: (workspace: s
     ...dueService.map(job => ({ id: `service-${job.id}`, title: job.vehicle || 'Vehicle service', detail: job.issue || job.type || 'Maintenance due', status: job.status || 'Due', target: 'maintenance' })),
     ...openTasks.filter(task => !task.due || task.due <= today).map(task => ({ id: `task-${task.id}`, title: task.title || 'Open task', detail: [task.customer, task.vehicle].filter(Boolean).join(' | ') || 'Internal task', status: task.status || 'Open', target: 'dispatch' }))
   ].slice(0, 12), [dueService, openTasks, paidPickups, reviewApplications, today]);
+  const sectionSwipe = useSwipeTabs(managerDashboardSections, section, onSectionChange);
 
   return <main className="dashboard-workspace manager-dashboard">
+    <div className="dashboard-section-switch workspace-view-switch swipe-tabs" role="tablist" aria-label="Manager dashboard view" {...sectionSwipe}><button type="button" role="tab" aria-selected={section === 'overview'} className={section === 'overview' ? 'active' : ''} onClick={() => onSectionChange('overview')}>Overview</button><button type="button" role="tab" aria-selected={section === 'applications'} className={section === 'applications' ? 'active' : ''} onClick={() => onSectionChange('applications')}>Applications <b>{reviewApplications.length}</b></button></div>
+    {section === 'applications' ? <ApplicationsPage onOpenRental={onOpenRental} embedded /> : <>
     <header className="page-heading"><div><span>Manager workspace</span><h1>Manager home</h1><p>Customers, applications, fleet, and daily work without owner payment or provider controls.</p></div><time>{new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</time></header>
     {error ? <div className="inline-alert error">{error}</div> : null}
     <section className="metric-strip" aria-label="Manager summary">
@@ -93,5 +101,6 @@ export function ManagerDashboardPage({ onNavigate }: { onNavigate: (workspace: s
         <div className="activity-list">{state.notifications.slice(0, 7).map(notice => <article key={notice.id}><span className={`activity-mark ${statusTone(notice.tone || notice.type)}`} /><div><strong>{notice.title || notice.type || 'Platform update'}</strong><p>{notice.body || notice.message || 'New activity is available.'}</p><time>{dateTime(notice.createdAt || notice.date)}</time></div></article>)}{!state.notifications.length && !loading ? <div className="empty-state compact">No new manager notifications.</div> : null}</div>
       </section>
     </div>
+    </>}
   </main>;
 }

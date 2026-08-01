@@ -504,7 +504,7 @@ async function main() {
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     finalRecurring = saved.recurringPayments.find(row => row.id === recurring.id);
     const completedPortalAccount = saved.customerAccounts.find(row => row.id === pendingCustomerAccount.id);
-    assert(finalRecurring.autoChargeEnabled === true && finalRecurring.autopayAnchorDate === actualPickupDate && finalRecurring.nextRun === plusDays(actualPickupDate, 7), 'Handoff must activate weekly autopay from the actual physical pickup date.');
+    assert(finalRecurring.autoChargeEnabled === true && finalRecurring.autopayAnchorDate === actualPickupDate && finalRecurring.nextRun === plusDays(actualPickupDate, 7) && finalRecurring.adminNextRun === finalRecurring.nextRun && finalRecurring.chargeDay === finalRecurring.paymentDay, 'Handoff must activate one canonical weekly autopay schedule from the actual physical pickup date.');
     const staleCompetingRecurring = saved.recurringPayments.find(row => row.id === 'rec-stale-competing-vehicle');
     assert(staleCompetingRecurring && staleCompetingRecurring.autoChargeEnabled === false && /history - vehicle assigned elsewhere/i.test(staleCompetingRecurring.status || '') && !staleCompetingRecurring.nextRun, 'Physical pickup must stop every different-customer onboarding autopay that still claims the exact vehicle.');
     assert(completedPortalAccount.applicationId === applicationId && completedPortalAccount.portalStage === 'Active customer' && completedPortalAccount.recurringPaymentId === finalRecurring.id && completedPortalAccount.vehicleId === 'veh-native-1', 'Pickup must relink the exact password-owning portal account even when a newer removed application and duplicate contact exist.');
@@ -516,12 +516,22 @@ async function main() {
     completedPortalAccount.portalStage = 'Removed - owner test reset';
     completedPortalAccount.recurringPaymentId = '';
     completedPortalAccount.vehicleId = '';
+    finalRecurring.status = 'Pending pickup';
+    finalRecurring.tone = 'warn';
+    finalRecurring.autoChargeEnabled = false;
+    finalRecurring.autopayManagedBy = 'Held until physical pickup and insurance verification';
+    finalRecurring.nextRun = actualPickupDate;
+    finalRecurring.adminNextRun = '';
+    saved.pickupAppointments.find(row => row.id === appointment.id).recurringPaymentId = '';
+    saved.onboardingSessions.find(row => row.id === onboardingId).recurringPaymentId = '';
     await fs.writeFile(path.join(dataDir, 'data.json'), JSON.stringify(saved, null, 2));
     const repairedHandoff = await request(server, 'POST', '/api/pickups/' + appointment.id + '/complete', { cookie: ownerCookie, json: { confirmed: true, mileage: 91000 } });
     assert(repairedHandoff.status === 200 && repairedHandoff.json.alreadyCompleted === true, 'Repeating a completed pickup must remain operationally idempotent while repairing account links.');
     saved = JSON.parse(await fs.readFile(path.join(dataDir, 'data.json'), 'utf8'));
     const repairedPortalAccount = saved.customerAccounts.find(row => row.id === pendingCustomerAccount.id);
+    const repairedRecurring = saved.recurringPayments.find(row => row.id === finalRecurring.id);
     assert(repairedPortalAccount.applicationId === applicationId && repairedPortalAccount.portalStage === 'Active customer' && repairedPortalAccount.recurringPaymentId === finalRecurring.id && repairedPortalAccount.vehicleId === 'veh-native-1', 'An already-completed pickup must repair stale portal links without another charge or rental transition.');
+    assert(repairedRecurring.status === 'Active' && repairedRecurring.autoChargeEnabled === true && repairedRecurring.nextRun === plusDays(actualPickupDate, 7) && repairedRecurring.adminNextRun === repairedRecurring.nextRun && repairedRecurring.autopayManagedBy === 'WheelsonAuto', 'An already-completed paid pickup must repair a stale pending schedule so next-week autopay remains restart-safe.');
 
     await signedWebhook({ Type: 'PAYMENT', Status: 'APPROVED', Data: 'checkout-native-first', Id: 'clover-payment-first' });
     await signedWebhook({ Type: 'PAYMENT', Status: 'DECLINED', Data: 'checkout-native-first', Id: 'clover-payment-first-late-decline' });

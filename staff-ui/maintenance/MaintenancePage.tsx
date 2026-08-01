@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { completeMaintenance, loadMaintenance, loadVehicles, saveMaintenance } from '../api';
 import type { MaintenanceRecord, VehicleRecord } from '../types';
 import { useSwipeTabs } from '../useSwipeTabs';
+import { useViewedRecords } from '../useViewedRecords';
 
 type Filter = 'open' | 'due' | 'history';
 const filters: readonly Filter[] = ['open', 'due', 'history'];
@@ -107,6 +108,7 @@ export function MaintenancePage() {
     due: jobs.filter(job => !isClosed(job) && !!(job.due || job.nextDue) && (job.due || job.nextDue || '') <= todayKey()).length,
     history: jobs.filter(isClosed).length
   }), [jobs]);
+  const viewed = useViewedRecords('maintenance', jobs, !loading);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -169,7 +171,7 @@ export function MaintenancePage() {
 
   return <main className={`operations-workspace ${draft ? 'has-detail' : ''}`}>
     <section className="operations-index swipe-zone" {...filterSwipe}>
-      <header className="workspace-title"><div><span>Fleet care</span><h1>Maintenance</h1></div><button type="button" className="primary-command" onClick={openNew}>Schedule</button></header>
+      <header className="workspace-title"><div><span>Fleet care</span><h1>Maintenance</h1></div><div className="workspace-head-actions">{viewed.unreadCount ? <button type="button" className="unread-summary" onClick={viewed.markAllViewed}>{viewed.unreadCount} new</button> : null}<button type="button" className="primary-command" onClick={openNew}>Schedule</button></div></header>
       <div className="compact-metrics swipe-tabs" role="tablist" aria-label="Maintenance status">
         <button type="button" role="tab" aria-selected={filter === 'open'} className={filter === 'open' ? 'active' : ''} onClick={() => setFilter('open')}><span>Open</span><strong>{counts.open}</strong></button>
         <button type="button" role="tab" aria-selected={filter === 'due'} className={filter === 'due' ? 'active' : ''} onClick={() => setFilter('due')}><span>Due now</span><strong>{counts.due}</strong></button>
@@ -180,8 +182,8 @@ export function MaintenancePage() {
       <div className="record-list">
         {loading ? <div className="empty-state">Loading maintenance...</div> : null}
         {!loading && !visible.length ? <div className="empty-state">No service records match this view.</div> : null}
-        {visible.map(job => <button type="button" key={job.id} className={job.id === selectedId ? 'record-row active' : 'record-row'} onClick={() => { setSelectedId(job.id); setCompleting(false); }} aria-label={`Open ${job.vehicle || 'vehicle'} service record`}>
-          <span className={`status-line ${jobTone(job)}`} aria-hidden="true" />
+        {visible.map(job => <button type="button" key={job.id} className={`${job.id === selectedId ? 'record-row active' : 'record-row'}${viewed.unreadIds.has(job.id) ? ' unread-record' : ''}`} onClick={() => { viewed.markViewed(job.id); setSelectedId(job.id); setCompleting(false); }} aria-label={`Open ${job.vehicle || 'vehicle'} service record`}>
+          {viewed.unreadIds.has(job.id) ? <span className="record-unread-dot" aria-label="Unviewed" /> : <span className={`status-line ${jobTone(job)}`} aria-hidden="true" />}
           <span className="record-main"><strong>{job.vehicle || 'Vehicle'}</strong><span>{[job.customer, job.issue || job.type].filter(Boolean).join(' | ')}</span></span>
           <span className="record-side"><b>{job.status || 'Scheduled'}</b><time>{job.due || job.nextDue || 'No due date'}</time></span>
         </button>)}

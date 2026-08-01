@@ -1,5 +1,6 @@
 const assert = require('assert');
 const engine = require('../integration-engine');
+const expiringInsuranceDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 const data = {
   customers: [{ id: 'customer-1', name: 'Test Customer', phone: '8565550100', email: 'test@example.com', vehicleId: 'vehicle-1' }],
@@ -50,7 +51,7 @@ const providerCase = engine.verificationCase(data, {
   externalCaseId: 'insurance-case-1',
   policyNumber: 'POLICY-5555'
 }, { name: 'Owner admin' }).record;
-engine.applyVerificationEvent(providerCase, { externalCaseId: 'insurance-case-1', status: 'approved', expiresAt: '2026-07-30', provider: 'Insurance provider' });
+engine.applyVerificationEvent(providerCase, { externalCaseId: 'insurance-case-1', status: 'approved', expiresAt: expiringInsuranceDate, provider: 'Insurance provider' });
 assert.equal(providerCase.status, 'Expiring');
 assert.equal(providerCase.policyNumberLast4, '5555');
 engine.reviewVerificationCase(providerCase, { decision: 'approve', notes: 'Manual review before authoritative callback.' }, { name: 'Manager' });

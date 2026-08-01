@@ -1049,6 +1049,7 @@ function repairDataIds(data) {
   resolveClaimCustomerLinks(data);
   reconcilePaidPaymentRequests(data);
   repairCompletedPickupVehicleClaims(data);
+  repairCompletedPickupAutopayStates(data);
   return data;
 }
 function nextUniqueVehicleId(data, base, vehicle) {
@@ -6864,6 +6865,36 @@ function assignmentAliasRows(data = {}, vehicleId = '') {
 function sameApprovedAssignmentCustomer(data = {}, vehicleId = '', a, b) {
   return stateRepository.sameApprovedAssignmentCustomer(data, vehicleId, a, b);
 }
+function sameExplicitAssignmentCustomer(data = {}, vehicleId = '', a, b) {
+  const first = normKey(a);
+  const second = normKey(b);
+  if (!first || !second) return false;
+  if (first === second) return true;
+  const graph = new Map();
+  assignmentAliasRows(data, vehicleId).forEach(row => {
+    const names = [row.canonicalCustomer, row.aliasCustomer]
+      .concat(Array.isArray(row.aliases) ? row.aliases : [])
+      .map(normKey)
+      .filter(Boolean);
+    names.forEach(name => {
+      if (!graph.has(name)) graph.set(name, new Set());
+      names.forEach(other => { if (other !== name) graph.get(name).add(other); });
+    });
+  });
+  if (!graph.has(first)) return false;
+  const seen = new Set([first]);
+  const queue = [first];
+  while (queue.length) {
+    const name = queue.shift();
+    if (name === second) return true;
+    (graph.get(name) || []).forEach(next => {
+      if (seen.has(next)) return;
+      seen.add(next);
+      queue.push(next);
+    });
+  }
+  return false;
+}
 function activeAssignmentClaimsForVehicle(data = {}, vehicleId = '') {
   const id = String(vehicleId || '').trim();
   if (!id) return [];
@@ -11405,6 +11436,73 @@ function nativeOnboardingReadyForPickup(data, session, application, options = {}
     firstWeek
   };
 }
+function completedPickupAutopayState(data, appointment) {
+  if (!appointment || !/picked up|completed/i.test(String(appointment.status || ''))) return null;
+  const application = (data.applications || []).find(row => row.id === appointment.applicationId) || null;
+  const session = (data.onboardingSessions || []).find(row => row.id === appointment.onboardingSessionId) || null;
+  if (!application || !session) return null;
+  const recurringId = String(appointment.recurringPaymentId || application.recurringPaymentId || session.recurringPaymentId || '').trim();
+  const exactRows = (data.recurringPayments || []).filter(row => recurringId
+    ? String(row.id || '') === recurringId
+    : String(row.applicationId || '') === String(application.id || '')
+      || String(row.onboardingSessionId || '') === String(session.id || ''));
+  if (exactRows.length !== 1) return null;
+  return { application, session, recurring: exactRows[0] };
+}
+function repairCompletedPickupAutopayStates(data = {}) {
+  const completed = (data.pickupAppointments || []).filter(row => /picked up|completed/i.test(String(row.status || '')));
+  let repaired = 0;
+  completed.forEach(appointment => {
+    const state = completedPickupAutopayState(data, appointment);
+    if (!state) return;
+    const { application, session, recurring } = state;
+    const lifecycle = recurringLifecycleText(recurring);
+    if (/(removed|history|returned|ended|closed|cancelled|canceled|inactive|stopped|archived)/.test(lifecycle)) return;
+    const issueState = /(fail|authentication|not found|confirmation pending|duplicate|review|refund|dispute|paused)/.test(lifecycle);
+    const provider = nativeOnboardingProvider(session, recurring);
+    if (!recurringCardReadyForProvider(recurring, provider)) return;
+    const requests = nativeOnboardingPaymentRequests(data, session, application, provider);
+    const deposit = requests.find(row => row.paymentType === 'Nonrefundable down payment');
+    const firstWeek = requests.find(row => row.paymentType === 'First weekly payment');
+    const depositRequired = Number(application.pricingSnapshot && application.pricingSnapshot.downPayment || 0) > 0;
+    if ((depositRequired && !nativePaymentPaid(deposit)) || !nativePaymentPaid(firstWeek)) return;
+    const anchor = validCalendarDateKey(appointment.actualPickupDate || appointment.date || recurring.autopayAnchorDate);
+    const firstRecurringDate = addDaysToDateKey(anchor, 7);
+    if (!anchor || !firstRecurringDate) return;
+    const currentNextRun = recurringDateKey(recurring);
+    const nextRun = !currentNextRun || currentNextRun <= anchor ? firstRecurringDate : currentNextRun;
+    const weekday = onboarding.pickupWeekday(anchor);
+    const patch = {
+      applicationId: application.id,
+      onboardingSessionId: session.id,
+      pickupAppointmentId: appointment.id,
+      autopayAnchorDate: anchor,
+      firstWeekCoverageStarts: anchor,
+      paymentDay: weekday,
+      chargeDay: weekday,
+      autopayWeekday: weekday,
+      nextRun,
+      adminNextRun: nextRun,
+      chargeTime: recurring.chargeTime || '18:00',
+      autopayManagedBy: 'WheelsonAuto',
+      pickupCompletedAt: appointment.completedAt || recurring.pickupCompletedAt || ''
+    };
+    if (!issueState) Object.assign(patch, { status: 'Active', tone: 'good', autoChargeEnabled: true });
+    const changed = Object.entries(patch).some(([key, value]) => String(recurring[key] == null ? '' : recurring[key]) !== String(value == null ? '' : value));
+    if (!changed) return;
+    patch.updatedAt = new Date().toISOString();
+    Object.assign(recurring, patch);
+    appointment.recurringPaymentId = recurring.id || appointment.recurringPaymentId || '';
+    session.recurringPaymentId = recurring.id || session.recurringPaymentId || '';
+    repaired += 1;
+  });
+  if (repaired) {
+    data.systemRepairs = data.systemRepairs || {};
+    data.systemRepairs.completedPickupAutopayRepairAt = new Date().toISOString();
+    data.systemRepairs.completedPickupAutopayRepairCount = Number(data.systemRepairs.completedPickupAutopayRepairCount || 0) + repaired;
+  }
+  return repaired;
+}
 function onlineVehiclePaymentClaimApplicationId(vehicle = {}) {
   const verifiedClaim = String(vehicle.paymentClaimApplicationId || '').trim();
   if (verifiedClaim) return verifiedClaim;
@@ -12418,6 +12516,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     const vehicle = (data.vehicles || []).find(row => row.id === appointment.vehicleId || recurring && row.id === recurring.vehicleId) || null;
     const onlineVehicle = (data.onlineVehicles || []).find(row => row.id === appointment.onlineVehicleId || vehicle && row.platformVehicleId === vehicle.id) || null;
     const repaired = reconcilePickupCustomerAccountLinks(account, pickupApplication, recurring, customer, contract, appointment, onlineVehicle);
+    const autopayRepaired = repairCompletedPickupAutopayStates(data) > 0;
     let rentalFile = (data.rentalFiles || []).find(row => row.id === appointment.rentalFileId || row.pickupAppointmentId === appointment.id) || null;
     let rentalFileRepaired = false;
     if (!rentalFile && customer && vehicle && recurring) {
@@ -12425,7 +12524,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
       rentalFile = rentalFileResult.rentalFile;
       rentalFileRepaired = rentalFileResult.created || rentalFileResult.linkedCount > 0;
     }
-    return { appointment, vehicle, recurring, customer, contract, application: pickupApplication, session: pickupSession, account: repaired.account, onlineVehicle, rentalFile, alreadyCompleted: true, repaired: repaired.changed || rentalFileRepaired };
+    return { appointment, vehicle, recurring, customer, contract, application: pickupApplication, session: pickupSession, account: repaired.account, onlineVehicle, rentalFile, alreadyCompleted: true, repaired: repaired.changed || rentalFileRepaired || autopayRepaired };
   }
   const pickupGate = nativeOnboardingReadyForPickup(data, pickupSession, pickupApplication);
   if (!pickupGate.paymentsReady) throw new Error('The verified down payment and first weekly payment must both be complete before this car can be marked Rented.');
@@ -12477,6 +12576,7 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     weekday: actualPickupWeekday,
     autopayAnchorDate: actualPickupDate,
     nextRecurringCharge,
+    recurringPaymentId: recurring.id || appointment.recurringPaymentId || '',
     status: 'Picked up',
     insuranceReleaseStatus: 'Approved',
     insuranceConfirmed: true,
@@ -12492,11 +12592,11 @@ function completePickupHandoff(data, appointment, payload = {}, actor = { name: 
     completionNotes: onboarding.text(payload.notes, 1200)
   });
   if (vehicle) Object.assign(vehicle, { status: 'Rented', currentCustomer: appointment.customer || vehicle.currentCustomer || '', mileage, pickupMileage: mileage, pickupCompletedAt: now, updatedAt: now });
-  if (recurring) Object.assign(recurring, { status: 'Active', tone: 'good', autoChargeEnabled: true, autopayManagedBy: 'WheelsonAuto', paymentDay: actualPickupWeekday, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, firstWeekCoverageStarts: actualPickupDate, nextRun: nextRecurringCharge, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
+  if (recurring) Object.assign(recurring, { status: 'Active', tone: 'good', autoChargeEnabled: true, autopayManagedBy: 'WheelsonAuto', paymentDay: actualPickupWeekday, chargeDay: actualPickupWeekday, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, firstWeekCoverageStarts: actualPickupDate, nextRun: nextRecurringCharge, adminNextRun: nextRecurringCharge, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
   if (customer) Object.assign(customer, { status: 'Active', stage: 'Active', vehicleId: appointment.vehicleId || customer.vehicleId || '', pickupDate: actualPickupDate, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
   if (contract) Object.assign(contract, { status: 'Active', rentalStartDate: contract.rentalStartDate || scheduledPickupDate, scheduledRentalStartDate: contract.scheduledRentalStartDate || contract.rentalStartDate || scheduledPickupDate, actualRentalStartDate: actualPickupDate, actualPickupDate, billingAnchorDate: actualPickupDate, autopayWeekday: actualPickupWeekday, pickupCompletedAt: now, startingMileage: mileage, updatedAt: now });
   if (application) Object.assign(application, { status: 'Approved - vehicle picked up', stage: 'Active customer', actualPickupDate, insuranceProvider, insurancePolicyNumber, insuranceVerifiedAt: now, pickupCompletedAt: now, pickupMileage: mileage, updatedAt: now });
-  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', actualPickupDate, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, nextRecurringCharge, insuranceReleaseStatus: 'Approved', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceVerifiedAt: now, insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
+  if (session) Object.assign(session, { status: 'Completed', pickupStatus: 'Picked up', recurringPaymentId: recurring.id || session.recurringPaymentId || '', actualPickupDate, autopayWeekday: actualPickupWeekday, autopayAnchorDate: actualPickupDate, nextRecurringCharge, insuranceReleaseStatus: 'Approved', insuranceConfirmed: true, insuranceVinConfirmed: true, insuranceVerifiedAt: now, insuranceVerifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff', pickupCompletedAt: now, pickupMileage: mileage, completedAt: session.completedAt || now });
   if (insuranceDocument) Object.assign(insuranceDocument, { status: 'Verified - active at pickup', verifiedAt: now, verifiedBy: actor.name || actor.username || actor.role || 'WheelsonAuto staff' });
   if (onlineVehicle) Object.assign(onlineVehicle, { availability: 'Rented', published: false, heldFor: appointment.customer || onlineVehicle.heldFor || '', pickupCompletedAt: now, updatedAt: now });
   const accountReconciliation = reconcilePickupCustomerAccountLinks(account, application, recurring, customer, contract, appointment, onlineVehicle, now);
@@ -19879,7 +19979,7 @@ async function runWheelsonAutoAutopay(options = {}) {
   woaAutopayStatus.lastError = '';
   woaAutopayStatus.fatalError = '';
   const dateKey = options.dateKey || localDateKey();
-  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
+  const result = { dateKey, charged: 0, creditCovered: 0, creditApplied: 0, pickupSchedulesRecovered: 0, reconciled: 0, failed: 0, notFound: 0, authenticationRequired: 0, confirmationPending: 0, providerBlocked: 0, duplicateBlocked: 0, skipped: 0, errors: [] };
   let autopayLock = null;
   try {
     autopayLock = await STATE_REPOSITORY.acquireJobLock('wheelsonauto-autopay');
@@ -19892,6 +19992,7 @@ async function runWheelsonAutoAutopay(options = {}) {
     }
     const data = await readData();
     data.recurringPayments = Array.isArray(data.recurringPayments) ? data.recurringPayments : [];
+    result.pickupSchedulesRecovered = repairCompletedPickupAutopayStates(data);
     for (const row of data.recurringPayments) {
       const dueKey = recurringDateKey(row);
       const status = String(row && row.status || '').toLowerCase();
@@ -26677,9 +26778,114 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
     }
+    const customerVehicleAssignmentMatch = /^\/api\/customers\/([^/]+)\/vehicle-assignment$/.exec(url.pathname);
+    if (customerVehicleAssignmentMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can change a customer vehicle assignment.' });
+      const customerId = decodeURIComponent(customerVehicleAssignmentMatch[1]);
+      const payload = await readJsonBody(req, 128 * 1024);
+      if (String(payload.confirmation || '') !== 'ASSIGN_EXACT_CUSTOMER_VEHICLE') return json(res, 400, { ok: false, error: 'Confirm the exact customer and vehicle before changing the assignment.' });
+      const targetVehicleId = cleanResourceText(payload.vehicleId, 240);
+      if (!targetVehicleId) return json(res, 400, { ok: false, error: 'Choose the exact replacement vehicle.' });
+      let response = null;
+      try {
+        await mutateLatestData('Change exact customer vehicle assignment', async data => {
+          const customer = (data.customers || []).find(row => String(row.id || '') === customerId);
+          if (!customer || !rowVisibleToUserOrganization(customer, user)) throw Object.assign(new Error('Customer record was not found.'), { statusCode: 404 });
+          assertResourceRevision(customer, payload);
+          const target = (data.vehicles || []).find(row => String(row.id || '') === targetVehicleId);
+          if (!target || !rowVisibleToUserOrganization(target, user)) throw Object.assign(new Error('Replacement vehicle was not found.'), { statusCode: 404 });
+          if (/removed|retired|sold/i.test(String(target.status || ''))) throw Object.assign(new Error('A removed or sold vehicle cannot be assigned.'), { statusCode: 409 });
+          const customerName = String(customer.name || '').trim();
+          const sameCustomer = name => sameExplicitAssignmentCustomer(data, targetVehicleId, name, customerName);
+          const targetRental = (data.rentalFiles || []).find(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === targetVehicleId);
+          const targetRecurring = (data.recurringPayments || []).find(row => String(row.vehicleId || '') === targetVehicleId && activeAssignmentRecord(row, 'recurringPayments') && !sameCustomer(row.customer || row.name));
+          if (targetRental && !sameCustomer(targetRental.customerName || targetRental.customer)) throw Object.assign(new Error('That vehicle already has an active Rental File for ' + (targetRental.customerName || 'another customer') + '.'), { statusCode: 409 });
+          if (String(target.currentCustomer || '').trim() && !sameCustomer(target.currentCustomer)) throw Object.assign(new Error('That vehicle is already assigned to ' + target.currentCustomer + '.'), { statusCode: 409 });
+          if (targetRecurring) throw Object.assign(new Error('That vehicle is linked to another active recurring payment plan.'), { statusCode: 409 });
+
+          const customerNameMatches = (data.customers || []).filter(row => normKey(row.name) === normKey(customerName));
+          const accountId = String(customer.customerAccountId || '').trim();
+          const exactCustomerRow = row => String(row.customerId || '') === customerId
+            || accountId && String(row.customerAccountId || '') === accountId
+            || customerNameMatches.length === 1 && !String(row.customerId || '').trim() && normKey(row.customer || row.name) === normKey(customerName);
+          const activeRentals = (data.rentalFiles || []).filter(row => rentalFiles.isActiveRentalFile(row) && exactCustomerRow(row));
+          if (activeRentals.length > 1) throw Object.assign(new Error('This customer has more than one active Rental File. Resolve that conflict before swapping vehicles.'), { statusCode: 409 });
+          const sourceCandidates = (data.vehicles || []).filter(row => String(row.id || '') !== targetVehicleId && (
+            String(row.id || '') === String(customer.vehicleId || '')
+            || activeRentals.some(file => String(file.vehicleId || '') === String(row.id || ''))
+            || sameExplicitAssignmentCustomer(data, row.id, row.currentCustomer, customerName)
+          ));
+          const sourceIds = [...new Set(sourceCandidates.map(row => String(row.id || '')).filter(Boolean))];
+          if (sourceIds.length > 1) throw Object.assign(new Error('This customer is linked to more than one current vehicle. Resolve the assignment conflict before swapping.'), { statusCode: 409 });
+          const source = sourceCandidates[0] || null;
+          if (source && String(source.id || '') === String(target.id || '')) {
+            response = { unchanged: true, customer: { ...customer }, vehicle: { ...target }, previousVehicle: null, propagated: [] };
+            return;
+          }
+
+          const now = new Date().toISOString();
+          const propagated = [];
+          const targetName = vehicleNameFromParts(target);
+          const targetTag = target.plate || target.stock || target.tempTag || '';
+          const identityPatch = {
+            vehicleId: target.id,
+            vehicle: targetName,
+            vin: target.vin || '',
+            licensePlate: targetTag,
+            plate: targetTag,
+            tempTag: target.tempTag || '',
+            tracker: trackerName(target)
+          };
+          Object.assign(customer, identityPatch, { status: /history|ended|returned|inactive/i.test(String(customer.status || customer.stage || '')) ? 'Active' : customer.status, stage: /history|ended|returned|inactive/i.test(String(customer.status || customer.stage || '')) ? 'Active contract' : customer.stage, updatedAt: now, updatedBy: user.name || user.username || 'Staff' });
+          propagated.push('customers:' + customer.id);
+          [['recurringPayments', data.recurringPayments], ['contracts', data.contracts], ['applications', data.applications]].forEach(([collection, rows]) => {
+            (Array.isArray(rows) ? rows : []).filter(exactCustomerRow).forEach(row => {
+              if (/removed|history|ended|stopped/i.test(String(row.status || '')) && collection === 'recurringPayments') return;
+              Object.assign(row, identityPatch, { updatedAt: now, updatedBy: user.name || user.username || 'Staff' });
+              propagated.push(collection + ':' + String(row.id || 'linked'));
+            });
+          });
+          const rental = activeRentals[0] || null;
+          if (rental) {
+            const oldVehicle = { vehicleId: rental.vehicleId || '', vehicleName: rental.vehicleName || '', vin: rental.vin || '', plate: rental.plate || '', tracker: rental.tracker || '' };
+            rental.vehicleId = target.id;
+            rental.vehicleName = targetName;
+            rental.vin = target.vin || '';
+            rental.plate = targetTag;
+            rental.tracker = trackerName(target);
+            rental.vehicleSwaps = Array.isArray(rental.vehicleSwaps) ? rental.vehicleSwaps : [];
+            rental.vehicleSwaps.push({ ...oldVehicle, replacementVehicleId: target.id, replacementVehicleName: targetName, at: now, by: user.name || user.username || 'Staff', reason: cleanResourceText(payload.reason || 'Customer vehicle swap', 500) });
+            rental.updatedAt = now;
+            rental.updatedBy = user.name || user.username || 'Staff';
+            rental.version = Math.max(1, Number(rental.version || 1)) + 1;
+            propagated.push('rentalFiles:' + rental.id);
+          }
+          if (source) Object.assign(source, { previousCustomer: source.currentCustomer || customerName, currentCustomer: '', activeRentalFileId: '', status: 'Ready', returnedAt: now, assignmentChangedAt: now, updatedAt: now });
+          Object.assign(target, { previousCustomer: target.currentCustomer || '', currentCustomer: customerName, activeRentalFileId: rental && rental.id || customer.activeRentalFileId || '', status: 'Rented', assignedAt: now, assignmentChangedAt: now, updatedAt: now });
+          (data.onlineVehicles || []).forEach(row => {
+            const linkedId = String(row.platformVehicleId || row.vehicleId || '');
+            if (linkedId === String(target.id || '')) Object.assign(row, { published: false, availability: 'Rented', currentCustomer: customerName, updatedAt: now });
+            if (source && linkedId === String(source.id || '')) Object.assign(row, { published: false, availability: 'Ready - publish after inspection', currentCustomer: '', updatedAt: now });
+          });
+          data.vehicleAssignmentHistory = Array.isArray(data.vehicleAssignmentHistory) ? data.vehicleAssignmentHistory : [];
+          data.vehicleAssignmentHistory.unshift({ id: 'assignment-' + crypto.randomUUID(), customerId, customer: customerName, fromVehicleId: source && source.id || '', fromVehicle: source && vehicleNameFromParts(source) || '', toVehicleId: target.id, toVehicle: targetName, reason: cleanResourceText(payload.reason || 'Customer vehicle swap', 500), at: now, by: user.name || user.username || 'Staff' });
+          enrichLinkedProfiles(data);
+          appendAuditLog(data, user, source ? 'Customer vehicle swapped' : 'Customer vehicle assigned', [customerName, source ? vehicleNameFromParts(source) + ' to ' + targetName : targetName, target.vin ? 'VIN ' + target.vin : 'VIN missing', targetTag ? 'Tag ' + targetTag : 'Tag missing', propagated.length + ' linked record(s) updated']);
+          response = { unchanged: false, customer: { ...customer }, vehicle: { ...target }, previousVehicle: source && { ...source }, rentalFile: rental && rentalFiles.summarize(rental), propagated };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, ...response, version: await dataVersion() }));
+    }
     if (url.pathname === '/api/vehicles' && req.method === 'GET') {
       const data = await readViewData();
-      const page = paginatedResource(viewResourceRows(data, 'vehicles', user), url, { searchFields: ['id', 'name', 'year', 'make', 'model', 'vin', 'plate', 'stock', 'tempTag', 'tracker', 'currentCustomer', 'status'], defaultLimit: 50 });
+      const vehicleRows = viewResourceRows(data, 'vehicles', user).map(vehicle => {
+        const online = (data.onlineVehicles || []).find(row => String(row.platformVehicleId || row.vehicleId || '') === String(vehicle.id || '') || vehicle.vin && row.vin && normKey(row.vin) === normKey(vehicle.vin));
+        return { ...vehicle, onlineListingId: online && online.id || '', publishedOnline: !!(online && online.published), onlineAvailability: online && online.availability || '' };
+      });
+      const page = paginatedResource(vehicleRows, url, { searchFields: ['id', 'name', 'year', 'make', 'model', 'vin', 'plate', 'stock', 'tempTag', 'tracker', 'currentCustomer', 'status'], defaultLimit: 50 });
       return json(res, 200, safeResourcePayload({ ok: true, ...page }), { 'Cache-Control': 'private, no-store' });
     }
     const vehicleResourceMatch = /^\/api\/vehicles\/([^/]+)$/.exec(url.pathname);
@@ -26772,6 +26978,49 @@ const server = http.createServer(async (req, res) => {
         return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), currentUpdatedAt: error && error.currentUpdatedAt || '' });
       }
       return json(res, 200, safeResourcePayload({ ok: true, record: saved, propagated, version: await dataVersion() }));
+    }
+    const vehicleStateMatch = /^\/api\/vehicles\/([^/]+)\/state$/.exec(url.pathname);
+    if (vehicleStateMatch && req.method === 'POST') {
+      const role = String(user.role || '').toLowerCase();
+      if (!isOwnerUser(user) && role !== 'manager') return json(res, 403, { ok: false, error: 'Only an owner or manager can change fleet availability.' });
+      const vehicleId = decodeURIComponent(vehicleStateMatch[1]);
+      const payload = await readJsonBody(req, 64 * 1024);
+      if (String(payload.confirmation || '') !== 'CHANGE_EXACT_VEHICLE_STATE') return json(res, 400, { ok: false, error: 'Confirm the exact vehicle before changing fleet availability.' });
+      const requested = cleanResourceText(payload.status, 80).toLowerCase();
+      const statusMap = { online: 'Online', offline: 'Offline', ready: 'Ready', prep: 'Prep', service: 'Service', returned: 'Returned' };
+      const nextStatus = statusMap[requested];
+      if (!nextStatus) return json(res, 400, { ok: false, error: 'Choose Online, Offline, Ready, Prep, Service, or Returned.' });
+      let response = null;
+      try {
+        await mutateLatestData('Change exact vehicle fleet state', async data => {
+          const vehicle = (data.vehicles || []).find(row => String(row.id || '') === vehicleId);
+          if (!vehicle || !rowVisibleToUserOrganization(vehicle, user)) throw Object.assign(new Error('Vehicle record was not found.'), { statusCode: 404 });
+          assertResourceRevision(vehicle, payload);
+          const activeRental = (data.rentalFiles || []).find(row => rentalFiles.isActiveRentalFile(row) && String(row.vehicleId || '') === vehicleId);
+          const activeRecurring = (data.recurringPayments || []).find(row => String(row.vehicleId || '') === vehicleId && activeAssignmentRecord(row, 'recurringPayments'));
+          if (String(vehicle.currentCustomer || '').trim() || activeRental || activeRecurring) {
+            throw Object.assign(new Error('This vehicle is assigned. Complete the Rental File return before changing it to ' + nextStatus + '.'), { statusCode: 409, rentalFileId: activeRental && activeRental.id || vehicle.activeRentalFileId || '' });
+          }
+          const online = (data.onlineVehicles || []).find(row => String(row.platformVehicleId || row.vehicleId || '') === vehicleId || vehicle.vin && row.vin && normKey(row.vin) === normKey(vehicle.vin));
+          if (nextStatus === 'Online' && !online) throw Object.assign(new Error('Website listing setup is required before this vehicle can be published online.'), { statusCode: 409, setupRequired: true });
+          const now = new Date().toISOString();
+          vehicle.status = nextStatus;
+          vehicle.updatedAt = now;
+          vehicle.updatedBy = user.name || user.username || 'Staff';
+          if (nextStatus === 'Returned') vehicle.returnedAt = now;
+          if (online) {
+            online.published = nextStatus === 'Online';
+            online.availability = nextStatus === 'Online' ? 'Available' : nextStatus;
+            online.updatedAt = now;
+            if (nextStatus !== 'Online') online.unpublishedAt = now;
+          }
+          appendAuditLog(data, user, 'Vehicle fleet state changed', [vehicleNameFromParts(vehicle), nextStatus, online ? (online.published ? 'Website listing published' : 'Website listing offline') : 'No website listing linked']);
+          response = { record: { ...vehicle, onlineListingId: online && online.id || '', publishedOnline: !!(online && online.published), onlineAvailability: online && online.availability || '' }, setupRequired: false };
+        });
+      } catch (error) {
+        return json(res, Number(error && error.statusCode || 409), { ok: false, error: String(error && error.message || error), setupRequired: !!(error && error.setupRequired), rentalFileId: error && error.rentalFileId || '', currentUpdatedAt: error && error.currentUpdatedAt || '' });
+      }
+      return json(res, 200, safeResourcePayload({ ok: true, ...response, version: await dataVersion() }));
     }
     const vehicleRetireMatch = /^\/api\/vehicles\/([^/]+)\/retire$/.exec(url.pathname);
     if (vehicleRetireMatch && req.method === 'POST') {

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadApplications, loadCustomers, loadMaintenance, loadNotifications, loadPayments, loadTasks, loadVehicles } from '../api';
 import type { ApplicationItem, CustomerRecord, MaintenanceRecord, NotificationRecord, PaymentRecord, TaskRecord, VehicleRecord } from '../types';
 import { dateTime, money, statusTone } from '../ui';
+import { useSwipeTabs } from '../useSwipeTabs';
+import { ApplicationsPage } from '../applications/ApplicationsPage';
 
 type DashboardState = {
   customers: CustomerRecord[];
@@ -20,7 +22,10 @@ function todayKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-export function DashboardPage({ onNavigate }: { onNavigate: (workspace: string) => void }) {
+type DashboardSection = 'overview' | 'applications';
+const dashboardSections: readonly DashboardSection[] = ['overview', 'applications'];
+
+export function DashboardPage({ onNavigate, onOpenRental, section, onSectionChange }: { onNavigate: (workspace: string, recordId?: string) => void; onOpenRental: (rentalId: string) => void; section: DashboardSection; onSectionChange: (section: DashboardSection) => void }) {
   const [state, setState] = useState<DashboardState>(emptyState);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -62,8 +67,14 @@ export function DashboardPage({ onNavigate }: { onNavigate: (workspace: string) 
     ...openTasks.filter(task => task.due && task.due <= today).map(task => ({ id: `task-${task.id}`, title: task.title, detail: [task.customer, task.vehicle].filter(Boolean).join(' | ') || 'Internal task', status: task.status || 'Open', target: 'dispatch' })),
     ...dueService.map(job => ({ id: `job-${job.id}`, title: job.vehicle || 'Vehicle service', detail: job.issue || job.type || 'Maintenance due', status: job.status || 'Due', target: 'maintenance' }))
   ].slice(0, 10);
+  const sectionSwipe = useSwipeTabs(dashboardSections, section, onSectionChange);
 
   return <main className="dashboard-workspace">
+    <div className="dashboard-section-switch workspace-view-switch swipe-tabs" role="tablist" aria-label="Dashboard view" {...sectionSwipe}>
+      <button type="button" role="tab" aria-selected={section === 'overview'} className={section === 'overview' ? 'active' : ''} onClick={() => onSectionChange('overview')}>Overview</button>
+      <button type="button" role="tab" aria-selected={section === 'applications'} className={section === 'applications' ? 'active' : ''} onClick={() => onSectionChange('applications')}>Applications <b>{reviewApplications.length}</b></button>
+    </div>
+    {section === 'applications' ? <ApplicationsPage onOpenRental={onOpenRental} embedded /> : <>
     <header className="page-heading"><div><span>Live command center</span><h1>Dashboard</h1><p>Money, customers, fleet, and work that needs attention now.</p></div><time>{new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}</time></header>
     {error ? <div className="inline-alert error">{error}</div> : null}
     <section className="metric-strip" aria-label="Business summary">
@@ -86,5 +97,6 @@ export function DashboardPage({ onNavigate }: { onNavigate: (workspace: string) 
         <div className="distribution-list">{['Assigned', 'Ready', 'Service', 'Prep', 'Online'].map(label => { const count = state.vehicles.filter(vehicle => new RegExp(label, 'i').test(vehicle.status || '')).length; const percent = state.vehicles.length ? Math.max(3, count / state.vehicles.length * 100) : 0; return <div key={label}><span><b>{label}</b><em>{count}</em></span><i><u style={{ width: `${percent}%` }} /></i></div>; })}</div>
       </section>
     </div>
+    </>}
   </main>;
 }

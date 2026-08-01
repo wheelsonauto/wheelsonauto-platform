@@ -92,11 +92,15 @@ export type VehicleRecord = {
   color?: string;
   location?: string;
   notes?: string;
+  onlineListingId?: string;
+  publishedOnline?: boolean;
+  onlineAvailability?: string;
   updatedAt?: string;
 };
 
 export type CustomerRecord = {
   id: string;
+  customerAccountId?: string;
   organizationId?: string;
   name?: string;
   phone?: string;
@@ -123,6 +127,7 @@ export type PaymentRecord = {
   organizationId?: string;
   customer?: string;
   customerId?: string;
+  customerAccountId?: string;
   vehicle?: string;
   vehicleId?: string;
   rentalFileId?: string;
@@ -142,6 +147,8 @@ export type PaymentRecord = {
 
 export type RecurringPaymentRecord = {
   id: string;
+  customerId?: string;
+  customerAccountId?: string;
   organizationId?: string;
   customer?: string;
   phone?: string;

@@ -12,16 +12,16 @@ function swipeBlocked(target: EventTarget | null) {
 }
 
 export function useSwipeTabs<T extends string>(items: readonly T[], active: T, onChange: (next: T) => void, enabled: boolean | (() => boolean) = true) {
-  const start = useRef<{ id: number; x: number; y: number } | null>(null);
+  const start = useRef<{ id: number; x: number; y: number; axis: 'horizontal' | 'vertical' | null } | null>(null);
   const suppressClickUntil = useRef(0);
 
   const swipeEnabled = () => typeof enabled === 'function' ? enabled() : enabled;
 
-  function finishSwipe(origin: { x: number; y: number } | null, x: number, y: number) {
+  function finishSwipe(origin: { x: number; y: number; axis: 'horizontal' | 'vertical' | null } | null, x: number, y: number) {
     if (!swipeEnabled() || !origin || Date.now() < suppressClickUntil.current) return false;
     const deltaX = x - origin.x;
     const deltaY = y - origin.y;
-    if (Math.abs(deltaX) < 44 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return false;
+    if (origin.axis === 'vertical' || Math.abs(deltaX) < 36 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.08) return false;
     const current = Math.max(0, items.indexOf(active));
     const next = deltaX < 0 ? Math.min(items.length - 1, current + 1) : Math.max(0, current - 1);
     if (next === current) return false;
@@ -37,7 +37,16 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
         start.current = null;
         return;
       }
-      start.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      start.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: null };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* Pointer capture is an enhancement. */ }
+    },
+    onPointerMove(event: ReactPointerEvent<HTMLElement>) {
+      const origin = start.current;
+      if (!origin || origin.id !== event.pointerId) return;
+      const deltaX = event.clientX - origin.x;
+      const deltaY = event.clientY - origin.y;
+      if (!origin.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) >= 9) origin.axis = Math.abs(deltaX) > Math.abs(deltaY) * 1.08 ? 'horizontal' : 'vertical';
+      if (origin.axis === 'horizontal') event.preventDefault();
     },
     onPointerCancel() {
       start.current = null;
@@ -45,6 +54,7 @@ export function useSwipeTabs<T extends string>(items: readonly T[], active: T, o
     onPointerUp(event: ReactPointerEvent<HTMLElement>) {
       const origin = start.current;
       start.current = null;
+      try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Already released by the browser. */ }
       if (!origin || event.pointerId !== origin.id) return;
       if (finishSwipe(origin, event.clientX, event.clientY)) {
         event.preventDefault();
