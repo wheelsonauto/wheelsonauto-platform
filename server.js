@@ -1049,7 +1049,6 @@ function repairDataIds(data) {
   resolveClaimCustomerLinks(data);
   reconcilePaidPaymentRequests(data);
   repairCompletedPickupVehicleClaims(data);
-  repairCompletedPickupAutopayStates(data);
   return data;
 }
 function nextUniqueVehicleId(data, base, vehicle) {

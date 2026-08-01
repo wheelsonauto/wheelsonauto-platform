@@ -106,6 +106,16 @@ async function ownerCookie(server) {
 }
 
 async function main() {
+  const serverSource = await fs.readFile(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const repairDataStart = serverSource.indexOf('function repairDataIds');
+  const repairDataEnd = serverSource.indexOf('function nextUniqueVehicleId', repairDataStart);
+  const autopayStart = serverSource.indexOf('async function runWheelsonAutoAutopay');
+  const autopayEnd = serverSource.indexOf('\nasync function ', autopayStart + 1);
+  const repairDataBody = serverSource.slice(repairDataStart, repairDataEnd);
+  const autopayBody = serverSource.slice(autopayStart, autopayEnd > autopayStart ? autopayEnd : undefined);
+  assert(!repairDataBody.includes('repairCompletedPickupAutopayStates'), 'Completed-pickup autopay recovery must not mutate PostgreSQL state during generic read-time repair.');
+  assert(autopayBody.includes('repairCompletedPickupAutopayStates(data)'), 'Completed-pickup autopay recovery must run inside the transactional autopay job.');
+
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'woa-autopay-restart-'));
   const originalFetch = global.fetch;
   const chargeRequests = [];
